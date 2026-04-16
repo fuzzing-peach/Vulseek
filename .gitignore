@@ -44,3 +44,6 @@ yarn-error.log*
 
 
 .db
+
+# Generated Codex app-server schemas
+agents/schemas/codex-app-server/
