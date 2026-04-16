@@ -26,6 +26,7 @@ export * from "./redirects";
 export * from "./redis";
 export * from "./registry";
 export * from "./rollbacks";
+export * from "./scan";
 export * from "./schedule";
 export * from "./security";
 export * from "./server";

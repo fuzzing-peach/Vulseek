@@ -29,3 +29,7 @@ type DeployJob =
 	  };
 
 export type DeploymentJob = DeployJob;
+
+export type ScanQueueJob = {
+	scanJobId: string;
+};

@@ -37,6 +37,11 @@ export const ShowVolumes = ({ id, type }: Props) => {
 	const { data, refetch } = queryMap[type]
 		? queryMap[type]()
 		: api.mongo.one.useQuery({ mongoId: id }, { enabled: !!id });
+
+	const scanContextVolumeName = (data as
+		| { environment?: { project?: { scanContextVolumeName?: string | null } } }
+		| undefined)?.environment?.project?.scanContextVolumeName;
+
 	const { mutateAsync: deleteVolume, isLoading: isRemoving } =
 		api.mounts.remove.useMutation();
 	return (
@@ -57,6 +62,15 @@ export const ShowVolumes = ({ id, type }: Props) => {
 				)}
 			</CardHeader>
 			<CardContent className="flex flex-col gap-4">
+				{scanContextVolumeName && (
+					<div className="border rounded-lg p-4 flex flex-col gap-1">
+						<span className="font-medium">System Volume (Scan Context)</span>
+						<span className="text-sm text-muted-foreground break-all">
+							{scanContextVolumeName}
+						</span>
+					</div>
+				)}
+
 				{data?.mounts.length === 0 ? (
 					<div className="flex w-full flex-col items-center justify-center gap-3 pt-10">
 						<Package className="size-8 text-muted-foreground" />

@@ -1,7 +1,10 @@
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import { Ban, CheckCircle2, RefreshCcw, Rocket, Terminal } from "lucide-react";
+import { Ban, GitBranch, PackageSearch, Shield, Terminal } from "lucide-react";
 import { useRouter } from "next/router";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { CreateScanDialog } from "@/components/dashboard/scanning/create-scan-dialog";
+import { CheckoutLogModal } from "@/components/dashboard/scanning/checkout-log-modal";
 import { DialogAction } from "@/components/shared/dialog-action";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -25,135 +28,283 @@ export const ComposeActions = ({ composeId }: Props) => {
 		},
 		{ enabled: !!composeId },
 	);
+	const { refetch: refetchScanJobs } = api.scan.allByCompose.useQuery(
+		{
+			composeId,
+		},
+		{
+			enabled: !!composeId,
+		},
+	);
 	const { mutateAsync: update } = api.compose.update.useMutation();
-	const { mutateAsync: deploy } = api.compose.deploy.useMutation();
-	const { mutateAsync: redeploy } = api.compose.redeploy.useMutation();
-	const { mutateAsync: start, isLoading: isStarting } =
-		api.compose.start.useMutation();
+	const { mutateAsync: checkout, isLoading: isCheckingOut } =
+		api.scan.checkout.useMutation();
+	const { mutateAsync: createScanJob, isLoading: isCreatingScanJob } =
+		api.scan.create.useMutation();
 	const { mutateAsync: stop, isLoading: isStopping } =
 		api.compose.stop.useMutation();
+	const [checkoutModalOpen, setCheckoutModalOpen] = useState(false);
+	const [checkoutId, setCheckoutId] = useState<string | null>(null);
+	const [checkoutLogs, setCheckoutLogs] = useState("");
+	const [checkoutFinalized, setCheckoutFinalized] = useState(false);
+	const { data: checkoutImageStatus, refetch: refetchCheckoutImageStatus } =
+		api.scan.checkoutImageStatus.useQuery(
+			{
+				composeId,
+			},
+			{
+				enabled: !!composeId,
+			},
+		);
+	const { data: runningCheckoutTask } = api.scan.runningCheckout.useQuery(
+		{
+			composeId,
+		},
+		{
+			enabled: !!composeId,
+			refetchInterval: checkoutFinalized ? false : 2000,
+		},
+	);
+	const { data: checkoutStatus } = api.scan.checkoutStatus.useQuery(
+		{
+			checkoutId: checkoutId || "",
+		},
+		{
+			enabled: !!checkoutId,
+			refetchInterval: checkoutId && !checkoutFinalized ? 1500 : false,
+		},
+	);
+	const isCheckouting =
+		checkoutStatus?.status === "running" ||
+		runningCheckoutTask?.status === "running";
+	const isCheckouted = checkoutImageStatus?.exists === true;
+
+	useEffect(() => {
+		if (!checkoutId && runningCheckoutTask?.checkoutId) {
+			setCheckoutId(runningCheckoutTask.checkoutId);
+			setCheckoutFinalized(false);
+		}
+	}, [checkoutId, runningCheckoutTask]);
+
+	useEffect(() => {
+		if (checkoutId && checkoutStatus === null && !runningCheckoutTask) {
+			setCheckoutFinalized(true);
+			setCheckoutId(null);
+		}
+	}, [checkoutId, checkoutStatus, runningCheckoutTask]);
+
+	useEffect(() => {
+		if (!checkoutStatus) return;
+		const logs = [
+			`Image: ${checkoutStatus.imageTag}`,
+			`Repository: ${checkoutStatus.gitUrl}`,
+			`Branch: ${checkoutStatus.gitBranch}`,
+			`Enable Submodules: ${checkoutStatus.enableSubmodules ? "true" : "false"}`,
+			`Build Probe: ${checkoutStatus.dockerBuildProbe}`,
+			"",
+			"===== Dockerfile =====",
+			checkoutStatus.dockerfileTemplate || "",
+			"",
+			"===== docker build stdout =====",
+			checkoutStatus.stdout || "",
+			"",
+			"===== docker build stderr =====",
+			checkoutStatus.stderr || "",
+			checkoutStatus.errorMessage
+				? `\n===== error =====\n${checkoutStatus.errorMessage}`
+				: "",
+		].join("\n");
+		setCheckoutLogs(logs);
+
+		if (checkoutFinalized) return;
+		if (checkoutStatus.status === "completed") {
+			toast.success("Checkout image built successfully");
+			setCheckoutFinalized(true);
+			void refetchCheckoutImageStatus();
+			refetch();
+		}
+		if (checkoutStatus.status === "failed") {
+			toast.error("Checkout build failed");
+			setCheckoutFinalized(true);
+			refetch();
+		}
+	}, [checkoutStatus, checkoutFinalized, refetch, refetchCheckoutImageStatus]);
 	return (
-		<div className="flex flex-row gap-4 w-full flex-wrap ">
-			<TooltipProvider delayDuration={0} disableHoverableContent={false}>
-				<DialogAction
-					title="Deploy Compose"
-					description="Are you sure you want to deploy this compose?"
-					type="default"
-					onClick={async () => {
-						await deploy({
+		<>
+			<div className="flex flex-row gap-4 w-full flex-wrap ">
+				<TooltipProvider delayDuration={0} disableHoverableContent={false}>
+					<Button
+						variant="default"
+						isLoading={isCreatingScanJob}
+						onClick={async () => {
+							await createScanJob({
+								composeId: composeId,
+								scanType: "delta",
+								triggerSource: "manual",
+							})
+								.then(() => {
+									toast.success("Delta scan started successfully");
+									refetch();
+									router.push(
+										`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/profiles/compose/${composeId}?tab=deployments`,
+									);
+								})
+								.catch(() => {
+									toast.error("Error starting delta scan");
+								});
+						}}
+						className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
+					>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<div className="flex items-center">
+									<GitBranch className="size-4 mr-1" />
+									Delta Scan
+								</div>
+							</TooltipTrigger>
+							<TooltipPrimitive.Portal>
+								<TooltipContent sideOffset={5} className="z-[60]">
+									<p>Scans recent code changes incrementally</p>
+								</TooltipContent>
+							</TooltipPrimitive.Portal>
+						</Tooltip>
+					</Button>
+				<CreateScanDialog
+					title="Full Scan"
+					description="Configure ref, tag, and k for this full scan. Dokploy will persist them on the scan job."
+					isLoading={isCreatingScanJob}
+					serviceData={data ? (data as unknown as Record<string, unknown>) : undefined}
+					onSubmit={async ({ targetRef, targetTag, commitWindow }) => {
+						const scanJobsResult = await refetchScanJobs();
+						const hasPendingFullScan = Boolean(
+							scanJobsResult.data?.some(
+								(scanJob) =>
+									scanJob.scanType === "full" &&
+									(scanJob.status === "queued" ||
+										scanJob.status === "scanning" ||
+										scanJob.status === "analyzing"),
+							),
+						);
+						if (hasPendingFullScan) {
+							toast.error("A full scan is already pending");
+							return;
+						}
+						await createScanJob({
 							composeId: composeId,
+							scanType: "full",
+							triggerSource: "manual",
+							targetRef,
+							targetTag,
+							commitWindow,
 						})
 							.then(() => {
-								toast.success("Compose deployed successfully");
+								toast.success("Full scan started successfully");
 								refetch();
 								router.push(
-									`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/services/compose/${composeId}?tab=deployments`,
+									`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/profiles/compose/${composeId}?tab=deployments`,
 								);
 							})
 							.catch(() => {
-								toast.error("Error deploying compose");
+								toast.error("Error starting full scan");
 							});
 					}}
-				>
-					<Button
-						variant="default"
-						isLoading={data?.composeStatus === "running"}
-						className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
-					>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<div className="flex items-center">
-									<Rocket className="size-4 mr-1" />
-									Deploy
-								</div>
-							</TooltipTrigger>
-							<TooltipPrimitive.Portal>
-								<TooltipContent sideOffset={5} className="z-[60]">
-									<p>Downloads the source code and performs a complete build</p>
-								</TooltipContent>
-							</TooltipPrimitive.Portal>
-						</Tooltip>
-					</Button>
-				</DialogAction>
-				<DialogAction
-					title="Reload Compose"
-					description="Are you sure you want to reload this compose?"
-					type="default"
-					onClick={async () => {
-						await redeploy({
-							composeId: composeId,
-						})
-							.then(() => {
-								toast.success("Compose reloaded successfully");
-								refetch();
-							})
-							.catch(() => {
-								toast.error("Error reloading compose");
-							});
-					}}
-				>
+					trigger={
 					<Button
 						variant="secondary"
-						isLoading={data?.composeStatus === "running"}
+						isLoading={isCreatingScanJob}
 						className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
 					>
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<div className="flex items-center">
-									<RefreshCcw className="size-4 mr-1" />
-									Reload
+									<Shield className="size-4 mr-1" />
+									Full Scan
 								</div>
 							</TooltipTrigger>
 							<TooltipPrimitive.Portal>
 								<TooltipContent sideOffset={5} className="z-[60]">
-									<p>Reload the compose without rebuilding it</p>
+									<p>Scans the full codebase from the current source</p>
 								</TooltipContent>
 							</TooltipPrimitive.Portal>
 						</Tooltip>
 					</Button>
-				</DialogAction>
-				{data?.composeType === "docker-compose" &&
-				data?.composeStatus === "idle" ? (
-					<DialogAction
-						title="Start Compose"
-						description="Are you sure you want to start this compose?"
-						type="default"
-						onClick={async () => {
-							await start({
-								composeId: composeId,
-							})
-								.then(() => {
-									toast.success("Compose started successfully");
-									refetch();
-								})
-								.catch(() => {
-									toast.error("Error starting compose");
-								});
-						}}
-					>
-						<Button
-							variant="secondary"
-							isLoading={isStarting}
-							className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
-						>
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<div className="flex items-center">
-										<CheckCircle2 className="size-4 mr-1" />
-										Start
-									</div>
-								</TooltipTrigger>
-								<TooltipPrimitive.Portal>
-									<TooltipContent sideOffset={5} className="z-[60]">
-										<p>
-											Start the compose (requires a previous successful build)
-										</p>
-									</TooltipContent>
-								</TooltipPrimitive.Portal>
-							</Tooltip>
-						</Button>
-					</DialogAction>
-				) : (
+					}
+				/>
+					{data?.composeType === "docker-compose" &&
+					data?.composeStatus === "idle" ? (
+						isCheckouting ? (
+							<Button
+								variant="secondary"
+								onClick={() => setCheckoutModalOpen(true)}
+								className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
+							>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<div className="flex items-center">
+											<PackageSearch className="size-4 mr-1" />
+											Checkouting
+										</div>
+									</TooltipTrigger>
+									<TooltipPrimitive.Portal>
+										<TooltipContent sideOffset={5} className="z-[60]">
+											<p>Open checkout build logs</p>
+										</TooltipContent>
+									</TooltipPrimitive.Portal>
+								</Tooltip>
+							</Button>
+						) : (
+							<DialogAction
+								title={isCheckouted ? "Recheckout" : "Checkout"}
+								description={
+									isCheckouted
+										? "Checkout image already exists. Recheckout image?"
+										: "Generate scan Dockerfile and build a checkout image?"
+								}
+								type="default"
+								onClick={async () => {
+									setCheckoutLogs("");
+									setCheckoutFinalized(false);
+									await checkout({
+										composeId,
+									})
+										.then((result) => {
+											setCheckoutId(result.checkoutId);
+											setCheckoutModalOpen(true);
+										})
+										.catch((error) => {
+											const message =
+												error instanceof Error ? error.message : "Checkout failed";
+											setCheckoutLogs(message);
+											toast.error("Error during checkout build");
+										});
+								}}
+							>
+								<Button
+									variant="secondary"
+									isLoading={isCheckingOut}
+									className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
+								>
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<div className="flex items-center">
+												<PackageSearch className="size-4 mr-1" />
+												{isCheckouted ? "Recheckout" : "Checkout"}
+											</div>
+										</TooltipTrigger>
+										<TooltipPrimitive.Portal>
+											<TooltipContent sideOffset={5} className="z-[60]">
+												<p>
+													{isCheckouted
+														? "Checkout image already exists; click to recheckout"
+														: "Generate Dockerfile and build checkout image"}
+												</p>
+											</TooltipContent>
+										</TooltipPrimitive.Portal>
+									</Tooltip>
+								</Button>
+							</DialogAction>
+						)
+					) : (
 					<DialogAction
 						title="Stop Compose"
 						description="Are you sure you want to stop this compose?"
@@ -190,42 +341,51 @@ export const ComposeActions = ({ composeId }: Props) => {
 							</Tooltip>
 						</Button>
 					</DialogAction>
-				)}
-			</TooltipProvider>
-			<DockerTerminalModal
-				appName={data?.appName || ""}
-				serverId={data?.serverId || ""}
-				appType={data?.composeType || "docker-compose"}
-			>
-				<Button
-					variant="outline"
-					className="flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-offset-2"
+					)}
+				</TooltipProvider>
+				<DockerTerminalModal
+					appName={data?.appName || ""}
+					serverId={data?.serverId || ""}
+					appType={data?.composeType || "docker-compose"}
 				>
-					<Terminal className="size-4 mr-1" />
-					Open Terminal
-				</Button>
-			</DockerTerminalModal>
-			<div className="flex flex-row items-center gap-2 rounded-md px-4 py-2 border">
-				<span className="text-sm font-medium">Autodeploy</span>
-				<Switch
-					aria-label="Toggle autodeploy"
-					checked={data?.autoDeploy || false}
-					onCheckedChange={async (enabled) => {
-						await update({
-							composeId,
-							autoDeploy: enabled,
-						})
-							.then(async () => {
-								toast.success("Auto Deploy Updated");
-								await refetch();
+					<Button
+						variant="outline"
+						className="flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-offset-2"
+					>
+						<Terminal className="size-4 mr-1" />
+						Open Terminal
+					</Button>
+				</DockerTerminalModal>
+				<div className="flex flex-row items-center gap-2 rounded-md px-4 py-2 border">
+					<span className="text-sm font-medium">Autoscan</span>
+					<Switch
+						aria-label="Toggle autoscan"
+						checked={data?.autoDeploy || false}
+						onCheckedChange={async (enabled) => {
+							await update({
+								composeId,
+								autoDeploy: enabled,
 							})
-							.catch(() => {
-								toast.error("Error updating Auto Deploy");
-							});
-					}}
-					className="flex flex-row gap-2 items-center data-[state=checked]:bg-primary"
-				/>
+								.then(async () => {
+									toast.success("Auto Scan Updated");
+									await refetch();
+								})
+								.catch(() => {
+									toast.error("Error updating Auto Scan");
+								});
+						}}
+						className="flex flex-row gap-2 items-center data-[state=checked]:bg-primary"
+					/>
+				</div>
 			</div>
-		</div>
+			<CheckoutLogModal
+				open={checkoutModalOpen}
+				onOpenChange={setCheckoutModalOpen}
+				title="Checkout Build Logs"
+				description="Docker build output for scan checkout image"
+				logs={checkoutLogs}
+				isLoading={isCheckouting && !checkoutLogs}
+			/>
+		</>
 	);
 };

@@ -1,16 +1,19 @@
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import {
 	Ban,
-	CheckCircle2,
-	Hammer,
+	GitBranch,
+	PackageSearch,
 	RefreshCcw,
-	Rocket,
+	Shield,
 	Terminal,
 } from "lucide-react";
 import { useRouter } from "next/router";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ShowBuildChooseForm } from "@/components/dashboard/application/build/show";
 import { ShowProviderForm } from "@/components/dashboard/application/general/generic/show";
+import { CreateScanDialog } from "@/components/dashboard/scanning/create-scan-dialog";
+import { CheckoutLogModal } from "@/components/dashboard/scanning/checkout-log-modal";
 import { DialogAction } from "@/components/shared/dialog-action";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,69 +39,158 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 		},
 		{ enabled: !!applicationId },
 	);
+	const { refetch: refetchScanJobs } = api.scan.allByApplication.useQuery(
+		{
+			applicationId,
+		},
+		{
+			enabled: !!applicationId,
+		},
+	);
 	const { mutateAsync: update } = api.application.update.useMutation();
-	const { mutateAsync: start, isLoading: isStarting } =
-		api.application.start.useMutation();
+	const { mutateAsync: checkout, isLoading: isCheckingOut } =
+		api.scan.checkout.useMutation();
 	const { mutateAsync: stop, isLoading: isStopping } =
 		api.application.stop.useMutation();
-
-	const { mutateAsync: deploy } = api.application.deploy.useMutation();
+	const { mutateAsync: createScanJob, isLoading: isCreatingScanJob } =
+		api.scan.create.useMutation();
 
 	const { mutateAsync: reload, isLoading: isReloading } =
 		api.application.reload.useMutation();
 
-	const { mutateAsync: redeploy } = api.application.redeploy.useMutation();
+	const [checkoutModalOpen, setCheckoutModalOpen] = useState(false);
+	const [checkoutId, setCheckoutId] = useState<string | null>(null);
+	const [checkoutLogs, setCheckoutLogs] = useState("");
+	const [checkoutFinalized, setCheckoutFinalized] = useState(false);
+	const { data: checkoutImageStatus, refetch: refetchCheckoutImageStatus } =
+		api.scan.checkoutImageStatus.useQuery(
+			{
+				applicationId,
+			},
+			{
+				enabled: !!applicationId,
+			},
+		);
+	const { data: runningCheckoutTask } = api.scan.runningCheckout.useQuery(
+		{
+			applicationId,
+		},
+		{
+			enabled: !!applicationId,
+			refetchInterval: checkoutFinalized ? false : 2000,
+		},
+	);
+	const { data: checkoutStatus } = api.scan.checkoutStatus.useQuery(
+		{
+			checkoutId: checkoutId || "",
+		},
+		{
+			enabled: !!checkoutId,
+			refetchInterval: checkoutId && !checkoutFinalized ? 1500 : false,
+		},
+	);
+	const isCheckouting =
+		checkoutStatus?.status === "running" ||
+		runningCheckoutTask?.status === "running";
+	const isCheckouted = checkoutImageStatus?.exists === true;
+
+	useEffect(() => {
+		if (!checkoutId && runningCheckoutTask?.checkoutId) {
+			setCheckoutId(runningCheckoutTask.checkoutId);
+			setCheckoutFinalized(false);
+		}
+	}, [checkoutId, runningCheckoutTask]);
+
+	useEffect(() => {
+		if (checkoutId && checkoutStatus === null && !runningCheckoutTask) {
+			setCheckoutFinalized(true);
+			setCheckoutId(null);
+		}
+	}, [checkoutId, checkoutStatus, runningCheckoutTask]);
+
+	useEffect(() => {
+		if (!checkoutStatus) return;
+		const logs = [
+			`Image: ${checkoutStatus.imageTag}`,
+			`Repository: ${checkoutStatus.gitUrl}`,
+			`Branch: ${checkoutStatus.gitBranch}`,
+			`Enable Submodules: ${checkoutStatus.enableSubmodules ? "true" : "false"}`,
+			`Build Probe: ${checkoutStatus.dockerBuildProbe}`,
+			"",
+			"===== Dockerfile =====",
+			checkoutStatus.dockerfileTemplate || "",
+			"",
+			"===== docker build stdout =====",
+			checkoutStatus.stdout || "",
+			"",
+			"===== docker build stderr =====",
+			checkoutStatus.stderr || "",
+			checkoutStatus.errorMessage
+				? `\n===== error =====\n${checkoutStatus.errorMessage}`
+				: "",
+		].join("\n");
+		setCheckoutLogs(logs);
+
+		if (checkoutFinalized) return;
+		if (checkoutStatus.status === "completed") {
+			toast.success("Checkout image built successfully");
+			setCheckoutFinalized(true);
+			void refetchCheckoutImageStatus();
+			refetch();
+		}
+		if (checkoutStatus.status === "failed") {
+			toast.error("Checkout build failed");
+			setCheckoutFinalized(true);
+			refetch();
+		}
+	}, [checkoutStatus, checkoutFinalized, refetch, refetchCheckoutImageStatus]);
 
 	return (
 		<>
 			<Card className="bg-background">
 				<CardHeader>
-					<CardTitle className="text-xl">Deploy Settings</CardTitle>
+					<CardTitle className="text-xl">Scan Settings</CardTitle>
 				</CardHeader>
 				<CardContent className="flex flex-row gap-4 flex-wrap">
 					<TooltipProvider delayDuration={0} disableHoverableContent={false}>
-						<DialogAction
-							title="Deploy Application"
-							description="Are you sure you want to deploy this application?"
-							type="default"
-							onClick={async () => {
-								await deploy({
-									applicationId: applicationId,
-								})
-									.then(() => {
-										toast.success("Application deployed successfully");
-										refetch();
-										router.push(
-											`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/services/application/${applicationId}?tab=deployments`,
-										);
-									})
-									.catch(() => {
-										toast.error("Error deploying application");
-									});
-							}}
-						>
 							<Button
 								variant="default"
-								isLoading={data?.applicationStatus === "running"}
+								isLoading={isCreatingScanJob}
+								onClick={async () => {
+									await createScanJob({
+										applicationId: applicationId,
+										scanType: "delta",
+										triggerSource: "manual",
+									})
+										.then(() => {
+											toast.success("Delta scan started successfully");
+											refetch();
+											router.push(
+												`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/profiles/application/${applicationId}?tab=deployments`,
+											);
+										})
+										.catch(() => {
+											toast.error("Error starting delta scan");
+										});
+								}}
 								className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
 							>
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<div className="flex items-center">
-											<Rocket className="size-4 mr-1" />
-											Deploy
+											<GitBranch className="size-4 mr-1" />
+											Delta Scan
 										</div>
 									</TooltipTrigger>
 									<TooltipPrimitive.Portal>
 										<TooltipContent sideOffset={5} className="z-[60]">
 											<p>
-												Downloads the source code and performs a complete build
+												Scans recent code changes incrementally
 											</p>
 										</TooltipContent>
 									</TooltipPrimitive.Portal>
 								</Tooltip>
 							</Button>
-						</DialogAction>
 						<DialogAction
 							title="Reload Application"
 							description="Are you sure you want to reload this application?"
@@ -137,88 +229,147 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 								</Tooltip>
 							</Button>
 						</DialogAction>
-						<DialogAction
-							title="Rebuild Application"
-							description="Are you sure you want to rebuild this application?"
-							type="default"
-							onClick={async () => {
-								await redeploy({
+						<CreateScanDialog
+							title="Full Scan"
+							description="Configure ref, tag, and k for this full scan. Dokploy will persist them on the scan job."
+							isLoading={isCreatingScanJob}
+							serviceData={
+								data ? (data as unknown as Record<string, unknown>) : undefined
+							}
+							onSubmit={async ({ targetRef, targetTag, commitWindow }) => {
+								const scanJobsResult = await refetchScanJobs();
+								const hasPendingFullScan = Boolean(
+									scanJobsResult.data?.some(
+										(scanJob) =>
+											scanJob.scanType === "full" &&
+											(scanJob.status === "queued" ||
+												scanJob.status === "scanning" ||
+												scanJob.status === "analyzing"),
+									),
+								);
+								if (hasPendingFullScan) {
+									toast.error("A full scan is already pending");
+									return;
+								}
+								await createScanJob({
 									applicationId: applicationId,
+									scanType: "full",
+									triggerSource: "manual",
+									targetRef,
+									targetTag,
+									commitWindow,
 								})
 									.then(() => {
-										toast.success("Application rebuilt successfully");
+										toast.success("Full scan started successfully");
 										refetch();
+										router.push(
+											`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/profiles/application/${applicationId}?tab=deployments`,
+										);
 									})
 									.catch(() => {
-										toast.error("Error rebuilding application");
+										toast.error("Error starting full scan");
 									});
 							}}
-						>
+							trigger={
 							<Button
 								variant="secondary"
-								isLoading={data?.applicationStatus === "running"}
+								isLoading={isCreatingScanJob}
 								className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
 							>
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<div className="flex items-center">
-											<Hammer className="size-4 mr-1" />
-											Rebuild
+											<Shield className="size-4 mr-1" />
+											Full Scan
 										</div>
 									</TooltipTrigger>
 									<TooltipPrimitive.Portal>
 										<TooltipContent sideOffset={5} className="z-[60]">
 											<p>
-												Only rebuilds the application without downloading new
-												code
+												Scans the full codebase from the current source
 											</p>
 										</TooltipContent>
 									</TooltipPrimitive.Portal>
 								</Tooltip>
 							</Button>
-						</DialogAction>
+							}
+						/>
 
 						{data?.applicationStatus === "idle" ? (
-							<DialogAction
-								title="Start Application"
-								description="Are you sure you want to start this application?"
-								type="default"
-								onClick={async () => {
-									await start({
-										applicationId: applicationId,
-									})
-										.then(() => {
-											toast.success("Application started successfully");
-											refetch();
-										})
-										.catch(() => {
-											toast.error("Error starting application");
-										});
-								}}
-							>
+							isCheckouting ? (
 								<Button
 									variant="secondary"
-									isLoading={isStarting}
+									onClick={() => setCheckoutModalOpen(true)}
 									className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
 								>
 									<Tooltip>
 										<TooltipTrigger asChild>
 											<div className="flex items-center">
-												<CheckCircle2 className="size-4 mr-1" />
-												Start
+												<PackageSearch className="size-4 mr-1" />
+												Checkouting
 											</div>
 										</TooltipTrigger>
 										<TooltipPrimitive.Portal>
 											<TooltipContent sideOffset={5} className="z-[60]">
-												<p>
-													Start the application (requires a previous successful
-													build)
-												</p>
+												<p>Open checkout build logs</p>
 											</TooltipContent>
 										</TooltipPrimitive.Portal>
 									</Tooltip>
 								</Button>
-							</DialogAction>
+							) : (
+								<DialogAction
+									title={isCheckouted ? "Recheckout" : "Checkout"}
+									description={
+										isCheckouted
+											? "Checkout image already exists. Recheckout image?"
+											: "Generate scan Dockerfile and build a checkout image?"
+									}
+									type="default"
+									onClick={async () => {
+										setCheckoutLogs("");
+										setCheckoutFinalized(false);
+										await checkout({
+											applicationId: applicationId,
+										})
+											.then((result) => {
+												setCheckoutId(result.checkoutId);
+												setCheckoutModalOpen(true);
+											})
+											.catch((error) => {
+												const message =
+													error instanceof Error
+														? error.message
+														: "Checkout failed";
+												setCheckoutLogs(message);
+												toast.error("Error during checkout build");
+											});
+									}}
+								>
+									<Button
+										variant="secondary"
+										isLoading={isCheckingOut}
+										className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
+									>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<div className="flex items-center">
+													<PackageSearch className="size-4 mr-1" />
+													{isCheckouted ? "Recheckout" : "Checkout"}
+												</div>
+											</TooltipTrigger>
+											<TooltipPrimitive.Portal>
+												<TooltipContent sideOffset={5} className="z-[60]">
+													<p>
+														{isCheckouted
+															? "Checkout image already exists; click to recheckout"
+															: "Generate Dockerfile and build checkout image"}
+													</p>
+												</TooltipContent>
+											</TooltipPrimitive.Portal>
+										</Tooltip>
+									</Button>
+								</DialogAction>
+							)
 						) : (
 							<DialogAction
 								title="Stop Application"
@@ -271,9 +422,9 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 						</Button>
 					</DockerTerminalModal>
 					<div className="flex flex-row items-center gap-2 rounded-md px-4 py-2 border">
-						<span className="text-sm font-medium">Autodeploy</span>
+						<span className="text-sm font-medium">Autoscan</span>
 						<Switch
-							aria-label="Toggle autodeploy"
+							aria-label="Toggle autoscan"
 							checked={data?.autoDeploy || false}
 							onCheckedChange={async (enabled) => {
 								await update({
@@ -281,11 +432,11 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 									autoDeploy: enabled,
 								})
 									.then(async () => {
-										toast.success("Auto Deploy Updated");
+										toast.success("Auto Scan Updated");
 										await refetch();
 									})
 									.catch(() => {
-										toast.error("Error updating Auto Deploy");
+										toast.error("Error updating Auto Scan");
 									});
 							}}
 							className="flex flex-row gap-2 items-center data-[state=checked]:bg-primary"
@@ -315,6 +466,14 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 					</div>
 				</CardContent>
 			</Card>
+			<CheckoutLogModal
+				open={checkoutModalOpen}
+				onOpenChange={setCheckoutModalOpen}
+				title="Checkout Build Logs"
+				description="Docker build output for scan checkout image"
+				logs={checkoutLogs}
+				isLoading={isCheckouting && !checkoutLogs}
+			/>
 			<ShowProviderForm applicationId={applicationId} />
 			<ShowBuildChooseForm applicationId={applicationId} />
 		</>

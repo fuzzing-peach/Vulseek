@@ -841,6 +841,111 @@
       "when": 1762142756443,
       "tag": "0119_bouncy_morbius",
       "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1776148467528,
+      "tag": "0120_vulseek_scan_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1776150028759,
+      "tag": "0121_project_scan_context_volume",
+      "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1776200000000,
+      "tag": "0122_container_environment",
+      "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1776201000000,
+      "tag": "0123_candidate_current_stage",
+      "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "7",
+      "when": 1776202000000,
+      "tag": "0124_scan_thread_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 125,
+      "version": "7",
+      "when": 1776203000000,
+      "tag": "0125_candidate_mining_thread",
+      "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1776204000000,
+      "tag": "0126_drop_candidate_stage_thread_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 127,
+      "version": "7",
+      "when": 1776205000000,
+      "tag": "0127_agent_profiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 128,
+      "version": "7",
+      "when": 1776206000000,
+      "tag": "0128_agent_profile_model",
+      "breakpoints": true
+    },
+    {
+      "idx": 129,
+      "version": "7",
+      "when": 1776207000000,
+      "tag": "0129_scan_job_target_ref_tag",
+      "breakpoints": true
+    },
+    {
+      "idx": 130,
+      "version": "7",
+      "when": 1776208000000,
+      "tag": "0130_vulnerability_candidate_confidence_real",
+      "breakpoints": true
+    },
+    {
+      "idx": 131,
+      "version": "7",
+      "when": 1776209000000,
+      "tag": "0131_scan_job_status_scanning_mining",
+      "breakpoints": true
+    },
+    {
+      "idx": 132,
+      "version": "7",
+      "when": 1776210000000,
+      "tag": "0132_analysis_rename",
+      "breakpoints": true
+    },
+    {
+      "idx": 133,
+      "version": "7",
+      "when": 1776211000000,
+      "tag": "0133_scan_job_status_analyzing",
+      "breakpoints": true
+    },
+    {
+      "idx": 134,
+      "version": "7",
+      "when": 1776212000000,
+      "tag": "0134_analysis_results",
+      "breakpoints": true
     }
   ]
 }

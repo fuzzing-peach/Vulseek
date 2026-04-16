@@ -237,13 +237,13 @@ const EnvironmentPage = (
 	const { data: auth } = api.user.get.useQuery();
 	const [sortBy, setSortBy] = useState<string>(() => {
 		if (typeof window !== "undefined") {
-			return localStorage.getItem("servicesSort") || "createdAt-desc";
+			return (localStorage.getItem("profilesSort") || localStorage.getItem("servicesSort") || "createdAt-desc");
 		}
 		return "createdAt-desc";
 	});
 
 	useEffect(() => {
-		localStorage.setItem("servicesSort", sortBy);
+		localStorage.setItem("profilesSort", sortBy);
 	}, [sortBy]);
 
 	const sortServices = (services: Services[]) => {
@@ -429,11 +429,11 @@ const EnvironmentPage = (
 				}
 				success++;
 			} catch {
-				toast.error(`Error starting service ${serviceId}`);
+				toast.error(`Error starting profile ${serviceId}`);
 			}
 		}
 		if (success > 0) {
-			toast.success(`${success} services started successfully`);
+			toast.success(`${success} profiles started successfully`);
 			refetch();
 		}
 		setIsBulkActionLoading(false);
@@ -476,11 +476,11 @@ const EnvironmentPage = (
 				}
 				success++;
 			} catch {
-				toast.error(`Error stopping service ${serviceId}`);
+				toast.error(`Error stopping profile ${serviceId}`);
 			}
 		}
 		if (success > 0) {
-			toast.success(`${success} services stopped successfully`);
+			toast.success(`${success} profiles stopped successfully`);
 			refetch();
 		}
 		setSelectedServices([]);
@@ -556,12 +556,12 @@ const EnvironmentPage = (
 				success++;
 			} catch (error) {
 				toast.error(
-					`Error moving service ${serviceId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+					`Error moving profile ${serviceId}: ${error instanceof Error ? error.message : "Unknown error"}`,
 				);
 			}
 		}
 		if (success > 0) {
-			toast.success(`${success} services moved successfully`);
+			toast.success(`${success} profiles moved successfully`);
 			refetch();
 		}
 		setSelectedServices([]);
@@ -625,12 +625,12 @@ const EnvironmentPage = (
 				success++;
 			} catch (error) {
 				toast.error(
-					`Error deleting service ${serviceId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+					`Error deleting profile ${serviceId}: ${error instanceof Error ? error.message : "Unknown error"}`,
 				);
 			}
 		}
 		if (success > 0) {
-			toast.success(`${success} services deleted successfully`);
+			toast.success(`${success} profiles deleted successfully`);
 			refetch();
 		}
 		setSelectedServices([]);
@@ -689,18 +689,18 @@ const EnvironmentPage = (
 			} catch (error) {
 				failed++;
 				toast.error(
-					`Error deploying service ${serviceId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+					`Error deploying profile ${serviceId}: ${error instanceof Error ? error.message : "Unknown error"}`,
 				);
 			}
 		}
 		if (success > 0) {
 			toast.success(
-				`${success} service${success !== 1 ? "s" : ""} deployed successfully`,
+				`${success} profile${success !== 1 ? "s" : ""} deployed successfully`,
 			);
 		}
 		if (failed > 0) {
 			toast.error(
-				`${failed} service${failed !== 1 ? "s" : ""} failed to deploy`,
+				`${failed} profile${failed !== 1 ? "s" : ""} failed to deploy`,
 			);
 		}
 
@@ -798,7 +798,7 @@ const EnvironmentPage = (
 											<DropdownMenuTrigger asChild>
 												<Button>
 													<PlusIcon className="h-4 w-4" />
-													Create Service
+													Create Profile
 												</Button>
 											</DropdownMenuTrigger>
 											<DropdownMenuContent
@@ -871,8 +871,8 @@ const EnvironmentPage = (
 												<DropdownMenuLabel>Actions</DropdownMenuLabel>
 												<DropdownMenuSeparator />
 												<DialogAction
-													title="Start Services"
-													description={`Are you sure you want to start ${selectedServices.length} services?`}
+													title="Start Profiles"
+													description={`Are you sure you want to start ${selectedServices.length} profiles?`}
 													type="default"
 													onClick={handleBulkStart}
 												>
@@ -885,8 +885,8 @@ const EnvironmentPage = (
 													</Button>
 												</DialogAction>
 												<DialogAction
-													title="Deploy Services"
-													description={`Are you sure you want to deploy ${selectedServices.length} service${selectedServices.length !== 1 ? "s" : ""}? This will redeploy/restart the selected services.`}
+													title="Deploy Profiles"
+													description={`Are you sure you want to deploy ${selectedServices.length} profile${selectedServices.length !== 1 ? "s" : ""}? This will redeploy/restart the selected profiles.`}
 													onClick={handleBulkDeploy}
 													type="default"
 													disabled={
@@ -902,8 +902,8 @@ const EnvironmentPage = (
 													</Button>
 												</DialogAction>
 												<DialogAction
-													title="Stop Services"
-													description={`Are you sure you want to stop ${selectedServices.length} services?`}
+													title="Stop Profiles"
+													description={`Are you sure you want to stop ${selectedServices.length} profiles?`}
 													type="destructive"
 													onClick={handleBulkStop}
 												>
@@ -919,12 +919,12 @@ const EnvironmentPage = (
 													auth?.canDeleteServices) && (
 													<>
 														<DialogAction
-															title="Delete Services"
+															title="Delete Profiles"
 															description={
 																<div className="space-y-3">
 																	<p>
 																		Are you sure you want to delete{" "}
-																		{selectedServices.length} services? This
+																		{selectedServices.length} profiles? This
 																		action cannot be undone.
 																	</p>
 																	{selectedServicesWithRunningStatus.length >
@@ -932,8 +932,8 @@ const EnvironmentPage = (
 																		<AlertBlock type="warning">
 																			Warning:{" "}
 																			{selectedServicesWithRunningStatus.length}{" "}
-																			of the selected services are currently
-																			running. Please stop these services first
+																			of the selected profiles are currently
+																			running. Please stop these profiles first
 																			before deleting:{" "}
 																			{selectedServicesWithRunningStatus
 																				.map((s) => s.name)
@@ -979,10 +979,10 @@ const EnvironmentPage = (
 													</DialogTrigger>
 													<DialogContent>
 														<DialogHeader>
-															<DialogTitle>Move Services</DialogTitle>
+															<DialogTitle>Move Profiles</DialogTitle>
 															<DialogDescription>
 																Select the target project and environment to
-																move {selectedServices.length} services
+																move {selectedServices.length} profiles
 															</DialogDescription>
 														</DialogHeader>
 														<div className="flex flex-col gap-4">
@@ -991,7 +991,7 @@ const EnvironmentPage = (
 																	<FolderInput className="h-8 w-8 text-muted-foreground" />
 																	<p className="text-sm text-muted-foreground text-center">
 																		No other projects available. Create a new
-																		project first to move services.
+																		project first to move profiles.
 																	</p>
 																</div>
 															) : (
@@ -1087,7 +1087,7 @@ const EnvironmentPage = (
 																	!selectedTargetEnvironment
 																}
 															>
-																Move Services
+																Move Profiles
 															</Button>
 														</DialogFooter>
 													</DialogContent>
@@ -1100,17 +1100,17 @@ const EnvironmentPage = (
 												>
 													<DialogContent>
 														<DialogHeader>
-															<DialogTitle>Delete Services</DialogTitle>
+															<DialogTitle>Delete Profiles</DialogTitle>
 															<DialogDescription>
 																Are you sure you want to delete{" "}
-																{selectedServices.length} service
+																{selectedServices.length} profile
 																{selectedServices.length !== 1 ? "s" : ""}? This
 																action cannot be undone.
 															</DialogDescription>
 														</DialogHeader>
 
 														<div className="space-y-4">
-															{/* Show services to be deleted */}
+															{/* Show profiles to be deleted */}
 															<div className="max-h-40 overflow-y-auto space-y-2">
 																{selectedServices.map((serviceId) => {
 																	const service = filteredServices.find(
@@ -1130,14 +1130,14 @@ const EnvironmentPage = (
 																})}
 															</div>
 
-															{/* Volume deletion option for compose services */}
+															{/* Volume deletion option for compose profiles */}
 															{(() => {
 																const servicesWithVolumeSupport =
 																	selectedServices.filter((serviceId) => {
 																		const service = filteredServices.find(
 																			(s) => s.id === serviceId,
 																		);
-																		// Currently only compose services support volume deletion
+																		// Currently only compose profiles support volume deletion
 																		return service?.type === "compose";
 																	});
 
@@ -1158,13 +1158,13 @@ const EnvironmentPage = (
 																				htmlFor="deleteVolumes"
 																				className="text-sm font-medium"
 																			>
-																				Delete volumes associated with services
+																				Delete volumes associated with profiles
 																			</label>
 																		</div>
 																		<p className="text-xs text-muted-foreground">
 																			Volume deletion is available for:{" "}
 																			{servicesWithVolumeSupport.length} compose
-																			service
+																			profile
 																			{servicesWithVolumeSupport.length !== 1
 																				? "s"
 																				: ""}
@@ -1193,7 +1193,7 @@ const EnvironmentPage = (
 																}}
 																disabled={isBulkActionLoading}
 															>
-																Delete Services
+																Delete Profiles
 															</Button>
 														</DialogFooter>
 													</DialogContent>
@@ -1205,7 +1205,7 @@ const EnvironmentPage = (
 									<div className="flex flex-col gap-2 lg:flex-row lg:gap-4 lg:items-center">
 										<div className="w-full relative">
 											<FocusShortcutInput
-												placeholder="Filter services..."
+												placeholder="Filter profiles..."
 												value={searchQuery}
 												onChange={(e) => setSearchQuery(e.target.value)}
 												className="pr-10"
@@ -1299,14 +1299,14 @@ const EnvironmentPage = (
 										<div className="flex h-[70vh] w-full flex-col items-center justify-center">
 											<FolderInput className="size-8 self-center text-muted-foreground" />
 											<span className="text-center font-medium text-muted-foreground">
-												No services added yet. Click on Create Service.
+												No profiles added yet. Click on Create Profile.
 											</span>
 										</div>
 									) : filteredServices.length === 0 ? (
 										<div className="flex h-[70vh] w-full flex-col items-center justify-center">
 											<Search className="size-8 self-center text-muted-foreground" />
 											<span className="text-center font-medium text-muted-foreground">
-												No services found with the current filters
+												No profiles found with the current filters
 											</span>
 											<span className="text-sm text-muted-foreground">
 												Try adjusting your search or filters
@@ -1320,7 +1320,7 @@ const EnvironmentPage = (
 														key={service.id}
 														onClick={() => {
 															router.push(
-																`/dashboard/project/${projectId}/environment/${environmentId}/services/${service.type}/${service.id}`,
+																`/dashboard/project/${projectId}/environment/${environmentId}/profiles/${service.type}/${service.id}`,
 															);
 														}}
 														className="flex flex-col group relative cursor-pointer bg-transparent transition-colors hover:bg-border"

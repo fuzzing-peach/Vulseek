@@ -3,6 +3,7 @@ import { createServerSideHelpers } from "@trpc/react-query/server";
 import type { GetServerSidePropsContext } from "next";
 import type { ReactElement } from "react";
 import superjson from "superjson";
+import { AgentProfilesForm } from "@/components/dashboard/settings/agent-profiles-form";
 import { AiForm } from "@/components/dashboard/settings/ai-form";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { appRouter } from "@/server/api/root";
@@ -12,6 +13,7 @@ const Page = () => {
 	return (
 		<div className="flex flex-col gap-4 w-full">
 			<AiForm />
+			<AgentProfilesForm />
 		</div>
 	);
 };

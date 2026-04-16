@@ -10,6 +10,8 @@ import {
 	initializeTraefikService,
 	type TraefikOptions,
 } from "../setup/traefik-setup";
+import { findAdmin } from "./admin";
+import { updateUser } from "./user";
 
 export interface IUpdateData {
 	latestVersion: string | null;
@@ -283,6 +285,32 @@ fi`;
 		console.error(error);
 		return "unknown";
 	}
+};
+
+export const getContainerEnvironmentSetting = async () => {
+	try {
+		const admin = await findAdmin();
+		return admin.user.containerEnvironment || "";
+	} catch {
+		return "";
+	}
+};
+
+export const updateContainerEnvironmentSetting = async (
+	containerEnvironment: string,
+) => {
+	const admin = await findAdmin();
+	await updateUser(admin.user.id, {
+		containerEnvironment,
+	});
+	process.env.DOKPLOY_CONTAINER_ENV = containerEnvironment;
+	return true;
+};
+
+export const syncContainerEnvironmentSettingToProcess = async () => {
+	const value = await getContainerEnvironmentSetting();
+	process.env.DOKPLOY_CONTAINER_ENV = value;
+	return value;
 };
 
 export const reloadDockerResource = async (

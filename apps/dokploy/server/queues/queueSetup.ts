@@ -4,13 +4,25 @@ import { redisConfig } from "./redis-connection";
 const myQueue = new Queue("deployments", {
 	connection: redisConfig,
 });
+const scansQueue = new Queue("scans", {
+	connection: redisConfig,
+});
 
 process.on("SIGTERM", () => {
 	myQueue.close();
+	scansQueue.close();
 	process.exit(0);
 });
 
 myQueue.on("error", (error) => {
+	if ((error as any).code === "ECONNREFUSED") {
+		console.error(
+			"Make sure you have installed Redis and it is running.",
+			error,
+		);
+	}
+});
+scansQueue.on("error", (error) => {
 	if ((error as any).code === "ECONNREFUSED") {
 		console.error(
 			"Make sure you have installed Redis and it is running.",
@@ -41,4 +53,4 @@ export const cleanQueuesByCompose = async (composeId: string) => {
 	}
 };
 
-export { myQueue };
+export { myQueue, scansQueue };

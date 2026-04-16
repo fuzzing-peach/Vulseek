@@ -30,6 +30,7 @@ import { redirectsRouter } from "./routers/redirects";
 import { redisRouter } from "./routers/redis";
 import { registryRouter } from "./routers/registry";
 import { rollbackRouter } from "./routers/rollbacks";
+import { scanRouter } from "./routers/scan";
 import { scheduleRouter } from "./routers/schedule";
 import { securityRouter } from "./routers/security";
 import { serverRouter } from "./routers/server";
@@ -84,6 +85,7 @@ export const appRouter = createTRPCRouter({
 	organization: organizationRouter,
 	schedule: scheduleRouter,
 	rollback: rollbackRouter,
+	scan: scanRouter,
 	volumeBackups: volumeBackupsRouter,
 	environment: environmentRouter,
 });

@@ -1,0 +1,96 @@
+rules:
+  # ──────────────────────────────────────────────
+  # Unbounded string operations — always overflow candidates
+  # ──────────────────────────────────────────────
+  - id: dangerous-strcpy
+    pattern: strcpy($DST, $SRC)
+    message: |
+      strcpy() has no bounds check — classic stack/heap buffer overflow.
+      Audit: verify $DST is large enough for $SRC at every call site.
+    languages: [c, cpp]
+    severity: WARNING
+    metadata:
+      cwe: CWE-120
+      category: memory-corruption
+
+  - id: dangerous-strcat
+    pattern: strcat($DST, $SRC)
+    message: |
+      strcat() has no bounds check — buffer overflow if $DST lacks space.
+      Use strncat() with explicit remaining-space calculation.
+    languages: [c, cpp]
+    severity: WARNING
+    metadata:
+      cwe: CWE-120
+      category: memory-corruption
+
+  - id: dangerous-gets
+    pattern: gets($BUF)
+    message: |
+      gets() is unconditionally unsafe — no bound, always overflow.
+      Replace with fgets(buf, sizeof(buf), stdin).
+    languages: [c, cpp]
+    severity: ERROR
+    metadata:
+      cwe: CWE-242
+      category: memory-corruption
+
+  # ──────────────────────────────────────────────
+  # Bounded but commonly misused
+  # ──────────────────────────────────────────────
+  - id: dangerous-sprintf
+    pattern: sprintf($BUF, $FMT, ...)
+    message: |
+      sprintf() writes to $BUF without length limit — use snprintf().
+      Overflow possible if formatted output exceeds buffer size.
+    languages: [c, cpp]
+    severity: WARNING
+    metadata:
+      cwe: CWE-120
+      category: memory-corruption
+
+  - id: dangerous-vsprintf
+    pattern: vsprintf($BUF, $FMT, $AP)
+    message: |
+      vsprintf() writes to $BUF without length limit — use vsnprintf().
+    languages: [c, cpp]
+    severity: WARNING
+    metadata:
+      cwe: CWE-120
+      category: memory-corruption
+
+  - id: dangerous-scanf-string
+    patterns:
+      - pattern: scanf("%s", ...)
+    message: |
+      scanf("%s") reads until whitespace with no width limit — overflow.
+      Use scanf("%Ns", ...) with an explicit field width.
+    languages: [c, cpp]
+    severity: WARNING
+    metadata:
+      cwe: CWE-120
+      category: memory-corruption
+
+  # ──────────────────────────────────────────────
+  # memcpy / memmove with externally-supplied length
+  # ──────────────────────────────────────────────
+  - id: dangerous-memcpy-var-len
+    pattern: memcpy($DST, $SRC, $LEN)
+    message: |
+      memcpy() with variable length $LEN — confirm $LEN is validated
+      against both the destination buffer size and the source data size.
+    languages: [c, cpp]
+    severity: INFO
+    metadata:
+      cwe: CWE-119
+      category: memory-corruption
+
+  - id: dangerous-memmove-var-len
+    pattern: memmove($DST, $SRC, $LEN)
+    message: |
+      memmove() with variable length $LEN — same validation requirement as memcpy.
+    languages: [c, cpp]
+    severity: INFO
+    metadata:
+      cwe: CWE-119
+      category: memory-corruption

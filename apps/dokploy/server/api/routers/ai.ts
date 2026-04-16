@@ -1,6 +1,8 @@
 import { IS_CLOUD } from "@dokploy/server/constants";
 import {
+	apiCreateAgentProfile,
 	apiCreateAi,
+	apiUpdateAgentProfile,
 	apiUpdateAi,
 	deploySuggestionSchema,
 } from "@dokploy/server/db/schema/ai";
@@ -10,9 +12,13 @@ import {
 	findEnvironmentById,
 } from "@dokploy/server/index";
 import {
+	deleteAgentProfile,
 	deleteAiSettings,
+	getAgentProfileById,
+	getAgentProfilesByOrganizationId,
 	getAiSettingById,
 	getAiSettingsByOrganizationId,
+	saveAgentProfile,
 	saveAiSettings,
 	suggestVariants,
 } from "@dokploy/server/services/ai";
@@ -136,6 +142,57 @@ export const aiRouter = createTRPCRouter({
 			ctx.session.activeOrganizationId,
 		);
 	}),
+
+	agentProfileOne: protectedProcedure
+		.input(z.object({ agentProfileId: z.string() }))
+		.query(async ({ ctx, input }) => {
+			const agentProfile = await getAgentProfileById(input.agentProfileId);
+			if (agentProfile.organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You don't have access to this agent profile",
+				});
+			}
+			return agentProfile;
+		}),
+
+	getAgentProfiles: protectedProcedure.query(async ({ ctx }) => {
+		return await getAgentProfilesByOrganizationId(
+			ctx.session.activeOrganizationId,
+		);
+	}),
+
+	createAgentProfile: adminProcedure
+		.input(apiCreateAgentProfile)
+		.mutation(async ({ ctx, input }) => {
+			return await saveAgentProfile(ctx.session.activeOrganizationId, input);
+		}),
+
+	updateAgentProfile: protectedProcedure
+		.input(apiUpdateAgentProfile)
+		.mutation(async ({ ctx, input }) => {
+			const agentProfile = await getAgentProfileById(input.agentProfileId);
+			if (agentProfile.organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You don't have access to this agent profile",
+				});
+			}
+			return await saveAgentProfile(ctx.session.activeOrganizationId, input);
+		}),
+
+	deleteAgentProfile: protectedProcedure
+		.input(z.object({ agentProfileId: z.string() }))
+		.mutation(async ({ ctx, input }) => {
+			const agentProfile = await getAgentProfileById(input.agentProfileId);
+			if (agentProfile.organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You don't have access to this agent profile",
+				});
+			}
+			return await deleteAgentProfile(input.agentProfileId);
+		}),
 
 	get: protectedProcedure
 		.input(z.object({ aiId: z.string() }))

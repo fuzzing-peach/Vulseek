@@ -1,5 +1,5 @@
 import { db } from "@dokploy/server/db";
-import { ai } from "@dokploy/server/db/schema";
+import { agentProfiles, ai } from "@dokploy/server/db/schema";
 import { selectAIProvider } from "@dokploy/server/utils/ai/select-ai-provider";
 import { TRPCError } from "@trpc/server";
 import { generateObject } from "ai";
@@ -50,6 +50,57 @@ export const saveAiSettings = async (organizationId: string, settings: any) => {
 
 export const deleteAiSettings = async (aiId: string) => {
 	return db.delete(ai).where(eq(ai.aiId, aiId));
+};
+
+export const getAgentProfilesByOrganizationId = async (
+	organizationId: string,
+) => {
+	return await db.query.agentProfiles.findMany({
+		where: eq(agentProfiles.organizationId, organizationId),
+		orderBy: desc(agentProfiles.createdAt),
+	});
+};
+
+export const getAgentProfileById = async (agentProfileId: string) => {
+	const agentProfile = await db.query.agentProfiles.findFirst({
+		where: eq(agentProfiles.agentProfileId, agentProfileId),
+	});
+
+	if (!agentProfile) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Agent profile not found",
+		});
+	}
+
+	return agentProfile;
+};
+
+export const saveAgentProfile = async (
+	organizationId: string,
+	settings: any,
+) => {
+	const agentProfileId = settings.agentProfileId;
+
+	return db
+		.insert(agentProfiles)
+		.values({
+			agentProfileId,
+			organizationId,
+			...settings,
+		})
+		.onConflictDoUpdate({
+			target: agentProfiles.agentProfileId,
+			set: {
+				...settings,
+			},
+		});
+};
+
+export const deleteAgentProfile = async (agentProfileId: string) => {
+	return db
+		.delete(agentProfiles)
+		.where(eq(agentProfiles.agentProfileId, agentProfileId));
 };
 
 interface Props {

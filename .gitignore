@@ -12,6 +12,7 @@ node_modules
 .env.development.local
 .env.test.local
 .env.production.local
+env.development
 
 # Testing
 coverage
@@ -26,6 +27,7 @@ coverage
 .next/
 out/
 dist
+.scan-runtime
 
 
 # Debug

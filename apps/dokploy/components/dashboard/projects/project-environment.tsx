@@ -113,13 +113,13 @@ export const ProjectEnvironment = ({ projectId, children }: Props) => {
 				<DialogHeader>
 					<DialogTitle>Project Environment</DialogTitle>
 					<DialogDescription>
-						Update the env Environment variables that are accessible to all
-						services of this project.
+						Update the environment variables that are accessible to all
+						profiles of this project.
 					</DialogDescription>
 				</DialogHeader>
 				{isError && <AlertBlock type="error">{error?.message}</AlertBlock>}
 				<AlertBlock type="info">
-					Use this syntax to reference project-level variables in your service
+					Use this syntax to reference project-level variables in your profile
 					environments: <code>DATABASE_URL=${"{{project.DATABASE_URL}}"}</code>
 				</AlertBlock>
 				<div className="grid gap-4">

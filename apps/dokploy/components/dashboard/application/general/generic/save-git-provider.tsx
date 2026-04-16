@@ -37,7 +37,6 @@ import {
 import { api } from "@/utils/api";
 
 const GitProviderSchema = z.object({
-	buildPath: z.string().min(1, "Path is required").default("/"),
 	repositoryURL: z.string().min(1, {
 		message: "Repository URL is required",
 	}),
@@ -64,7 +63,6 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 	const form = useForm<GitProvider>({
 		defaultValues: {
 			branch: "",
-			buildPath: "/",
 			repositoryURL: "",
 			sshKey: undefined,
 			watchPaths: [],
@@ -78,7 +76,6 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 			form.reset({
 				sshKey: data.customGitSSHKeyId || undefined,
 				branch: data.customGitBranch || "",
-				buildPath: data.customGitBuildPath || "/",
 				repositoryURL: data.customGitUrl || "",
 				watchPaths: data.watchPaths || [],
 				enableSubmodules: data.enableSubmodules ?? false,
@@ -89,7 +86,7 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 	const onSubmit = async (values: GitProvider) => {
 		await mutateAsync({
 			customGitBranch: values.branch,
-			customGitBuildPath: values.buildPath,
+			customGitBuildPath: "/",
 			customGitUrl: values.repositoryURL,
 			customGitSSHKeyId: values.sshKey === "none" ? null : values.sshKey,
 			applicationId,
@@ -190,7 +187,7 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 							</Button>
 						)}
 					</div>
-					<div className="space-y-4">
+					<div className="space-y-4 md:col-span-2">
 						<FormField
 							control={form.control}
 							name="branch"
@@ -206,19 +203,6 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 						/>
 					</div>
 
-					<FormField
-						control={form.control}
-						name="buildPath"
-						render={({ field }) => (
-							<FormItem>
-								<FormLabel>Build Path</FormLabel>
-								<FormControl>
-									<Input placeholder="/" {...field} />
-								</FormControl>
-								<FormMessage />
-							</FormItem>
-						)}
-					/>
 					<FormField
 						control={form.control}
 						name="watchPaths"

@@ -191,10 +191,10 @@ export const ShowProjects = () => {
 														Oldest first
 													</SelectItem>
 													<SelectItem value="services-desc">
-														Most services
+														Most profiles
 													</SelectItem>
 													<SelectItem value="services-asc">
-														Least services
+														Least profiles
 													</SelectItem>
 												</SelectContent>
 											</Select>
@@ -433,7 +433,7 @@ export const ShowProjects = () => {
 																											<AlertTriangle className="text-yellow-600 dark:text-yellow-400" />
 																											<span className="text-sm text-yellow-600 dark:text-yellow-400">
 																												You have active
-																												services, please delete
+																												profiles, please delete
 																												them first
 																											</span>
 																										</div>
@@ -490,8 +490,8 @@ export const ShowProjects = () => {
 																	<span>
 																		{totalServices}{" "}
 																		{totalServices === 1
-																			? "service"
-																			: "services"}
+																			? "profile"
+																			: "profiles"}
 																	</span>
 																</div>
 															</CardFooter>

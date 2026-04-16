@@ -11,6 +11,7 @@ import {
 import { createInsertSchema } from "drizzle-zod";
 import { nanoid } from "nanoid";
 import { z } from "zod";
+import { agentProfiles } from "./ai";
 import { bitbucket } from "./bitbucket";
 import { deployments } from "./deployment";
 import { domains } from "./domain";
@@ -201,6 +202,12 @@ export const applications = pgTable("application", {
 	serverId: text("serverId").references(() => server.serverId, {
 		onDelete: "cascade",
 	}),
+	agentProfileId: text("agentProfileId").references(
+		() => agentProfiles.agentProfileId,
+		{
+			onDelete: "set null",
+		},
+	),
 });
 
 export const applicationsRelations = relations(
@@ -243,6 +250,10 @@ export const applicationsRelations = relations(
 		server: one(server, {
 			fields: [applications.serverId],
 			references: [server.serverId],
+		}),
+		agentProfile: one(agentProfiles, {
+			fields: [applications.agentProfileId],
+			references: [agentProfiles.agentProfileId],
 		}),
 		previewDeployments: many(previewDeployments),
 	}),
@@ -318,6 +329,7 @@ const createSchema = createInsertSchema(applications, {
 	previewLabels: z.array(z.string()).optional(),
 	cleanCache: z.boolean().optional(),
 	stopGracePeriodSwarm: z.bigint().nullable(),
+	agentProfileId: z.string().nullable().optional(),
 });
 
 export const apiCreateApplication = createSchema.pick({

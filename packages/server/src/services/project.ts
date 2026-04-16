@@ -9,6 +9,7 @@ import {
 	projects,
 	redis,
 } from "@dokploy/server/db/schema";
+import { execAsync } from "@dokploy/server/utils/process/execAsync";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { createProductionEnvironment } from "./environment";
@@ -19,6 +20,9 @@ export const createProject = async (
 	input: typeof apiCreateProject._type,
 	organizationId: string,
 ) => {
+	const buildScanContextVolumeName = (projectId: string) =>
+		`scan-context-${projectId}`;
+
 	const newProject = await db
 		.insert(projects)
 		.values({
@@ -35,12 +39,35 @@ export const createProject = async (
 		});
 	}
 
+	const scanContextVolumeName = buildScanContextVolumeName(newProject.projectId);
+
+	try {
+		await execAsync(`docker volume create "${scanContextVolumeName}"`);
+		await db
+			.update(projects)
+			.set({
+				scanContextVolumeName,
+			})
+			.where(eq(projects.projectId, newProject.projectId));
+	} catch (error) {
+		await db.delete(projects).where(eq(projects.projectId, newProject.projectId));
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: `Error creating scan context volume: ${
+				error instanceof Error ? error.message : error
+			}`,
+		});
+	}
+
 	// Automatically create a production environment
 	const newEnvironment = await createProductionEnvironment(
 		newProject.projectId,
 	);
 	return {
-		project: newProject,
+		project: {
+			...newProject,
+			scanContextVolumeName,
+		},
 		environment: newEnvironment,
 	};
 };

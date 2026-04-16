@@ -12,6 +12,7 @@ import {
 	findUserById,
 	getDokployImage,
 	getDokployImageTag,
+	getContainerEnvironmentSetting,
 	getLogCleanupStatus,
 	getUpdateData,
 	IS_CLOUD,
@@ -36,6 +37,7 @@ import {
 	stopLogCleanup,
 	updateLetsEncryptEmail,
 	updateServerById,
+	updateContainerEnvironmentSetting,
 	updateServerTraefik,
 	updateUser,
 	writeConfig,
@@ -854,6 +856,20 @@ export const settingsRouter = createTRPCRouter({
 	getLogCleanupStatus: adminProcedure.query(async () => {
 		return getLogCleanupStatus();
 	}),
+	getContainerEnvironment: adminProcedure.query(async () => {
+		return {
+			containerEnvironment: await getContainerEnvironmentSetting(),
+		};
+	}),
+	updateContainerEnvironment: adminProcedure
+		.input(
+			z.object({
+				containerEnvironment: z.string(),
+			}),
+		)
+		.mutation(async ({ input }) => {
+			return await updateContainerEnvironmentSetting(input.containerEnvironment);
+		}),
 
 	getDokployCloudIps: adminProcedure.query(async () => {
 		if (!IS_CLOUD) {

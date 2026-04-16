@@ -1,0 +1,17 @@
+
+model = "gpt-5.3-codex"
+model_reasoning_effort = "medium"
+
+model_provider = "cliproxyapi"
+preferred_auth_method = "apikey"
+
+[notice]
+hide_rate_limit_model_nudge = true
+
+[tui]
+status_line = ["model-with-reasoning", "context-remaining", "current-dir", "five-hour-limit", "weekly-limit"]
+
+[model_providers.cliproxyapi]
+name = "cliproxyapi"
+base_url = "http://211.65.197.92:8317/v1"
+wire_api = "responses"

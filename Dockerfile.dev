@@ -1,0 +1,82 @@
+# syntax=docker/dockerfile:1
+# 开发环境 Dockerfile - 用于代码修改、调试和开发
+
+FROM node:20.16.0-slim AS base
+ENV PNPM_HOME="/pnpm"
+ENV PATH="$PNPM_HOME:$PATH"
+RUN corepack enable
+RUN corepack prepare pnpm@9.12.0 --activate
+
+FROM base AS development
+WORKDIR /app
+
+# 设置开发环境
+ENV NODE_ENV=development
+
+# 安装开发所需的系统依赖和调试工具
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    git \
+    python3-pip \
+    pkg-config \
+    libsecret-1-dev \
+    curl \
+    unzip \
+    zip \
+    apache2-utils \
+    iproute2 \
+    rsync \
+    git-lfs \
+    vim \
+    nano \
+    procps \
+    net-tools \
+    && git lfs install \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 Docker（用于容器管理功能）
+RUN curl -x ${HTTP_PROXY} -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh && rm get-docker.sh
+
+# 安装 rclone
+RUN curl -x ${HTTP_PROXY} https://rclone.org/install.sh | bash
+
+# 安装 Nixpacks
+ARG NIXPACKS_VERSION=1.39.0
+RUN curl -x ${HTTP_PROXY} -sSL https://nixpacks.com/install.sh -o install.sh \
+    && chmod +x install.sh \
+    && ./install.sh \
+    && rm install.sh
+
+# 安装 Railpack
+ARG RAILPACK_VERSION=0.2.2
+RUN curl -x ${HTTP_PROXY} -sSL https://railpack.com/install.sh | bash
+
+# 安装 buildpacks
+COPY --from=buildpacksio/pack:0.35.0 /usr/local/bin/pack /usr/local/bin/pack
+
+# 复制 package.json 和 pnpm-lock.yaml（利用 Docker 缓存）
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages ./packages
+COPY apps ./apps
+
+# 安装所有依赖（包括开发依赖）
+RUN --mount=type=cache,id=pnpm-dev,target=/pnpm/store pnpm install
+
+# 全局安装 tsx 和其他开发工具
+RUN pnpm install -g tsx nodemon
+
+# 暴露主应用端口
+EXPOSE 3000
+
+# 暴露 Node.js 调试端口
+EXPOSE 9229
+
+# 暴露可能的其他服务端口
+EXPOSE 5555
+
+# 使用开发模式启动，支持热重载
+# 注意：需要在 docker-compose.yml 中挂载源代码卷
+CMD ["pnpm", "dokploy:dev"]
+

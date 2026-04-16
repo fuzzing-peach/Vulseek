@@ -261,9 +261,13 @@ export const prepareEnvironmentVariables = (
 	projectEnv?: string | null,
 	environmentEnv?: string | null,
 ) => {
+	const globalContainerVars = parse(process.env.DOKPLOY_CONTAINER_ENV || "");
 	const projectVars = parse(projectEnv ?? "");
 	const environmentVars = parse(environmentEnv ?? "");
-	const serviceVars = parse(serviceEnv ?? "");
+	const serviceVars = {
+		...globalContainerVars,
+		...parse(serviceEnv ?? ""),
+	};
 
 	const resolvedVars = Object.entries(serviceVars).map(([key, value]) => {
 		let resolvedValue = value;
@@ -308,6 +312,16 @@ export const prepareEnvironmentVariables = (
 	});
 
 	return resolvedVars;
+};
+
+export const getGlobalContainerEnvironmentObject = () => {
+	return parse(process.env.DOKPLOY_CONTAINER_ENV || "");
+};
+
+export const getGlobalContainerEnvironmentPairs = () => {
+	return Object.entries(getGlobalContainerEnvironmentObject()).map(
+		([key, value]) => `${key}=${value}`,
+	);
 };
 
 export const parseEnvironmentKeyValuePair = (

@@ -17,12 +17,13 @@ export const DateTooltip = ({ date, children, className }: Props) => {
 	return (
 		<TooltipProvider delayDuration={0}>
 			<Tooltip>
-				<TooltipTrigger>
+				<TooltipTrigger asChild>
 					<span
 						className={cn(
 							"flex items-center text-muted-foreground text-left",
 							className,
 						)}
+						tabIndex={-1}
 					>
 						{children}{" "}
 						{formatDistanceToNow(new Date(date), {

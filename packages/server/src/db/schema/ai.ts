@@ -1,9 +1,12 @@
 import { relations } from "drizzle-orm";
-import { boolean, pgTable, text } from "drizzle-orm/pg-core";
+import { boolean, pgEnum, pgTable, text } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { organization } from "./account";
+
+export const agentProvider = pgEnum("agentProvider", ["codex", "claude_code"]);
+
 export const ai = pgTable("ai", {
 	aiId: text("aiId")
 		.notNull()
@@ -25,6 +28,33 @@ export const ai = pgTable("ai", {
 export const aiRelations = relations(ai, ({ one }) => ({
 	organization: one(organization, {
 		fields: [ai.organizationId],
+		references: [organization.id],
+	}),
+}));
+
+export const agentProfiles = pgTable("agent_profiles", {
+	agentProfileId: text("agentProfileId")
+		.notNull()
+		.primaryKey()
+		.$defaultFn(() => nanoid()),
+	name: text("name").notNull(),
+	provider: agentProvider("provider").notNull().default("codex"),
+	baseUrl: text("baseUrl").notNull(),
+	apiKey: text("apiKey").notNull(),
+	model: text("model").notNull(),
+	thinkingLevel: text("thinkingLevel").notNull().default("medium"),
+	isEnabled: boolean("isEnabled").notNull().default(true),
+	organizationId: text("organizationId")
+		.notNull()
+		.references(() => organization.id, { onDelete: "cascade" }),
+	createdAt: text("createdAt")
+		.notNull()
+		.$defaultFn(() => new Date().toISOString()),
+});
+
+export const agentProfilesRelations = relations(agentProfiles, ({ one }) => ({
+	organization: one(organization, {
+		fields: [agentProfiles.organizationId],
 		references: [organization.id],
 	}),
 }));
@@ -51,6 +81,35 @@ export const apiUpdateAi = createSchema
 	.partial()
 	.extend({
 		aiId: z.string().min(1),
+	})
+	.omit({ organizationId: true });
+
+const createAgentProfileSchema = createInsertSchema(agentProfiles, {
+	name: z.string().min(1, { message: "Name is required" }),
+	provider: z.enum(["codex", "claude_code"]),
+	baseUrl: z.string().url({ message: "Please enter a valid URL" }),
+	apiKey: z.string(),
+	model: z.string().min(1, { message: "Model is required" }),
+	thinkingLevel: z.string().min(1, { message: "Thinking level is required" }),
+	isEnabled: z.boolean().optional(),
+});
+
+export const apiCreateAgentProfile = createAgentProfileSchema
+	.pick({
+		name: true,
+		provider: true,
+		baseUrl: true,
+		apiKey: true,
+		model: true,
+		thinkingLevel: true,
+		isEnabled: true,
+	})
+	.required();
+
+export const apiUpdateAgentProfile = createAgentProfileSchema
+	.partial()
+	.extend({
+		agentProfileId: z.string().min(1),
 	})
 	.omit({ organizationId: true });
 

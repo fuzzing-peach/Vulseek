@@ -11,6 +11,7 @@ import {
 	initCancelDeployments,
 	sendDokployRestartNotifications,
 	setupDirectories,
+	syncContainerEnvironmentSettingToProcess,
 } from "@dokploy/server";
 import { config } from "dotenv";
 import next from "next";
@@ -51,6 +52,7 @@ void app.prepare().then(async () => {
 			createDefaultTraefikConfig();
 			createDefaultServerTraefikConfig();
 			await migration();
+			await syncContainerEnvironmentSettingToProcess();
 			await initCronJobs();
 			await initSchedules();
 			await initCancelDeployments();
@@ -60,6 +62,11 @@ void app.prepare().then(async () => {
 
 		if (IS_CLOUD && process.env.NODE_ENV === "production") {
 			await migration();
+			await syncContainerEnvironmentSettingToProcess();
+		}
+
+		if (process.env.NODE_ENV !== "production") {
+			await syncContainerEnvironmentSettingToProcess();
 		}
 
 		server.listen(PORT, HOST);
@@ -67,7 +74,10 @@ void app.prepare().then(async () => {
 		if (!IS_CLOUD) {
 			console.log("Starting Deployment Worker");
 			const { deploymentWorker } = await import("./queues/deployments-queue");
-			await deploymentWorker.run();
+			void deploymentWorker.run();
+			console.log("Starting Scans Worker");
+			const { scansWorker } = await import("./queues/scans-queue");
+			void scansWorker.run();
 		}
 	} catch (e) {
 		console.error("Main Server Error", e);
