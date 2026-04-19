@@ -1,6 +1,6 @@
 ---
 name: vulseek-bridge
-description: Use when a Codex agent running inside Vulseek needs to communicate structured state back to Dokploy without MCP. Defines the required event block format for candidate submission and next-stage scheduling.
+description: Use when a Codex agent running inside Vulseek needs to communicate structured state back to Dokploy without MCP. Defines the required event block format for candidate submission, analysis results, verification results, and next-stage scheduling.
 ---
 
 # Vulseek Bridge
@@ -66,15 +66,27 @@ Suggested `stage` values:
 - `analyzing`
 - `fuzzing`
 
+### 4. Verification Result
+
+Use when the verifier has completed validation for one candidate.
+
+```text
+<VULSEEK_EVENT>
+{"type":"verification_result","payload":{"candidateId":"CANDIDATE_ID","result":"real_vulnerability","isBug":true,"isSecurity":true,"confidence":0.93,"reportPath":"/scan-context/jobs/.../candidates/.../verify/01_verify_report.md","issueDraftPath":"/scan-context/jobs/.../candidates/.../verify/02_issue_draft.md","pocPath":"/scan-context/jobs/.../candidates/.../verify/03_poc/poc.c","dockerfilePath":"/scan-context/jobs/.../candidates/.../verify/04_repro/Dockerfile","runScriptPath":"/scan-context/jobs/.../candidates/.../verify/04_repro/run.sh","summary":"Confirmed remote memory corruption reachable from the public TLS handshake path."}}
+</VULSEEK_EVENT>
+```
+
 ## Behavioral Rules
 
 - Emit a `candidate` or `candidate_batch` event as soon as you have actionable candidates.
+- Emit an `analysis_result` event when candidate analysis is complete.
+- Emit a `verification_result` event when candidate verification is complete.
 - Emit `next_stage` when the analysis workflow should switch between `analyzing` and `fuzzing`.
 - If you are unsure about a field, omit the optional field instead of inventing data.
 - Keep normal narrative output concise once the event block has been emitted.
 - If you found candidates, the event block must appear before any prose claiming success or completion.
 - If you found no candidates, say explicitly that no candidate event was emitted.
-- At the end of the turn, include a short self-check line stating how many `candidate` / `candidate_batch` / `next_stage` blocks were actually printed.
+- At the end of the turn, include a short self-check line stating how many `candidate` / `candidate_batch` / `analysis_result` / `verification_result` / `next_stage` blocks were actually printed.
 
 ## Priority
 

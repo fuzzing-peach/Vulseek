@@ -25,6 +25,10 @@ if (typeof window === "undefined") {
 }
 
 const baseApp: ApplicationNested = {
+	agentProfileId: null,
+	scanAgentProfileId: null,
+	analysisAgentProfileId: null,
+	verifierAgentProfileId: null,
 	railpackVersion: "0.2.2",
 	applicationId: "",
 	previewLabels: [],
@@ -71,6 +75,7 @@ const baseApp: ApplicationNested = {
 			description: "",
 			createdAt: "",
 			projectId: "",
+			scanContextVolumeName: "",
 		},
 	},
 	buildArgs: null,

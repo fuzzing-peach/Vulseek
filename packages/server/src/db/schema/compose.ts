@@ -3,6 +3,7 @@ import { boolean, integer, pgEnum, pgTable, text } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { nanoid } from "nanoid";
 import { z } from "zod";
+import { agentProfiles } from "./ai";
 import { backups } from "./backups";
 import { bitbucket } from "./bitbucket";
 import { deployments } from "./deployment";
@@ -106,6 +107,24 @@ export const compose = pgTable("compose", {
 	serverId: text("serverId").references(() => server.serverId, {
 		onDelete: "cascade",
 	}),
+	scanAgentProfileId: text("scanAgentProfileId").references(
+		() => agentProfiles.agentProfileId,
+		{
+			onDelete: "set null",
+		},
+	),
+	analysisAgentProfileId: text("analysisAgentProfileId").references(
+		() => agentProfiles.agentProfileId,
+		{
+			onDelete: "set null",
+		},
+	),
+	verifierAgentProfileId: text("verifierAgentProfileId").references(
+		() => agentProfiles.agentProfileId,
+		{
+			onDelete: "set null",
+		},
+	),
 });
 
 export const composeRelations = relations(compose, ({ one, many }) => ({
@@ -139,6 +158,21 @@ export const composeRelations = relations(compose, ({ one, many }) => ({
 	server: one(server, {
 		fields: [compose.serverId],
 		references: [server.serverId],
+	}),
+	scanAgentProfile: one(agentProfiles, {
+		fields: [compose.scanAgentProfileId],
+		references: [agentProfiles.agentProfileId],
+		relationName: "composeScanAgentProfile",
+	}),
+	analysisAgentProfile: one(agentProfiles, {
+		fields: [compose.analysisAgentProfileId],
+		references: [agentProfiles.agentProfileId],
+		relationName: "composeAnalysisAgentProfile",
+	}),
+	verifierAgentProfile: one(agentProfiles, {
+		fields: [compose.verifierAgentProfileId],
+		references: [agentProfiles.agentProfileId],
+		relationName: "composeVerifierAgentProfile",
 	}),
 	backups: many(backups),
 	schedules: many(schedules),

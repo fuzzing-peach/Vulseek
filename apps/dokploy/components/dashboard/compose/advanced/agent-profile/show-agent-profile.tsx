@@ -41,19 +41,19 @@ const Schema = z.object({
 type Schema = z.infer<typeof Schema>;
 
 interface Props {
-	applicationId: string;
+	composeId: string;
 }
 
-export const ShowAgentProfile = ({ applicationId }: Props) => {
-	const { data } = api.application.one.useQuery(
+export const ShowComposeAgentProfile = ({ composeId }: Props) => {
+	const { data } = api.compose.one.useQuery(
 		{
-			applicationId,
+			composeId,
 		},
-		{ enabled: !!applicationId },
+		{ enabled: !!composeId },
 	);
 	const { data: agentProfiles } = api.ai.getAgentProfiles.useQuery();
 	const utils = api.useUtils();
-	const { mutateAsync, isLoading } = api.application.update.useMutation();
+	const { mutateAsync, isLoading } = api.compose.update.useMutation();
 
 	const enabledProfiles =
 		agentProfiles?.filter((profile) => profile.isEnabled) ?? [];
@@ -69,24 +69,20 @@ export const ShowAgentProfile = ({ applicationId }: Props) => {
 
 	useEffect(() => {
 		form.reset({
-			scanAgentProfileId:
-				data?.scanAgentProfileId || data?.agentProfileId || "none",
-			analysisAgentProfileId:
-				data?.analysisAgentProfileId || data?.agentProfileId || "none",
-			verifierAgentProfileId:
-				data?.verifierAgentProfileId || data?.agentProfileId || "none",
+			scanAgentProfileId: data?.scanAgentProfileId || "none",
+			analysisAgentProfileId: data?.analysisAgentProfileId || "none",
+			verifierAgentProfileId: data?.verifierAgentProfileId || "none",
 		});
 	}, [
 		data?.scanAgentProfileId,
 		data?.analysisAgentProfileId,
 		data?.verifierAgentProfileId,
-		data?.agentProfileId,
 		form,
 	]);
 
 	const onSubmit = async (values: Schema) => {
 		await mutateAsync({
-			applicationId,
+			composeId,
 			scanAgentProfileId:
 				values.scanAgentProfileId === "none"
 					? null
@@ -102,7 +98,7 @@ export const ShowAgentProfile = ({ applicationId }: Props) => {
 		})
 			.then(async () => {
 				toast.success("Agent profiles updated");
-				await utils.application.one.invalidate({ applicationId });
+				await utils.compose.one.invalidate({ composeId });
 			})
 			.catch(() => {
 				toast.error("Failed to update agent profiles");

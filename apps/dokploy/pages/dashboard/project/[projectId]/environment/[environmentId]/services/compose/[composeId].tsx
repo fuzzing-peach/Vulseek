@@ -18,6 +18,7 @@ import { ShowEnvironment } from "@/components/dashboard/application/environment/
 import { ShowSchedules } from "@/components/dashboard/application/schedules/show-schedules";
 import { ShowVolumeBackups } from "@/components/dashboard/application/volume-backups/show-volume-backups";
 import { AddCommandCompose } from "@/components/dashboard/compose/advanced/add-command";
+import { ShowComposeAgentProfile } from "@/components/dashboard/compose/advanced/agent-profile/show-agent-profile";
 import { IsolatedDeploymentTab } from "@/components/dashboard/compose/advanced/add-isolation";
 import { DeleteService } from "@/components/dashboard/compose/delete-service";
 import { ShowGeneralCompose } from "@/components/dashboard/compose/general/show";
@@ -338,6 +339,7 @@ const Service = (
 
 									<TabsContent value="advanced">
 										<div className="flex flex-col gap-4 pt-2.5">
+											<ShowComposeAgentProfile composeId={composeId} />
 											<AddCommandCompose composeId={composeId} />
 											<ShowVolumes id={composeId} type="compose" />
 											<ShowImport composeId={composeId} />

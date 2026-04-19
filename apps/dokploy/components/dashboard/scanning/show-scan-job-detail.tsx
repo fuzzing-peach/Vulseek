@@ -244,6 +244,10 @@ const getScanJobStatusLabel = (status?: string) => {
 		return "Analyzing";
 	}
 
+	if (status === "verifying") {
+		return "Verifying";
+	}
+
 	if (status === "completed") {
 		return "Completed";
 	}
@@ -266,6 +270,10 @@ const getScanJobStatusClassName = (status?: string) => {
 
 	if (status === "analyzing") {
 		return "text-sky-600";
+	}
+
+	if (status === "verifying") {
+		return "text-violet-600";
 	}
 
 	if (status === "scanning") {
@@ -330,7 +338,31 @@ const getAnalysisResultBadgeClassName = (result?: string | null) => {
 		return "border-muted-foreground/20 bg-muted text-muted-foreground";
 	}
 
+	if (result === "api_misuse") {
+		return "border-slate-200 bg-slate-100 text-slate-700";
+	}
+
 	return "border-muted-foreground/20 bg-muted text-muted-foreground";
+};
+
+const getVerificationTruthBadge = (
+	result?: string | null,
+): { label: string; className: string } | null => {
+	if (!result) {
+		return null;
+	}
+
+	if (result === "real_vulnerability") {
+		return {
+			label: "Verified 0day",
+			className: "border-red-200 bg-red-100 text-red-700",
+		};
+	}
+
+	return {
+		label: "Verified Not 0day",
+		className: "border-muted-foreground/20 bg-muted text-muted-foreground",
+	};
 };
 
 export const ShowScanJobDetail = ({
@@ -446,6 +478,19 @@ export const ShowScanJobDetail = ({
 				candidate.latestAnalysisResult?.result || "",
 				candidate.latestAnalysisResult?.reportPath || "",
 				candidate.latestAnalysisResult?.threadId || "",
+				candidate.latestVerificationResult?.result || "",
+				typeof candidate.latestVerificationResult?.isBug === "boolean"
+					? String(candidate.latestVerificationResult.isBug)
+					: "",
+				typeof candidate.latestVerificationResult?.isSecurity === "boolean"
+					? String(candidate.latestVerificationResult.isSecurity)
+					: "",
+				typeof candidate.latestVerificationResult?.confidence === "number"
+					? String(candidate.latestVerificationResult.confidence)
+					: "",
+				candidate.latestVerificationResult?.reportPath || "",
+				candidate.latestVerificationResult?.issueDraftPath || "",
+				candidate.latestVerificationResult?.threadId || "",
 			]
 				.join("\n")
 				.toLowerCase();
@@ -644,22 +689,22 @@ export const ShowScanJobDetail = ({
 												{statusView.summary.completedCandidates}
 											</div>
 										</div>
-										<div className="rounded-lg border p-4">
-											<div className="text-sm text-muted-foreground">
-												Excluded Candidates
-											</div>
-											<div className="mt-2 text-2xl font-semibold">
-												{statusView.summary.excludedCandidates}
-											</div>
+									<div className="rounded-lg border p-4">
+										<div className="text-sm text-muted-foreground">
+											Analysis Likely / Confirmed
 										</div>
-										<div className="rounded-lg border p-4">
-											<div className="text-sm text-muted-foreground">
-												Issue Candidates
-											</div>
-											<div className="mt-2 text-2xl font-semibold">
-												{statusView.summary.issueCandidates}
-											</div>
+										<div className="mt-2 text-2xl font-semibold">
+											{statusView.summary.analysisLikelyOrConfirmedCandidates}
 										</div>
+									</div>
+									<div className="rounded-lg border p-4">
+										<div className="text-sm text-muted-foreground">
+											Verified 0day
+										</div>
+										<div className="mt-2 text-2xl font-semibold">
+											{statusView.summary.verifiedZeroDayCandidates}
+										</div>
+									</div>
 									</div>
 
 									<div className="rounded-lg border">
@@ -816,41 +861,50 @@ export const ShowScanJobDetail = ({
 											No matching candidates
 										</div>
 									) : (
-										filteredCandidates.map((candidate) => (
-											<button
-												type="button"
-												key={candidate.vulnerabilityCandidateId}
-												onClick={() =>
-													setSelectedCandidateId(
-														candidate.vulnerabilityCandidateId,
-													)
-												}
-												className="flex w-full flex-col gap-1 rounded-lg border p-3 text-left transition-colors hover:border-foreground/20 hover:bg-muted/40"
-											>
-												<div className="flex items-center gap-2">
-													<Badge variant="outline" className="capitalize">
-														{candidate.status}
-													</Badge>
-													{typeof candidate.confidence === "number" && (
-														<span className="text-xs text-muted-foreground">
-															confidence: {candidate.confidence}
-														</span>
-													)}
-												</div>
-												<div className="font-medium">{candidate.title}</div>
-												{candidate.description && (
-													<div className="text-sm text-muted-foreground break-all">
-														{candidate.description}
+										filteredCandidates.map((candidate) => {
+											const verificationTruthBadge = getVerificationTruthBadge(
+												candidate.latestVerificationResult?.result,
+											);
+
+											return (
+												<button
+													type="button"
+													key={candidate.vulnerabilityCandidateId}
+													onClick={() =>
+														setSelectedCandidateId(
+															candidate.vulnerabilityCandidateId,
+														)
+													}
+													className="flex w-full flex-col gap-1 rounded-lg border p-3 text-left transition-colors hover:border-foreground/20 hover:bg-muted/40"
+												>
+													<div className="flex items-center gap-2">
+														<Badge variant="outline" className="capitalize">
+															{candidate.status}
+														</Badge>
+														{verificationTruthBadge ? (
+															<Badge
+																variant="outline"
+																className={verificationTruthBadge.className}
+															>
+																{verificationTruthBadge.label}
+															</Badge>
+														) : null}
+														{typeof candidate.confidence === "number" && (
+															<span className="text-xs text-muted-foreground">
+																confidence: {candidate.confidence}
+															</span>
+														)}
 													</div>
-												)}
-											{candidate.filePath && (
-												<div className="text-xs text-muted-foreground break-all">
-													{candidate.filePath}
-													{candidate.line ? `:${candidate.line}` : ""}
-												</div>
-											)}
-										</button>
-									))
+													<div className="font-medium">{candidate.title}</div>
+													{candidate.filePath && (
+														<div className="text-xs text-muted-foreground break-all">
+															{candidate.filePath}
+															{candidate.line ? `:${candidate.line}` : ""}
+														</div>
+													)}
+												</button>
+											);
+										})
 								)}
 								</div>
 							)}
@@ -968,6 +1022,17 @@ export const ShowScanJobDetail = ({
 									</div>
 								</div>
 								<div className="rounded-lg border p-3">
+									<div className="text-sm text-muted-foreground">Verified</div>
+									<div className="mt-1 font-medium">
+										{selectedCandidate.latestVerificationResult
+											? selectedCandidate.latestVerificationResult.result ===
+												"real_vulnerability"
+												? "Yes"
+												: "No"
+											: "-"}
+									</div>
+								</div>
+								<div className="rounded-lg border p-3">
 									<div className="text-sm text-muted-foreground">Location</div>
 									<div className="mt-1 break-all font-medium">
 										{selectedCandidate.filePath || "-"}
@@ -1050,6 +1115,124 @@ export const ShowScanJobDetail = ({
 										<div className="text-xs text-muted-foreground">Thread ID</div>
 										<div className="mt-1 break-all text-sm">
 											{selectedCandidate.latestAnalysisResult?.threadId || "-"}
+										</div>
+									</div>
+								</div>
+							</div>
+
+							<div className="rounded-lg border p-3">
+								<div className="mb-3 flex items-center justify-between gap-3">
+									<div className="text-sm text-muted-foreground">
+										Latest Verification Result
+									</div>
+									{selectedCandidate.latestVerificationResult?.result ? (
+										<Badge
+											variant="outline"
+											className={`capitalize ${getAnalysisResultBadgeClassName(
+												selectedCandidate.latestVerificationResult.result,
+											)}`}
+										>
+											{selectedCandidate.latestVerificationResult.result.replace(
+												/_/g,
+												" ",
+											)}
+										</Badge>
+									) : null}
+								</div>
+								<div className="grid gap-3 md:grid-cols-2">
+									<div className="rounded-md border p-3">
+										<div className="text-xs text-muted-foreground">Summary</div>
+										<div className="mt-1 whitespace-pre-wrap break-words text-sm">
+											{selectedCandidate.latestVerificationResult?.summary || "-"}
+										</div>
+									</div>
+									<div className="rounded-md border p-3">
+										<div className="text-xs text-muted-foreground">Report Path</div>
+										<div className="mt-1 break-all text-sm">
+											{selectedCandidate.latestVerificationResult?.reportPath || "-"}
+										</div>
+									</div>
+									<div className="rounded-md border p-3">
+										<div className="text-xs text-muted-foreground">Is Bug</div>
+										<div className="mt-1 text-sm">
+											{typeof selectedCandidate.latestVerificationResult?.isBug ===
+											"boolean"
+												? selectedCandidate.latestVerificationResult.isBug
+													? "true"
+													: "false"
+												: "-"}
+										</div>
+									</div>
+									<div className="rounded-md border p-3">
+										<div className="text-xs text-muted-foreground">
+											Is Security Vulnerability
+										</div>
+										<div className="mt-1 text-sm">
+											{typeof selectedCandidate.latestVerificationResult
+												?.isSecurity === "boolean"
+												? selectedCandidate.latestVerificationResult.isSecurity
+													? "true"
+													: "false"
+												: "-"}
+										</div>
+									</div>
+									<div className="rounded-md border p-3">
+										<div className="text-xs text-muted-foreground">Confidence</div>
+										<div className="mt-1 text-sm">
+											{typeof selectedCandidate.latestVerificationResult
+												?.confidence === "number"
+												? selectedCandidate.latestVerificationResult.confidence
+												: "-"}
+										</div>
+									</div>
+									<div className="rounded-md border p-3">
+										<div className="text-xs text-muted-foreground">
+											Issue Draft Path
+										</div>
+										<div className="mt-1 break-all text-sm">
+											{selectedCandidate.latestVerificationResult?.issueDraftPath ||
+												"-"}
+										</div>
+									</div>
+									<div className="rounded-md border p-3">
+										<div className="text-xs text-muted-foreground">PoC Path</div>
+										<div className="mt-1 break-all text-sm">
+											{selectedCandidate.latestVerificationResult?.pocPath || "-"}
+										</div>
+									</div>
+									<div className="rounded-md border p-3">
+										<div className="text-xs text-muted-foreground">
+											Dockerfile Path
+										</div>
+										<div className="mt-1 break-all text-sm">
+											{selectedCandidate.latestVerificationResult?.dockerfilePath ||
+												"-"}
+										</div>
+									</div>
+									<div className="rounded-md border p-3">
+										<div className="text-xs text-muted-foreground">
+											Run Script Path
+										</div>
+										<div className="mt-1 break-all text-sm">
+											{selectedCandidate.latestVerificationResult?.runScriptPath ||
+												"-"}
+										</div>
+									</div>
+									<div className="rounded-md border p-3">
+										<div className="text-xs text-muted-foreground">
+											Runtime Seconds
+										</div>
+										<div className="mt-1 text-sm">
+											{typeof selectedCandidate.latestVerificationResult
+												?.runtimeSeconds === "number"
+												? selectedCandidate.latestVerificationResult.runtimeSeconds
+												: "-"}
+										</div>
+									</div>
+									<div className="rounded-md border p-3">
+										<div className="text-xs text-muted-foreground">Thread ID</div>
+										<div className="mt-1 break-all text-sm">
+											{selectedCandidate.latestVerificationResult?.threadId || "-"}
 										</div>
 									</div>
 								</div>

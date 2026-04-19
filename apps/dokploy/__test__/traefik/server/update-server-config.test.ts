@@ -67,6 +67,8 @@ const baseAdmin: User = {
 	image: "",
 	updatedAt: new Date(),
 	twoFactorEnabled: false,
+	containerEnvironment: "",
+	scanContextHostPath: "",
 };
 
 beforeEach(() => {

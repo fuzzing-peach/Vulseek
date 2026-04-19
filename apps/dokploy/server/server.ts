@@ -12,6 +12,7 @@ import {
 	sendDokployRestartNotifications,
 	setupDirectories,
 	syncContainerEnvironmentSettingToProcess,
+	syncScanContextHostPathSettingToProcess,
 } from "@dokploy/server";
 import { config } from "dotenv";
 import next from "next";
@@ -53,6 +54,7 @@ void app.prepare().then(async () => {
 			createDefaultServerTraefikConfig();
 			await migration();
 			await syncContainerEnvironmentSettingToProcess();
+			await syncScanContextHostPathSettingToProcess();
 			await initCronJobs();
 			await initSchedules();
 			await initCancelDeployments();
@@ -63,10 +65,12 @@ void app.prepare().then(async () => {
 		if (IS_CLOUD && process.env.NODE_ENV === "production") {
 			await migration();
 			await syncContainerEnvironmentSettingToProcess();
+			await syncScanContextHostPathSettingToProcess();
 		}
 
 		if (process.env.NODE_ENV !== "production") {
 			await syncContainerEnvironmentSettingToProcess();
+			await syncScanContextHostPathSettingToProcess();
 		}
 
 		server.listen(PORT, HOST);

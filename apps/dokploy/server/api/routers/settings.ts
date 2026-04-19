@@ -13,6 +13,7 @@ import {
 	getDokployImage,
 	getDokployImageTag,
 	getContainerEnvironmentSetting,
+	getScanContextHostPathSetting,
 	getLogCleanupStatus,
 	getUpdateData,
 	IS_CLOUD,
@@ -38,6 +39,7 @@ import {
 	updateLetsEncryptEmail,
 	updateServerById,
 	updateContainerEnvironmentSetting,
+	updateScanContextHostPathSetting,
 	updateServerTraefik,
 	updateUser,
 	writeConfig,
@@ -869,6 +871,20 @@ export const settingsRouter = createTRPCRouter({
 		)
 		.mutation(async ({ input }) => {
 			return await updateContainerEnvironmentSetting(input.containerEnvironment);
+		}),
+	getScanContextHostPath: adminProcedure.query(async () => {
+		return {
+			scanContextHostPath: await getScanContextHostPathSetting(),
+		};
+	}),
+	updateScanContextHostPath: adminProcedure
+		.input(
+			z.object({
+				scanContextHostPath: z.string(),
+			}),
+		)
+		.mutation(async ({ input }) => {
+			return await updateScanContextHostPathSetting(input.scanContextHostPath);
 		}),
 
 	getDokployCloudIps: adminProcedure.query(async () => {

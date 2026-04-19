@@ -53,6 +53,7 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { encodeBase64 } from "../utils/docker/utils";
 import { getDokployUrl } from "./admin";
+import { getAgentProfileById } from "./ai";
 import { createDeploymentCompose, updateDeploymentStatus } from "./deployment";
 import { validUniqueServerAppName } from "./project";
 
@@ -153,7 +154,25 @@ export const findComposeById = async (composeId: string) => {
 			message: "Compose not found",
 		});
 	}
-	return result;
+
+	const [scanAgentProfile, analysisAgentProfile, verifierAgentProfile] = await Promise.all([
+		result.scanAgentProfileId
+			? getAgentProfileById(result.scanAgentProfileId).catch(() => null)
+			: Promise.resolve(null),
+		result.analysisAgentProfileId
+			? getAgentProfileById(result.analysisAgentProfileId).catch(() => null)
+			: Promise.resolve(null),
+		result.verifierAgentProfileId
+			? getAgentProfileById(result.verifierAgentProfileId).catch(() => null)
+			: Promise.resolve(null),
+	]);
+
+	return {
+		...result,
+		scanAgentProfile,
+		analysisAgentProfile,
+		verifierAgentProfile,
+	};
 };
 
 export const loadServices = async (

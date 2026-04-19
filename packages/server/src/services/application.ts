@@ -43,6 +43,7 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { encodeBase64 } from "../utils/docker/utils";
 import { getDokployUrl } from "./admin";
+import { getAgentProfileById } from "./ai";
 import {
 	createDeployment,
 	createDeploymentPreview,
@@ -122,7 +123,6 @@ export const findApplicationById = async (applicationId: string) => {
 			bitbucket: true,
 			gitea: true,
 			server: true,
-			agentProfile: true,
 			previewDeployments: true,
 		},
 	});
@@ -132,7 +132,30 @@ export const findApplicationById = async (applicationId: string) => {
 			message: "Application not found",
 		});
 	}
-	return application;
+
+	const [agentProfile, scanAgentProfile, analysisAgentProfile, verifierAgentProfile] =
+		await Promise.all([
+			application.agentProfileId
+				? getAgentProfileById(application.agentProfileId).catch(() => null)
+				: Promise.resolve(null),
+			application.scanAgentProfileId
+				? getAgentProfileById(application.scanAgentProfileId).catch(() => null)
+				: Promise.resolve(null),
+			application.analysisAgentProfileId
+				? getAgentProfileById(application.analysisAgentProfileId).catch(() => null)
+				: Promise.resolve(null),
+			application.verifierAgentProfileId
+				? getAgentProfileById(application.verifierAgentProfileId).catch(() => null)
+				: Promise.resolve(null),
+		]);
+
+	return {
+		...application,
+		agentProfile,
+		scanAgentProfile,
+		analysisAgentProfile,
+		verifierAgentProfile,
+	};
 };
 
 export const findApplicationByName = async (appName: string) => {

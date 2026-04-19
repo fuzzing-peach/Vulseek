@@ -208,6 +208,24 @@ export const applications = pgTable("application", {
 			onDelete: "set null",
 		},
 	),
+	scanAgentProfileId: text("scanAgentProfileId").references(
+		() => agentProfiles.agentProfileId,
+		{
+			onDelete: "set null",
+		},
+	),
+	analysisAgentProfileId: text("analysisAgentProfileId").references(
+		() => agentProfiles.agentProfileId,
+		{
+			onDelete: "set null",
+		},
+	),
+	verifierAgentProfileId: text("verifierAgentProfileId").references(
+		() => agentProfiles.agentProfileId,
+		{
+			onDelete: "set null",
+		},
+	),
 });
 
 export const applicationsRelations = relations(
@@ -254,6 +272,22 @@ export const applicationsRelations = relations(
 		agentProfile: one(agentProfiles, {
 			fields: [applications.agentProfileId],
 			references: [agentProfiles.agentProfileId],
+			relationName: "applicationAgentProfile",
+		}),
+		scanAgentProfile: one(agentProfiles, {
+			fields: [applications.scanAgentProfileId],
+			references: [agentProfiles.agentProfileId],
+			relationName: "applicationScanAgentProfile",
+		}),
+		analysisAgentProfile: one(agentProfiles, {
+			fields: [applications.analysisAgentProfileId],
+			references: [agentProfiles.agentProfileId],
+			relationName: "applicationAnalysisAgentProfile",
+		}),
+		verifierAgentProfile: one(agentProfiles, {
+			fields: [applications.verifierAgentProfileId],
+			references: [agentProfiles.agentProfileId],
+			relationName: "applicationVerifierAgentProfile",
 		}),
 		previewDeployments: many(previewDeployments),
 	}),
@@ -330,6 +364,9 @@ const createSchema = createInsertSchema(applications, {
 	cleanCache: z.boolean().optional(),
 	stopGracePeriodSwarm: z.bigint().nullable(),
 	agentProfileId: z.string().nullable().optional(),
+	scanAgentProfileId: z.string().nullable().optional(),
+	analysisAgentProfileId: z.string().nullable().optional(),
+	verifierAgentProfileId: z.string().nullable().optional(),
 });
 
 export const apiCreateApplication = createSchema.pick({

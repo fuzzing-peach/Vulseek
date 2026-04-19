@@ -3,6 +3,10 @@ import { createRouterConfig } from "@dokploy/server";
 import { expect, test } from "vitest";
 
 const baseApp: ApplicationNested = {
+	agentProfileId: null,
+	scanAgentProfileId: null,
+	analysisAgentProfileId: null,
+	verifierAgentProfileId: null,
 	railpackVersion: "0.2.2",
 	rollbackActive: false,
 	applicationId: "",
@@ -53,6 +57,7 @@ const baseApp: ApplicationNested = {
 			description: "",
 			createdAt: "",
 			projectId: "",
+			scanContextVolumeName: "",
 		},
 	},
 	buildPath: "/",

@@ -10,6 +10,7 @@ import {
 	type apiCreateScanJob,
 	scanJobs,
 	scanJobStatusEnum,
+	verificationResults,
 	vulnerabilityCandidateStatusEnum,
 	vulnerabilityCandidates,
 } from "@dokploy/server/db/schema";
@@ -26,11 +27,17 @@ export const DEFAULT_DELTA_COMMIT_WINDOW = 3;
 export type ScanJob = typeof scanJobs.$inferSelect;
 export type VulnerabilityCandidate = typeof vulnerabilityCandidates.$inferSelect;
 export type AnalysisResult = typeof analysisResults.$inferSelect;
-type VulnerabilityCandidateStage = "analyzing" | "fuzzing";
+export type VerificationResult = typeof verificationResults.$inferSelect;
+type VulnerabilityCandidateStage = "analyzing" | "fuzzing" | "verifying";
 
 type ScanBridgeEventRecord = {
 	recordedAt: string;
-	type: "candidate" | "candidate_batch" | "next_stage" | "analysis_result";
+	type:
+		| "candidate"
+		| "candidate_batch"
+		| "next_stage"
+		| "analysis_result"
+		| "verification_result";
 	payload: Record<string, unknown>;
 };
 
@@ -54,6 +61,7 @@ type ScanRuntimeLiveAction = {
 };
 
 const ANALYSIS_CONCURRENCY = 2;
+const VERIFIER_CONCURRENCY = 1;
 
 type AgentProfileLike = {
 	agentProfileId: string;
@@ -295,9 +303,10 @@ export const findVulnerabilityCandidatesByScanJobId = async (scanJobId: string) 
 export const findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId = async (
 	scanJobId: string,
 ) => {
-	const [candidates, analysisResultsList] = await Promise.all([
+	const [candidates, analysisResultsList, verificationResultsList] = await Promise.all([
 		findVulnerabilityCandidatesByScanJobId(scanJobId),
 		findAnalysisResultsByScanJobId(scanJobId),
+		findVerificationResultsByScanJobId(scanJobId),
 	]);
 
 	const latestAnalysisResultByCandidateId = new Map<string, AnalysisResult>();
@@ -314,8 +323,28 @@ export const findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId = as
 		}
 	}
 
+	const latestVerificationResultByCandidateId = new Map<
+		string,
+		VerificationResult
+	>();
+	for (const verificationResult of verificationResultsList) {
+		if (
+			!latestVerificationResultByCandidateId.has(
+				verificationResult.vulnerabilityCandidateId,
+			)
+		) {
+			latestVerificationResultByCandidateId.set(
+				verificationResult.vulnerabilityCandidateId,
+				verificationResult as VerificationResult,
+			);
+		}
+	}
+
 	return candidates.map((candidate) => {
 		const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
+			candidate.vulnerabilityCandidateId,
+		);
+		const latestVerificationResult = latestVerificationResultByCandidateId.get(
 			candidate.vulnerabilityCandidateId,
 		);
 
@@ -331,6 +360,25 @@ export const findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId = as
 						summary: latestAnalysisResult.summary,
 						createdAt: latestAnalysisResult.createdAt,
 						updatedAt: latestAnalysisResult.updatedAt,
+					}
+				: null,
+			latestVerificationResult: latestVerificationResult
+				? {
+						verificationResultId: latestVerificationResult.verificationResultId,
+						result: latestVerificationResult.result,
+						isBug: latestVerificationResult.isBug,
+						isSecurity: latestVerificationResult.isSecurity,
+						confidence: latestVerificationResult.confidence,
+						reportPath: latestVerificationResult.reportPath,
+						issueDraftPath: latestVerificationResult.issueDraftPath,
+						pocPath: latestVerificationResult.pocPath,
+						dockerfilePath: latestVerificationResult.dockerfilePath,
+						runScriptPath: latestVerificationResult.runScriptPath,
+						runtimeSeconds: latestVerificationResult.runtimeSeconds,
+						threadId: latestVerificationResult.threadId,
+						summary: latestVerificationResult.summary,
+						createdAt: latestVerificationResult.createdAt,
+						updatedAt: latestVerificationResult.updatedAt,
 					}
 				: null,
 		};
@@ -426,6 +474,28 @@ const updateVulnerabilityCandidateAnalysisThreadId = async (
 	return updated[0] || null;
 };
 
+const updateVulnerabilityCandidateVerifierThreadId = async (
+	vulnerabilityCandidateId: string,
+	threadId: string,
+) => {
+	const patch: Partial<VulnerabilityCandidate> = {};
+	patch.verifierThreadId = threadId;
+	patch.updatedAt = new Date().toISOString();
+
+	const updated = await db
+		.update(vulnerabilityCandidates)
+		.set(patch)
+		.where(
+			eq(
+				vulnerabilityCandidates.vulnerabilityCandidateId,
+				vulnerabilityCandidateId,
+			),
+		)
+		.returning();
+
+	return updated[0] || null;
+};
+
 export const createAnalysisResult = async (input: {
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
@@ -497,6 +567,98 @@ const deleteAnalysisResultsByCandidateId = async (
 		);
 };
 
+export const createVerificationResult = async (input: {
+	scanJobId: string;
+	vulnerabilityCandidateId: string;
+	result: string;
+	isBug?: boolean;
+	isSecurity?: boolean;
+	confidence?: number;
+	reportPath?: string;
+	issueDraftPath?: string;
+	pocPath?: string;
+	dockerfilePath?: string;
+	runScriptPath?: string;
+	runtimeSeconds?: number;
+	threadId?: string;
+	summary?: string;
+}) => {
+	const created = await db
+		.insert(verificationResults)
+		.values({
+			scanJobId: input.scanJobId,
+			vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+			result: input.result,
+			isBug: input.isBug,
+			isSecurity: input.isSecurity,
+			confidence: input.confidence,
+			reportPath: input.reportPath,
+			issueDraftPath: input.issueDraftPath,
+			pocPath: input.pocPath,
+			dockerfilePath: input.dockerfilePath,
+			runScriptPath: input.runScriptPath,
+			runtimeSeconds: input.runtimeSeconds,
+			threadId: input.threadId,
+			summary: input.summary || "",
+			updatedAt: new Date().toISOString(),
+		})
+		.returning();
+
+	if (!created[0]) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Error creating verification result",
+		});
+	}
+
+	return created[0];
+};
+
+export const findVerificationResultsByScanJobId = async (scanJobId: string) =>
+	await db
+		.select({
+			verificationResultId: verificationResults.verificationResultId,
+			scanJobId: verificationResults.scanJobId,
+			vulnerabilityCandidateId: verificationResults.vulnerabilityCandidateId,
+			result: verificationResults.result,
+			isBug: verificationResults.isBug,
+			isSecurity: verificationResults.isSecurity,
+			confidence: verificationResults.confidence,
+			reportPath: verificationResults.reportPath,
+			issueDraftPath: verificationResults.issueDraftPath,
+			pocPath: verificationResults.pocPath,
+			dockerfilePath: verificationResults.dockerfilePath,
+			runScriptPath: verificationResults.runScriptPath,
+			runtimeSeconds: verificationResults.runtimeSeconds,
+			threadId: verificationResults.threadId,
+			summary: verificationResults.summary,
+			createdAt: verificationResults.createdAt,
+			updatedAt: verificationResults.updatedAt,
+		})
+		.from(verificationResults)
+		.innerJoin(
+			vulnerabilityCandidates,
+			eq(
+				verificationResults.vulnerabilityCandidateId,
+				vulnerabilityCandidates.vulnerabilityCandidateId,
+			),
+		)
+		.where(eq(vulnerabilityCandidates.scanJobId, scanJobId))
+		.orderBy(desc(verificationResults.createdAt));
+
+const deleteVerificationResultsByCandidateId = async (
+	vulnerabilityCandidateId: string,
+) => {
+	await db
+		.delete(verificationResults)
+		.where(
+			eq(
+				verificationResults.vulnerabilityCandidateId,
+				vulnerabilityCandidateId,
+			),
+		);
+};
+
 const toGitUrl = (
 	provider: "github" | "gitlab" | "bitbucket" | "gitea",
 	owner: string,
@@ -528,6 +690,21 @@ ARG GIT_URL="<GIT_URL>"
 ARG GIT_BRANCH="<GIT_BRANCH>"
 ARG ENABLE_SUBMODULES="false"
 ARG CODEQL_VERSION="2.20.6"
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
+ENV HTTP_PROXY=$HTTP_PROXY \\
+    HTTPS_PROXY=$HTTPS_PROXY \\
+    NO_PROXY=$NO_PROXY \\
+    http_proxy=$http_proxy \\
+    https_proxy=$https_proxy \\
+    no_proxy=$no_proxy
+
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.ustc.edu.cn/ubuntu/|g; s|http://security.ubuntu.com/ubuntu/|http://mirrors.ustc.edu.cn/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
 
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     ca-certificates curl wget git jq unzip zip tar xz-utils file gnupg \\
@@ -535,13 +712,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
     build-essential cmake ninja-build make autoconf automake libtool pkg-config \\
     clang lldb lld gdb \\
     python3 python3-pip python3-venv \\
+    pipx \\
     software-properties-common \\
     && rm -rf /var/lib/apt/lists/*
+
+RUN sed -i 's|http://mirrors.ustc.edu.cn/ubuntu/|https://mirrors.ustc.edu.cn/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
 
 # Node.js (LTS)
 RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \\
     && apt-get update && apt-get install -y --no-install-recommends nodejs \\
     && rm -rf /var/lib/apt/lists/*
+
+# Semgrep CLI
+RUN PIPX_BIN_DIR=/usr/local/bin pipx install semgrep \
+    && semgrep --version
 
 # LLM Agent CLIs
 # Keep Claude non-fatal to avoid blocking build if registry/network fails.
@@ -556,6 +740,7 @@ RUN mkdir -p /opt/codeql \\
     && unzip -q /tmp/codeql.zip -d /opt \\
     && rm -f /tmp/codeql.zip \\
     && ln -sf /opt/codeql/codeql /usr/local/bin/codeql
+RUN codeql pack download codeql/cpp-all
 
 WORKDIR /workspace
 
@@ -849,37 +1034,14 @@ export const findCheckoutStatus = async (checkoutId: string) => {
 		return null;
 	}
 
-	let dockerBuildProbe = "unknown";
-	try {
-		const probe = await new Promise<string>((resolve, reject) => {
-			const child = spawn("docker", [
-				"ps",
-				"--format",
-				"{{.Image}} {{.Names}}",
-			]);
-			let output = "";
-			child.stdout.on("data", (chunk) => {
-				output += chunk.toString();
-			});
-			child.on("error", (error) => reject(error));
-			child.on("close", (code) => {
-				if (code !== 0) {
-					reject(new Error(`docker ps failed with code ${code}`));
-					return;
-				}
-				resolve(output);
-			});
-		});
-		dockerBuildProbe = /buildkit|buildx|moby\/buildkit/i.test(probe)
-			? "buildkit-container-running"
-			: "no-buildkit-container-detected";
-	} catch {
-		dockerBuildProbe = "docker-ps-probe-failed";
-	}
-
 	return {
 		...task,
-		dockerBuildProbe,
+		dockerBuildProbe:
+			task.status === "running"
+				? "checkout-task-running"
+				: task.status === "completed"
+					? "checkout-task-completed"
+					: "checkout-task-failed",
 	};
 };
 
@@ -1024,6 +1186,9 @@ const writeContainerFile = async (
 const getCandidateAnalysisThreadId = (candidate: VulnerabilityCandidate) =>
 	candidate.analysisThreadId || "";
 
+const getCandidateVerifierThreadId = (candidate: VulnerabilityCandidate) =>
+	candidate.verifierThreadId || "";
+
 const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 	const isApplicationJob = Boolean(scanJob.applicationId);
 	const target = isApplicationJob
@@ -1035,9 +1200,13 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 	const contextVolumeName = target.environment.project.scanContextVolumeName;
 	const projectName = target.environment.project.name;
 	const serviceName = target.name || target.appName;
+	const projectProfileContextRoot = buildProjectProfileContextRoot();
+	const projectProfileCacheRoot = buildProjectProfileCacheRoot();
 
-	if (!contextVolumeName) {
-		throw new Error("Scan context volume is not configured for this project");
+	if (!contextVolumeName && !process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH?.trim()) {
+		throw new Error(
+			"Scan context storage is not configured for this project",
+		);
 	}
 
 	try {
@@ -1056,8 +1225,20 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 		contextVolumeName,
 		projectName,
 		serviceName,
-		agentProfile:
-			isApplicationJob && "agentProfile" in target ? target.agentProfile : null,
+		projectProfileContextRoot,
+		projectProfileCacheRoot,
+		scanAgentProfile:
+			("scanAgentProfile" in target && target.scanAgentProfile) ||
+			("agentProfile" in target ? target.agentProfile : null) ||
+			null,
+		analysisAgentProfile:
+			("analysisAgentProfile" in target && target.analysisAgentProfile) ||
+			("agentProfile" in target ? target.agentProfile : null) ||
+			null,
+		verifierAgentProfile:
+			("verifierAgentProfile" in target && target.verifierAgentProfile) ||
+			("agentProfile" in target ? target.agentProfile : null) ||
+			null,
 	};
 };
 
@@ -1117,6 +1298,73 @@ const copyCodexAssetsToContainerHome = async (
 const resolveScanRuntimeBaseDir = () =>
 	path.resolve(process.cwd(), ".scan-runtime");
 
+const sanitizeContextPathPart = (value: string) =>
+	value
+		.trim()
+		.replace(/[\\/]/g, "-")
+		.replace(/\s+/g, "-")
+		.replace(/[^a-zA-Z0-9._-]/g, "-")
+		.replace(/-+/g, "-")
+		.replace(/^-|-$/g, "") || "default";
+
+const buildProjectProfileContextRoot = () => "/scan-context";
+
+const buildProjectProfileCacheRoot = () =>
+	path.posix.join(buildProjectProfileContextRoot(), "cache");
+
+const buildScanJobContextRoot = (scanJobId: string) =>
+	path.posix.join(buildProjectProfileContextRoot(), "jobs", scanJobId);
+
+const buildCandidateContextRoot = (scanJobId: string, candidateId: string) =>
+	path.posix.join(buildScanJobContextRoot(scanJobId), "candidates", candidateId);
+
+const buildHostProjectProfileContextRoot = (
+	hostRoot: string,
+	projectName: string,
+	profileName: string,
+) =>
+	path.join(
+		hostRoot,
+		"projects",
+		sanitizeContextPathPart(projectName),
+		"profiles",
+		sanitizeContextPathPart(profileName),
+	);
+
+const resolveScanContextMount = async (input: {
+	contextVolumeName: string | null | undefined;
+	projectName: string;
+	profileName: string;
+}) => {
+	const configuredHostRoot =
+		process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH?.trim() || "";
+	if (configuredHostRoot) {
+		const hostProfileDir = buildHostProjectProfileContextRoot(
+			configuredHostRoot,
+			input.projectName,
+			input.profileName,
+		);
+		await fs.mkdir(hostProfileDir, { recursive: true });
+		return {
+			mountSource: hostProfileDir,
+			mountDescription: `host_path:${hostProfileDir}`,
+			dockerMountArg: `-v '${escapeSingleQuotes(hostProfileDir)}':/scan-context`,
+			usingHostPath: true,
+		};
+	}
+
+	if (!input.contextVolumeName) {
+		throw new Error("Scan context storage is not configured");
+	}
+
+	return {
+		mountSource: input.contextVolumeName,
+		mountDescription: `volume:${input.contextVolumeName}`,
+		dockerMountArg: `-v ${input.contextVolumeName}:/scan-context`,
+		usingHostPath: false,
+	};
+};
+
 const resolveScanRuntimeDir = (scanJobId: string) =>
 	path.join(resolveScanRuntimeBaseDir(), scanJobId);
 
@@ -1156,6 +1404,24 @@ export const getCandidateAnalysisAppServerStderrPath = (
 ) =>
 	path.join(resolveCandidateRuntimeDir(scanJobId, candidateId), "app-server-stderr.log");
 
+export const getCandidateVerifierAppServerJsonlPath = (
+	scanJobId: string,
+	candidateId: string,
+) =>
+	path.join(resolveCandidateRuntimeDir(scanJobId, candidateId), "verify-app-server-messages.jsonl");
+
+export const getCandidateVerifierAppServerTextPath = (
+	scanJobId: string,
+	candidateId: string,
+) =>
+	path.join(resolveCandidateRuntimeDir(scanJobId, candidateId), "verify-app-server-text.log");
+
+export const getCandidateVerifierAppServerStderrPath = (
+	scanJobId: string,
+	candidateId: string,
+) =>
+	path.join(resolveCandidateRuntimeDir(scanJobId, candidateId), "verify-app-server-stderr.log");
+
 const resetScanRuntimeFiles = async (scanJobId: string) => {
 	await fs.mkdir(resolveScanJobScanningRuntimeDir(scanJobId), { recursive: true });
 	await Promise.all([
@@ -1185,6 +1451,31 @@ export const resetCandidateAnalysisRuntimeFiles = async (
 		),
 		fs.writeFile(
 			getCandidateAnalysisAppServerStderrPath(scanJobId, candidateId),
+			"",
+			"utf-8",
+		),
+	]);
+};
+
+export const resetCandidateVerifierRuntimeFiles = async (
+	scanJobId: string,
+	candidateId: string,
+) => {
+	const runtimeDir = resolveCandidateRuntimeDir(scanJobId, candidateId);
+	await fs.mkdir(runtimeDir, { recursive: true });
+	await Promise.all([
+		fs.writeFile(
+			getCandidateVerifierAppServerJsonlPath(scanJobId, candidateId),
+			"",
+			"utf-8",
+		),
+		fs.writeFile(
+			getCandidateVerifierAppServerTextPath(scanJobId, candidateId),
+			"",
+			"utf-8",
+		),
+		fs.writeFile(
+			getCandidateVerifierAppServerStderrPath(scanJobId, candidateId),
 			"",
 			"utf-8",
 		),
@@ -1230,6 +1521,25 @@ const readCandidateAnalysisAppServerMessages = async (
 	}
 };
 
+const readCandidateVerifierAppServerMessages = async (
+	scanJobId: string,
+	candidateId: string,
+): Promise<JsonRpcMessage[]> => {
+	try {
+		const file = await fs.readFile(
+			getCandidateVerifierAppServerJsonlPath(scanJobId, candidateId),
+			"utf-8",
+		);
+		return file
+			.split("\n")
+			.map((line) => line.trim())
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as JsonRpcMessage);
+	} catch {
+		return [];
+	}
+};
+
 export const readScanJobAppServerText = async (scanJobId: string) => {
 	try {
 		return await fs.readFile(getScanJobAppServerTextPath(scanJobId), "utf-8");
@@ -1245,6 +1555,20 @@ export const readCandidateAnalysisAppServerText = async (
 	try {
 		return await fs.readFile(
 			getCandidateAnalysisAppServerTextPath(scanJobId, candidateId),
+			"utf-8",
+		);
+	} catch {
+		return "";
+	}
+};
+
+export const readCandidateVerifierAppServerText = async (
+	scanJobId: string,
+	candidateId: string,
+) => {
+	try {
+		return await fs.readFile(
+			getCandidateVerifierAppServerTextPath(scanJobId, candidateId),
 			"utf-8",
 		);
 	} catch {
@@ -1276,6 +1600,24 @@ const asString = (value: unknown) =>
 	typeof value === "string" && value ? value : undefined;
 
 const asArray = (value: unknown) => (Array.isArray(value) ? value : []);
+
+const asBoolean = (value: unknown) => {
+	if (typeof value === "boolean") {
+		return value;
+	}
+	if (typeof value === "string") {
+		if (value === "true") {
+			return true;
+		}
+		if (value === "false") {
+			return false;
+		}
+	}
+	return undefined;
+};
+
+const asNumber = (value: unknown) =>
+	typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
 const formatActionText = (value: string | undefined, fallback = "-") => {
 	if (!value) {
@@ -1442,11 +1784,9 @@ const deriveScanRuntimeLiveAction = async (
 	return activeActions.at(-1) || null;
 };
 
-const deriveCandidateAnalysisRuntimeLiveAction = async (
-	scanJobId: string,
-	candidateId: string,
+const deriveRuntimeLiveActionFromMessages = async (
+	messages: JsonRpcMessage[],
 ): Promise<ScanRuntimeLiveAction | null> => {
-	const messages = await readCandidateAnalysisAppServerMessages(scanJobId, candidateId);
 	if (messages.length === 0) {
 		return null;
 	}
@@ -1504,6 +1844,22 @@ const deriveCandidateAnalysisRuntimeLiveAction = async (
 	return activeActions.at(-1) || null;
 };
 
+const deriveCandidateAnalysisRuntimeLiveAction = async (
+	scanJobId: string,
+	candidateId: string,
+): Promise<ScanRuntimeLiveAction | null> => {
+	const messages = await readCandidateAnalysisAppServerMessages(scanJobId, candidateId);
+	return deriveRuntimeLiveActionFromMessages(messages);
+};
+
+const deriveCandidateVerifierRuntimeLiveAction = async (
+	scanJobId: string,
+	candidateId: string,
+): Promise<ScanRuntimeLiveAction | null> => {
+	const messages = await readCandidateVerifierAppServerMessages(scanJobId, candidateId);
+	return deriveRuntimeLiveActionFromMessages(messages);
+};
+
 const deriveLiveState = (event: ScanBridgeEventRecord) => {
 	if (event.type === "next_stage") {
 		const nextStage = asRecord(event.payload.nextStage) || {};
@@ -1531,6 +1887,10 @@ const deriveLiveState = (event: ScanBridgeEventRecord) => {
 const resolveCandidateStageFromEvent = (
 	event: VulseekBridgeEvent,
 ): VulnerabilityCandidateStage | null => {
+	if (event.type === "verification_result") {
+		return "verifying";
+	}
+
 	if (event.type === "next_stage") {
 		const nextStage = asRecord(event.payload.nextStage) || {};
 		const stage = asString(nextStage.stage);
@@ -1544,6 +1904,14 @@ const resolveCandidateStageFromEvent = (
 };
 
 const resolveCandidateThreadIdFromEvent = (event: VulseekBridgeEvent) => {
+	if (event.type === "verification_result") {
+		return (
+			asString(event.payload.threadId) ||
+			asString(asRecord(event.payload.metadata)?.threadId) ||
+			undefined
+		);
+	}
+
 	if (event.type === "next_stage") {
 		const nextStage = asRecord(event.payload.nextStage) || {};
 		return (
@@ -1557,17 +1925,58 @@ const resolveCandidateThreadIdFromEvent = (event: VulseekBridgeEvent) => {
 };
 
 export const findScanJobStatusView = async (scanJobId: string) => {
-	const [candidates, analysisResultsList, bridgeEvents] = await Promise.all([
+	const [candidates, analysisResultsList, verificationResultsList, bridgeEvents] =
+		await Promise.all([
 		findVulnerabilityCandidatesByScanJobId(scanJobId),
 		findAnalysisResultsByScanJobId(scanJobId),
+		findVerificationResultsByScanJobId(scanJobId),
 		readScanJobBridgeEvents(scanJobId),
 	]);
 
-	const issueCandidateIds = new Set(
-		analysisResultsList
-			.filter((analysisResult) => analysisResult.result !== "false_positive")
-			.map((analysisResult) => analysisResult.vulnerabilityCandidateId),
-	);
+	const latestAnalysisResultByCandidateId = new Map<string, AnalysisResult>();
+	for (const analysisResult of analysisResultsList) {
+		if (
+			!latestAnalysisResultByCandidateId.has(
+				analysisResult.vulnerabilityCandidateId,
+			)
+		) {
+			latestAnalysisResultByCandidateId.set(
+				analysisResult.vulnerabilityCandidateId,
+				analysisResult as AnalysisResult,
+			);
+		}
+	}
+
+	const latestVerificationResultByCandidateId = new Map<string, VerificationResult>();
+	for (const verificationResult of verificationResultsList) {
+		if (
+			!latestVerificationResultByCandidateId.has(
+				verificationResult.vulnerabilityCandidateId,
+			)
+		) {
+			latestVerificationResultByCandidateId.set(
+				verificationResult.vulnerabilityCandidateId,
+				verificationResult as VerificationResult,
+			);
+		}
+	}
+
+	const analysisLikelyOrConfirmedCount = candidates.filter((candidate) => {
+		const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
+			candidate.vulnerabilityCandidateId,
+		);
+		return (
+			latestAnalysisResult?.result === "real_vulnerability" ||
+			latestAnalysisResult?.result === "likely_vulnerability"
+		);
+	}).length;
+
+	const verifiedZeroDayCount = candidates.filter((candidate) => {
+		const latestVerificationResult = latestVerificationResultByCandidateId.get(
+			candidate.vulnerabilityCandidateId,
+		);
+		return latestVerificationResult?.result === "real_vulnerability";
+	}).length;
 	const latestEventByCandidate = new Map<string, ScanBridgeEventRecord>();
 
 	for (const event of bridgeEvents) {
@@ -1580,14 +1989,6 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 	const completedCount = candidates.filter(
 		(candidate) => candidate.status === "completed",
 	).length;
-	const issueCount = candidates.filter((candidate) =>
-		issueCandidateIds.has(candidate.vulnerabilityCandidateId),
-	).length;
-	const excludedCount = candidates.filter(
-		(candidate) =>
-			candidate.status === "completed" &&
-			!issueCandidateIds.has(candidate.vulnerabilityCandidateId),
-	).length;
 
 	const inProgressCandidates = await Promise.all(
 		candidates
@@ -1598,10 +1999,16 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 			);
 			const candidateStage = (candidate.currentStage ||
 				"analyzing") as VulnerabilityCandidateStage;
-			const candidateRuntimeLiveAction = await deriveCandidateAnalysisRuntimeLiveAction(
-				scanJobId,
-				candidate.vulnerabilityCandidateId,
-			);
+			const candidateRuntimeLiveAction =
+				candidateStage === "verifying"
+					? await deriveCandidateVerifierRuntimeLiveAction(
+							scanJobId,
+							candidate.vulnerabilityCandidateId,
+						)
+					: await deriveCandidateAnalysisRuntimeLiveAction(
+							scanJobId,
+							candidate.vulnerabilityCandidateId,
+						);
 			const liveState = latestEvent
 				? deriveLiveState(latestEvent)
 				: {
@@ -1648,8 +2055,8 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 		summary: {
 			totalCandidates: candidates.length,
 			completedCandidates: completedCount,
-			excludedCandidates: excludedCount,
-			issueCandidates: issueCount,
+			analysisLikelyOrConfirmedCandidates: analysisLikelyOrConfirmedCount,
+			verifiedZeroDayCandidates: verifiedZeroDayCount,
 		},
 		inProgressCandidates,
 		queuedCandidates,
@@ -1833,7 +2240,12 @@ const renderClaudeStreamJsonMessage = (message: Record<string, unknown>) => {
 };
 
 type VulseekBridgeEvent = {
-	type: "candidate" | "candidate_batch" | "next_stage" | "analysis_result";
+	type:
+		| "candidate"
+		| "candidate_batch"
+		| "next_stage"
+		| "analysis_result"
+		| "verification_result";
 	payload: Record<string, unknown>;
 };
 
@@ -1866,6 +2278,30 @@ const normalizeAnalysisResult = (value: string | undefined) => {
 			return "plausible_but_unproven";
 		case "false_positive":
 			return "false_positive";
+		default:
+			return normalized || "plausible_but_unproven";
+	}
+};
+
+const normalizeVerificationResult = (value: string | undefined) => {
+	const normalized = (value || "")
+		.trim()
+		.toLowerCase()
+		.replace(/\s+/g, "_")
+		.replace(/-/g, "_");
+
+	switch (normalized) {
+		case "real_vulnerability":
+			return "real_vulnerability";
+		case "likely_vulnerability":
+			return "likely_vulnerability";
+		case "plausible_but_unproven":
+		case "weak_hypothesis":
+			return "plausible_but_unproven";
+		case "false_positive":
+			return "false_positive";
+		case "api_misuse":
+			return "api_misuse";
 		default:
 			return normalized || "plausible_but_unproven";
 	}
@@ -2068,13 +2504,88 @@ const persistVulseekBridgeEvent = async (
 		};
 	}
 
+	if (event.type === "verification_result") {
+		const candidateId =
+			asString(event.payload.candidateId) || options?.candidateId;
+		if (!candidateId) {
+			return {
+				type: event.type,
+				receivedCandidates: 0,
+				createdCandidates: 0,
+				droppedCandidates: 0,
+			};
+		}
+
+		const candidate = await findVulnerabilityCandidateById(candidateId);
+		const result = normalizeVerificationResult(asString(event.payload.result));
+		const summary = asString(event.payload.summary);
+		const reportPath = asString(event.payload.reportPath);
+		const issueDraftPath = asString(event.payload.issueDraftPath);
+		const pocPath = asString(event.payload.pocPath);
+		const dockerfilePath = asString(event.payload.dockerfilePath);
+		const runScriptPath = asString(event.payload.runScriptPath);
+		const isBug = asBoolean(event.payload.isBug);
+		const isSecurity = asBoolean(event.payload.isSecurity);
+		const confidence = asNumber(event.payload.confidence);
+		const runtimeSeconds =
+			typeof event.payload.runtimeSeconds === "number"
+				? event.payload.runtimeSeconds
+				: options?.runtimeSeconds;
+		const threadId = asString(event.payload.threadId) || options?.threadId;
+
+		if (threadId) {
+			await updateVulnerabilityCandidateVerifierThreadId(candidateId, threadId);
+		}
+
+		await updateVulnerabilityCandidateCurrentStage(candidateId, "verifying");
+		await deleteVerificationResultsByCandidateId(candidateId);
+		await createVerificationResult({
+			scanJobId,
+			vulnerabilityCandidateId: candidateId,
+			result,
+			isBug,
+			isSecurity,
+			confidence,
+			reportPath,
+			issueDraftPath,
+			pocPath,
+			dockerfilePath,
+			runScriptPath,
+			runtimeSeconds,
+			threadId,
+			summary:
+				summary ||
+				(result === "real_vulnerability"
+					? `Verified vulnerability: ${candidate.title}`
+					: result === "likely_vulnerability"
+						? `Likely vulnerability after verification: ${candidate.title}`
+						: result === "api_misuse"
+							? `API misuse: ${candidate.title}`
+							: result === "false_positive"
+								? `False positive: ${candidate.title}`
+								: `Plausible but unproven after verification: ${candidate.title}`),
+		});
+
+		await updateVulnerabilityCandidateStatus(candidateId, "completed");
+		return {
+			type: event.type,
+			receivedCandidates: 0,
+			createdCandidates: 0,
+			droppedCandidates: 0,
+		};
+	}
+
 	const candidateId = asString(event.payload.candidateId);
 	const currentStage = resolveCandidateStageFromEvent(event);
 	const threadId = resolveCandidateThreadIdFromEvent(event);
 	if (candidateId && currentStage) {
 		await updateVulnerabilityCandidateCurrentStage(candidateId, currentStage);
 		if (threadId) {
-			await updateVulnerabilityCandidateAnalysisThreadId(candidateId, threadId);
+			if (currentStage === "verifying") {
+				await updateVulnerabilityCandidateVerifierThreadId(candidateId, threadId);
+			} else {
+				await updateVulnerabilityCandidateAnalysisThreadId(candidateId, threadId);
+			}
 		}
 	}
 	return {
@@ -2435,7 +2946,9 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 		contextVolumeName,
 		projectName,
 		serviceName,
-		agentProfile,
+		projectProfileContextRoot,
+		projectProfileCacheRoot,
+		scanAgentProfile,
 	} = await resolveScanExecutionContext(scanJob);
 
 	const containerName = [
@@ -2445,18 +2958,27 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 		"scan",
 		sanitizeContainerNamePart(scanJob.scanJobId),
 	].join("-");
-	const scanRootDir = `/scan-context/jobs/${scanJob.scanJobId}/scanning`;
+	const scanRootDir = path.posix.join(buildScanJobContextRoot(scanJob.scanJobId), "scanning");
 	const startedAt = new Date().toISOString();
 	const agentsDir = await resolveAgentsDirectory();
 	const appServerJsonlPath = getScanJobAppServerJsonlPath(scanJob.scanJobId);
 	const appServerTextPath = getScanJobAppServerTextPath(scanJob.scanJobId);
 	const appServerStderrPath = getScanJobAppServerStderrPath(scanJob.scanJobId);
-	const agentProvider = agentProfile?.provider || "codex";
-	const containerEnvPairs = getGlobalContainerEnvironmentPairs();
+	const agentProvider = scanAgentProfile?.provider || "codex";
+	const containerEnvPairs = [
+		...getGlobalContainerEnvironmentPairs(),
+		`VULSEEK_PROJECT_PROFILE_DIR=${projectProfileContextRoot}`,
+		`VULSEEK_PROJECT_CACHE_DIR=${projectProfileCacheRoot}`,
+	];
 	const containerEnvArgs = containerEnvPairs
 		.map((pair) => `-e '${escapeSingleQuotes(pair)}'`)
 		.join(" ");
 
+	const scanContextMount = await resolveScanContextMount({
+		contextVolumeName,
+		projectName,
+		profileName: serviceName,
+	});
 	const stageSummary: string[] = [];
 	let repositoryState: PreparedRepositoryState | null = null;
 	const bridgeDebugStats = createEmptyScanBridgeDebugStats();
@@ -2464,29 +2986,30 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 		| {
 				appName: string;
 				imageTag: string;
-				contextVolumeName: string;
+				contextVolumeName: string | null | undefined;
 				scanRootDir: string;
 				codexStdoutSnippet: string;
 				codexStderrSnippet: string;
 		  }
 		| undefined;
-	await execAsync(
-		`docker run -d --name ${containerName} -v ${contextVolumeName}:/scan-context ${containerEnvArgs} ${imageTag} bash -lc "sleep infinity"`,
-	);
+	try {
+		await execAsync(
+			`docker run -d --rm --name ${containerName} ${scanContextMount.dockerMountArg} ${containerEnvArgs} ${imageTag} bash -lc "sleep infinity"`,
+		);
 
 		stageSummary.push(`- container: ${containerName}`);
 		stageSummary.push(`- image: ${imageTag}`);
-		stageSummary.push(`- context_volume: ${contextVolumeName}`);
+		stageSummary.push(`- context_storage: ${scanContextMount.mountDescription}`);
 		stageSummary.push(`- scan_type: ${scanJob.scanType}`);
 		stageSummary.push(`- container_env_count: ${containerEnvPairs.length}`);
 		stageSummary.push(
 			`- agent_transport: ${agentProvider === "claude_code" ? "claude-stream-json-stdio" : "codex-app-server-jsonrpc-stdio"}`,
 		);
 		stageSummary.push(
-			`- agent_profile: ${agentProfile?.name || agentProfile?.agentProfileId || "default"}`,
+			`- agent_profile: ${scanAgentProfile?.name || scanAgentProfile?.agentProfileId || "default"}`,
 		);
 		stageSummary.push(`- agent_provider: ${agentProvider}`);
-		stageSummary.push(`- agent_model: ${agentProfile?.model || "gpt-5.3-codex"}`);
+		stageSummary.push(`- agent_model: ${scanAgentProfile?.model || "gpt-5.3-codex"}`);
 		stageSummary.push(`- started_at: ${startedAt}`);
 
 		await execAsync(
@@ -2504,7 +3027,7 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 				`- target: ${isApplicationJob ? "application" : "compose"}`,
 				`- app_name: ${appName}`,
 				`- image_tag: ${imageTag}`,
-				`- context_volume: ${contextVolumeName}`,
+				`- context_storage: ${scanContextMount.mountDescription}`,
 				`- target_ref: ${scanJob.targetRef || "<none>"}`,
 				`- target_tag: ${scanJob.targetTag || "<none>"}`,
 				`- commit_sha: ${scanJob.commitSha || "<none>"}`,
@@ -2518,12 +3041,12 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 			await execAsync(`docker cp "${agentsDir}/." ${containerName}:/root/.codex/skills/`);
 			stageSummary.push(`- copied_skills_from: ${agentsDir}`);
 
-			if (agentProfile) {
+			if (scanAgentProfile) {
 				await copyCodexAssetsToContainerHome(
 					containerName,
 					"/root/.codex",
 					agentsDir,
-					agentProfile,
+					scanAgentProfile,
 				);
 				stageSummary.push(
 					agentProvider === "codex"
@@ -2590,7 +3113,7 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 				`Target commit: ${repositoryState?.resolvedTargetSha || "<none>"}.`,
 				`Base commit: ${repositoryState?.resolvedBaseSha || "<none>"}.`,
 				`Commit window k: ${repositoryState?.commitWindow || scanJob.commitWindow}.`,
-				`Use ${agentProvider} as the runtime agent and keep reasoning effort around ${agentProfile?.thinkingLevel || "medium"}.`,
+				`Use ${agentProvider} as the runtime agent and keep reasoning effort around ${scanAgentProfile?.thinkingLevel || "medium"}.`,
 				`Before analyzing, use the repository state already prepared in ${scanRootDir}/00_repository_state.md and work from the checked out target revision in /workspace/repo.`,
 				"Event emission is a hard requirement: if you identify candidates, print the literal <VULSEEK_EVENT>...</VULSEEK_EVENT> block to stdout before any prose claiming success.",
 				"Do not say that you emitted candidate events unless the literal block was actually printed in this turn.",
@@ -2606,18 +3129,18 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 			await resetScanRuntimeFiles(scanJob.scanJobId);
 
 			if (agentProvider === "claude_code") {
-				if (!agentProfile) {
+				if (!scanAgentProfile) {
 					throw new Error("Claude Code scan runtime requires an agent profile");
 				}
 
-				const claudeEnvPairs = buildClaudeEnvPairs(agentProfile);
+				const claudeEnvPairs = buildClaudeEnvPairs(scanAgentProfile);
 				let sessionId = scanJob.scanningThreadId || "";
 				await runClaudeHeadlessTurnInContainer({
 					containerName,
 					cwd: "/workspace/repo",
 					prompt: testPrompt,
-					model: agentProfile.model,
-					thinkingLevel: agentProfile.thinkingLevel,
+					model: scanAgentProfile.model,
+					thinkingLevel: scanAgentProfile.thinkingLevel,
 					envPairs: claudeEnvPairs,
 					sessionId,
 					jsonlPath: appServerJsonlPath,
@@ -2658,8 +3181,8 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 					containerName,
 					cwd: "/workspace/repo",
 					prompt: codexPrompt,
-					model: agentProfile.model,
-					thinkingLevel: agentProfile.thinkingLevel,
+					model: scanAgentProfile.model,
+					thinkingLevel: scanAgentProfile.thinkingLevel,
 					envPairs: claudeEnvPairs,
 					sessionId,
 					jsonlPath: appServerJsonlPath,
@@ -3086,6 +3609,9 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 		codexStdoutSnippet,
 		codexStderrSnippet,
 	};
+	} finally {
+		await execAsync(`docker rm -f ${containerName}`).catch(() => {});
+	}
 
 	return result as NonNullable<typeof result>;
 };
@@ -3105,7 +3631,9 @@ export const runCandidateAnalysisAgentInContainer = async (input: {
 		contextVolumeName,
 		projectName,
 		serviceName,
-		agentProfile,
+		projectProfileContextRoot,
+		projectProfileCacheRoot,
+		analysisAgentProfile,
 	} = await resolveScanExecutionContext(scanJob);
 
 	const stage = input.stage;
@@ -3113,7 +3641,7 @@ export const runCandidateAnalysisAgentInContainer = async (input: {
 		scanJob.scanJobId,
 		candidate.vulnerabilityCandidateId,
 	);
-	const candidateRuntimeRootInContainer = `/scan-context/jobs/${scanJob.scanJobId}/candidates/${candidate.vulnerabilityCandidateId}`;
+	const candidateRuntimeRootInContainer = buildCandidateContextRoot(scanJob.scanJobId, candidate.vulnerabilityCandidateId);
 	const codexHome = `${candidateRuntimeRootInContainer}/.codex`;
 	const appServerJsonlPath = getCandidateAnalysisAppServerJsonlPath(
 		scanJob.scanJobId,
@@ -3127,8 +3655,12 @@ export const runCandidateAnalysisAgentInContainer = async (input: {
 		scanJob.scanJobId,
 		candidate.vulnerabilityCandidateId,
 	);
-	const agentProvider = agentProfile?.provider || "codex";
-	const containerEnvPairs = getGlobalContainerEnvironmentPairs();
+	const agentProvider = analysisAgentProfile?.provider || "codex";
+	const containerEnvPairs = [
+		...getGlobalContainerEnvironmentPairs(),
+		`VULSEEK_PROJECT_PROFILE_DIR=${projectProfileContextRoot}`,
+		`VULSEEK_PROJECT_CACHE_DIR=${projectProfileCacheRoot}`,
+	];
 	const containerEnvArgs = containerEnvPairs
 		.map((pair) => `-e '${escapeSingleQuotes(pair)}'`)
 		.join(" ");
@@ -3140,6 +3672,11 @@ export const runCandidateAnalysisAgentInContainer = async (input: {
 		String(Date.now()),
 	].join("-");
 	const agentsDir = await resolveAgentsDirectory();
+	const scanContextMount = await resolveScanContextMount({
+		contextVolumeName,
+		projectName,
+		profileName: serviceName,
+	});
 
 	await fs.mkdir(candidateRuntimeDir, { recursive: true });
 		await Promise.all([
@@ -3153,7 +3690,7 @@ export const runCandidateAnalysisAgentInContainer = async (input: {
 		);
 
 	await execAsync(
-		`docker run -d --rm --name ${containerName} -v ${contextVolumeName}:/scan-context ${containerEnvArgs} ${imageTag} bash -lc "mkdir -p '${candidateRuntimeRootInContainer}' '${codexHome}/skills' && sleep infinity"`,
+		`docker run -d --rm --name ${containerName} ${scanContextMount.dockerMountArg} ${containerEnvArgs} ${imageTag} bash -lc "mkdir -p '${candidateRuntimeRootInContainer}' '${codexHome}/skills' && sleep infinity"`,
 	);
 
 	try {
@@ -3161,7 +3698,7 @@ export const runCandidateAnalysisAgentInContainer = async (input: {
 			containerName,
 			codexHome,
 			agentsDir,
-			agentProfile,
+			analysisAgentProfile,
 		);
 		await writeContainerFile(
 			containerName,
@@ -3173,17 +3710,17 @@ export const runCandidateAnalysisAgentInContainer = async (input: {
 				`- candidate_id: ${candidate.vulnerabilityCandidateId}`,
 				`- stage: ${stage}`,
 				`- agent: analysis`,
-				`- agent_profile: ${agentProfile?.name || agentProfile?.agentProfileId || "default"}`,
+				`- agent_profile: ${analysisAgentProfile?.name || analysisAgentProfile?.agentProfileId || "default"}`,
 				`- agent_provider: ${agentProvider}`,
-				`- agent_model: ${agentProfile?.model || "gpt-5.3-codex"}`,
+				`- agent_model: ${analysisAgentProfile?.model || "gpt-5.3-codex"}`,
 				`- app_name: ${appName}`,
 				`- image_tag: ${imageTag}`,
-				`- context_volume: ${contextVolumeName}`,
+				`- context_storage: ${scanContextMount.mountDescription}`,
 			].join("\n"),
 		);
 
 		if (agentProvider === "claude_code") {
-			if (!agentProfile) {
+			if (!analysisAgentProfile) {
 				throw new Error("Claude Code analysis runtime requires an agent profile");
 			}
 
@@ -3194,12 +3731,12 @@ export const runCandidateAnalysisAgentInContainer = async (input: {
 				cwd: "/workspace/repo",
 				prompt: [
 					`Current analysis stage: ${stage}.`,
-					`Use reasoning effort around ${agentProfile.thinkingLevel}.`,
+					`Use reasoning effort around ${analysisAgentProfile.thinkingLevel}.`,
 					input.prompt,
 				].join("\n\n"),
-				model: agentProfile.model,
-				thinkingLevel: agentProfile.thinkingLevel,
-				envPairs: buildClaudeEnvPairs(agentProfile),
+				model: analysisAgentProfile.model,
+				thinkingLevel: analysisAgentProfile.thinkingLevel,
+				envPairs: buildClaudeEnvPairs(analysisAgentProfile),
 				sessionId,
 				jsonlPath: appServerJsonlPath,
 				textPath: appServerTextPath,
@@ -3526,11 +4063,420 @@ export const runCandidateAnalysisAgentInContainer = async (input: {
 	}
 };
 
+export const runCandidateVerifierInContainer = async (input: {
+	vulnerabilityCandidateId: string;
+	prompt: string;
+}) => {
+	const candidate = await findVulnerabilityCandidateById(
+		input.vulnerabilityCandidateId,
+	);
+	const scanJob = await findScanJobById(candidate.scanJobId);
+	const {
+		appName,
+		imageTag,
+		contextVolumeName,
+		projectName,
+		serviceName,
+		projectProfileContextRoot,
+		projectProfileCacheRoot,
+		verifierAgentProfile,
+	} = await resolveScanExecutionContext(scanJob);
+
+	const stage: VulnerabilityCandidateStage = "verifying";
+	const candidateRuntimeDir = resolveCandidateRuntimeDir(
+		scanJob.scanJobId,
+		candidate.vulnerabilityCandidateId,
+	);
+	const candidateRuntimeRootInContainer = buildCandidateContextRoot(scanJob.scanJobId, candidate.vulnerabilityCandidateId);
+	const codexHome = `${candidateRuntimeRootInContainer}/.codex-verify`;
+	const appServerJsonlPath = path.join(candidateRuntimeDir, "verify-app-server-messages.jsonl");
+	const appServerTextPath = path.join(candidateRuntimeDir, "verify-app-server-text.log");
+	const appServerStderrPath = path.join(candidateRuntimeDir, "verify-app-server-stderr.log");
+	const agentProvider = verifierAgentProfile?.provider || "codex";
+	const containerEnvPairs = [
+		...getGlobalContainerEnvironmentPairs(),
+		`VULSEEK_PROJECT_PROFILE_DIR=${projectProfileContextRoot}`,
+		`VULSEEK_PROJECT_CACHE_DIR=${projectProfileCacheRoot}`,
+	];
+	const containerEnvArgs = containerEnvPairs
+		.map((pair) => `-e '${escapeSingleQuotes(pair)}'`)
+		.join(" ");
+	const containerName = [
+		sanitizeContainerNamePart(projectName),
+		sanitizeContainerNamePart(serviceName),
+		sanitizeContainerNamePart(candidate.vulnerabilityCandidateId.slice(0, 8)),
+		"verify",
+		String(Date.now()),
+	].join("-");
+	const agentsDir = await resolveAgentsDirectory();
+	const scanContextMount = await resolveScanContextMount({
+		contextVolumeName,
+		projectName,
+		profileName: serviceName,
+	});
+
+	await fs.mkdir(candidateRuntimeDir, { recursive: true });
+	await Promise.all([
+		fs.writeFile(appServerJsonlPath, "", { flag: "a" }),
+		fs.writeFile(appServerTextPath, "", { flag: "a" }),
+		fs.writeFile(appServerStderrPath, "", { flag: "a" }),
+	]);
+	await updateVulnerabilityCandidateCurrentStage(
+		candidate.vulnerabilityCandidateId,
+		stage,
+	);
+
+	await execAsync(
+		`docker run -d --rm --name ${containerName} ${scanContextMount.dockerMountArg} ${containerEnvArgs} ${imageTag} bash -lc "mkdir -p '${candidateRuntimeRootInContainer}' '${codexHome}/skills' && sleep infinity"`,
+	);
+
+	try {
+		await copyCodexAssetsToContainerHome(
+			containerName,
+			codexHome,
+			agentsDir,
+			verifierAgentProfile,
+		);
+		await writeContainerFile(
+			containerName,
+			`${candidateRuntimeRootInContainer}/verify/00_setup.md`,
+			[
+				"# Candidate Verify Setup",
+				"",
+				`- scan_job_id: ${scanJob.scanJobId}`,
+				`- candidate_id: ${candidate.vulnerabilityCandidateId}`,
+				`- agent: verifier`,
+				`- agent_profile: ${verifierAgentProfile?.name || verifierAgentProfile?.agentProfileId || "default"}`,
+				`- agent_provider: ${agentProvider}`,
+				`- agent_model: ${verifierAgentProfile?.model || "gpt-5.3-codex"}`,
+				`- app_name: ${appName}`,
+				`- image_tag: ${imageTag}`,
+				`- context_storage: ${scanContextMount.mountDescription}`,
+			].join("\n"),
+		);
+
+		if (agentProvider === "claude_code") {
+			if (!verifierAgentProfile) {
+				throw new Error("Claude Code verifier runtime requires an agent profile");
+			}
+
+			let sessionId = getCandidateVerifierThreadId(candidate);
+			const startedAt = Date.now();
+			await runClaudeHeadlessTurnInContainer({
+				containerName,
+				cwd: "/workspace/repo",
+				prompt: input.prompt,
+				model: verifierAgentProfile.model,
+				thinkingLevel: verifierAgentProfile.thinkingLevel,
+				envPairs: buildClaudeEnvPairs(verifierAgentProfile),
+				sessionId,
+				jsonlPath: appServerJsonlPath,
+				textPath: appServerTextPath,
+				stderrPath: appServerStderrPath,
+				onBridgeEvent: async (event) => {
+					await persistVulseekBridgeEvent(scanJob.scanJobId, event, {
+						candidateId: candidate.vulnerabilityCandidateId,
+						runtimeSeconds: (Date.now() - startedAt) / 1000,
+						threadId: sessionId || candidate.verifierThreadId || undefined,
+					});
+				},
+				onSessionId: async (nextSessionId) => {
+					sessionId = nextSessionId;
+					await updateVulnerabilityCandidateVerifierThreadId(
+						candidate.vulnerabilityCandidateId,
+						nextSessionId,
+					);
+				},
+			});
+
+			return {
+				scanJobId: scanJob.scanJobId,
+				vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
+				stage,
+				threadId: sessionId,
+				runtimeDir: candidateRuntimeDir,
+			};
+		}
+
+		const rpcChild = spawn(
+			"docker",
+			[
+				"exec",
+				"-i",
+				containerName,
+				"bash",
+				"-lc",
+				`cd /workspace/repo && export CODEX_HOME='${escapeSingleQuotes(
+					codexHome,
+				)}' && codex app-server`,
+			],
+			{
+				env: {
+					...process.env,
+					HOME: "/root",
+				},
+				stdio: ["pipe", "pipe", "pipe"],
+			},
+		);
+
+		let nextRequestId = 1;
+		let threadId = getCandidateVerifierThreadId(candidate);
+		let turnCompletionStatus = "";
+		let turnCompletionError = "";
+		let childExitCode: number | null = null;
+		const startedAt = Date.now();
+		const pendingRequests = new Map<
+			number,
+			{
+				resolve: (value: JsonRpcMessage) => void;
+				reject: (error: Error) => void;
+			}
+		>();
+
+		const sendJsonRpcMessage = (message: JsonRpcMessage) => {
+			rpcChild.stdin.write(
+				`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`,
+			);
+		};
+
+		const sendJsonRpcRequest = (
+			method: string,
+			params?: Record<string, unknown>,
+		) => {
+			const id = nextRequestId++;
+			const payload: JsonRpcMessage = { id, method, params };
+			return new Promise<JsonRpcMessage>((resolve, reject) => {
+				pendingRequests.set(id, { resolve, reject });
+				sendJsonRpcMessage(payload);
+			});
+		};
+
+		let resolveTurnCompleted: (() => void) | undefined;
+		let rejectTurnCompleted: ((error: Error) => void) | undefined;
+		let turnCompleted = new Promise<void>((resolve, reject) => {
+			resolveTurnCompleted = resolve;
+			rejectTurnCompleted = reject;
+		});
+
+		const resetTurnCompletion = () => {
+			turnCompletionStatus = "";
+			turnCompletionError = "";
+			turnCompleted = new Promise<void>((resolve, reject) => {
+				resolveTurnCompleted = resolve;
+				rejectTurnCompleted = reject;
+			});
+		};
+
+		const stdoutLines = createInterface({ input: rpcChild.stdout });
+		let bridgeEventBuffer = "";
+		const agentMessageBuffers = new Map<string, string>();
+		stdoutLines.on("line", async (line) => {
+			try {
+				await appendScanRuntimeFile(appServerJsonlPath, `${line}\n`);
+				const message = JSON.parse(line) as JsonRpcMessage;
+				const rendered = renderJsonRpcMessage(message);
+				if (rendered) {
+					await appendScanRuntimeFile(appServerTextPath, rendered);
+				}
+				const bridgeText = resolveCompletedAgentMessageText(
+					message,
+					agentMessageBuffers,
+				);
+				if (bridgeText) {
+					bridgeEventBuffer += bridgeText;
+					const { events, parseErrors, remaining } =
+						extractVulseekBridgeEvents(bridgeEventBuffer);
+					bridgeEventBuffer = remaining;
+					for (const parseError of parseErrors) {
+						await appendScanRuntimeFile(
+							appServerStderrPath,
+							`[bridge-debug] invalid VULSEEK_EVENT: ${parseError.message}; payload=${parseError.payloadSnippet}\n`,
+						);
+					}
+					for (const event of events) {
+						await persistVulseekBridgeEvent(scanJob.scanJobId, event, {
+							candidateId: candidate.vulnerabilityCandidateId,
+							runtimeSeconds: (Date.now() - startedAt) / 1000,
+							threadId: threadId || candidate.verifierThreadId || undefined,
+						});
+					}
+				}
+
+				if (typeof message.id === "number" && pendingRequests.has(message.id)) {
+					const pendingRequest = pendingRequests.get(message.id);
+					pendingRequests.delete(message.id);
+					if (message.error?.message) {
+						pendingRequest?.reject(new Error(message.error.message));
+					} else {
+						pendingRequest?.resolve(message);
+					}
+					return;
+				}
+
+				if (message.method === "thread/started") {
+					threadId =
+						extractNamedString(
+							(message.params as Record<string, unknown> | undefined)?.thread,
+							["threadId", "id"],
+						) ||
+						extractNamedString(message.params, ["threadId"]) ||
+						threadId;
+					if (threadId) {
+						await updateVulnerabilityCandidateVerifierThreadId(
+							candidate.vulnerabilityCandidateId,
+							threadId,
+						);
+					}
+				}
+
+				if (message.method === "turn/completed") {
+					const turnRecord = (message.params as Record<string, unknown> | undefined)
+						?.turn as Record<string, unknown> | undefined;
+					turnCompletionStatus =
+						extractNamedString(turnRecord, ["status"]) ||
+						extractNamedString(message.params, ["status"]) ||
+						"completed";
+					turnCompletionError =
+						extractTurnErrorMessage(turnRecord) ||
+						message.error?.message ||
+						(turnCompletionStatus === "failed"
+							? "Codex turn completed with failed status"
+							: "");
+					resolveTurnCompleted?.();
+				}
+			} catch (error) {
+				const message =
+					error instanceof Error ? error.message : "Failed to parse JSON-RPC";
+				await appendScanRuntimeFile(appServerStderrPath, `[parse-error] ${message}\n`);
+			}
+		});
+
+		rpcChild.stderr.on("data", (chunk) => {
+			void appendScanRuntimeFile(appServerStderrPath, chunk.toString());
+		});
+
+		const childExited = new Promise<void>((resolve, reject) => {
+			rpcChild.on("error", (error) => {
+				for (const pendingRequest of pendingRequests.values()) {
+					pendingRequest.reject(error);
+				}
+				pendingRequests.clear();
+				reject(error);
+			});
+
+			rpcChild.on("close", (code) => {
+				childExitCode = code;
+				for (const pendingRequest of pendingRequests.values()) {
+					pendingRequest.reject(
+						new Error(`codex app-server exited before response (code ${code})`),
+					);
+				}
+				pendingRequests.clear();
+				if (!turnCompletionStatus) {
+					rejectTurnCompleted?.(
+						new Error(
+							`codex app-server exited before turn completion (code ${code})`,
+						),
+					);
+				}
+				resolve();
+			});
+		});
+
+		await sendJsonRpcRequest("initialize", {
+			clientInfo: {
+				name: "dokploy",
+				version: "vulseek",
+			},
+			capabilities: {
+				experimentalApi: true,
+			},
+		});
+		sendJsonRpcMessage({ method: "initialized" });
+
+		if (threadId) {
+			try {
+				await sendJsonRpcRequest("thread/resume", {
+					threadId,
+					cwd: "/workspace/repo",
+					approvalPolicy: "never",
+					persistExtendedHistory: true,
+				});
+			} catch {
+				threadId = "";
+			}
+		}
+
+		if (!threadId) {
+			const threadStarted = await sendJsonRpcRequest("thread/start", {
+				cwd: "/workspace/repo",
+				approvalPolicy: "never",
+				serviceName: "dokploy_candidate_verify",
+				experimentalRawEvents: false,
+				persistExtendedHistory: true,
+			});
+			threadId =
+				extractNamedString(
+					(threadStarted.result as Record<string, unknown> | undefined)?.thread,
+					["threadId", "id"],
+				) ||
+				extractNamedString(threadStarted.result, ["threadId"]) ||
+				threadId;
+			if (!threadId) {
+				throw new Error("Codex app-server did not return a thread id");
+			}
+			await updateVulnerabilityCandidateVerifierThreadId(
+				candidate.vulnerabilityCandidateId,
+				threadId,
+			);
+		}
+
+		resetTurnCompletion();
+		await sendJsonRpcRequest("turn/start", {
+			threadId,
+			input: [{ type: "text", text: input.prompt, text_elements: [] }],
+			cwd: "/workspace/repo",
+			approvalPolicy: "never",
+			sandboxPolicy: {
+				type: "externalSandbox",
+				networkAccess: "enabled",
+			},
+		});
+		await turnCompleted;
+		if (turnCompletionStatus === "failed") {
+			throw new Error(turnCompletionError || "Codex turn failed");
+		}
+
+		try {
+			rpcChild.stdin.end();
+		} catch {}
+		await childExited;
+		if (childExitCode !== null && childExitCode !== 0) {
+			throw new Error(`codex app-server exited with code ${childExitCode}`);
+		}
+
+		return {
+			scanJobId: scanJob.scanJobId,
+			vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
+			stage,
+			threadId,
+			runtimeDir: candidateRuntimeDir,
+		};
+	} finally {
+		await execAsync(`docker rm -f ${containerName}`).catch(() => {});
+	}
+};
+
 const buildCandidateAnalysisPrompt = async (input: {
 	scanJob: ScanJob;
 	candidate: VulnerabilityCandidate;
 }) => {
-	const reportPath = `/scan-context/jobs/${input.scanJob.scanJobId}/candidates/${input.candidate.vulnerabilityCandidateId}/analysis/01_report.md`;
+	await resolveScanExecutionContext(input.scanJob);
+	const reportPath = path.posix.join(
+		buildCandidateContextRoot(input.scanJob.scanJobId, input.candidate.vulnerabilityCandidateId),
+		"analysis",
+		"01_report.md",
+	);
 
 	return [
 		"You are the analysis agent for one vulnerability candidate.",
@@ -3558,6 +4504,58 @@ const buildCandidateAnalysisPrompt = async (input: {
 		"- likely_vulnerability",
 		"- plausible_but_unproven",
 		"- false_positive",
+	].join("\n");
+};
+
+const buildCandidateVerificationPrompt = async (input: {
+	scanJob: ScanJob;
+	candidate: VulnerabilityCandidate;
+	analysisResult: AnalysisResult;
+}) => {
+	await resolveScanExecutionContext(input.scanJob);
+	const verifyRoot = path.posix.join(
+		buildCandidateContextRoot(input.scanJob.scanJobId, input.candidate.vulnerabilityCandidateId),
+		"verify",
+	);
+	const reportPath = `${verifyRoot}/01_verify_report.md`;
+	const issueDraftPath = `${verifyRoot}/02_issue_draft.md`;
+	const pocPath = `${verifyRoot}/03_poc/poc.txt`;
+	const dockerfilePath = `${verifyRoot}/04_repro/Dockerfile`;
+	const runScriptPath = `${verifyRoot}/04_repro/run.sh`;
+
+	return [
+		"You are the verifier agent for one vulnerability candidate.",
+		"Work only on this candidate and validate the existing analysis result.",
+		`scan_job_id: ${input.scanJob.scanJobId}`,
+		`candidate_id: ${input.candidate.vulnerabilityCandidateId}`,
+		`candidate_title: ${input.candidate.title}`,
+		`candidate_description: ${input.candidate.description || "-"}`,
+		`candidate_file: ${input.candidate.filePath || "-"}`,
+		`candidate_line: ${
+			typeof input.candidate.line === "number" ? input.candidate.line : "-"
+		}`,
+		`analysis_result: ${input.analysisResult.result}`,
+		`analysis_summary: ${input.analysisResult.summary || "-"}`,
+		`analysis_report_path: ${input.analysisResult.reportPath || "-"}`,
+		`write_verify_report_to: ${reportPath}`,
+		`write_issue_draft_to: ${issueDraftPath}`,
+		`write_poc_to: ${pocPath}`,
+		`write_repro_dockerfile_to: ${dockerfilePath}`,
+		`write_repro_run_script_to: ${runScriptPath}`,
+		"",
+		"Use the installed skill named verify as your working method.",
+		"Event emission is mandatory.",
+		'After writing the artifacts, print exactly one literal <VULSEEK_EVENT>...</VULSEEK_EVENT> block with {"type":"verification_result","payload":{...}}.',
+		"Use payload fields: result, isBug, isSecurity, confidence, reportPath, issueDraftPath, pocPath, dockerfilePath, runScriptPath, summary.",
+		"Do not include scanJobId or candidateId in the event payload; Dokploy will attach them.",
+		"Dokploy will supplement runtimeSeconds and threadId if needed.",
+		"",
+		"Recommended result enum values:",
+		"- real_vulnerability",
+		"- likely_vulnerability",
+		"- plausible_but_unproven",
+		"- false_positive",
+		"- api_misuse",
 	].join("\n");
 };
 
@@ -3624,6 +4622,110 @@ export const runScanJobAnalysisPipeline = async (scanJobId: string) => {
 
 	return {
 		total: candidates.length,
+		failed,
+	};
+};
+
+export const runScanJobVerificationPipeline = async (scanJobId: string) => {
+	const scanJob = await findScanJobById(scanJobId);
+	const candidates = await findVulnerabilityCandidatesByScanJobId(scanJobId);
+	const analysisResultsList = await findAnalysisResultsByScanJobId(scanJobId);
+	const latestAnalysisResultByCandidateId = new Map<string, AnalysisResult>();
+	for (const analysisResult of analysisResultsList) {
+		if (
+			!latestAnalysisResultByCandidateId.has(
+				analysisResult.vulnerabilityCandidateId,
+			)
+		) {
+			latestAnalysisResultByCandidateId.set(
+				analysisResult.vulnerabilityCandidateId,
+				analysisResult as AnalysisResult,
+			);
+		}
+	}
+
+	const verificationTargets = candidates
+		.map((candidate) => ({
+			candidate,
+			analysisResult: latestAnalysisResultByCandidateId.get(
+				candidate.vulnerabilityCandidateId,
+			),
+		}))
+		.filter(
+			(value): value is {
+				candidate: VulnerabilityCandidate;
+				analysisResult: AnalysisResult;
+			} => {
+				const analysisResult = value.analysisResult;
+				return Boolean(
+					analysisResult &&
+						(analysisResult.result === "real_vulnerability" ||
+							analysisResult.result === "likely_vulnerability"),
+				);
+			},
+		);
+
+	if (verificationTargets.length === 0) {
+		return { total: 0, failed: 0 };
+	}
+
+	await updateScanJobStatus(scanJobId, "verifying").catch(() => {});
+
+	let failed = 0;
+	let cursor = 0;
+	const runNext = async () => {
+		while (cursor < verificationTargets.length) {
+			const current = verificationTargets[cursor++];
+			if (!current) {
+				break;
+			}
+
+			await updateVulnerabilityCandidateStatus(
+				current.candidate.vulnerabilityCandidateId,
+				"running",
+			);
+			await updateVulnerabilityCandidateCurrentStage(
+				current.candidate.vulnerabilityCandidateId,
+				"verifying",
+			);
+
+			try {
+				const prompt = await buildCandidateVerificationPrompt({
+					scanJob,
+					candidate: current.candidate,
+					analysisResult: current.analysisResult,
+				});
+				await runCandidateVerifierInContainer({
+					vulnerabilityCandidateId: current.candidate.vulnerabilityCandidateId,
+					prompt,
+				});
+
+				const refreshed = await findVulnerabilityCandidateById(
+					current.candidate.vulnerabilityCandidateId,
+				);
+				if (refreshed.status === "running") {
+					await updateVulnerabilityCandidateStatus(
+						current.candidate.vulnerabilityCandidateId,
+						"completed",
+					);
+				}
+			} catch {
+				failed += 1;
+				await updateVulnerabilityCandidateStatus(
+					current.candidate.vulnerabilityCandidateId,
+					"failed",
+				).catch(() => {});
+			}
+		}
+	};
+
+	const workers = Array.from({
+		length: Math.min(VERIFIER_CONCURRENCY, verificationTargets.length),
+	}).map(() => runNext());
+	await Promise.all(workers);
+
+	return {
+		total: verificationTargets.length,
 		failed,
 	};
 };

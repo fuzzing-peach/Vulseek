@@ -8,7 +8,47 @@ Search and cross-reference CVE databases (NVD, MITRE, OSV) for known vulnerabili
 - **OSV Search**: Query Open Source Vulnerabilities database by package, CVE ID, or git commit
 - **Vulnerability Lookup**: Get detailed information including CVSS scores, CWE, affected products
 - **Cross-Reference**: Link CVEs to their OSV entries and vice versa
+- **PR Search**: Query historical GitHub pull requests for fixes, hardening, regressions, and related discussions
 - **Recent First**: By default, searches prioritize recently published vulnerabilities
+
+
+## Project-Scoped Cache
+
+See also: `/root/.codex/skills/cache-schema/project-intel.md` for the normalized file layout and merge rules.
+
+
+Before querying external registries, use the shared project/profile cache directory. The Python tools resolve it from `VULSEEK_PROJECT_CACHE_DIR`.
+
+Cache files:
+
+- `${VULSEEK_PROJECT_CACHE_DIR}/cve-cache.json`
+- `${VULSEEK_PROJECT_CACHE_DIR}/pr-cache.json`
+
+The Python tools handle cache reuse, staleness checks, refresh, merge, and `updatedAt` updates internally. Agents should treat cache management as an implementation detail of the tool.
+
+Built-in defaults:
+
+- CVE cache TTL: 7 days
+- PR cache TTL: 1 day
+
+Normalized cache requirements:
+
+- CVE cache must be stored as structured JSON with top-level keys: `schemaVersion`, `kind`, `project`, `updatedAt`, `coverage`, `items`
+- PR cache must be stored as structured JSON with top-level keys: `schemaVersion`, `kind`, `project`, `updatedAt`, `coverage`, `items`
+- merge CVEs by `items[].id`
+- merge PRs by `items[].id` or `items[].number`
+- preserve useful existing fields and union arrays such as references, tags, labels, related commits, and CWE entries
+
+When reporting findings, explicitly say whether the result came from:
+
+- cache only
+- cache plus refresh
+- fresh fetch because cache was missing or unusable
+
+Both tools support:
+
+- `--cache-path`
+- `--refresh`
 
 ## Data Sources
 
@@ -20,19 +60,22 @@ Search and cross-reference CVE databases (NVD, MITRE, OSV) for known vulnerabili
 
 ## Usage
 
-### CVE Search (NVD/MITRE)
+### CVE Search (NVD/MITRE/CVE.org/GitHub Advisory)
 
 ```bash
-# Search by CVE ID (most detailed)
+# Search by CVE ID
 python3 skills/search-registries/search_cve.py --cve CVE-2021-44228
 
-# Search by keyword (default: all time, use --recent to limit)
+# Search by keyword
 python3 skills/search-registries/search_cve.py --keyword "log4j"
-python3 skills/search-registries/search_cve.py --keyword "log4j" --recent 24  # last 2 years
+python3 skills/search-registries/search_cve.py --keyword "log4j" --recent 24
 
 # Search by product
 python3 skills/search-registries/search_cve.py --product nginx --version 1.18.0
-python3 skills/search-registries/search_cve.py --product nginx --recent 12  # last year
+python3 skills/search-registries/search_cve.py --product wolfssl --repository wolfSSL/wolfssl --project-name wolfssl
+
+# Force refresh and merge the CVE cache
+python3 skills/search-registries/search_cve.py --product wolfssl --repository wolfSSL/wolfssl --project-name wolfssl --refresh
 
 # Output as JSON
 python3 skills/search-registries/search_cve.py --keyword "heartbleed" --json
@@ -41,7 +84,7 @@ python3 skills/search-registries/search_cve.py --keyword "heartbleed" --json
 ### OSV Search
 
 ```bash
-# Search by package name (without ecosystem = search all)
+# Search by package name
 python3 skills/search-registries/search_osv.py --package tensorflow
 
 # Search by package + ecosystem
@@ -55,55 +98,66 @@ python3 skills/search-registries/search_osv.py --cve CVE-2021-44228
 
 # Search by git commit hash
 python3 skills/search-registries/search_osv.py --git abc123def456
+```
 
-# Verbose output with full details
-python3 skills/search-registries/search_osv.py --cve CVE-2021-44228 --verbose
+### PR Search
 
-# Recent vulnerabilities only (last N months)
-python3 skills/search-registries/search_osv.py --package lodash --ecosystem npm --recent 12
+```bash
+# Search PRs in a repository by keyword
+python3 skills/search-registries/search_prs.py --repository wolfSSL/wolfssl --query security
+
+# Search only merged PRs
+python3 skills/search-registries/search_prs.py --repository wolfSSL/wolfssl --query pem --state merged
+
+# Limit to a base branch
+python3 skills/search-registries/search_prs.py --repository wolfSSL/wolfssl --query tls --base-branch master
+
+# Force refresh and merge the PR cache
+python3 skills/search-registries/search_prs.py --repository wolfSSL/wolfssl --query security --refresh
+
+# Output as JSON
+python3 skills/search-registries/search_prs.py --repository wolfSSL/wolfssl --query cve --json
 ```
 
 ## Output Formats
 
 ### CVE Output
-```
-============================================================
-CVE ID: CVE-2021-44228
-Source: NVD
-CVSS Score: 10.0
-CVSS Vector: CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H
-CWE: CWE-502
 
-Published: 2021-12-10T10:15:00.000
-Last Modified: 2021-12-10T10:15:00.000
-
-Description:
-  Log4j JNDI features used in configuration, log messages, ...
-
-Affected Products:
-  - cpe:2.3:a:apache:log4j:2.0:*:*:*:*:*:*:*
-  ...
-
-References:
-  - https://nvd.nist.gov/vuln/detail/CVE-2021-44228
-  ...
-============================================================
+```text
+{
+  "cacheMode": "cache+refresh",
+  "cachePath": "/scan-context/cache/cve-cache.json",
+  "results": [
+    {
+      "id": "CVE-2026-5500",
+      "description": "...",
+      "cvss_score": 8.7,
+      "cvss_vector": "CVSS:4.0/...",
+      "source": "cveorg",
+      "published": "2026-04-10"
+    }
+  ]
+}
 ```
 
-### OSV Output
-```
-======================================================================
-OSV Search Results for: package:lodash
-Found 5 vulnerability(ies)
-======================================================================
+### PR Output
 
-[CVE-2021-23337]
-  CVEs: CVE-2021-23337
-  Summary: Prototype Pollution in lodash
-  Severity: 7.2 (CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/L:H)
-  Affected:
-    - lodash (npm): introduced *
-    - lodash (npm): fixed 4.17.21
+```text
+{
+  "count": 3,
+  "pullRequests": [
+    {
+      "number": 10207,
+      "title": "Add signed-length validation to d2i, PEM, and buffer-load APIs",
+      "state": "open",
+      "isMerged": false,
+      "baseRef": "master",
+      "url": "https://github.com/wolfSSL/wolfssl/pull/10207"
+    }
+  ],
+  "cacheMode": "cache+refresh",
+  "cachePath": "/scan-context/cache/pr-cache.json"
+}
 ```
 
 ## Common Workflows
@@ -111,31 +165,22 @@ Found 5 vulnerability(ies)
 ### Before Fuzzing: Check Known Vulnerabilities
 
 ```bash
-# Check if target has known CVEs (recent only - last 24 months)
 python3 skills/search-registries/search_cve.py --product openssl --version 1.1.1 --recent 24
-
-# Check specific CVE
 python3 skills/search-registries/search_cve.py --cve CVE-2014-0160
 ```
 
 ### Vulnerability Research: Find Similar Issues
 
 ```bash
-# Find recent CVEs related to a keyword
 python3 skills/search-registries/search_cve.py --keyword "buffer overflow" --source nvd --recent 12
-
-# Cross-reference with OSV
 python3 skills/search-registries/search_osv.py --keyword "prototype pollution" --recent 12
 ```
 
-### Dependency Audit
+### Fix-History Research
 
 ```bash
-# Check Python package (recent vulnerabilities)
-python3 skills/search-registries/search_osv.py --package requests --ecosystem pypi --recent 12
-
-# Check JavaScript package
-python3 skills/search-registries/search_osv.py --package moment --ecosystem npm --recent 12
+python3 skills/search-registries/search_cve.py --product wolfssl --repository wolfSSL/wolfssl --project-name wolfssl
+python3 skills/search-registries/search_prs.py --repository wolfSSL/wolfssl --query security
 ```
 
 ## Notes

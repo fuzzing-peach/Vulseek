@@ -299,7 +299,7 @@ Recommended event shape:
 
 ```text
 <VULSEEK_EVENT>
-{"type":"analysis_result","payload":{"result":"likely_vulnerability","reportPath":"/scan-context/jobs/.../deep-analysis/01_report.md","runtimeSeconds":123.4,"threadId":"THREAD_ID","summary":"Entry point A and B can reach the candidate under state X; path through callback chain Y is the strongest evidence."}}
+{"type":"analysis_result","payload":{"result":"likely_vulnerability","reportPath":"/scan-context/jobs/.../candidates/.../analysis/01_report.md","runtimeSeconds":123.4,"threadId":"THREAD_ID","summary":"Entry point A and B can reach the candidate under state X; path through callback chain Y is the strongest evidence."}}
 </VULSEEK_EVENT>
 ```
 

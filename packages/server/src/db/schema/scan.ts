@@ -1,5 +1,6 @@
 import { relations } from "drizzle-orm";
 import {
+	boolean,
 	integer,
 	pgEnum,
 	pgTable,
@@ -16,6 +17,7 @@ export const scanJobStatusEnum = pgEnum("scanJobStatus", [
 	"queued",
 	"scanning",
 	"analyzing",
+	"verifying",
 	"completed",
 	"failed",
 ]);
@@ -76,6 +78,7 @@ export const vulnerabilityCandidates = pgTable("vulnerability_candidates", {
 		.default("queued"),
 	currentStage: text("currentStage").default("analyzing").notNull(),
 	analysisThreadId: text("analysisThreadId"),
+	verifierThreadId: text("verifierThreadId"),
 	confidence: real("confidence"),
 	createdAt: text("createdAt")
 		.notNull()
@@ -113,6 +116,41 @@ export const analysisResults = pgTable("analysis_results", {
 		.$defaultFn(() => new Date().toISOString()),
 });
 
+export const verificationResults = pgTable("verification_results", {
+	verificationResultId: text("verificationResultId")
+		.notNull()
+		.primaryKey()
+		.$defaultFn(() => nanoid()),
+	scanJobId: text("scanJobId")
+		.notNull()
+		.references(() => scanJobs.scanJobId, {
+			onDelete: "cascade",
+		}),
+	vulnerabilityCandidateId: text("vulnerabilityCandidateId")
+		.notNull()
+		.references(() => vulnerabilityCandidates.vulnerabilityCandidateId, {
+			onDelete: "cascade",
+		}),
+	result: text("result").notNull(),
+	isBug: boolean("isBug"),
+	isSecurity: boolean("isSecurity"),
+	confidence: real("confidence"),
+	reportPath: text("reportPath"),
+	issueDraftPath: text("issueDraftPath"),
+	pocPath: text("pocPath"),
+	dockerfilePath: text("dockerfilePath"),
+	runScriptPath: text("runScriptPath"),
+	runtimeSeconds: real("runtimeSeconds"),
+	threadId: text("threadId"),
+	summary: text("summary"),
+	createdAt: text("createdAt")
+		.notNull()
+		.$defaultFn(() => new Date().toISOString()),
+	updatedAt: text("updatedAt")
+		.notNull()
+		.$defaultFn(() => new Date().toISOString()),
+});
+
 export const scanJobsRelations = relations(scanJobs, ({ one, many }) => ({
 	application: one(applications, {
 		fields: [scanJobs.applicationId],
@@ -124,6 +162,7 @@ export const scanJobsRelations = relations(scanJobs, ({ one, many }) => ({
 	}),
 	vulnerabilityCandidates: many(vulnerabilityCandidates),
 	analysisResults: many(analysisResults),
+	verificationResults: many(verificationResults),
 }));
 
 export const vulnerabilityCandidatesRelations = relations(
@@ -134,6 +173,7 @@ export const vulnerabilityCandidatesRelations = relations(
 			references: [scanJobs.scanJobId],
 		}),
 		analysisResults: many(analysisResults),
+		verificationResults: many(verificationResults),
 	}),
 );
 
@@ -147,6 +187,20 @@ export const analysisResultsRelations = relations(analysisResults, ({ one }) => 
 		references: [vulnerabilityCandidates.vulnerabilityCandidateId],
 	}),
 }));
+
+export const verificationResultsRelations = relations(
+	verificationResults,
+	({ one }) => ({
+		scanJob: one(scanJobs, {
+			fields: [verificationResults.scanJobId],
+			references: [scanJobs.scanJobId],
+		}),
+		vulnerabilityCandidate: one(vulnerabilityCandidates, {
+			fields: [verificationResults.vulnerabilityCandidateId],
+			references: [vulnerabilityCandidates.vulnerabilityCandidateId],
+		}),
+	}),
+);
 
 export const apiCreateScanJob = z
 	.object({

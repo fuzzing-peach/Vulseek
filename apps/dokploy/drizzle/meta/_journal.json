@@ -800,12 +800,12 @@
       "tag": "0113_complete_rafael_vega",
       "breakpoints": true
     },
-    {	
-      "idx": 114,	
-      "version": "7",	
-      "when": 1759643172958,	
-      "tag": "0114_dry_black_tom",	
-      "breakpoints": true	
+    {
+      "idx": 114,
+      "version": "7",
+      "when": 1759643172958,
+      "tag": "0114_dry_black_tom",
+      "breakpoints": true
     },
     {
       "idx": 115,
@@ -945,6 +945,41 @@
       "version": "7",
       "when": 1776212000000,
       "tag": "0134_analysis_results",
+      "breakpoints": true
+    },
+    {
+      "idx": 135,
+      "version": "7",
+      "when": 1776413000000,
+      "tag": "0135_scan_analysis_agent_profiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 136,
+      "version": "7",
+      "when": 1776429000000,
+      "tag": "0136_verifier_agent_profiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 137,
+      "version": "7",
+      "when": 1776433000000,
+      "tag": "0137_verifier_runtime",
+      "breakpoints": true
+    },
+    {
+      "idx": 138,
+      "version": "7",
+      "when": 1776435000000,
+      "tag": "0138_verification_result_structured_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 139,
+      "version": "7",
+      "when": 1776440000000,
+      "tag": "0139_scan_context_host_path",
       "breakpoints": true
     }
   ]

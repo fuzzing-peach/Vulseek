@@ -1,5 +1,5 @@
 import { readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { docker } from "@dokploy/server/constants";
 import {
 	execAsync,
@@ -310,6 +310,63 @@ export const updateContainerEnvironmentSetting = async (
 export const syncContainerEnvironmentSettingToProcess = async () => {
 	const value = await getContainerEnvironmentSetting();
 	process.env.DOKPLOY_CONTAINER_ENV = value;
+	return value;
+};
+
+const escapeSingleQuotes = (value: string) => value.replace(/'/g, `'"'"'`);
+
+const validateAndPrepareScanContextHostPath = async (rawPath: string) => {
+	const trimmedPath = rawPath.trim();
+
+	if (!trimmedPath) {
+		return "";
+	}
+
+	const normalizedPath = resolve(trimmedPath);
+	const hostTargetPath = `/host${normalizedPath}`;
+	const escapedHostTargetPath = escapeSingleQuotes(hostTargetPath);
+
+	try {
+		await execAsync(
+			`docker run --rm -v /:/host busybox:1.36.1 sh -lc "mkdir -p -- '${escapedHostTargetPath}' && test -w '${escapedHostTargetPath}'"`,
+		);
+	} catch (error) {
+		throw new Error(
+			error instanceof Error
+				? `Scan context host path is not writable on Docker host: ${error.message}`
+				: "Scan context host path is not writable on Docker host",
+		);
+	}
+
+	return normalizedPath;
+};
+
+export const getScanContextHostPathSetting = async () => {
+	try {
+		const admin = await findAdmin();
+		return admin.user.scanContextHostPath || "";
+	} catch {
+		return "";
+	}
+};
+
+export const updateScanContextHostPathSetting = async (
+	scanContextHostPath: string,
+) => {
+	const normalizedPath = await validateAndPrepareScanContextHostPath(
+		scanContextHostPath,
+	);
+	const admin = await findAdmin();
+	await updateUser(admin.user.id, {
+		scanContextHostPath: normalizedPath,
+	});
+	process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH = normalizedPath;
+	return true;
+};
+
+export const syncScanContextHostPathSettingToProcess = async () => {
+	const value = await getScanContextHostPathSetting();
+	process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH = value;
 	return value;
 };
 

@@ -2,6 +2,7 @@ import {
 	findScanJobById,
 	runScanJobAnalysisPipeline,
 	runScanJobInContainer,
+	runScanJobVerificationPipeline,
 	updateScanJobStatus,
 } from "@dokploy/server";
 import { type Job, Worker } from "bullmq";
@@ -23,6 +24,18 @@ export const scansWorker = new Worker(
 					scanJob.scanJobId,
 					"failed",
 					`${analysisResult.failed} candidate analyses failed`,
+				);
+				return;
+			}
+
+			const verificationResult = await runScanJobVerificationPipeline(
+				scanJob.scanJobId,
+			);
+			if (verificationResult.failed > 0) {
+				await updateScanJobStatus(
+					scanJob.scanJobId,
+					"failed",
+					`${verificationResult.failed} candidate verifications failed`,
 				);
 				return;
 			}

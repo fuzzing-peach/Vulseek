@@ -22,6 +22,7 @@ const statusColorMap = {
 	queued: "bg-muted-foreground",
 	scanning: "bg-yellow-500",
 	analyzing: "bg-sky-500",
+	verifying: "bg-violet-500",
 	completed: "bg-green-500",
 	failed: "bg-destructive",
 } as const;
