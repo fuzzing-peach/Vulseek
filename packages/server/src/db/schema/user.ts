@@ -58,6 +58,7 @@ export const users_temp = pgTable("user_temp", {
 	sshPrivateKey: text("sshPrivateKey"),
 	containerEnvironment: text("containerEnvironment").default(""),
 	scanContextHostPath: text("scanContextHostPath").default(""),
+	scanJobConcurrency: integer("scanJobConcurrency").notNull().default(1),
 	enableDockerCleanup: boolean("enableDockerCleanup").notNull().default(false),
 	logCleanupCron: text("logCleanupCron").default("0 0 * * *"),
 	role: text("role").notNull().default("user"),

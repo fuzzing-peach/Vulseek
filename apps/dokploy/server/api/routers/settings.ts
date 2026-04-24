@@ -13,8 +13,9 @@ import {
 	getDokployImage,
 	getDokployImageTag,
 	getContainerEnvironmentSetting,
-	getScanContextHostPathSetting,
 	getLogCleanupStatus,
+	getScanJobConcurrencySetting,
+	getTraefikResourceName,
 	getUpdateData,
 	IS_CLOUD,
 	parseRawConfig,
@@ -39,7 +40,7 @@ import {
 	updateLetsEncryptEmail,
 	updateServerById,
 	updateContainerEnvironmentSetting,
-	updateScanContextHostPathSetting,
+	updateScanJobConcurrencySetting,
 	updateServerTraefik,
 	updateUser,
 	writeConfig,
@@ -115,7 +116,8 @@ export const settingsRouter = createTRPCRouter({
 		.input(apiServerSchema)
 		.mutation(async ({ input }) => {
 			try {
-				await reloadDockerResource("dokploy-traefik", input?.serverId);
+				const traefikResourceName = await getTraefikResourceName(input?.serverId);
+				await reloadDockerResource(traefikResourceName, input?.serverId);
 			} catch (err) {
 				console.error(err);
 			}
@@ -125,9 +127,10 @@ export const settingsRouter = createTRPCRouter({
 	toggleDashboard: adminProcedure
 		.input(apiEnableDashboard)
 		.mutation(async ({ input }) => {
-			const ports = await readPorts("dokploy-traefik", input.serverId);
+			const traefikResourceName = await getTraefikResourceName(input.serverId);
+			const ports = await readPorts(traefikResourceName, input.serverId);
 			const env = await readEnvironmentVariables(
-				"dokploy-traefik",
+				traefikResourceName,
 				input.serverId,
 			);
 			const preparedEnv = prepareEnvironmentVariables(env);
@@ -563,8 +566,9 @@ export const settingsRouter = createTRPCRouter({
 	readTraefikEnv: adminProcedure
 		.input(apiServerSchema)
 		.query(async ({ input }) => {
+			const traefikResourceName = await getTraefikResourceName(input?.serverId);
 			const envVars = await readEnvironmentVariables(
-				"dokploy-traefik",
+				traefikResourceName,
 				input?.serverId,
 			);
 			return envVars;
@@ -574,7 +578,8 @@ export const settingsRouter = createTRPCRouter({
 		.input(z.object({ env: z.string(), serverId: z.string().optional() }))
 		.mutation(async ({ input }) => {
 			const envs = prepareEnvironmentVariables(input.env);
-			const ports = await readPorts("dokploy-traefik", input?.serverId);
+			const traefikResourceName = await getTraefikResourceName(input?.serverId);
+			const ports = await readPorts(traefikResourceName, input?.serverId);
 
 			await writeTraefikSetup({
 				env: envs,
@@ -587,8 +592,13 @@ export const settingsRouter = createTRPCRouter({
 	haveTraefikDashboardPortEnabled: adminProcedure
 		.input(apiServerSchema)
 		.query(async ({ input }) => {
-			const ports = await readPorts("dokploy-traefik", input?.serverId);
-			return ports.some((port) => port.targetPort === 8080);
+			try {
+				const traefikResourceName = await getTraefikResourceName(input?.serverId);
+				const ports = await readPorts(traefikResourceName, input?.serverId);
+				return ports.some((port) => port.targetPort === 8080);
+			} catch {
+				return false;
+			}
 		}),
 
 	readStatsLogs: adminProcedure
@@ -810,8 +820,9 @@ export const settingsRouter = createTRPCRouter({
 						message: "Please set a serverId to update Traefik ports",
 					});
 				}
+				const traefikResourceName = await getTraefikResourceName(input?.serverId);
 				const env = await readEnvironmentVariables(
-					"dokploy-traefik",
+					traefikResourceName,
 					input?.serverId,
 				);
 				const preparedEnv = prepareEnvironmentVariables(env);
@@ -836,7 +847,8 @@ export const settingsRouter = createTRPCRouter({
 	getTraefikPorts: adminProcedure
 		.input(apiServerSchema)
 		.query(async ({ input }) => {
-			const ports = await readPorts("dokploy-traefik", input?.serverId);
+			const traefikResourceName = await getTraefikResourceName(input?.serverId);
+			const ports = await readPorts(traefikResourceName, input?.serverId);
 			return ports;
 		}),
 	updateLogCleanup: adminProcedure
@@ -872,19 +884,19 @@ export const settingsRouter = createTRPCRouter({
 		.mutation(async ({ input }) => {
 			return await updateContainerEnvironmentSetting(input.containerEnvironment);
 		}),
-	getScanContextHostPath: adminProcedure.query(async () => {
+	getScanJobConcurrency: adminProcedure.query(async () => {
 		return {
-			scanContextHostPath: await getScanContextHostPathSetting(),
+			scanJobConcurrency: await getScanJobConcurrencySetting(),
 		};
 	}),
-	updateScanContextHostPath: adminProcedure
+	updateScanJobConcurrency: adminProcedure
 		.input(
 			z.object({
-				scanContextHostPath: z.string(),
+				scanJobConcurrency: z.number().int().min(1).max(16),
 			}),
 		)
 		.mutation(async ({ input }) => {
-			return await updateScanContextHostPathSetting(input.scanContextHostPath);
+			return await updateScanJobConcurrencySetting(input.scanJobConcurrency);
 		}),
 
 	getDokployCloudIps: adminProcedure.query(async () => {

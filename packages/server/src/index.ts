@@ -39,6 +39,8 @@ export * from "./services/schedule";
 export * from "./services/security";
 export * from "./services/server";
 export * from "./services/settings";
+export * from "./services/sandbox-agent/runtime";
+export * from "./services/sandbox-agent/types";
 export * from "./services/ssh-key";
 export * from "./services/user";
 export * from "./services/volume-backups";

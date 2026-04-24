@@ -1,5 +1,5 @@
 import { readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { docker } from "@dokploy/server/constants";
 import {
 	execAsync,
@@ -251,6 +251,23 @@ export const cleanupFullDocker = async (serverId?: string | null) => {
 	}
 };
 
+export const resolveDockerResourceName = async (
+	resourceNames: string[],
+	serverId?: string,
+) => {
+	for (const resourceName of resourceNames) {
+		const resourceType = await getDockerResourceType(resourceName, serverId);
+		if (resourceType !== "unknown") {
+			return resourceName;
+		}
+	}
+
+	throw new Error("Resource type not found");
+};
+
+export const getTraefikResourceName = async (serverId?: string) =>
+	await resolveDockerResourceName(["dokploy-traefik", "dokploy-traefik-dev"], serverId);
+
 export const getDockerResourceType = async (
 	resourceName: string,
 	serverId?: string,
@@ -313,61 +330,23 @@ export const syncContainerEnvironmentSettingToProcess = async () => {
 	return value;
 };
 
-const escapeSingleQuotes = (value: string) => value.replace(/'/g, `'"'"'`);
-
-const validateAndPrepareScanContextHostPath = async (rawPath: string) => {
-	const trimmedPath = rawPath.trim();
-
-	if (!trimmedPath) {
-		return "";
-	}
-
-	const normalizedPath = resolve(trimmedPath);
-	const hostTargetPath = `/host${normalizedPath}`;
-	const escapedHostTargetPath = escapeSingleQuotes(hostTargetPath);
-
-	try {
-		await execAsync(
-			`docker run --rm -v /:/host busybox:1.36.1 sh -lc "mkdir -p -- '${escapedHostTargetPath}' && test -w '${escapedHostTargetPath}'"`,
-		);
-	} catch (error) {
-		throw new Error(
-			error instanceof Error
-				? `Scan context host path is not writable on Docker host: ${error.message}`
-				: "Scan context host path is not writable on Docker host",
-		);
-	}
-
-	return normalizedPath;
-};
-
-export const getScanContextHostPathSetting = async () => {
+export const getScanJobConcurrencySetting = async () => {
 	try {
 		const admin = await findAdmin();
-		return admin.user.scanContextHostPath || "";
+		return Math.max(1, admin.user.scanJobConcurrency ?? 1);
 	} catch {
-		return "";
+		return 1;
 	}
 };
 
-export const updateScanContextHostPathSetting = async (
-	scanContextHostPath: string,
+export const updateScanJobConcurrencySetting = async (
+	scanJobConcurrency: number,
 ) => {
-	const normalizedPath = await validateAndPrepareScanContextHostPath(
-		scanContextHostPath,
-	);
 	const admin = await findAdmin();
 	await updateUser(admin.user.id, {
-		scanContextHostPath: normalizedPath,
+		scanJobConcurrency: Math.max(1, scanJobConcurrency),
 	});
-	process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH = normalizedPath;
 	return true;
-};
-
-export const syncScanContextHostPathSettingToProcess = async () => {
-	const value = await getScanContextHostPathSetting();
-	process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH = value;
-	return value;
 };
 
 export const reloadDockerResource = async (
@@ -480,8 +459,9 @@ export const readPorts = async (
 };
 
 export const writeTraefikSetup = async (input: TraefikOptions) => {
+	const traefikResourceName = await getTraefikResourceName(input.serverId);
 	const resourceType = await getDockerResourceType(
-		"dokploy-traefik",
+		traefikResourceName,
 		input.serverId,
 	);
 

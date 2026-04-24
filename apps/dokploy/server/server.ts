@@ -12,7 +12,6 @@ import {
 	sendDokployRestartNotifications,
 	setupDirectories,
 	syncContainerEnvironmentSettingToProcess,
-	syncScanContextHostPathSettingToProcess,
 } from "@dokploy/server";
 import { config } from "dotenv";
 import next from "next";
@@ -23,6 +22,7 @@ import { setupDockerStatsMonitoringSocketServer } from "./wss/docker-stats";
 import { setupDrawerLogsWebSocketServer } from "./wss/drawer-logs";
 import { setupDeploymentLogsWebSocketServer } from "./wss/listen-deployment";
 import { setupTerminalWebSocketServer } from "./wss/terminal";
+import { initAutoDeltaScanPolling } from "./utils/auto-delta-scan";
 
 config({ path: ".env" });
 const PORT = Number.parseInt(process.env.PORT || "3000", 10);
@@ -54,7 +54,6 @@ void app.prepare().then(async () => {
 			createDefaultServerTraefikConfig();
 			await migration();
 			await syncContainerEnvironmentSettingToProcess();
-			await syncScanContextHostPathSettingToProcess();
 			await initCronJobs();
 			await initSchedules();
 			await initCancelDeployments();
@@ -65,12 +64,10 @@ void app.prepare().then(async () => {
 		if (IS_CLOUD && process.env.NODE_ENV === "production") {
 			await migration();
 			await syncContainerEnvironmentSettingToProcess();
-			await syncScanContextHostPathSettingToProcess();
 		}
 
 		if (process.env.NODE_ENV !== "production") {
 			await syncContainerEnvironmentSettingToProcess();
-			await syncScanContextHostPathSettingToProcess();
 		}
 
 		server.listen(PORT, HOST);
@@ -82,6 +79,30 @@ void app.prepare().then(async () => {
 			console.log("Starting Scans Worker");
 			const { scansWorker } = await import("./queues/scans-queue");
 			void scansWorker.run();
+			console.log("Starting Scan Module Worker");
+			const {
+				scanModuleWorker,
+				scanFunctionWorker,
+				recoverScanFullQueuesOnStartup,
+			} = await import("./queues/scan-full-queues");
+			void scanModuleWorker.run();
+			console.log("Starting Scan Function Worker");
+			void scanFunctionWorker.run();
+			console.log("Starting Scan Candidate Analysis Worker");
+			const {
+				scanCandidateAnalysisWorker,
+				scanCandidateVerificationWorker,
+				recoverScanCandidateQueuesOnStartup,
+			} = await import("./queues/scan-candidate-queues");
+			void scanCandidateAnalysisWorker.run();
+			console.log("Starting Scan Candidate Verification Worker");
+			void scanCandidateVerificationWorker.run();
+			console.log("Recovering Pending Full Scan Queues");
+			await recoverScanFullQueuesOnStartup();
+			console.log("Recovering Pending Scan Candidate Queues");
+			await recoverScanCandidateQueuesOnStartup();
+			console.log("Starting Auto Delta Scan Polling");
+			await initAutoDeltaScanPolling();
 		}
 	} catch (e) {
 		console.error("Main Server Error", e);

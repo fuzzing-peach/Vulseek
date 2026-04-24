@@ -49,6 +49,9 @@ export const compose = pgTable("compose", {
 	owner: text("owner"),
 	branch: text("branch"),
 	autoDeploy: boolean("autoDeploy").$defaultFn(() => true),
+	autoDeltaScan: boolean("autoDeltaScan").$defaultFn(() => true),
+	analysisConcurrency: integer("analysisConcurrency").notNull().default(2),
+	verifyConcurrency: integer("verifyConcurrency").notNull().default(1),
 	// Gitlab
 	gitlabProjectId: integer("gitlabProjectId"),
 	gitlabRepository: text("gitlabRepository"),
@@ -125,6 +128,12 @@ export const compose = pgTable("compose", {
 			onDelete: "set null",
 		},
 	),
+	fullScanModuleConcurrency: integer("fullScanModuleConcurrency")
+		.notNull()
+		.default(4),
+	fullScanFunctionConcurrency: integer("fullScanFunctionConcurrency")
+		.notNull()
+		.default(4),
 });
 
 export const composeRelations = relations(compose, ({ one, many }) => ({
@@ -181,6 +190,11 @@ export const composeRelations = relations(compose, ({ one, many }) => ({
 const createSchema = createInsertSchema(compose, {
 	name: z.string().min(1),
 	description: z.string(),
+	autoDeltaScan: z.boolean(),
+	analysisConcurrency: z.number().int().min(1).max(16).default(2),
+	verifyConcurrency: z.number().int().min(1).max(16).default(1),
+	fullScanModuleConcurrency: z.number().int().min(1).max(32).default(4),
+	fullScanFunctionConcurrency: z.number().int().min(1).max(64).default(4),
 	env: z.string().optional(),
 	composeFile: z.string().optional(),
 	environmentId: z.string(),

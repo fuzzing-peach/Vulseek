@@ -5,7 +5,7 @@ import type { ReactElement } from "react";
 import superjson from "superjson";
 import { ShowBackups } from "@/components/dashboard/database/backups/show-backups";
 import { ContainerEnvironment } from "@/components/dashboard/settings/container-environment";
-import { ScanContextHostPath } from "@/components/dashboard/settings/scan-context-host-path";
+import { ScanJobConcurrency } from "@/components/dashboard/settings/web-server/scan-job-concurrency";
 import { WebDomain } from "@/components/dashboard/settings/web-domain";
 import { WebServer } from "@/components/dashboard/settings/web-server";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
@@ -21,8 +21,8 @@ const Page = () => {
 			<div className="h-full rounded-xl  max-w-5xl mx-auto flex flex-col gap-4">
 				<WebDomain />
 				<ContainerEnvironment />
-				<ScanContextHostPath />
 				<WebServer />
+				<ScanJobConcurrency />
 				<div className="w-full flex flex-col gap-4">
 					<Card className="h-full bg-sidebar  p-2.5 rounded-xl  mx-auto w-full">
 						<ShowBackups

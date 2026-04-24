@@ -168,6 +168,9 @@ table application {
   branch text
   buildPath text [default: '/']
   autoDeploy boolean
+  autoDeltaScan boolean
+  analysisConcurrency integer
+  verifyConcurrency integer
   gitlabProjectId integer
   gitlabRepository text
   gitlabOwner text
@@ -276,6 +279,9 @@ table compose {
   owner text
   branch text
   autoDeploy boolean
+  autoDeltaScan boolean
+  analysisConcurrency integer
+  verifyConcurrency integer
   gitlabProjectId integer
   gitlabRepository text
   gitlabOwner text

@@ -1,56 +1,79 @@
 import {
 	findScanJobById,
-	runScanJobAnalysisPipeline,
+	getScanJobConcurrencySetting,
+	reconcileScanJobCandidatePipelineStatus,
 	runScanJobInContainer,
-	runScanJobVerificationPipeline,
 	updateScanJobStatus,
 } from "@dokploy/server";
 import { type Job, Worker } from "bullmq";
 import type { ScanQueueJob } from "./queue-types";
 import { redisConfig } from "./redis-connection";
 
+const MAX_SCAN_JOB_WORKER_CONCURRENCY = 16;
+
+type ScanExecutionState = {
+	active: number;
+	waiters: Array<() => void>;
+};
+
+const scanExecutionState: ScanExecutionState = {
+	active: 0,
+	waiters: [],
+};
+
+const acquireScanExecutionSlot = async (limit: number) =>
+	await new Promise<() => void>((resolve) => {
+		const normalizedLimit = Math.max(1, limit);
+
+		const tryAcquire = () => {
+			if (scanExecutionState.active < normalizedLimit) {
+				scanExecutionState.active += 1;
+				resolve(() => {
+					scanExecutionState.active = Math.max(0, scanExecutionState.active - 1);
+					const next = scanExecutionState.waiters.shift();
+					if (next) {
+						queueMicrotask(next);
+					}
+				});
+				return;
+			}
+
+			scanExecutionState.waiters.push(tryAcquire);
+		};
+
+		tryAcquire();
+	});
+
 export const scansWorker = new Worker(
 	"scans",
 	async (job: Job<ScanQueueJob>) => {
+		const configuredConcurrency = await getScanJobConcurrencySetting();
+		const releaseScanExecutionSlot =
+			await acquireScanExecutionSlot(configuredConcurrency);
+
 		try {
 			const scanJob = await findScanJobById(job.data.scanJobId);
-			await updateScanJobStatus(scanJob.scanJobId, "scanning");
+			const mode = job.data.mode || "full";
 
-			await runScanJobInContainer(scanJob.scanJobId);
-
-			const analysisResult = await runScanJobAnalysisPipeline(scanJob.scanJobId);
-			if (analysisResult.failed > 0) {
-				await updateScanJobStatus(
-					scanJob.scanJobId,
-					"failed",
-					`${analysisResult.failed} candidate analyses failed`,
-				);
-				return;
+			if (mode === "full") {
+				await updateScanJobStatus(scanJob.scanJobId, "scanning");
+				await runScanJobInContainer(scanJob.scanJobId);
 			}
 
-			const verificationResult = await runScanJobVerificationPipeline(
-				scanJob.scanJobId,
-			);
-			if (verificationResult.failed > 0) {
-				await updateScanJobStatus(
-					scanJob.scanJobId,
-					"failed",
-					`${verificationResult.failed} candidate verifications failed`,
-				);
-				return;
-			}
-
-			await updateScanJobStatus(scanJob.scanJobId, "completed");
+			await reconcileScanJobCandidatePipelineStatus(scanJob.scanJobId);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "Unknown error";
 			try {
 				await updateScanJobStatus(job.data.scanJobId, "failed", message);
 			} catch (_) {}
 			console.log("Scan worker error", error);
+		} finally {
+			releaseScanExecutionSlot();
 		}
 	},
 	{
 		autorun: false,
 		connection: redisConfig,
+		concurrency: MAX_SCAN_JOB_WORKER_CONCURRENCY,
 	},
 );

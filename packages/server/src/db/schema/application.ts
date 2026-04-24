@@ -120,6 +120,9 @@ export const applications = pgTable("application", {
 	buildPath: text("buildPath").default("/"),
 	triggerType: triggerType("triggerType").default("push"),
 	autoDeploy: boolean("autoDeploy").$defaultFn(() => true),
+	autoDeltaScan: boolean("autoDeltaScan").$defaultFn(() => true),
+	analysisConcurrency: integer("analysisConcurrency").notNull().default(2),
+	verifyConcurrency: integer("verifyConcurrency").notNull().default(1),
 	// Gitlab
 	gitlabProjectId: integer("gitlabProjectId"),
 	gitlabRepository: text("gitlabRepository"),
@@ -226,6 +229,12 @@ export const applications = pgTable("application", {
 			onDelete: "set null",
 		},
 	),
+	fullScanModuleConcurrency: integer("fullScanModuleConcurrency")
+		.notNull()
+		.default(4),
+	fullScanFunctionConcurrency: integer("fullScanFunctionConcurrency")
+		.notNull()
+		.default(4),
 });
 
 export const applicationsRelations = relations(
@@ -298,6 +307,11 @@ const createSchema = createInsertSchema(applications, {
 	createdAt: z.string(),
 	applicationId: z.string(),
 	autoDeploy: z.boolean(),
+	autoDeltaScan: z.boolean(),
+	analysisConcurrency: z.number().int().min(1).max(16).default(2),
+	verifyConcurrency: z.number().int().min(1).max(16).default(1),
+	fullScanModuleConcurrency: z.number().int().min(1).max(32).default(4),
+	fullScanFunctionConcurrency: z.number().int().min(1).max(64).default(4),
 	env: z.string().optional(),
 	buildArgs: z.string().optional(),
 	buildSecrets: z.string().optional(),
@@ -364,10 +378,10 @@ const createSchema = createInsertSchema(applications, {
 	cleanCache: z.boolean().optional(),
 	stopGracePeriodSwarm: z.bigint().nullable(),
 	agentProfileId: z.string().nullable().optional(),
-	scanAgentProfileId: z.string().nullable().optional(),
-	analysisAgentProfileId: z.string().nullable().optional(),
-	verifierAgentProfileId: z.string().nullable().optional(),
-});
+		scanAgentProfileId: z.string().nullable().optional(),
+		analysisAgentProfileId: z.string().nullable().optional(),
+		verifierAgentProfileId: z.string().nullable().optional(),
+	});
 
 export const apiCreateApplication = createSchema.pick({
 	name: true,
