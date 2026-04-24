@@ -42,10 +42,11 @@ interface Props {
 	isLoading?: boolean;
 	serviceData?: Record<string, unknown> | null;
 	defaultCommitWindow?: number;
+	showCommitWindow?: boolean;
 	onSubmit: (input: {
 		targetRef?: string;
 		targetTag?: string;
-		commitWindow: number;
+		commitWindow?: number;
 	}) => Promise<void>;
 }
 
@@ -56,6 +57,7 @@ export const CreateScanDialog = ({
 	isLoading = false,
 	serviceData,
 	defaultCommitWindow = 3,
+	showCommitWindow = true,
 	onSubmit,
 }: Props) => {
 	const [open, setOpen] = useState(false);
@@ -80,7 +82,7 @@ export const CreateScanDialog = ({
 		await onSubmit({
 			targetRef: targetRef.trim() || undefined,
 			targetTag: targetTag.trim() || undefined,
-			commitWindow: normalizedWindow,
+			commitWindow: showCommitWindow ? normalizedWindow : undefined,
 		});
 		setOpen(false);
 	};
@@ -112,16 +114,18 @@ export const CreateScanDialog = ({
 							onChange={(event) => setTargetTag(event.target.value)}
 						/>
 					</div>
-					<div className="grid gap-2">
-						<Label htmlFor={`${title}-commit-window`}>k</Label>
-						<Input
-							id={`${title}-commit-window`}
-							inputMode="numeric"
-							placeholder={String(defaultCommitWindow)}
-							value={commitWindow}
-							onChange={(event) => setCommitWindow(event.target.value)}
-						/>
-					</div>
+					{showCommitWindow ? (
+						<div className="grid gap-2">
+							<Label htmlFor={`${title}-commit-window`}>k</Label>
+							<Input
+								id={`${title}-commit-window`}
+								inputMode="numeric"
+								placeholder={String(defaultCommitWindow)}
+								value={commitWindow}
+								onChange={(event) => setCommitWindow(event.target.value)}
+							/>
+						</div>
+					) : null}
 				</div>
 				<DialogFooter>
 					<Button variant="secondary" onClick={() => setOpen(false)}>

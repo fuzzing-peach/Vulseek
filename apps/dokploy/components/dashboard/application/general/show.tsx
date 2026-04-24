@@ -231,8 +231,9 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 						</DialogAction>
 						<CreateScanDialog
 							title="Full Scan"
-							description="Configure ref, tag, and k for this full scan. Dokploy will persist them on the scan job."
+							description="Configure ref and tag for this full scan. If tag is empty, Dokploy will scan the most recent tag version."
 							isLoading={isCreatingScanJob}
+							showCommitWindow={false}
 							serviceData={
 								data ? (data as unknown as Record<string, unknown>) : undefined
 							}
@@ -327,12 +328,14 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 									type="default"
 									onClick={async () => {
 										setCheckoutLogs("");
-										setCheckoutFinalized(false);
+										setCheckoutId(null);
+										setCheckoutFinalized(true);
 										await checkout({
 											applicationId: applicationId,
 										})
 											.then((result) => {
 												setCheckoutId(result.checkoutId);
+												setCheckoutFinalized(false);
 												setCheckoutModalOpen(true);
 											})
 											.catch((error) => {
@@ -341,6 +344,7 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 														? error.message
 														: "Checkout failed";
 												setCheckoutLogs(message);
+												setCheckoutFinalized(true);
 												toast.error("Error during checkout build");
 											});
 									}}
@@ -422,21 +426,21 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 						</Button>
 					</DockerTerminalModal>
 					<div className="flex flex-row items-center gap-2 rounded-md px-4 py-2 border">
-						<span className="text-sm font-medium">Autoscan</span>
+						<span className="text-sm font-medium">Auto Delta Scan</span>
 						<Switch
-							aria-label="Toggle autoscan"
-							checked={data?.autoDeploy || false}
+							aria-label="Toggle auto delta scan"
+							checked={data?.autoDeltaScan || false}
 							onCheckedChange={async (enabled) => {
 								await update({
 									applicationId,
-									autoDeploy: enabled,
+									autoDeltaScan: enabled,
 								})
 									.then(async () => {
-										toast.success("Auto Scan Updated");
+										toast.success("Auto Delta Scan Updated");
 										await refetch();
 									})
 									.catch(() => {
-										toast.error("Error updating Auto Scan");
+										toast.error("Error updating Auto Delta Scan");
 									});
 							}}
 							className="flex flex-row gap-2 items-center data-[state=checked]:bg-primary"

@@ -12,8 +12,8 @@ import { getLocale, serverSideTranslations } from "@/utils/i18n";
 const Page = () => {
 	return (
 		<div className="flex flex-col gap-4 w-full">
-			<AiForm />
 			<AgentProfilesForm />
+			<AiForm />
 		</div>
 	);
 };

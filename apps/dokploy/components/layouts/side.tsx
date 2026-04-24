@@ -297,7 +297,7 @@ const MENU: Menu = {
 				!!(auth?.role === "owner" || auth?.canAccessToSSHKeys),
 		},
 		{
-			title: "AI",
+			title: "Agents",
 			icon: BotIcon,
 			url: "/dashboard/settings/ai",
 			isSingle: true,

@@ -13,7 +13,6 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
-import { DateTooltip } from "@/components/shared/date-tooltip";
 import { StatusTooltip } from "@/components/shared/status-tooltip";
 import {
 	AlertDialog,
@@ -483,10 +482,7 @@ export const ShowProjects = () => {
 																</CardTitle>
 															</CardHeader>
 															<CardFooter className="pt-4">
-																<div className="space-y-1 text-sm flex flex-row justify-between max-sm:flex-wrap w-full gap-2 sm:gap-4">
-																	<DateTooltip date={project.createdAt}>
-																		Created
-																	</DateTooltip>
+																<div className="space-y-1 text-sm flex flex-row justify-end max-sm:flex-wrap w-full gap-2 sm:gap-4">
 																	<span>
 																		{totalServices}{" "}
 																		{totalServices === 1

@@ -1,4 +1,5 @@
 import { SearchCode, ShieldAlert } from "lucide-react";
+import { CopyValueButton } from "@/components/shared/copy-value-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,7 +22,16 @@ export const ShowScanningOverview = ({ resourceId, resourceType }: Props) => {
 				<CardContent className="flex flex-col gap-4">
 					<div className="flex flex-wrap items-center gap-2">
 						<Badge variant="secondary">Target: {resourceType}</Badge>
-						<Badge variant="outline">ID: {resourceId}</Badge>
+						<div className="flex items-center gap-1 rounded-md border px-2 py-0.5">
+							<Badge variant="outline" className="border-0 px-0">
+								ID: {resourceId}
+							</Badge>
+							<CopyValueButton
+								value={resourceId}
+								label="Resource ID"
+								className="size-6"
+							/>
+						</div>
 						<Badge>Mode: Vulnerability Analysis</Badge>
 					</div>
 					<p className="text-sm text-muted-foreground">
@@ -56,4 +66,3 @@ export const ShowScanningOverview = ({ resourceId, resourceType }: Props) => {
 		</div>
 	);
 };
-

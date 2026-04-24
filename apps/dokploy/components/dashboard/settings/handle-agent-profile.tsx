@@ -75,7 +75,7 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 			provider: "codex",
 			baseUrl: "https://api.openai.com/v1",
 			apiKey: "",
-			model: "gpt-5.3-codex",
+			model: "gpt-5.4",
 			thinkingLevel: "medium",
 			isEnabled: true,
 		},
@@ -92,7 +92,7 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 			provider: data?.provider ?? "codex",
 			baseUrl: data?.baseUrl ?? "https://api.openai.com/v1",
 			apiKey: data?.apiKey ?? "",
-			model: data?.model ?? "gpt-5.3-codex",
+			model: data?.model ?? "gpt-5.4",
 			thinkingLevel: data?.thinkingLevel ?? "medium",
 			isEnabled: data?.isEnabled ?? true,
 		});
@@ -105,7 +105,7 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 		}
 		if (provider === "codex" && !agentProfileId && !data?.baseUrl) {
 			form.setValue("baseUrl", "https://api.openai.com/v1");
-			form.setValue("model", "gpt-5.3-codex");
+			form.setValue("model", "gpt-5.4");
 		}
 	}, [agentProfileId, data?.baseUrl, form, provider]);
 
@@ -179,11 +179,11 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 							name="provider"
 							render={({ field }) => (
 								<FormItem>
-									<FormLabel>Provider</FormLabel>
+									<FormLabel>Agent</FormLabel>
 									<Select onValueChange={field.onChange} value={field.value}>
 										<FormControl>
 											<SelectTrigger>
-												<SelectValue placeholder="Select a provider" />
+												<SelectValue placeholder="Select an agent" />
 											</SelectTrigger>
 										</FormControl>
 										<SelectContent>
@@ -239,7 +239,7 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 								<FormItem>
 									<FormLabel>Model</FormLabel>
 									<FormControl>
-										<Input placeholder="gpt-5.3-codex" {...field} />
+										<Input placeholder="gpt-5.4" {...field} />
 									</FormControl>
 									<FormDescription>
 										The model name used by the selected agent runtime
