@@ -43,13 +43,17 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { encodeBase64 } from "../utils/docker/utils";
 import { getDokployUrl } from "./admin";
-import { getAgentProfileById } from "./ai";
+import {
+	getAgentProfileById,
+	getAgentProfilesByOrganizationId,
+} from "./ai";
 import {
 	createDeployment,
 	createDeploymentPreview,
 	updateDeploymentStatus,
 } from "./deployment";
 import { type Domain, getDomainHost } from "./domain";
+import { findEnvironmentById } from "./environment";
 import {
 	createPreviewDeploymentComment,
 	getIssueComment,
@@ -68,6 +72,13 @@ export const createApplication = async (
 	input: typeof apiCreateApplication._type,
 ) => {
 	const appName = buildAppName("app", input.appName);
+	const environment = await findEnvironmentById(input.environmentId);
+	const defaultAgentProfile =
+		(
+			await getAgentProfilesByOrganizationId(
+				environment.project.organizationId,
+			)
+		).find((profile) => profile.isEnabled) || null;
 
 	const valid = await validUniqueServerAppName(appName);
 	if (!valid) {
@@ -83,6 +94,11 @@ export const createApplication = async (
 			.values({
 				...input,
 				appName,
+				agentProfileId: defaultAgentProfile?.agentProfileId ?? null,
+				analysisConcurrency: 2,
+				verifyConcurrency: 1,
+				fullScanModuleConcurrency: 4,
+				fullScanFunctionConcurrency: 4,
 			})
 			.returning()
 			.then((value) => value[0]);
@@ -124,6 +140,7 @@ export const findApplicationById = async (applicationId: string) => {
 			gitea: true,
 			server: true,
 			previewDeployments: true,
+			customGitSSHKey: true,
 		},
 	});
 	if (!application) {

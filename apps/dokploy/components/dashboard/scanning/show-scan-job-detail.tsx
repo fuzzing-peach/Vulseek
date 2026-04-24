@@ -1,11 +1,42 @@
-import { AnimatePresence, motion } from "framer-motion";
-import { AlertCircle, FileSearch, Loader2, Radio, Search } from "lucide-react";
+import { motion } from "framer-motion";
+import {
+	AlertCircle,
+	ChevronRight,
+	ChevronsUpDown,
+	FileIcon,
+	FileSearch,
+	Folder,
+	Loader2,
+	Search,
+} from "lucide-react";
 import Head from "next/head";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { DateTooltip } from "@/components/shared/date-tooltip";
+import { useRouter } from "next/router";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
+import {
+	ANALYSIS_RESULT_OPTIONS,
+	VERIFY_RESULT_OPTIONS,
+	applyCandidateListQueryState,
+	buildCandidateListStateHref,
+	parseCandidateListQueryState,
+	serializeCandidateListQueryState,
+	type CandidateSortDirection,
+	type CandidateSortKey,
+} from "@/components/dashboard/scanning/candidate-list-query-state";
+import {
+	JsonRpcSummaryPanel,
+	type JsonRpcStreamMessage,
+} from "@/components/dashboard/scanning/jsonrpc-summary";
+import { useJsonRpcStream } from "@/components/dashboard/scanning/use-jsonrpc-stream";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
+import { CopyValueButton } from "@/components/shared/copy-value-button";
+import { DateTooltip } from "@/components/shared/date-tooltip";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Progress } from "@/components/ui/progress";
+import { Textarea } from "@/components/ui/textarea";
 import {
 	Card,
 	CardContent,
@@ -14,12 +45,10 @@ import {
 	CardTitle,
 } from "@/components/ui/card";
 import {
-	Dialog,
-	DialogContent,
-	DialogDescription,
-	DialogHeader,
-	DialogTitle,
-} from "@/components/ui/dialog";
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/components/ui/popover";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/utils/api";
 
@@ -32,204 +61,359 @@ interface Props {
 	routeSegment: "profiles" | "services";
 }
 
-type JsonRpcStreamMessage = {
-	line: number;
-	message: Record<string, unknown>;
-};
-
-type SummaryLine = {
+type DirectoryListItem = {
 	id: string;
-	kind: "system" | "reasoning" | "command" | "agent" | "error";
-	text: string;
+	name: string;
+	type: "file" | "directory";
+	hasChildren?: boolean;
 };
 
-const trimSummary = (value: string, max = 220) => {
-	const normalized = value.replace(/\s+/g, " ").trim();
-	if (!normalized) {
-		return "";
-	}
-	return normalized.length > max
-		? `${normalized.slice(0, Math.max(0, max - 3))}...`
-		: normalized;
+type DirectoryCacheEntry = {
+	items: DirectoryListItem[];
+	status: "idle" | "loading" | "loaded" | "error";
 };
 
-const summarizeCommandResult = (input: string, command: string) => {
-	const summary = trimSummary(input, 240);
-	if (!summary) {
-		return "";
-	}
+type ScanJobTab =
+	| "overview"
+	| "stream"
+	| "analysis"
+	| "verify"
+	| "candidates"
+	| "files";
 
-	const normalizedCommand = trimSummary(command, 240);
-	if (normalizedCommand && summary === normalizedCommand) {
-		return "";
-	}
-
-	if (normalizedCommand && summary === `$ ${normalizedCommand}`) {
-		return "";
-	}
-
-	return summary;
+const RESULT_SORT_RANK: Record<string, number> = {
+	real_vulnerability: 4,
+	likely_vulnerability: 3,
+	plausible_but_unproven: 2,
+	api_misuse: 1,
+	false_positive: 0,
 };
 
-const extractScanningSummaryLines = (
-	messages: JsonRpcStreamMessage[],
-): SummaryLine[] => {
-	const lines: SummaryLine[] = [];
-	const commandOutputByItemId = new Map<string, string>();
-	const reasoningByItemId = new Map<string, string>();
-	const commandByItemId = new Map<string, string>();
-	const reasoningLineIndexByItemId = new Map<string, number>();
+const RESULT_SHORT_LABELS: Record<string, string> = {
+	real_vulnerability: "Real",
+	likely_vulnerability: "Likely",
+	plausible_but_unproven: "Plausible",
+	false_positive: "False",
+	api_misuse: "Misuse",
+};
 
-	for (const entry of messages) {
-		const message = entry.message;
-		const method = typeof message.method === "string" ? message.method : "";
-		const params = (message.params as Record<string, unknown> | undefined) || {};
+const formatResultLabel = (value: string) =>
+	value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 
-		if (
-			method === "item/reasoning/textDelta" ||
-			method === "item/reasoning/summaryTextDelta"
-		) {
-			const itemId = typeof params.itemId === "string" ? params.itemId : "";
-			const delta = typeof params.delta === "string" ? params.delta : "";
-			if (itemId && delta) {
-				reasoningByItemId.set(
-					itemId,
-					`${reasoningByItemId.get(itemId) || ""}${delta}`,
-				);
-			}
-			continue;
-		}
+const resolveRequestedTab = (value: string | string[] | undefined): ScanJobTab => {
+	const rawTab = typeof value === "string" ? value : Array.isArray(value) ? value[0] : "";
+	if (
+		rawTab === "overview" ||
+		rawTab === "stream" ||
+		rawTab === "analysis" ||
+		rawTab === "verify" ||
+		rawTab === "candidates" ||
+		rawTab === "files"
+	) {
+		return rawTab;
+	}
+	if (rawTab === "status") {
+		return "analysis";
+	}
+	return "overview";
+};
 
-		if (method === "item/commandExecution/outputDelta") {
-			const itemId = typeof params.itemId === "string" ? params.itemId : "";
-			const delta = typeof params.delta === "string" ? params.delta : "";
-			if (itemId && delta) {
-				commandOutputByItemId.set(
-					itemId,
-					`${commandOutputByItemId.get(itemId) || ""}${delta}`,
-				);
-			}
-			continue;
-		}
+const getShortResultLabel = (value?: string | null) => {
+	if (!value) {
+		return "-";
+	}
+	return RESULT_SHORT_LABELS[value] || formatResultLabel(value);
+};
 
-		if (method === "item/started") {
-			const item = (params.item as Record<string, unknown> | undefined) || {};
-			const itemType = typeof item.type === "string" ? item.type : "";
-			const itemId = typeof item.id === "string" ? item.id : "";
-			if (itemType === "commandExecution") {
-				const command =
-					typeof item.command === "string" ? trimSummary(item.command) : "command";
-				if (itemId) {
-					commandByItemId.set(itemId, command);
-				}
-				lines.push({
-					id: `line-${entry.line}`,
-					kind: "command",
-					text: `$ ${command}`,
-				});
-				continue;
-			}
-			if (itemType === "reasoning") {
-				const lineId = itemId || `line-${entry.line}`;
-				reasoningLineIndexByItemId.set(lineId, lines.length);
-				lines.push({
-					id: lineId,
-					kind: "reasoning",
-					text: "[reasoning started]",
-				});
-				continue;
-			}
-		}
+const ROOT_DIRECTORY_KEY = "__root__";
 
-		if (method === "item/completed") {
-			const item = (params.item as Record<string, unknown> | undefined) || {};
-			const itemType = typeof item.type === "string" ? item.type : "";
-			const itemId = typeof item.id === "string" ? item.id : "";
+type LazyFileTreeProps = {
+	rootItems: DirectoryListItem[];
+	rootStatus: DirectoryCacheEntry["status"];
+	expandedDirectories: Record<string, boolean>;
+	selectedFilePath: string | null;
+	directoryCache: Record<string, DirectoryCacheEntry>;
+	onToggleDirectory: (directoryPath: string) => void;
+	onSelectFile: (filePath: string) => void;
+};
 
-			if (itemType === "commandExecution") {
-				const aggregatedOutput =
-					typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : "";
-				const command = commandByItemId.get(itemId) || "command";
-				const output = summarizeCommandResult(
-					aggregatedOutput || commandOutputByItemId.get(itemId) || "",
-					command,
-				);
-				if (output) {
-					lines.push({
-						id: `${itemId}-output-${entry.line}`,
-						kind: "command",
-						text: output,
-					});
-				} else {
-					const status =
-						typeof item.status === "string" ? item.status.toLowerCase() : "completed";
-					lines.push({
-						id: `${itemId}-done-${entry.line}`,
-						kind: status === "failed" ? "error" : "command",
-						text:
-							status === "failed"
-								? `${command} failed`
-								: `${command} finished without output`,
-					});
-				}
-				commandOutputByItemId.delete(itemId);
-				commandByItemId.delete(itemId);
-				continue;
-			}
+const LazyFileTree = ({
+	rootItems,
+	rootStatus,
+	expandedDirectories,
+	selectedFilePath,
+	directoryCache,
+	onToggleDirectory,
+	onSelectFile,
+}: LazyFileTreeProps) => {
+	const renderItems = (items: DirectoryListItem[], depth = 0): ReactNode =>
+		items.map((item) => {
+			const isDirectory = item.type === "directory";
+			const isExpanded = !!expandedDirectories[item.id];
+			const cacheEntry = directoryCache[item.id];
+			const childStatus = cacheEntry?.status || "idle";
+			const childItems = cacheEntry?.items || [];
 
-			if (itemType === "reasoning") {
-				const summary = trimSummary(reasoningByItemId.get(itemId) || "");
-				const lineIndex = reasoningLineIndexByItemId.get(itemId);
-				if (lineIndex !== undefined) {
-					lines[lineIndex] = {
-						id: itemId,
-						kind: "reasoning",
-						text: summary || "[reasoning completed]",
-					};
-					reasoningLineIndexByItemId.delete(itemId);
-				} else {
-					lines.push({
-						id: `${itemId}-reasoning-${entry.line}`,
-						kind: "reasoning",
-						text: summary || "[reasoning completed]",
-					});
-				}
-				reasoningByItemId.delete(itemId);
-				continue;
-			}
+			return (
+				<div key={item.id}>
+					<button
+						type="button"
+						onClick={() =>
+							isDirectory ? onToggleDirectory(item.id) : onSelectFile(item.id)
+						}
+						className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
+							!isDirectory && selectedFilePath === item.id
+								? "bg-accent text-accent-foreground"
+								: "hover:bg-muted/70"
+						}`}
+						style={{ paddingLeft: `${depth * 14 + 10}px` }}
+					>
+						{isDirectory ? (
+							<ChevronRight
+								className={`size-4 shrink-0 text-muted-foreground transition-transform ${
+									isExpanded ? "rotate-90" : ""
+								}`}
+							/>
+						) : (
+							<span className="block size-4 shrink-0" />
+						)}
+						{isDirectory ? (
+							<Folder className="size-4 shrink-0 text-muted-foreground" />
+						) : (
+							<FileIcon className="size-4 shrink-0 text-muted-foreground" />
+						)}
+						<span className="min-w-0 truncate font-mono text-sm">
+							{item.name}
+						</span>
+					</button>
+					{isDirectory && isExpanded ? (
+						<div>
+							{childStatus === "loading" ? (
+								<div
+									className="flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground"
+									style={{ paddingLeft: `${(depth + 1) * 14 + 10}px` }}
+								>
+									<Loader2 className="size-4 animate-spin" />
+									Loading...
+								</div>
+							) : childStatus === "error" ? (
+								<div
+									className="px-2 py-1.5 text-sm text-destructive"
+									style={{ paddingLeft: `${(depth + 1) * 14 + 10}px` }}
+								>
+									Failed to load directory
+								</div>
+							) : childStatus === "loaded" && childItems.length === 0 ? (
+								<div
+									className="px-2 py-1.5 text-sm text-muted-foreground"
+									style={{ paddingLeft: `${(depth + 1) * 14 + 10}px` }}
+								>
+									Empty
+								</div>
+							) : (
+								renderItems(childItems, depth + 1)
+							)}
+						</div>
+					) : null}
+				</div>
+			);
+		});
 
-			if (itemType === "agentMessage") {
-				const text = typeof item.text === "string" ? item.text : "";
-				const summary = trimSummary(text, 260);
-				if (summary) {
-					lines.push({
-						id: `${itemId}-agent-${entry.line}`,
-						kind: "agent",
-						text: summary,
-					});
-				}
-				continue;
-			}
-		}
-
-		if (method === "error") {
-			const error = (params.error as Record<string, unknown> | undefined) || {};
-			const errorMessage =
-				typeof error.message === "string"
-					? error.message
-					: typeof params.message === "string"
-						? params.message
-						: "Unknown error";
-			lines.push({
-				id: `line-${entry.line}`,
-				kind: "error",
-				text: `[error] ${trimSummary(errorMessage, 240)}`,
-			});
-		}
+	if (rootStatus === "loading") {
+		return (
+			<div className="flex h-full min-h-[320px] items-center justify-center gap-2 text-muted-foreground">
+				<Loader2 className="size-4 animate-spin" />
+				Loading files...
+			</div>
+		);
 	}
 
-	return lines.slice(-80);
+	if (rootStatus === "error") {
+		return (
+			<div className="flex h-full min-h-[320px] items-center justify-center text-destructive">
+				Failed to load files
+			</div>
+		);
+	}
+
+	if (rootItems.length === 0) {
+		return (
+			<div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-2 text-muted-foreground">
+				<Folder className="size-6" />
+				No files available
+			</div>
+		);
+	}
+
+	return <div className="h-[65vh] overflow-auto p-2">{renderItems(rootItems)}</div>;
 };
+
+const LiveCandidateAgentOutput = ({
+	candidateId,
+	stage,
+	initialMessages,
+}: {
+	candidateId: string;
+	stage: string;
+	initialMessages: JsonRpcStreamMessage[];
+}) => {
+	const requestedStage = stage === "verifying" ? "verifying" : "analyzing";
+	const { messages } = useJsonRpcStream({
+		url:
+			candidateId
+				? `/api/scan/candidates/${candidateId}/jsonrpc-stream?stage=${requestedStage}`
+				: null,
+		enabled: !!candidateId,
+		initialMessages,
+	});
+
+	return <JsonRpcSummaryPanel messages={messages} />;
+};
+
+const LiveScannerAgentOutput = ({
+	scanJobId,
+	stage,
+	scanModuleTaskId,
+	scanFunctionTaskId,
+	initialMessages,
+}: {
+	scanJobId: string;
+	stage: "repository_scanning" | "module_scanning" | "function_scanning";
+	scanModuleTaskId?: string;
+	scanFunctionTaskId?: string;
+	initialMessages: JsonRpcStreamMessage[];
+}) => {
+	const query = new URLSearchParams({ stage });
+	if (scanModuleTaskId) {
+		query.set("scanModuleTaskId", scanModuleTaskId);
+	}
+	if (scanFunctionTaskId) {
+		query.set("scanFunctionTaskId", scanFunctionTaskId);
+	}
+
+	const { messages } = useJsonRpcStream({
+		url:
+			scanJobId
+				? `/api/scan/jobs/${scanJobId}/scanner-jsonrpc-stream?${query.toString()}`
+				: null,
+		enabled: !!scanJobId,
+		initialMessages,
+	});
+
+	return <JsonRpcSummaryPanel messages={messages} />;
+};
+
+const CandidateWorkflowSection = ({
+	title,
+	description,
+	summaryCards,
+	inProgressCandidates,
+}: {
+	title: string;
+	description: string;
+	summaryCards: Array<{
+		title: string;
+		value: ReactNode;
+		progress?: number;
+		progressClassName?: string;
+	}>;
+	inProgressCandidates: Array<{
+		vulnerabilityCandidateId: string;
+		title: string;
+		filePath: string | null;
+		line: number | null;
+		stage: string;
+		streamMessages: JsonRpcStreamMessage[];
+	}>;
+}) => (
+	<div className="flex flex-col gap-6">
+		<div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+			{summaryCards.map((card, index) => (
+				<motion.div
+					key={card.title}
+					layout
+					initial={{ opacity: 0, y: 10 }}
+					animate={{ opacity: 1, y: 0 }}
+					whileHover={{ y: -2, scale: 1.01 }}
+					transition={{
+						duration: 0.18,
+						ease: "easeOut",
+						delay: index * 0.03,
+					}}
+					className="rounded-lg border p-4"
+				>
+					<div className="text-sm text-muted-foreground">{card.title}</div>
+					<div className="mt-2 text-2xl font-semibold">{card.value}</div>
+					{typeof card.progress === "number" ? (
+						<div className="mt-3">
+							<Progress
+								value={card.progress}
+								className={`h-3 bg-secondary/70 ${card.progressClassName || "[&>div]:bg-emerald-500"}`}
+							/>
+						</div>
+					) : null}
+				</motion.div>
+			))}
+		</div>
+
+		<div className="rounded-lg border">
+			<div className="border-b px-4 py-3">
+				<div className="font-medium">{title} In Progress</div>
+				<div className="text-sm text-muted-foreground">{description}</div>
+			</div>
+			<div className="overflow-x-auto">
+				<table className="w-full text-sm">
+					<thead className="border-b bg-muted/30 text-left">
+						<tr>
+							<th className="w-[24%] px-4 py-3 font-medium">Candidate</th>
+							<th className="w-[10%] px-4 py-3 font-medium">Stage</th>
+							<th className="w-[66%] px-4 py-3 font-medium">Agent Output</th>
+						</tr>
+					</thead>
+					<tbody>
+						{inProgressCandidates.length === 0 ? (
+							<tr>
+								<td
+									colSpan={3}
+									className="px-4 py-6 text-center text-muted-foreground"
+								>
+									No active candidates
+								</td>
+							</tr>
+						) : (
+							inProgressCandidates.map((candidate) => (
+								<tr
+									key={candidate.vulnerabilityCandidateId}
+									className="border-b last:border-b-0"
+								>
+									<td className="w-[24%] px-4 py-3 align-top">
+										<div className="line-clamp-2 font-medium">
+											{candidate.title}
+										</div>
+										<div className="text-xs text-muted-foreground break-all">
+											{candidate.filePath || "-"}
+											{candidate.line ? `:${candidate.line}` : ""}
+										</div>
+									</td>
+									<td className="w-[10%] px-4 py-3 align-top capitalize">
+										{candidate.stage}
+									</td>
+									<td className="w-[66%] px-4 py-3 align-top">
+										<LiveCandidateAgentOutput
+											candidateId={candidate.vulnerabilityCandidateId}
+											stage={candidate.stage}
+											initialMessages={candidate.streamMessages}
+										/>
+									</td>
+								</tr>
+							))
+						)}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+);
 
 const getScanJobStatusLabel = (status?: string) => {
 	if (status === "queued") {
@@ -283,43 +467,8 @@ const getScanJobStatusClassName = (status?: string) => {
 	return "text-muted-foreground";
 };
 
-const getSummaryLineClassName = (line: SummaryLine) => {
-	if (line.kind === "reasoning") {
-		return line.text === "[reasoning started]"
-			? "text-sm font-medium italic text-amber-700/90"
-			: "text-sm font-medium text-amber-700/90";
-	}
-
-	if (line.kind === "error") {
-		return "text-sm font-semibold text-destructive";
-	}
-
-	if (line.kind === "command" && line.text.startsWith("$ ")) {
-		return "text-sm font-semibold tracking-tight text-sky-700";
-	}
-
-	if (line.kind === "command") {
-		return "text-sm font-normal text-emerald-700/95";
-	}
-
-	if (line.kind === "agent") {
-		return "text-sm font-normal text-foreground/90";
-	}
-
-	return "text-sm font-medium text-muted-foreground";
-};
-
-const getSummaryLinePrefix = (line: SummaryLine) => {
-	if (line.kind === "command" && line.text.startsWith("$ ")) {
-		return "$";
-	}
-
-	if (line.kind === "command") {
-		return "";
-	}
-
-	return ">";
-};
+const formatTriggerSourceLabel = (triggerSource?: string) =>
+	triggerSource === "schedule" ? "auto" : triggerSource || "manual";
 
 const getAnalysisResultBadgeClassName = (result?: string | null) => {
 	if (result === "real_vulnerability") {
@@ -354,15 +503,28 @@ const getVerificationTruthBadge = (
 
 	if (result === "real_vulnerability") {
 		return {
-			label: "Verified 0day",
+			label: "Real",
 			className: "border-red-200 bg-red-100 text-red-700",
 		};
 	}
 
 	return {
-		label: "Verified Not 0day",
+		label: getShortResultLabel(result),
 		className: "border-muted-foreground/20 bg-muted text-muted-foreground",
 	};
+};
+
+const getScannerStageLabel = (stage?: string) => {
+	if (stage === "repository_scanning") {
+		return "Repository";
+	}
+	if (stage === "module_scanning") {
+		return "Module";
+	}
+	if (stage === "function_scanning") {
+		return "Function";
+	}
+	return "Scanner";
 };
 
 export const ShowScanJobDetail = ({
@@ -373,20 +535,43 @@ export const ShowScanJobDetail = ({
 	serviceType,
 	routeSegment,
 }: Props) => {
-	const [candidateQuery, setCandidateQuery] = useState("");
-	const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
-		null,
+	const router = useRouter();
+	const utils = api.useUtils();
+	const initialCandidateListQueryState = parseCandidateListQueryState(router.query);
+	const [activeTab, setActiveTab] = useState<ScanJobTab>(() =>
+		resolveRequestedTab(router.query.tab),
 	);
-	const [streamText, setStreamText] = useState("");
-	const [streamState, setStreamState] = useState<
-		"connecting" | "streaming" | "completed" | "failed" | "disconnected"
-	>("connecting");
-	const [jsonRpcMessages, setJsonRpcMessages] = useState<JsonRpcStreamMessage[]>([]);
-	const [jsonRpcState, setJsonRpcState] = useState<
-		"connecting" | "streaming" | "completed" | "failed" | "disconnected"
-	>("connecting");
-	const streamContainerRef = useRef<HTMLDivElement | null>(null);
-	const scanningSummaryContainerRef = useRef<HTMLDivElement | null>(null);
+	const [candidateQuery, setCandidateQuery] = useState(
+		() => initialCandidateListQueryState.candidateQuery,
+	);
+	const [analysisFilters, setAnalysisFilters] = useState<string[]>(
+		() => initialCandidateListQueryState.analysisFilters,
+	);
+	const [verifyFilters, setVerifyFilters] = useState<string[]>(
+		() => initialCandidateListQueryState.verifyFilters,
+	);
+	const [candidateSortKey, setCandidateSortKey] =
+		useState<CandidateSortKey>(() => initialCandidateListQueryState.candidateSortKey);
+	const [candidateSortDirection, setCandidateSortDirection] =
+		useState<CandidateSortDirection>(
+			() => initialCandidateListQueryState.candidateSortDirection,
+		);
+	const [candidatePage, setCandidatePage] = useState(
+		() => initialCandidateListQueryState.candidatePage,
+	);
+	const [candidatePageSize, setCandidatePageSize] = useState(
+		() => initialCandidateListQueryState.candidatePageSize,
+	);
+	const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+	const [noteDraft, setNoteDraft] = useState("");
+	const [expandedDirectories, setExpandedDirectories] = useState<Record<string, boolean>>(
+		{},
+	);
+	const [directoryCache, setDirectoryCache] = useState<
+		Record<string, DirectoryCacheEntry>
+	>({});
+	const restoredCandidateScrollKeyRef = useRef<string | null>(null);
+	const isApplyingQueryStateRef = useRef(false);
 
 	const serviceQuery =
 		serviceType === "application"
@@ -408,67 +593,303 @@ export const ShowScanJobDetail = ({
 			{ scanJobId },
 			{ enabled: !!scanJobId, refetchInterval: 2000 },
 		);
+	const { data: selectedFile, isLoading: isLoadingSelectedFile } =
+		api.scan.readFile.useQuery(
+			{ scanJobId, filePath: selectedFilePath || "" },
+			{ enabled: !!scanJobId && !!selectedFilePath },
+		);
+	const retryFailedScanningTasksMutation =
+		api.scan.retryFailedScanningTasks.useMutation();
+	const updateNoteMutation = api.scan.updateNote.useMutation();
+	const retryFailedAnalysisTasksMutation =
+		api.scan.retryFailedAnalysisTasks.useMutation();
+	const retryFailedVerificationTasksMutation =
+		api.scan.retryFailedVerificationTasks.useMutation();
+	const rootDirectoryQuery = api.scan.listDirectory.useQuery(
+		{ scanJobId },
+		{
+			enabled: !!scanJobId && activeTab === "files",
+			refetchInterval: activeTab === "files" ? 4000 : false,
+		},
+	);
 
 	useEffect(() => {
-		setStreamText("");
-		setStreamState("connecting");
-
-		const eventSource = new EventSource(
-			`/api/scan/jobs/${scanJobId}/text-stream`,
-		);
-		eventSource.addEventListener("snapshot", (event) => {
-			const payload = JSON.parse((event as MessageEvent).data) as { text?: string };
-			setStreamText(payload.text || "");
-			setStreamState("streaming");
-		});
-		eventSource.addEventListener("append", (event) => {
-			const payload = JSON.parse((event as MessageEvent).data) as { text?: string };
-			if (payload.text) {
-				setStreamText((current) => `${current}${payload.text}`);
-			}
-			setStreamState("streaming");
-		});
-		eventSource.addEventListener("done", (event) => {
-			const payload = JSON.parse((event as MessageEvent).data) as {
-				status?: string;
-			};
-			setStreamState(payload.status === "failed" ? "failed" : "completed");
-			eventSource.close();
-		});
-		eventSource.addEventListener("error", () => {
-			setStreamState((current) =>
-				current === "completed" || current === "failed"
-					? current
-					: "disconnected",
-			);
-		});
-
-		return () => {
-			eventSource.close();
-		};
+		setSelectedFilePath(null);
+		setExpandedDirectories({});
+		setDirectoryCache({});
 	}, [scanJobId]);
 
 	useEffect(() => {
-		const container = streamContainerRef.current;
-		if (!container) {
+		setNoteDraft(scanJob?.note ?? "");
+	}, [scanJob?.note]);
+
+	const requestedTab = useMemo(
+		() => resolveRequestedTab(router.query.tab),
+		[router.query.tab],
+	);
+
+	const isNoteDirty = (scanJob?.note ?? "") !== noteDraft;
+
+	const candidateListQueryState = useMemo(
+		() => parseCandidateListQueryState(router.query),
+		[router.query],
+	);
+	const candidateListQueryStateSerialized = useMemo(
+		() => serializeCandidateListQueryState(candidateListQueryState),
+		[candidateListQueryState],
+	);
+	const currentCandidateListState = useMemo(
+		() => ({
+			candidateQuery,
+			analysisFilters,
+			verifyFilters,
+			candidateSortKey,
+			candidateSortDirection,
+			candidatePage,
+			candidatePageSize,
+		}),
+		[
+			analysisFilters,
+			candidateQuery,
+			candidatePage,
+			candidatePageSize,
+			candidateSortDirection,
+			candidateSortKey,
+			verifyFilters,
+		],
+	);
+	const currentCandidateListStateSerialized = useMemo(
+		() => serializeCandidateListQueryState(currentCandidateListState),
+		[currentCandidateListState],
+	);
+
+	useEffect(() => {
+		if (!router.isReady) {
 			return;
 		}
-		container.scrollTop = container.scrollHeight;
-	}, [streamText]);
 
-	const scanningSummaryLines = useMemo(
-		() => extractScanningSummaryLines(jsonRpcMessages),
-		[jsonRpcMessages],
+		isApplyingQueryStateRef.current = true;
+		setActiveTab(requestedTab);
+		setCandidateQuery(candidateListQueryState.candidateQuery);
+		setAnalysisFilters(candidateListQueryState.analysisFilters);
+		setVerifyFilters(candidateListQueryState.verifyFilters);
+		setCandidateSortKey(candidateListQueryState.candidateSortKey);
+		setCandidateSortDirection(candidateListQueryState.candidateSortDirection);
+		setCandidatePage(candidateListQueryState.candidatePage);
+		setCandidatePageSize(candidateListQueryState.candidatePageSize);
+	}, [
+		requestedTab,
+		router.isReady,
+		candidateListQueryStateSerialized,
+		candidateListQueryState,
+	]);
+
+	useEffect(() => {
+		if (!router.isReady) {
+			return;
+		}
+
+		const hasCaughtUp =
+			activeTab === requestedTab &&
+			currentCandidateListStateSerialized === candidateListQueryStateSerialized;
+		if (hasCaughtUp) {
+			isApplyingQueryStateRef.current = false;
+		}
+	}, [
+		activeTab,
+		requestedTab,
+		router.isReady,
+		currentCandidateListStateSerialized,
+		candidateListQueryStateSerialized,
+	]);
+
+	useEffect(() => {
+		if (!router.isReady) {
+			return;
+		}
+
+		if (isApplyingQueryStateRef.current) {
+			return;
+		}
+
+		if (
+			currentCandidateListStateSerialized ===
+			candidateListQueryStateSerialized
+		) {
+			return;
+		}
+
+		void router.replace(
+			{
+				pathname: router.pathname,
+				query: applyCandidateListQueryState(
+					router.query,
+					currentCandidateListState,
+					activeTab,
+				),
+			},
+			undefined,
+			{ shallow: true },
+		);
+	}, [
+		activeTab,
+		candidateListQueryStateSerialized,
+		currentCandidateListState,
+		currentCandidateListStateSerialized,
+		router,
+	]);
+	const repositoryScanningProgress = useMemo(() => {
+		const completed = statusView?.scan.repositoryTaskStatus === "completed" ? 1 : 0;
+		return {
+			completed,
+			total: 1,
+			percent: completed * 100,
+			status: statusView?.scan.repositoryTaskStatus || "queued",
+		};
+	}, [statusView?.scan.repositoryTaskStatus]);
+	const moduleScanningProgress = useMemo(() => {
+		const completed = statusView?.summary.moduleTasksCompleted || 0;
+		const total = statusView?.summary.moduleTasksTotal || 0;
+		const failed = statusView?.summary.moduleTasksFailed || 0;
+		return {
+			completed,
+			total,
+			percent: total > 0 ? Math.max(0, Math.min(100, (completed / total) * 100)) : 0,
+			status:
+				total > 0 && completed >= total
+					? "completed"
+					: failed > 0
+						? "failed"
+						: total > 0
+							? "running"
+							: "queued",
+		};
+	}, [
+		statusView?.summary.moduleTasksCompleted,
+		statusView?.summary.moduleTasksFailed,
+		statusView?.summary.moduleTasksTotal,
+	]);
+	const functionScanningProgress = useMemo(() => {
+		const completed = statusView?.summary.functionTasksCompleted || 0;
+		const total = statusView?.summary.functionTasksTotal || 0;
+		const failed = statusView?.summary.functionTasksFailed || 0;
+		return {
+			completed,
+			total,
+			percent: total > 0 ? Math.max(0, Math.min(100, (completed / total) * 100)) : 0,
+			status:
+				total > 0 && completed >= total
+					? "completed"
+					: failed > 0
+						? "failed"
+						: total > 0
+							? "running"
+							: "queued",
+		};
+	}, [
+		statusView?.summary.functionTasksCompleted,
+		statusView?.summary.functionTasksFailed,
+		statusView?.summary.functionTasksTotal,
+	]);
+	const failedModuleTasksCount = statusView?.summary.moduleTasksFailed || 0;
+	const failedFunctionTasksCount = statusView?.summary.functionTasksFailed || 0;
+	const totalFailedScanningTasks =
+		failedModuleTasksCount + failedFunctionTasksCount;
+	const canRetryFailedScanningTasks =
+		scanJob?.scanType === "full" &&
+		totalFailedScanningTasks > 0 &&
+		(statusView?.inProgressScannerAgents.length || 0) === 0 &&
+		statusView?.scan.repositoryTaskStatus !== "running" &&
+		scanJob?.status === "failed";
+	const analysisInProgressCandidates = useMemo(
+		() =>
+			(statusView?.inProgressCandidates || []).filter(
+				(candidate) => candidate.stage === "analyzing",
+			),
+		[statusView?.inProgressCandidates],
+	);
+	const verifyInProgressCandidates = useMemo(
+		() =>
+			(statusView?.inProgressCandidates || []).filter(
+				(candidate) => candidate.stage === "verifying",
+			),
+		[statusView?.inProgressCandidates],
+	);
+	const analysisQueuedCount = useMemo(
+		() =>
+			(statusView?.queuedCandidates || []).filter(
+				(candidate) => (candidate.stage || "analyzing") === "analyzing",
+			).length,
+		[statusView?.queuedCandidates],
+	);
+	const verifyQueuedCount = useMemo(
+		() =>
+			(statusView?.queuedCandidates || []).filter(
+				(candidate) => candidate.stage === "verifying",
+			).length,
+		[statusView?.queuedCandidates],
+	);
+	const analysisCompletedCandidates = useMemo(
+		() =>
+			(candidates || []).filter((candidate) => !!candidate.latestAnalysisResult).length,
+		[candidates],
+	);
+	const failedAnalysisCandidatesCount = useMemo(
+		() =>
+			(candidates || []).filter(
+				(candidate) =>
+					candidate.status === "failed" && candidate.currentStage === "analyzing",
+			).length,
+		[candidates],
+	);
+	const verifyEligibleCandidates = useMemo(
+		() =>
+			(candidates || []).filter((candidate) => {
+				const result = candidate.latestAnalysisResult?.result;
+				return (
+					result === "real_vulnerability" ||
+					result === "likely_vulnerability"
+				);
+			}).length,
+		[candidates],
+	);
+	const verifyCompletedCandidates = useMemo(
+		() =>
+			(candidates || []).filter((candidate) => !!candidate.latestVerificationResult)
+				.length,
+		[candidates],
+	);
+	const failedVerificationCandidatesCount = useMemo(
+		() =>
+			(candidates || []).filter(
+				(candidate) =>
+					candidate.status === "failed" && candidate.currentStage === "verifying",
+			).length,
+		[candidates],
 	);
 	const filteredCandidates = useMemo(() => {
 		if (!candidates) {
 			return [];
 		}
 		const query = candidateQuery.trim().toLowerCase();
-		if (!query) {
-			return candidates;
-		}
 		return candidates.filter((candidate) => {
+			const latestAnalysisResult = candidate.latestAnalysisResult?.result || "";
+			const latestVerifyResult = candidate.latestVerificationResult?.result || "";
+			if (
+				analysisFilters.length > 0 &&
+				!analysisFilters.includes(latestAnalysisResult)
+			) {
+				return false;
+			}
+			if (
+				verifyFilters.length > 0 &&
+				!verifyFilters.includes(latestVerifyResult)
+			) {
+				return false;
+			}
+			if (!query) {
+				return true;
+			}
 			const haystack = [
 				candidate.title,
 				candidate.description || "",
@@ -488,6 +909,13 @@ export const ShowScanJobDetail = ({
 				typeof candidate.latestVerificationResult?.confidence === "number"
 					? String(candidate.latestVerificationResult.confidence)
 					: "",
+				typeof candidate.latestVerificationResult?.score === "number"
+					? String(candidate.latestVerificationResult.score)
+					: "",
+				typeof candidate.latestAnalysisResult?.score === "number"
+					? String(candidate.latestAnalysisResult.score)
+					: "",
+				typeof candidate.score === "number" ? String(candidate.score) : "",
 				candidate.latestVerificationResult?.reportPath || "",
 				candidate.latestVerificationResult?.issueDraftPath || "",
 				candidate.latestVerificationResult?.threadId || "",
@@ -496,66 +924,249 @@ export const ShowScanJobDetail = ({
 				.toLowerCase();
 			return haystack.includes(query);
 		});
-	}, [candidateQuery, candidates]);
-	const selectedCandidate = useMemo(
+	}, [analysisFilters, candidateQuery, candidates, verifyFilters]);
+
+	const sortedCandidates = useMemo(() => {
+		const items = [...filteredCandidates];
+		items.sort((left, right) => {
+			const direction = candidateSortDirection === "asc" ? 1 : -1;
+
+			if (candidateSortKey === "candidate") {
+				return direction * left.title.localeCompare(right.title);
+			}
+
+			if (candidateSortKey === "analysis") {
+				const leftRank =
+					RESULT_SORT_RANK[left.latestAnalysisResult?.result || ""] ?? -1;
+				const rightRank =
+					RESULT_SORT_RANK[right.latestAnalysisResult?.result || ""] ?? -1;
+				if (leftRank !== rightRank) {
+					return direction * (leftRank - rightRank);
+				}
+				return direction * left.title.localeCompare(right.title);
+			}
+
+			if (candidateSortKey === "verify") {
+				const leftRank =
+					RESULT_SORT_RANK[left.latestVerificationResult?.result || ""] ?? -1;
+				const rightRank =
+					RESULT_SORT_RANK[right.latestVerificationResult?.result || ""] ?? -1;
+				if (leftRank !== rightRank) {
+					return direction * (leftRank - rightRank);
+				}
+				return direction * left.title.localeCompare(right.title);
+			}
+
+			const leftScore = typeof left.score === "number" ? left.score : -1;
+			const rightScore = typeof right.score === "number" ? right.score : -1;
+			if (leftScore !== rightScore) {
+				return direction * (leftScore - rightScore);
+			}
+			return direction * left.title.localeCompare(right.title);
+		});
+		return items;
+	}, [candidateSortDirection, candidateSortKey, filteredCandidates]);
+
+	const candidatePagination = useMemo(() => {
+		const totalItems = sortedCandidates.length;
+		const totalPages = Math.max(1, Math.ceil(totalItems / candidatePageSize));
+		const safePage = Math.min(Math.max(1, candidatePage), totalPages);
+		const startIndex = (safePage - 1) * candidatePageSize;
+		const endIndex = Math.min(totalItems, startIndex + candidatePageSize);
+		return {
+			page: safePage,
+			pageSize: candidatePageSize,
+			totalItems,
+			totalPages,
+			startIndex,
+			endIndex,
+			items: sortedCandidates.slice(startIndex, endIndex),
+		};
+	}, [candidatePage, candidatePageSize, sortedCandidates]);
+
+	useEffect(() => {
+		if (candidatePage !== candidatePagination.page) {
+			setCandidatePage(candidatePagination.page);
+		}
+	}, [candidatePage, candidatePagination.page]);
+
+	const toggleCandidateSort = (key: CandidateSortKey) => {
+		if (candidateSortKey === key) {
+			setCandidateSortDirection((current) =>
+				current === "asc" ? "desc" : "asc",
+			);
+			return;
+		}
+		setCandidateSortKey(key);
+		setCandidateSortDirection("asc");
+	};
+
+	const toggleAnalysisFilter = (value: string) => {
+		setCandidatePage(1);
+		setAnalysisFilters((current) =>
+			current.includes(value)
+				? current.filter((item) => item !== value)
+				: [...current, value],
+		);
+	};
+
+	const toggleVerifyFilter = (value: string) => {
+		setCandidatePage(1);
+		setVerifyFilters((current) =>
+			current.includes(value)
+				? current.filter((item) => item !== value)
+				: [...current, value],
+		);
+	};
+
+	const candidateListPageBasePath = `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}`;
+
+	const candidateScrollStorageKey = useMemo(
 		() =>
-			candidates?.find(
-				(candidate) =>
-					candidate.vulnerabilityCandidateId === selectedCandidateId,
-			) || null,
-		[candidates, selectedCandidateId],
+			`scan-candidates-scroll:${buildCandidateListStateHref(
+				candidateListPageBasePath,
+				currentCandidateListState,
+				"candidates",
+			)}`,
+		[candidateListPageBasePath, currentCandidateListState],
 	);
 
 	useEffect(() => {
-		setJsonRpcMessages([]);
-		setJsonRpcState("connecting");
-
-		const eventSource = new EventSource(
-			`/api/scan/jobs/${scanJobId}/jsonrpc-stream`,
-		);
-		eventSource.addEventListener("snapshot", (event) => {
-			const payload = JSON.parse((event as MessageEvent).data) as {
-				messages?: JsonRpcStreamMessage[];
-			};
-			setJsonRpcMessages(payload.messages || []);
-			setJsonRpcState("streaming");
-		});
-		eventSource.addEventListener("append", (event) => {
-			const payload = JSON.parse((event as MessageEvent).data) as {
-				messages?: JsonRpcStreamMessage[];
-			};
-			if (payload.messages?.length) {
-				setJsonRpcMessages((current) => [...current, ...payload.messages!]);
-			}
-			setJsonRpcState("streaming");
-		});
-		eventSource.addEventListener("done", (event) => {
-			const payload = JSON.parse((event as MessageEvent).data) as {
-				status?: string;
-			};
-			setJsonRpcState(payload.status === "failed" ? "failed" : "completed");
-			eventSource.close();
-		});
-		eventSource.addEventListener("error", () => {
-			setJsonRpcState((current) =>
-				current === "completed" || current === "failed"
-					? current
-					: "disconnected",
-			);
-		});
-
-		return () => {
-			eventSource.close();
-		};
-	}, [scanJobId]);
-
-	useEffect(() => {
-		const container = scanningSummaryContainerRef.current;
-		if (!container) {
+		if (
+			typeof window === "undefined" ||
+			!router.isReady ||
+			activeTab !== "candidates"
+		) {
 			return;
 		}
-		container.scrollTop = container.scrollHeight;
-	}, [scanningSummaryLines]);
+
+		if (restoredCandidateScrollKeyRef.current === candidateScrollStorageKey) {
+			return;
+		}
+
+		const rawScrollY = window.sessionStorage.getItem(candidateScrollStorageKey);
+		if (!rawScrollY) {
+			restoredCandidateScrollKeyRef.current = candidateScrollStorageKey;
+			return;
+		}
+
+		const scrollY = Number.parseFloat(rawScrollY);
+		if (!Number.isFinite(scrollY) || scrollY < 0) {
+			window.sessionStorage.removeItem(candidateScrollStorageKey);
+			restoredCandidateScrollKeyRef.current = candidateScrollStorageKey;
+			return;
+		}
+
+		requestAnimationFrame(() => {
+			window.scrollTo({ top: scrollY, behavior: "auto" });
+			restoredCandidateScrollKeyRef.current = candidateScrollStorageKey;
+			window.sessionStorage.removeItem(candidateScrollStorageKey);
+		});
+	}, [
+		activeTab,
+		candidatePagination.page,
+		candidateScrollStorageKey,
+		router.isReady,
+	]);
+
+	const buildCandidateDetailHref = (candidateId: string) =>
+		buildCandidateListStateHref(
+			`${candidateListPageBasePath}/candidates/${candidateId}`,
+			currentCandidateListState,
+			"candidates",
+		);
+	const handleCandidateLinkClick = () => {
+		if (typeof window === "undefined") {
+			return;
+		}
+		window.sessionStorage.setItem(
+			candidateScrollStorageKey,
+			String(window.scrollY),
+		);
+	};
+
+	useEffect(() => {
+		if (activeTab !== "files") {
+			return;
+		}
+
+		if (rootDirectoryQuery.isLoading) {
+			setDirectoryCache((current) => ({
+				...current,
+				[ROOT_DIRECTORY_KEY]: { items: current[ROOT_DIRECTORY_KEY]?.items || [], status: "loading" },
+			}));
+			return;
+		}
+
+		if (rootDirectoryQuery.isError) {
+			setDirectoryCache((current) => ({
+				...current,
+				[ROOT_DIRECTORY_KEY]: { items: [], status: "error" },
+			}));
+			setSelectedFilePath(null);
+			return;
+		}
+
+		const items = rootDirectoryQuery.data || [];
+		setDirectoryCache((current) => ({
+			...current,
+			[ROOT_DIRECTORY_KEY]: { items, status: "loaded" },
+		}));
+
+		if (!items.length) {
+			setSelectedFilePath(null);
+			return;
+		}
+
+		const firstFile = items.find((item) => item.type === "file")?.id || null;
+		if (!firstFile) {
+			return;
+		}
+		setSelectedFilePath((current) => current || firstFile);
+	}, [
+		activeTab,
+		rootDirectoryQuery.data,
+		rootDirectoryQuery.isError,
+		rootDirectoryQuery.isLoading,
+	]);
+
+	const handleToggleDirectory = async (directoryPath: string) => {
+		const nextExpanded = !expandedDirectories[directoryPath];
+		setExpandedDirectories((current) => ({
+			...current,
+			[directoryPath]: nextExpanded,
+		}));
+
+		if (!nextExpanded) {
+			return;
+		}
+
+		const existing = directoryCache[directoryPath];
+		if (existing?.status === "loaded" || existing?.status === "loading") {
+			return;
+		}
+
+		setDirectoryCache((current) => ({
+			...current,
+			[directoryPath]: { items: current[directoryPath]?.items || [], status: "loading" },
+		}));
+
+		try {
+			const items = await utils.scan.listDirectory.fetch({
+				scanJobId,
+				directoryPath,
+			});
+			setDirectoryCache((current) => ({
+				...current,
+				[directoryPath]: { items, status: "loaded" },
+			}));
+		} catch {
+			setDirectoryCache((current) => ({
+				...current,
+				[directoryPath]: { items: [], status: "error" },
+			}));
+		}
+	};
 
 	return (
 		<div className="pb-10">
@@ -585,15 +1196,30 @@ export const ShowScanJobDetail = ({
 			<Card className="bg-background">
 				<CardHeader>
 					<CardTitle className="text-xl">Scan Job {scanJobId.slice(0, 6)}</CardTitle>
-					<CardDescription>{scanJobId}</CardDescription>
+					<CardDescription className="flex items-center gap-2 break-all">
+						<span>{scanJobId}</span>
+						<CopyValueButton
+							value={scanJobId}
+							label="Job ID"
+							className="size-7 shrink-0"
+						/>
+					</CardDescription>
 				</CardHeader>
 				<CardContent>
-					<Tabs defaultValue="overview" className="w-full">
+					<Tabs
+						value={activeTab}
+						onValueChange={(value) => {
+							setActiveTab(value as ScanJobTab);
+						}}
+						className="w-full"
+					>
 						<TabsList className="flex gap-4 justify-start">
 							<TabsTrigger value="overview">Overview</TabsTrigger>
-							<TabsTrigger value="status">Status</TabsTrigger>
-							<TabsTrigger value="candidates">Candidates</TabsTrigger>
 							<TabsTrigger value="stream">Scanning</TabsTrigger>
+							<TabsTrigger value="analysis">Analysis</TabsTrigger>
+							<TabsTrigger value="verify">Verify</TabsTrigger>
+							<TabsTrigger value="candidates">Candidates</TabsTrigger>
+							<TabsTrigger value="files">Files</TabsTrigger>
 						</TabsList>
 
 						<TabsContent value="overview" className="pt-4">
@@ -625,12 +1251,16 @@ export const ShowScanJobDetail = ({
 									</div>
 									<div className="border rounded-lg p-3">
 										<div className="text-sm text-muted-foreground">Trigger</div>
-										<div className="font-medium">{scanJob.triggerSource}</div>
+										<div className="font-medium">
+											{formatTriggerSourceLabel(scanJob.triggerSource)}
+										</div>
 									</div>
-									<div className="border rounded-lg p-3">
-										<div className="text-sm text-muted-foreground">Commit Window</div>
-										<div className="font-medium">k={scanJob.commitWindow}</div>
-									</div>
+									{scanJob.scanType === "delta" ? (
+										<div className="border rounded-lg p-3">
+											<div className="text-sm text-muted-foreground">Commit Window</div>
+											<div className="font-medium">k={scanJob.commitWindow}</div>
+										</div>
+									) : null}
 									<div className="border rounded-lg p-3">
 										<div className="text-sm text-muted-foreground">Created</div>
 										<div className="font-medium">
@@ -655,12 +1285,166 @@ export const ShowScanJobDetail = ({
 											</div>
 										</div>
 									)}
+									<div className="border rounded-lg p-3 md:col-span-2">
+										<div className="flex items-start justify-between gap-3">
+											<div>
+												<div className="text-sm text-muted-foreground">Note</div>
+												<div className="text-xs text-muted-foreground">
+													Internal note for this scan job
+												</div>
+											</div>
+											<Button
+												type="button"
+												size="sm"
+												disabled={
+													updateNoteMutation.isLoading ||
+													!isNoteDirty ||
+													!scanJob
+												}
+												onClick={async () => {
+													try {
+														await updateNoteMutation.mutateAsync({
+															scanJobId,
+															note: noteDraft,
+														});
+														toast.success("Note saved");
+														await Promise.all([
+															utils.scan.one.invalidate({ scanJobId }),
+															serviceType === "application"
+																? utils.scan.allByApplication.invalidate({
+																		applicationId: serviceId,
+																	})
+																: utils.scan.allByCompose.invalidate({
+																		composeId: serviceId,
+																	}),
+														]);
+													} catch (error) {
+														toast.error(
+															error instanceof Error
+																? error.message
+																: "Failed to save note",
+														);
+													}
+												}}
+											>
+												{updateNoteMutation.isLoading ? (
+													<>
+														<Loader2 className="mr-2 size-4 animate-spin" />
+														Saving...
+													</>
+												) : (
+													"Save"
+												)}
+											</Button>
+										</div>
+										<Textarea
+											value={noteDraft}
+											onChange={(event) => setNoteDraft(event.target.value)}
+											placeholder="Add a note for this scan job..."
+											className="mt-3 min-h-[96px] resize-y"
+										/>
+									</div>
 								</div>
 							)}
 						</TabsContent>
 
-						<TabsContent value="status" className="pt-4">
-							{isLoadingStatusView ? (
+						<TabsContent value="analysis" className="pt-4">
+							{isLoadingStatusView || isLoadingCandidates ? (
+								<div className="flex items-center gap-2 text-muted-foreground">
+									<Loader2 className="size-4 animate-spin" />
+									Loading status...
+								</div>
+							) : !statusView ? (
+								<div className="flex items-center gap-2 text-muted-foreground">
+									<AlertCircle className="size-4" />
+									Status not available
+								</div>
+								) : (
+									<div className="flex flex-col gap-4">
+										{failedAnalysisCandidatesCount > 0 ? (
+											<div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3">
+												<div>
+													<div className="font-medium">Failed Analysis Tasks</div>
+													<div className="text-sm text-muted-foreground">
+														{failedAnalysisCandidatesCount} failed candidate analysis
+														tasks can be requeued from the analysis stage.
+													</div>
+												</div>
+												<Button
+													type="button"
+													disabled={retryFailedAnalysisTasksMutation.isLoading}
+													onClick={async () => {
+														try {
+															const result =
+																await retryFailedAnalysisTasksMutation.mutateAsync({
+																	scanJobId,
+																});
+															toast.success(
+																`Requeued ${result.retriedCandidates} failed analysis tasks`,
+															);
+															await Promise.all([
+																utils.scan.one.invalidate({ scanJobId }),
+																utils.scan.statusView.invalidate({ scanJobId }),
+																utils.scan.candidates.invalidate({ scanJobId }),
+															]);
+														} catch (error) {
+															toast.error(
+																error instanceof Error
+																	? error.message
+																	: "Failed to retry analysis tasks",
+															);
+														}
+													}}
+												>
+													{retryFailedAnalysisTasksMutation.isLoading ? (
+														<>
+															<Loader2 className="mr-2 size-4 animate-spin" />
+															Retrying...
+														</>
+													) : (
+														`Retry Failed Tasks (${failedAnalysisCandidatesCount})`
+													)}
+												</Button>
+											</div>
+										) : null}
+									<CandidateWorkflowSection
+										title="Analysis"
+										description="Candidates currently being analyzed and pending analysis."
+										summaryCards={[
+											{
+												title: "Candidate Analysis",
+												value: `${analysisCompletedCandidates} / ${statusView.summary.totalCandidates}`,
+												progress:
+													statusView.summary.totalCandidates > 0
+														? Math.max(
+																0,
+																Math.min(
+																	100,
+																	(analysisCompletedCandidates /
+																		statusView.summary.totalCandidates) *
+																		100,
+																),
+															)
+														: 0,
+												progressClassName: "[&>div]:bg-emerald-500",
+											},
+											{
+												title: "Analysis Likely / Confirmed",
+												value: statusView.summary.analysisLikelyOrConfirmedCandidates,
+											},
+											{
+												title: "Queued / Running",
+												value: `${analysisQueuedCount} / ${analysisInProgressCandidates.length}`,
+											},
+										]}
+										inProgressCandidates={analysisInProgressCandidates}
+									/>
+									</div>
+							)}
+						</TabsContent>
+
+						<TabsContent value="verify" className="pt-4">
+							{isLoadingStatusView || isLoadingCandidates ? (
 								<div className="flex items-center gap-2 text-muted-foreground">
 									<Loader2 className="size-4 animate-spin" />
 									Loading status...
@@ -671,163 +1455,84 @@ export const ShowScanJobDetail = ({
 									Status not available
 								</div>
 							) : (
-								<div className="flex flex-col gap-6">
-									<div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-										<div className="rounded-lg border p-4">
-											<div className="text-sm text-muted-foreground">
-												Total Candidates
+								<div className="flex flex-col gap-4">
+									{failedVerificationCandidatesCount > 0 ? (
+										<div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3">
+											<div>
+												<div className="font-medium">Failed Verification Tasks</div>
+												<div className="text-sm text-muted-foreground">
+													{failedVerificationCandidatesCount} failed candidate
+													verification tasks can be requeued from the verify stage.
+												</div>
 											</div>
-											<div className="mt-2 text-2xl font-semibold">
-												{statusView.summary.totalCandidates}
-											</div>
+											<Button
+												type="button"
+												disabled={retryFailedVerificationTasksMutation.isLoading}
+												onClick={async () => {
+													try {
+														const result =
+															await retryFailedVerificationTasksMutation.mutateAsync({
+																scanJobId,
+															});
+														toast.success(
+															`Requeued ${result.retriedCandidates} failed verification tasks`,
+														);
+														await Promise.all([
+															utils.scan.one.invalidate({ scanJobId }),
+															utils.scan.statusView.invalidate({ scanJobId }),
+															utils.scan.candidates.invalidate({ scanJobId }),
+														]);
+													} catch (error) {
+														toast.error(
+															error instanceof Error
+																? error.message
+																: "Failed to retry verification tasks",
+														);
+													}
+												}}
+											>
+												{retryFailedVerificationTasksMutation.isLoading ? (
+													<>
+														<Loader2 className="mr-2 size-4 animate-spin" />
+														Retrying...
+													</>
+												) : (
+													`Retry Failed Tasks (${failedVerificationCandidatesCount})`
+												)}
+											</Button>
 										</div>
-										<div className="rounded-lg border p-4">
-											<div className="text-sm text-muted-foreground">
-												Completed Candidates
-											</div>
-											<div className="mt-2 text-2xl font-semibold">
-												{statusView.summary.completedCandidates}
-											</div>
-										</div>
-									<div className="rounded-lg border p-4">
-										<div className="text-sm text-muted-foreground">
-											Analysis Likely / Confirmed
-										</div>
-										<div className="mt-2 text-2xl font-semibold">
-											{statusView.summary.analysisLikelyOrConfirmedCandidates}
-										</div>
-									</div>
-									<div className="rounded-lg border p-4">
-										<div className="text-sm text-muted-foreground">
-											Verified 0day
-										</div>
-										<div className="mt-2 text-2xl font-semibold">
-											{statusView.summary.verifiedZeroDayCandidates}
-										</div>
-									</div>
-									</div>
-
-									<div className="rounded-lg border">
-										<div className="border-b px-4 py-3">
-											<div className="font-medium">In Progress Candidates</div>
-											<div className="text-sm text-muted-foreground">
-												Currently active candidate workers and their latest state.
-											</div>
-										</div>
-										<div className="overflow-x-auto">
-											<table className="w-full text-sm">
-												<thead className="border-b bg-muted/30 text-left">
-													<tr>
-														<th className="px-4 py-3 font-medium">Candidate</th>
-														<th className="px-4 py-3 font-medium">Stage</th>
-														<th className="px-4 py-3 font-medium">Action Type</th>
-														<th className="px-4 py-3 font-medium">Current Action</th>
-														<th className="px-4 py-3 font-medium">Updated</th>
-													</tr>
-												</thead>
-												<tbody>
-													{statusView.inProgressCandidates.length === 0 ? (
-														<tr>
-															<td
-																colSpan={5}
-																className="px-4 py-6 text-center text-muted-foreground"
-															>
-																No active candidates
-															</td>
-														</tr>
-													) : (
-														statusView.inProgressCandidates.map((candidate) => (
-															<tr
-																key={candidate.vulnerabilityCandidateId}
-																className="border-b last:border-b-0"
-															>
-																<td className="px-4 py-3 align-top">
-																	<div className="font-medium">{candidate.title}</div>
-																	<div className="text-xs text-muted-foreground break-all">
-																		{candidate.filePath || "-"}
-																		{candidate.line ? `:${candidate.line}` : ""}
-																	</div>
-																</td>
-																<td className="px-4 py-3 align-top capitalize">
-																	{candidate.stage}
-																</td>
-																<td className="px-4 py-3 align-top capitalize">
-																	{candidate.actionType}
-																</td>
-																<td className="px-4 py-3 align-top">
-																	<div
-																		className="max-w-[420px] truncate"
-																		title={candidate.actionText}
-																	>
-																		{candidate.actionText}
-																	</div>
-																</td>
-																<td className="px-4 py-3 align-top">
-																	<DateTooltip date={candidate.updatedAt} />
-																</td>
-															</tr>
-														))
-													)}
-												</tbody>
-											</table>
-										</div>
-									</div>
-
-									<div className="rounded-lg border">
-										<div className="border-b px-4 py-3">
-											<div className="font-medium">Queued Candidates</div>
-											<div className="text-sm text-muted-foreground">
-												Top 10 pending candidates waiting for processing.
-											</div>
-										</div>
-										<div className="overflow-x-auto">
-											<table className="w-full text-sm">
-												<thead className="border-b bg-muted/30 text-left">
-													<tr>
-														<th className="px-4 py-3 font-medium">Candidate</th>
-														<th className="px-4 py-3 font-medium">Location</th>
-														<th className="px-4 py-3 font-medium">Confidence</th>
-														<th className="px-4 py-3 font-medium">Created</th>
-													</tr>
-												</thead>
-												<tbody>
-													{statusView.queuedCandidates.length === 0 ? (
-														<tr>
-															<td
-																colSpan={4}
-																className="px-4 py-6 text-center text-muted-foreground"
-															>
-																No queued candidates
-															</td>
-														</tr>
-													) : (
-														statusView.queuedCandidates.map((candidate) => (
-															<tr
-																key={candidate.vulnerabilityCandidateId}
-																className="border-b last:border-b-0"
-															>
-																<td className="px-4 py-3 align-top font-medium">
-																	{candidate.title}
-																</td>
-																<td className="px-4 py-3 align-top text-muted-foreground break-all">
-																	{candidate.filePath || "-"}
-																	{candidate.line ? `:${candidate.line}` : ""}
-																</td>
-																<td className="px-4 py-3 align-top">
-																	{typeof candidate.confidence === "number"
-																		? candidate.confidence
-																		: "-"}
-																</td>
-																<td className="px-4 py-3 align-top">
-																	<DateTooltip date={candidate.createdAt} />
-																</td>
-															</tr>
-														))
-													)}
-												</tbody>
-											</table>
-										</div>
-									</div>
+									) : null}
+								<CandidateWorkflowSection
+									title="Verify"
+									description="Candidates currently being verified and pending verification."
+									summaryCards={[
+										{
+											title: "Candidate Verify",
+											value: `${verifyCompletedCandidates} / ${verifyEligibleCandidates}`,
+											progress:
+												verifyEligibleCandidates > 0
+													? Math.max(
+															0,
+															Math.min(
+																100,
+																(verifyCompletedCandidates / verifyEligibleCandidates) *
+																	100,
+															),
+														)
+													: 0,
+											progressClassName: "[&>div]:bg-sky-500",
+										},
+										{
+											title: "Verified 0day",
+											value: statusView.summary.verifiedZeroDayCandidates,
+										},
+										{
+											title: "Queued / Running",
+											value: `${verifyQueuedCount} / ${verifyInProgressCandidates.length}`,
+										},
+									]}
+									inProgressCandidates={verifyInProgressCandidates}
+								/>
 								</div>
 							)}
 						</TabsContent>
@@ -845,137 +1550,548 @@ export const ShowScanJobDetail = ({
 								</div>
 							) : (
 								<div className="flex flex-col gap-3">
-									<div className="relative">
-										<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-										<input
-											type="text"
-											value={candidateQuery}
-											onChange={(event) => setCandidateQuery(event.target.value)}
-											placeholder="Search candidates"
-											className="flex h-10 w-full rounded-md border border-input bg-background pl-9 pr-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-										/>
+									<div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_220px_220px]">
+										<div className="relative">
+											<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+											<input
+												type="text"
+												value={candidateQuery}
+												onChange={(event) => {
+													setCandidatePage(1);
+													setCandidateQuery(event.target.value);
+												}}
+												placeholder="Search candidates"
+												className="flex h-10 w-full rounded-md border border-input bg-background pl-9 pr-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+											/>
+										</div>
+										<Popover>
+											<PopoverTrigger asChild>
+												<Button variant="outline" className="justify-between">
+													<span>
+														Analysis Result
+														{analysisFilters.length > 0
+															? ` (${analysisFilters.length})`
+															: ""}
+													</span>
+													<ChevronsUpDown className="size-4 text-muted-foreground" />
+												</Button>
+											</PopoverTrigger>
+											<PopoverContent align="end" className="w-72 p-3">
+												<div className="mb-3 flex items-center justify-between">
+													<div className="text-sm font-medium">Analysis Result</div>
+													<Button
+														type="button"
+														variant="ghost"
+														size="sm"
+														className="h-auto px-2 py-1 text-xs"
+														onClick={() => setAnalysisFilters([])}
+													>
+														Clear
+													</Button>
+												</div>
+												<div className="space-y-2">
+													{ANALYSIS_RESULT_OPTIONS.map((value) => (
+														<label
+															key={value}
+															className="flex items-center gap-2 text-sm"
+														>
+															<Checkbox
+																checked={analysisFilters.includes(value)}
+																onCheckedChange={() => toggleAnalysisFilter(value)}
+															/>
+															<span>{formatResultLabel(value)}</span>
+														</label>
+													))}
+												</div>
+											</PopoverContent>
+										</Popover>
+										<Popover>
+											<PopoverTrigger asChild>
+												<Button variant="outline" className="justify-between">
+													<span>
+														Verify Result
+														{verifyFilters.length > 0
+															? ` (${verifyFilters.length})`
+															: ""}
+													</span>
+													<ChevronsUpDown className="size-4 text-muted-foreground" />
+												</Button>
+											</PopoverTrigger>
+											<PopoverContent align="end" className="w-72 p-3">
+												<div className="mb-3 flex items-center justify-between">
+													<div className="text-sm font-medium">Verify Result</div>
+													<Button
+														type="button"
+														variant="ghost"
+														size="sm"
+														className="h-auto px-2 py-1 text-xs"
+														onClick={() => setVerifyFilters([])}
+													>
+														Clear
+													</Button>
+												</div>
+												<div className="space-y-2">
+													{VERIFY_RESULT_OPTIONS.map((value) => (
+														<label
+															key={value}
+															className="flex items-center gap-2 text-sm"
+														>
+															<Checkbox
+																checked={verifyFilters.includes(value)}
+																onCheckedChange={() => toggleVerifyFilter(value)}
+															/>
+															<span>{formatResultLabel(value)}</span>
+														</label>
+													))}
+												</div>
+											</PopoverContent>
+										</Popover>
 									</div>
-									{filteredCandidates.length === 0 ? (
+									{sortedCandidates.length === 0 ? (
 										<div className="flex items-center gap-2 text-muted-foreground">
 											<FileSearch className="size-4" />
 											No matching candidates
 										</div>
 									) : (
-										filteredCandidates.map((candidate) => {
-											const verificationTruthBadge = getVerificationTruthBadge(
-												candidate.latestVerificationResult?.result,
-											);
-
-											return (
-												<button
-													type="button"
-													key={candidate.vulnerabilityCandidateId}
-													onClick={() =>
-														setSelectedCandidateId(
-															candidate.vulnerabilityCandidateId,
-														)
-													}
-													className="flex w-full flex-col gap-1 rounded-lg border p-3 text-left transition-colors hover:border-foreground/20 hover:bg-muted/40"
-												>
-													<div className="flex items-center gap-2">
-														<Badge variant="outline" className="capitalize">
-															{candidate.status}
-														</Badge>
-														{verificationTruthBadge ? (
-															<Badge
-																variant="outline"
-																className={verificationTruthBadge.className}
-															>
-																{verificationTruthBadge.label}
-															</Badge>
-														) : null}
-														{typeof candidate.confidence === "number" && (
-															<span className="text-xs text-muted-foreground">
-																confidence: {candidate.confidence}
-															</span>
-														)}
+										<div className="rounded-lg border">
+											<div className="flex flex-col gap-3 border-b px-4 py-3 text-sm md:flex-row md:items-center md:justify-between">
+												<div className="text-muted-foreground">
+													Showing {candidatePagination.startIndex + 1}-
+													{candidatePagination.endIndex} of{" "}
+													{candidatePagination.totalItems}
+												</div>
+												<div className="flex flex-wrap items-center gap-2">
+													<label className="text-muted-foreground">
+														Page size
+													</label>
+													<select
+														value={candidatePageSize}
+														onChange={(event) => {
+															setCandidatePage(1);
+															setCandidatePageSize(
+																Number.parseInt(event.target.value, 10) || 20,
+															);
+														}}
+														className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+													>
+														{[10, 20, 50, 100].map((size) => (
+															<option key={size} value={size}>
+																{size}
+															</option>
+														))}
+													</select>
+													<Button
+														type="button"
+														variant="outline"
+														size="sm"
+														onClick={() =>
+															setCandidatePage((current) => Math.max(1, current - 1))
+														}
+														disabled={candidatePagination.page <= 1}
+													>
+														Previous
+													</Button>
+													<div className="min-w-[96px] text-center text-muted-foreground">
+														Page {candidatePagination.page} /{" "}
+														{candidatePagination.totalPages}
 													</div>
-													<div className="font-medium">{candidate.title}</div>
-													{candidate.filePath && (
-														<div className="text-xs text-muted-foreground break-all">
-															{candidate.filePath}
-															{candidate.line ? `:${candidate.line}` : ""}
-														</div>
-													)}
-												</button>
-											);
-										})
+													<Button
+														type="button"
+														variant="outline"
+														size="sm"
+														onClick={() =>
+															setCandidatePage((current) =>
+																Math.min(
+																	candidatePagination.totalPages,
+																	current + 1,
+																),
+															)
+														}
+														disabled={
+															candidatePagination.page >=
+															candidatePagination.totalPages
+														}
+													>
+														Next
+													</Button>
+												</div>
+											</div>
+											<div className="overflow-x-auto">
+												<table className="w-full text-sm">
+													<thead className="border-b bg-muted/30 text-left">
+														<tr>
+															<th className="w-[10%] px-4 py-3 font-medium">Status</th>
+															<th className="w-[38%] px-4 py-3 font-medium">
+																<button
+																	type="button"
+																	onClick={() => toggleCandidateSort("candidate")}
+																	className="inline-flex items-center gap-1 hover:text-foreground"
+																>
+																	<span>Candidate</span>
+																	<ChevronsUpDown className="size-3.5" />
+																</button>
+															</th>
+															<th className="w-[18%] px-4 py-3 font-medium">
+																<button
+																	type="button"
+																	onClick={() => toggleCandidateSort("analysis")}
+																	className="inline-flex items-center gap-1 hover:text-foreground"
+																>
+																	<span>Analysis Result</span>
+																	<ChevronsUpDown className="size-3.5" />
+																</button>
+															</th>
+															<th className="w-[18%] px-4 py-3 font-medium">
+																<button
+																	type="button"
+																	onClick={() => toggleCandidateSort("verify")}
+																	className="inline-flex items-center gap-1 hover:text-foreground"
+																>
+																	<span>Verify Result</span>
+																	<ChevronsUpDown className="size-3.5" />
+																</button>
+															</th>
+															<th className="w-[20%] px-4 py-3 font-medium">
+																<button
+																	type="button"
+																	onClick={() => toggleCandidateSort("score")}
+																	className="inline-flex items-center gap-1 hover:text-foreground"
+																>
+																	<span>Score</span>
+																	<ChevronsUpDown className="size-3.5" />
+																</button>
+															</th>
+														</tr>
+													</thead>
+													<tbody>
+														{candidatePagination.items.map((candidate) => {
+															const verificationTruthBadge = getVerificationTruthBadge(
+																candidate.latestVerificationResult?.result,
+															);
+															return (
+																						<tr
+																							key={candidate.vulnerabilityCandidateId}
+																							className="border-b last:border-b-0 transition-colors hover:bg-muted/40"
+																						>
+																							<td className="px-4 py-3 align-top text-xs text-muted-foreground capitalize">
+																								<Link
+																									href={buildCandidateDetailHref(
+																										candidate.vulnerabilityCandidateId,
+																									)}
+																									onClick={handleCandidateLinkClick}
+																									className="block"
+																								>
+																									{candidate.status}
+																								</Link>
+																							</td>
+																							<td className="px-4 py-3 align-top">
+																								<Link
+																									href={buildCandidateDetailHref(
+																										candidate.vulnerabilityCandidateId,
+																									)}
+																									onClick={handleCandidateLinkClick}
+																									className="block"
+																								>
+																									<div className="font-medium">{candidate.title}</div>
+																			<div className="mt-1 text-xs text-muted-foreground break-all">
+																				{candidate.filePath || "-"}
+																				{candidate.line ? `:${candidate.line}` : ""}
+																			</div>
+																		</Link>
+																	</td>
+																							<td className="px-4 py-3 align-top">
+																								<Link
+																									href={buildCandidateDetailHref(
+																										candidate.vulnerabilityCandidateId,
+																									)}
+																									onClick={handleCandidateLinkClick}
+																									className="block"
+																								>
+																									{candidate.latestAnalysisResult?.result ? (
+																				<Badge
+																					variant="outline"
+																					className={getAnalysisResultBadgeClassName(
+																						candidate.latestAnalysisResult.result,
+																					)}
+																				>
+																					{getShortResultLabel(
+																						candidate.latestAnalysisResult.result,
+																					)}
+																				</Badge>
+																			) : (
+																				<span className="text-xs text-muted-foreground">-</span>
+																			)}
+																		</Link>
+																	</td>
+																							<td className="px-4 py-3 align-top">
+																								<Link
+																									href={buildCandidateDetailHref(
+																										candidate.vulnerabilityCandidateId,
+																									)}
+																									onClick={handleCandidateLinkClick}
+																									className="block"
+																								>
+																									{verificationTruthBadge ? (
+																				<Badge
+																					variant="outline"
+																					className={verificationTruthBadge.className}
+																				>
+																					{verificationTruthBadge.label}
+																				</Badge>
+																			) : (
+																				<span className="text-xs text-muted-foreground">-</span>
+																			)}
+																		</Link>
+																	</td>
+																							<td className="px-4 py-3 align-top text-xs text-muted-foreground">
+																								<Link
+																									href={buildCandidateDetailHref(
+																										candidate.vulnerabilityCandidateId,
+																									)}
+																									onClick={handleCandidateLinkClick}
+																									className="block"
+																								>
+																									{typeof candidate.score === "number"
+																				? candidate.score.toFixed(1)
+																				: "-"}
+																		</Link>
+																	</td>
+																</tr>
+															);
+														})}
+													</tbody>
+												</table>
+											</div>
+										</div>
 								)}
 								</div>
 							)}
 						</TabsContent>
 
-						<TabsContent value="stream" className="pt-4">
-							<div className="flex flex-col gap-4">
-								<div className="border rounded-lg">
-									<div className="flex items-center gap-2 border-b px-4 py-3 text-sm text-muted-foreground">
-										<Radio className="size-4" />
-										<span>JSON-RPC Summary</span>
-										<span>·</span>
-										<span className="capitalize">{jsonRpcState}</span>
-										<span>·</span>
-										<span>{jsonRpcMessages.length} messages</span>
+
+						<TabsContent value="files" className="pt-4">
+							<div className="rounded-lg border">
+								<div className="border-b px-4 py-3">
+									<div className="font-medium">Files</div>
+									<div className="text-sm text-muted-foreground">
+										Browse scan job context files.
 									</div>
-									<div
-										ref={scanningSummaryContainerRef}
-										className="max-h-[18vh] overflow-auto bg-muted/20 px-4 py-3"
-									>
-										<div className="font-mono text-xs leading-6">
-											{scanningSummaryLines.length === 0 ? (
-												<div className="text-muted-foreground">(empty)</div>
+								</div>
+								<div className="grid min-h-[65vh] grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]">
+									<div className="border-b lg:border-b-0 lg:border-r">
+										<LazyFileTree
+											rootItems={directoryCache[ROOT_DIRECTORY_KEY]?.items || []}
+											rootStatus={
+												directoryCache[ROOT_DIRECTORY_KEY]?.status ||
+												(rootDirectoryQuery.isLoading ? "loading" : "idle")
+											}
+											expandedDirectories={expandedDirectories}
+											selectedFilePath={selectedFilePath}
+											directoryCache={directoryCache}
+											onToggleDirectory={handleToggleDirectory}
+											onSelectFile={setSelectedFilePath}
+										/>
+									</div>
+
+									<div className="min-w-0">
+										<div className="border-b px-4 py-3">
+											<div className="flex items-center gap-2 text-sm text-muted-foreground">
+												<FileIcon className="size-4" />
+												<span className="truncate">
+													{selectedFile?.relativePath || selectedFilePath || "No file selected"}
+												</span>
+											</div>
+										</div>
+										<div className="max-h-[calc(65vh-49px)] overflow-auto px-4 py-3">
+											{!selectedFilePath ? (
+												<div className="flex min-h-[280px] flex-col items-center justify-center gap-2 text-muted-foreground">
+													<FileIcon className="size-6" />
+													No file selected
+												</div>
+											) : isLoadingSelectedFile ? (
+												<div className="flex min-h-[280px] items-center justify-center gap-2 text-muted-foreground">
+													<Loader2 className="size-4 animate-spin" />
+													Loading file...
+												</div>
 											) : (
-												<AnimatePresence initial={false}>
-													{scanningSummaryLines.map((line) => (
-														<motion.div
-															key={line.id}
-															initial={{ opacity: 0, y: 8, scale: 0.995 }}
-															animate={{ opacity: 1, y: 0, scale: 1 }}
-															exit={{ opacity: 0, y: -4 }}
-															transition={{ duration: 0.2, ease: "easeOut" }}
-															className={`whitespace-pre-wrap break-words ${getSummaryLineClassName(line)} ${
-																line.kind === "command" && !line.text.startsWith("$ ")
-																	? "mt-1"
-																	: "mt-4 first:mt-0"
-															}`}
-														>
-															<div className="grid grid-cols-[20px_minmax(0,1fr)] gap-3">
-																<div className="text-muted-foreground/80 text-center">
-																	{getSummaryLinePrefix(line)}
-																</div>
-																<div>
-																	{line.kind === "command" &&
-																	line.text.startsWith("$ ")
-																		? line.text.slice(2)
-																		: line.text}
-																</div>
-															</div>
-														</motion.div>
-													))}
-												</AnimatePresence>
+												<pre className="whitespace-pre-wrap break-words font-mono text-sm">
+													{selectedFile?.content || "(empty)"}
+												</pre>
 											)}
 										</div>
 									</div>
 								</div>
+							</div>
+						</TabsContent>
 
-								<div className="border rounded-lg">
-									<div className="flex items-center gap-2 border-b px-4 py-3 text-sm text-muted-foreground">
-										<Radio className="size-4" />
-										<span>Scanning</span>
-										<span>·</span>
-										<span className="capitalize">{streamState}</span>
+						<TabsContent value="stream" className="pt-4">
+							<div className="flex flex-col gap-4">
+								{canRetryFailedScanningTasks ? (
+									<div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3">
+										<div>
+											<div className="font-medium">Failed Scanning Tasks</div>
+											<div className="text-sm text-muted-foreground">
+												{failedModuleTasksCount} failed module tasks and{" "}
+												{failedFunctionTasksCount} failed function tasks can be
+												retried without restarting completed scanning work.
+											</div>
+										</div>
+										<Button
+											type="button"
+											disabled={retryFailedScanningTasksMutation.isLoading}
+											onClick={async () => {
+												try {
+													const result =
+														await retryFailedScanningTasksMutation.mutateAsync({
+															scanJobId,
+														});
+													toast.success(
+														`Requeued ${result.retriedModuleTasks} module tasks and ${result.retriedFunctionTasks} function tasks`,
+													);
+													await Promise.all([
+														utils.scan.one.invalidate({ scanJobId }),
+														utils.scan.statusView.invalidate({ scanJobId }),
+														utils.scan.candidates.invalidate({ scanJobId }),
+													]);
+												} catch (error) {
+													toast.error(
+														error instanceof Error
+															? error.message
+															: "Failed to retry scanning tasks",
+													);
+												}
+											}}
+										>
+											{retryFailedScanningTasksMutation.isLoading ? (
+												<>
+													<Loader2 className="mr-2 size-4 animate-spin" />
+													Retrying...
+												</>
+											) : (
+												`Retry Failed Tasks (${totalFailedScanningTasks})`
+											)}
+										</Button>
 									</div>
-									<div
-										ref={streamContainerRef}
-										className="max-h-[65vh] overflow-auto px-4 py-3"
-									>
-										<pre className="whitespace-pre-wrap break-words text-sm">
-											{streamText || "(empty)"}
-										</pre>
+								) : null}
+								{statusView ? (
+									<div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+										{[
+											{
+												key: "repository",
+												title: "Repository Scanning",
+												description: `${repositoryScanningProgress.completed} / ${repositoryScanningProgress.total}`,
+												percent: repositoryScanningProgress.percent,
+												status: repositoryScanningProgress.status,
+												progressClassName:
+													"h-3 bg-secondary/70 [&>div]:bg-sky-500",
+											},
+											{
+												key: "module",
+												title: "Module Scanning",
+												description: `${moduleScanningProgress.completed} / ${moduleScanningProgress.total}`,
+												percent: moduleScanningProgress.percent,
+												status: moduleScanningProgress.status,
+												progressClassName:
+													"h-3 bg-secondary/70 [&>div]:bg-amber-500",
+											},
+											{
+												key: "function",
+												title: "Function Scanning",
+												description: `${functionScanningProgress.completed} / ${functionScanningProgress.total}`,
+												percent: functionScanningProgress.percent,
+												status: functionScanningProgress.status,
+												progressClassName:
+													"h-3 bg-secondary/70 [&>div]:bg-zinc-400",
+											},
+										].map((item, index) => (
+											<motion.div
+												key={item.key}
+												layout
+												initial={{ opacity: 0, y: 10 }}
+												animate={{ opacity: 1, y: 0 }}
+												whileHover={{ y: -2, scale: 1.01 }}
+												transition={{
+													duration: 0.18,
+													ease: "easeOut",
+													delay: index * 0.04,
+												}}
+												className="rounded-lg border p-4"
+											>
+												<div className="flex items-center justify-between gap-3">
+													<div>
+														<div className="text-sm text-muted-foreground">
+															{item.title}
+														</div>
+														<div className="mt-2 text-2xl font-semibold">
+															{item.description}
+														</div>
+													</div>
+													<div className="text-xs uppercase tracking-[0.14em] text-muted-foreground">
+														{item.status}
+													</div>
+												</div>
+												<div className="mt-4">
+													<Progress
+														value={item.percent}
+														className={item.progressClassName}
+													/>
+												</div>
+											</motion.div>
+										))}
+									</div>
+								) : null}
+
+								<div className="rounded-lg border">
+									<div className="border-b px-4 py-3">
+										<div className="font-medium">Running Scanner Agents</div>
+										<div className="text-sm text-muted-foreground">
+											Repository, module, and function scanners currently running.
+										</div>
+									</div>
+									<div className="overflow-x-auto">
+										{!statusView || statusView.inProgressScannerAgents.length === 0 ? (
+											<div className="px-4 py-6 text-sm text-muted-foreground">
+												No running scanner agents
+											</div>
+										) : (
+											<table className="w-full text-sm">
+												<thead className="border-b bg-muted/30 text-left">
+													<tr>
+														<th className="w-[24%] px-4 py-3 font-medium">Agent</th>
+														<th className="w-[10%] px-4 py-3 font-medium">Stage</th>
+														<th className="w-[66%] px-4 py-3 font-medium">Agent Output</th>
+													</tr>
+												</thead>
+												<tbody>
+													{statusView.inProgressScannerAgents.map((agent) => (
+														<tr key={agent.id} className="border-b last:border-b-0">
+															<td className="w-[24%] px-4 py-3 align-top">
+																<div className="line-clamp-2 font-medium">
+																	{agent.title}
+																</div>
+																<div className="text-xs text-muted-foreground break-all">
+																	{agent.subtitle || "-"}
+																</div>
+															</td>
+															<td className="w-[10%] px-4 py-3 align-top capitalize">
+																{getScannerStageLabel(agent.stage)}
+															</td>
+															<td className="w-[66%] px-4 py-3 align-top">
+																<LiveScannerAgentOutput
+																	scanJobId={scanJobId}
+																	stage={agent.stage}
+																	scanModuleTaskId={agent.scanModuleTaskId}
+																	scanFunctionTaskId={agent.scanFunctionTaskId}
+																	initialMessages={
+																		(agent.streamMessages || []) as JsonRpcStreamMessage[]
+																	}
+																/>
+															</td>
+														</tr>
+													))}
+												</tbody>
+											</table>
+										)}
 									</div>
 								</div>
 							</div>
@@ -991,256 +2107,8 @@ export const ShowScanJobDetail = ({
 					</div>
 				</CardContent>
 			</Card>
-			<Dialog
-				open={Boolean(selectedCandidate)}
-				onOpenChange={(open) => {
-					if (!open) {
-						setSelectedCandidateId(null);
-					}
-				}}
-			>
-				<DialogContent className="max-w-3xl">
-					<DialogHeader>
-						<DialogTitle>{selectedCandidate?.title || "Candidate Detail"}</DialogTitle>
-						<DialogDescription>
-							{selectedCandidate?.vulnerabilityCandidateId || "-"}
-						</DialogDescription>
-					</DialogHeader>
-					{selectedCandidate ? (
-						<div className="grid gap-6">
-							<div className="grid gap-3 md:grid-cols-2">
-								<div className="rounded-lg border p-3">
-									<div className="text-sm text-muted-foreground">Status</div>
-									<div className="mt-1 font-medium capitalize">
-										{selectedCandidate.status}
-									</div>
-								</div>
-								<div className="rounded-lg border p-3">
-									<div className="text-sm text-muted-foreground">Current Stage</div>
-									<div className="mt-1 font-medium capitalize">
-										{selectedCandidate.currentStage}
-									</div>
-								</div>
-								<div className="rounded-lg border p-3">
-									<div className="text-sm text-muted-foreground">Verified</div>
-									<div className="mt-1 font-medium">
-										{selectedCandidate.latestVerificationResult
-											? selectedCandidate.latestVerificationResult.result ===
-												"real_vulnerability"
-												? "Yes"
-												: "No"
-											: "-"}
-									</div>
-								</div>
-								<div className="rounded-lg border p-3">
-									<div className="text-sm text-muted-foreground">Location</div>
-									<div className="mt-1 break-all font-medium">
-										{selectedCandidate.filePath || "-"}
-										{selectedCandidate.line ? `:${selectedCandidate.line}` : ""}
-									</div>
-								</div>
-								<div className="rounded-lg border p-3">
-									<div className="text-sm text-muted-foreground">Confidence</div>
-									<div className="mt-1 font-medium">
-										{typeof selectedCandidate.confidence === "number"
-											? selectedCandidate.confidence
-											: "-"}
-									</div>
-								</div>
-								<div className="rounded-lg border p-3">
-									<div className="text-sm text-muted-foreground">Created</div>
-									<div className="mt-1 font-medium">
-										<DateTooltip date={selectedCandidate.createdAt} />
-									</div>
-								</div>
-								<div className="rounded-lg border p-3">
-									<div className="text-sm text-muted-foreground">Updated</div>
-									<div className="mt-1 font-medium">
-										<DateTooltip date={selectedCandidate.updatedAt} />
-									</div>
-								</div>
-							</div>
 
-							<div className="rounded-lg border p-3">
-								<div className="text-sm text-muted-foreground">Description</div>
-								<div className="mt-1 whitespace-pre-wrap break-words text-sm">
-									{selectedCandidate.description || "-"}
-								</div>
-							</div>
 
-							<div className="rounded-lg border p-3">
-								<div className="mb-3 flex items-center justify-between gap-3">
-									<div className="text-sm text-muted-foreground">
-										Latest Analysis Result
-									</div>
-									{selectedCandidate.latestAnalysisResult?.result ? (
-										<Badge
-											variant="outline"
-											className={`capitalize ${getAnalysisResultBadgeClassName(
-												selectedCandidate.latestAnalysisResult.result,
-											)}`}
-										>
-											{selectedCandidate.latestAnalysisResult.result.replace(
-												/_/g,
-												" ",
-											)}
-										</Badge>
-									) : null}
-								</div>
-								<div className="grid gap-3 md:grid-cols-2">
-									<div className="rounded-md border p-3">
-										<div className="text-xs text-muted-foreground">Summary</div>
-										<div className="mt-1 whitespace-pre-wrap break-words text-sm">
-											{selectedCandidate.latestAnalysisResult?.summary || "-"}
-										</div>
-									</div>
-									<div className="rounded-md border p-3">
-										<div className="text-xs text-muted-foreground">Report Path</div>
-										<div className="mt-1 break-all text-sm">
-											{selectedCandidate.latestAnalysisResult?.reportPath || "-"}
-										</div>
-									</div>
-									<div className="rounded-md border p-3">
-										<div className="text-xs text-muted-foreground">
-											Runtime Seconds
-										</div>
-										<div className="mt-1 text-sm">
-											{typeof selectedCandidate.latestAnalysisResult
-												?.runtimeSeconds === "number"
-												? selectedCandidate.latestAnalysisResult.runtimeSeconds
-												: "-"}
-										</div>
-									</div>
-									<div className="rounded-md border p-3">
-										<div className="text-xs text-muted-foreground">Thread ID</div>
-										<div className="mt-1 break-all text-sm">
-											{selectedCandidate.latestAnalysisResult?.threadId || "-"}
-										</div>
-									</div>
-								</div>
-							</div>
-
-							<div className="rounded-lg border p-3">
-								<div className="mb-3 flex items-center justify-between gap-3">
-									<div className="text-sm text-muted-foreground">
-										Latest Verification Result
-									</div>
-									{selectedCandidate.latestVerificationResult?.result ? (
-										<Badge
-											variant="outline"
-											className={`capitalize ${getAnalysisResultBadgeClassName(
-												selectedCandidate.latestVerificationResult.result,
-											)}`}
-										>
-											{selectedCandidate.latestVerificationResult.result.replace(
-												/_/g,
-												" ",
-											)}
-										</Badge>
-									) : null}
-								</div>
-								<div className="grid gap-3 md:grid-cols-2">
-									<div className="rounded-md border p-3">
-										<div className="text-xs text-muted-foreground">Summary</div>
-										<div className="mt-1 whitespace-pre-wrap break-words text-sm">
-											{selectedCandidate.latestVerificationResult?.summary || "-"}
-										</div>
-									</div>
-									<div className="rounded-md border p-3">
-										<div className="text-xs text-muted-foreground">Report Path</div>
-										<div className="mt-1 break-all text-sm">
-											{selectedCandidate.latestVerificationResult?.reportPath || "-"}
-										</div>
-									</div>
-									<div className="rounded-md border p-3">
-										<div className="text-xs text-muted-foreground">Is Bug</div>
-										<div className="mt-1 text-sm">
-											{typeof selectedCandidate.latestVerificationResult?.isBug ===
-											"boolean"
-												? selectedCandidate.latestVerificationResult.isBug
-													? "true"
-													: "false"
-												: "-"}
-										</div>
-									</div>
-									<div className="rounded-md border p-3">
-										<div className="text-xs text-muted-foreground">
-											Is Security Vulnerability
-										</div>
-										<div className="mt-1 text-sm">
-											{typeof selectedCandidate.latestVerificationResult
-												?.isSecurity === "boolean"
-												? selectedCandidate.latestVerificationResult.isSecurity
-													? "true"
-													: "false"
-												: "-"}
-										</div>
-									</div>
-									<div className="rounded-md border p-3">
-										<div className="text-xs text-muted-foreground">Confidence</div>
-										<div className="mt-1 text-sm">
-											{typeof selectedCandidate.latestVerificationResult
-												?.confidence === "number"
-												? selectedCandidate.latestVerificationResult.confidence
-												: "-"}
-										</div>
-									</div>
-									<div className="rounded-md border p-3">
-										<div className="text-xs text-muted-foreground">
-											Issue Draft Path
-										</div>
-										<div className="mt-1 break-all text-sm">
-											{selectedCandidate.latestVerificationResult?.issueDraftPath ||
-												"-"}
-										</div>
-									</div>
-									<div className="rounded-md border p-3">
-										<div className="text-xs text-muted-foreground">PoC Path</div>
-										<div className="mt-1 break-all text-sm">
-											{selectedCandidate.latestVerificationResult?.pocPath || "-"}
-										</div>
-									</div>
-									<div className="rounded-md border p-3">
-										<div className="text-xs text-muted-foreground">
-											Dockerfile Path
-										</div>
-										<div className="mt-1 break-all text-sm">
-											{selectedCandidate.latestVerificationResult?.dockerfilePath ||
-												"-"}
-										</div>
-									</div>
-									<div className="rounded-md border p-3">
-										<div className="text-xs text-muted-foreground">
-											Run Script Path
-										</div>
-										<div className="mt-1 break-all text-sm">
-											{selectedCandidate.latestVerificationResult?.runScriptPath ||
-												"-"}
-										</div>
-									</div>
-									<div className="rounded-md border p-3">
-										<div className="text-xs text-muted-foreground">
-											Runtime Seconds
-										</div>
-										<div className="mt-1 text-sm">
-											{typeof selectedCandidate.latestVerificationResult
-												?.runtimeSeconds === "number"
-												? selectedCandidate.latestVerificationResult.runtimeSeconds
-												: "-"}
-										</div>
-									</div>
-									<div className="rounded-md border p-3">
-										<div className="text-xs text-muted-foreground">Thread ID</div>
-										<div className="mt-1 break-all text-sm">
-											{selectedCandidate.latestVerificationResult?.threadId || "-"}
-										</div>
-									</div>
-								</div>
-							</div>
-						</div>
-					) : null}
-				</DialogContent>
-			</Dialog>
 		</div>
 	);
 };

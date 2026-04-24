@@ -31,6 +31,9 @@ const formatJobTitle = (job: {
 	scanJobId: string;
 }) => `Scan Job (${job.scanJobId.slice(0, 6)})`;
 
+const formatTriggerSource = (triggerSource: string) =>
+	triggerSource === "schedule" ? "auto" : triggerSource;
+
 export const ShowScanJobs = ({ id, type }: Props) => {
 	const router = useRouter();
 	const { projectId, environmentId } = router.query;
@@ -94,12 +97,16 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 												{job.description}
 											</span>
 										)}
+										{job.note && (
+											<span className="text-sm text-foreground/80 break-all">
+												Note: {job.note}
+											</span>
+										)}
 										<div className="flex items-center gap-2 text-xs text-muted-foreground">
 											<Badge variant="outline">
 												{job.scanType === "delta" ? "Delta Scan" : "Full Scan"}
 											</Badge>
-											<span>k={job.commitWindow}</span>
-											<span>{job.triggerSource}</span>
+											<span>{formatTriggerSource(job.triggerSource)}</span>
 										</div>
 									</div>
 									<div className="flex flex-col items-end gap-2">

@@ -2,44 +2,49 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
 import { db } from "@dokploy/server/db";
 import {
 	analysisResults,
 	type apiCheckoutScanEnvironment,
 	type apiCreateScanJob,
+	scanFunctionTasks,
 	scanJobs,
+	scanModuleTasks,
+	scanPhaseEnum,
 	scanJobStatusEnum,
+	scanTaskStatusEnum,
 	verificationResults,
 	vulnerabilityCandidateStatusEnum,
 	vulnerabilityCandidates,
 } from "@dokploy/server/db/schema";
 import { TRPCError } from "@trpc/server";
-import { desc, eq } from "drizzle-orm";
+import { Queue } from "bullmq";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { SandboxAgent } from "sandbox-agent";
+import { Agent, type Dispatcher } from "undici";
 import { execAsync } from "../utils/process/execAsync";
 import { getGlobalContainerEnvironmentPairs } from "../utils/docker/utils";
+import {
+	prepareSandboxAgentRuntime,
+} from "./sandbox-agent/runtime";
 import { findApplicationById } from "./application";
 import { findComposeById } from "./compose";
 
 export const DEFAULT_DELTA_COMMIT_WINDOW = 3;
+const DEFAULT_FULL_SCAN_MODULE_CONCURRENCY = 4;
+const DEFAULT_FULL_SCAN_FUNCTION_CONCURRENCY = 4;
+const DEFAULT_ANALYSIS_CONCURRENCY = 2;
+const DEFAULT_VERIFY_CONCURRENCY = 1;
+const ACP_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
 
 export type ScanJob = typeof scanJobs.$inferSelect;
+export type ScanModuleTask = typeof scanModuleTasks.$inferSelect;
+export type ScanFunctionTask = typeof scanFunctionTasks.$inferSelect;
 export type VulnerabilityCandidate = typeof vulnerabilityCandidates.$inferSelect;
 export type AnalysisResult = typeof analysisResults.$inferSelect;
 export type VerificationResult = typeof verificationResults.$inferSelect;
 type VulnerabilityCandidateStage = "analyzing" | "fuzzing" | "verifying";
-
-type ScanBridgeEventRecord = {
-	recordedAt: string;
-	type:
-		| "candidate"
-		| "candidate_batch"
-		| "next_stage"
-		| "analysis_result"
-		| "verification_result";
-	payload: Record<string, unknown>;
-};
 
 type JsonRpcMessage = {
 	id?: number | string;
@@ -53,6 +58,22 @@ type JsonRpcMessage = {
 	};
 };
 
+type JsonRpcMessageWithLine = {
+	line: number;
+	timestamp?: string;
+	message: JsonRpcMessage;
+};
+
+type SandboxAgentSessionEvent = {
+	id?: string;
+	eventIndex?: number;
+	sessionId?: string;
+	createdAt?: string;
+	connectionId?: string;
+	sender?: string;
+	payload?: unknown;
+};
+
 type ScanRuntimeLiveAction = {
 	itemId: string;
 	itemType: string;
@@ -60,8 +81,282 @@ type ScanRuntimeLiveAction = {
 	actionText: string;
 };
 
-const ANALYSIS_CONCURRENCY = 2;
-const VERIFIER_CONCURRENCY = 1;
+export const MAX_CANDIDATE_ANALYSIS_WORKER_CONCURRENCY = 16;
+export const MAX_CANDIDATE_VERIFICATION_WORKER_CONCURRENCY = 16;
+export const MAX_SCAN_MODULE_WORKER_CONCURRENCY = 32;
+export const MAX_SCAN_FUNCTION_WORKER_CONCURRENCY = 32;
+
+export const SCAN_MODULE_QUEUE_NAME = "scan-module";
+export const SCAN_FUNCTION_QUEUE_NAME = "scan-function";
+export const SCAN_CANDIDATE_ANALYSIS_QUEUE_NAME = "scan-candidate-analysis";
+export const SCAN_CANDIDATE_VERIFICATION_QUEUE_NAME =
+	"scan-candidate-verification";
+
+export type ScanModuleQueueJob = {
+	scanJobId: string;
+	scanModuleTaskId: string;
+};
+
+export type ScanFunctionQueueJob = {
+	scanJobId: string;
+	scanFunctionTaskId: string;
+};
+
+export type ScanCandidateQueueJob = {
+	scanJobId: string;
+	vulnerabilityCandidateId: string;
+};
+
+type RequestInitWithDispatcher = RequestInit & {
+	dispatcher?: Dispatcher;
+};
+
+const acpHttpDispatcher = new Agent({
+	headersTimeout: ACP_HTTP_TIMEOUT_MS,
+	bodyTimeout: ACP_HTTP_TIMEOUT_MS,
+});
+
+const sandboxAgentFetch: typeof fetch = async (input, init) => {
+	const nextInit: RequestInitWithDispatcher = {
+		...(init || {}),
+		dispatcher:
+			(init as RequestInitWithDispatcher | undefined)?.dispatcher ||
+			acpHttpDispatcher,
+	};
+	return fetch(input, nextInit);
+};
+
+const parseRedisConnection = (url?: string) => {
+	if (!url) {
+		return {
+			host: process.env.REDIS_HOST || "dokploy-redis-dev",
+			port: process.env.REDIS_PORT
+				? Number.parseInt(process.env.REDIS_PORT, 10)
+				: 6379,
+		};
+	}
+
+	try {
+		const parsed = new URL(url);
+		return {
+			host: parsed.hostname || "dokploy-redis-dev",
+			port: parsed.port ? Number.parseInt(parsed.port, 10) : 6379,
+		};
+	} catch {
+		return {
+			host: url,
+			port: 6379,
+		};
+	}
+};
+
+const bullRedisConnection = parseRedisConnection(process.env.REDIS_URL);
+
+const moduleScanQueue = new Queue<ScanModuleQueueJob>(SCAN_MODULE_QUEUE_NAME, {
+	connection: bullRedisConnection,
+});
+
+const functionScanQueue = new Queue<ScanFunctionQueueJob>(
+	SCAN_FUNCTION_QUEUE_NAME,
+	{
+		connection: bullRedisConnection,
+	},
+);
+
+const candidateAnalysisQueue = new Queue<ScanCandidateQueueJob>(
+	SCAN_CANDIDATE_ANALYSIS_QUEUE_NAME,
+	{
+		connection: bullRedisConnection,
+	},
+);
+
+const candidateVerificationQueue = new Queue<ScanCandidateQueueJob>(
+	SCAN_CANDIDATE_VERIFICATION_QUEUE_NAME,
+	{
+		connection: bullRedisConnection,
+	},
+);
+
+type VerificationExecutionState = {
+	active: number;
+	waiters: Array<() => void>;
+};
+
+type ScanTaskExecutionState = {
+	active: number;
+	waiters: Array<() => void>;
+};
+
+type AnalysisExecutionState = {
+	active: number;
+	waiters: Array<() => void>;
+};
+
+const moduleExecutionStateByKey = new Map<string, ScanTaskExecutionState>();
+const functionExecutionStateByKey = new Map<string, ScanTaskExecutionState>();
+const verificationExecutionStateByKey = new Map<
+	string,
+	VerificationExecutionState
+>();
+const analysisExecutionStateByKey = new Map<string, AnalysisExecutionState>();
+
+const getVerificationExecutionState = (key: string) => {
+	const existing = verificationExecutionStateByKey.get(key);
+	if (existing) {
+		return existing;
+	}
+
+	const state: VerificationExecutionState = {
+		active: 0,
+		waiters: [],
+	};
+	verificationExecutionStateByKey.set(key, state);
+	return state;
+};
+
+const getScanTaskExecutionState = (
+	stateMap: Map<string, ScanTaskExecutionState>,
+	key: string,
+) => {
+	const existing = stateMap.get(key);
+	if (existing) {
+		return existing;
+	}
+
+	const state: ScanTaskExecutionState = {
+		active: 0,
+		waiters: [],
+	};
+	stateMap.set(key, state);
+	return state;
+};
+
+const acquireScanTaskExecutionSlot = async (
+	stateMap: Map<string, ScanTaskExecutionState>,
+	key: string,
+	limit: number,
+) =>
+	await new Promise<() => void>((resolve) => {
+		const normalizedLimit = Math.max(1, limit);
+		const tryAcquire = () => {
+			const state = getScanTaskExecutionState(stateMap, key);
+			if (state.active < normalizedLimit) {
+				state.active += 1;
+				resolve(() => {
+					const current = stateMap.get(key);
+					if (!current) {
+						return;
+					}
+
+					current.active = Math.max(0, current.active - 1);
+					const next = current.waiters.shift();
+					if (next) {
+						queueMicrotask(next);
+						return;
+					}
+
+					if (current.active === 0) {
+						stateMap.delete(key);
+					}
+				});
+				return;
+			}
+
+			state.waiters.push(tryAcquire);
+		};
+
+		tryAcquire();
+	});
+
+const acquireVerificationExecutionSlot = async (
+	key: string,
+	limit: number,
+) =>
+	await new Promise<() => void>((resolve) => {
+		const normalizedLimit = Math.max(1, limit);
+		const tryAcquire = () => {
+			const state = getVerificationExecutionState(key);
+			if (state.active < normalizedLimit) {
+				state.active += 1;
+				resolve(() => {
+					const current = verificationExecutionStateByKey.get(key);
+					if (!current) {
+						return;
+					}
+
+					current.active = Math.max(0, current.active - 1);
+					const next = current.waiters.shift();
+					if (next) {
+						queueMicrotask(next);
+						return;
+					}
+
+					if (current.active === 0) {
+						verificationExecutionStateByKey.delete(key);
+					}
+				});
+				return;
+			}
+
+			state.waiters.push(tryAcquire);
+		};
+
+		tryAcquire();
+	});
+
+const getAnalysisExecutionState = (key: string) => {
+	const existing = analysisExecutionStateByKey.get(key);
+	if (existing) {
+		return existing;
+	}
+
+	const state: AnalysisExecutionState = {
+		active: 0,
+		waiters: [],
+	};
+	analysisExecutionStateByKey.set(key, state);
+	return state;
+};
+
+const acquireAnalysisExecutionSlot = async (key: string, limit: number) =>
+	await new Promise<() => void>((resolve) => {
+		const normalizedLimit = Math.max(1, limit);
+		const tryAcquire = () => {
+			const state = getAnalysisExecutionState(key);
+			if (state.active < normalizedLimit) {
+				state.active += 1;
+				resolve(() => {
+					const current = analysisExecutionStateByKey.get(key);
+					if (!current) {
+						return;
+					}
+
+					current.active = Math.max(0, current.active - 1);
+					const next = current.waiters.shift();
+					if (next) {
+						queueMicrotask(next);
+						return;
+					}
+
+					if (current.active === 0) {
+						analysisExecutionStateByKey.delete(key);
+					}
+				});
+				return;
+			}
+
+			state.waiters.push(tryAcquire);
+		};
+
+		tryAcquire();
+	});
+
+const sleep = async (ms: number) =>
+	await new Promise<void>((resolve) => {
+		setTimeout(resolve, ms);
+	});
+
+const SANDBOX_AGENT_PROMPT_TIMEOUT_MS = 15 * 60 * 1000;
 
 type AgentProfileLike = {
 	agentProfileId: string;
@@ -106,6 +401,42 @@ const extractTurnErrorMessage = (value: unknown): string | null => {
 	return extractNamedString(value, ["message", "additionalDetails"]);
 };
 
+const withTimeout = async <T>(
+	promise: Promise<T>,
+	timeoutMs: number,
+	errorFactory: () => Error,
+): Promise<T> =>
+	await new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => {
+			reject(errorFactory());
+		}, timeoutMs);
+
+		promise.then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			(error) => {
+				clearTimeout(timer);
+				reject(error);
+			},
+			);
+		});
+
+const isPromptPayloadSchemaError = (error: unknown) => {
+	if (!(error instanceof Error)) {
+		return false;
+	}
+
+	const message = error.message.toLowerCase();
+	return (
+		(message.includes("invalid") ||
+			message.includes("schema") ||
+			message.includes("string")) &&
+		!message.includes("timed out")
+	);
+};
+
 export const createScanJob = async (input: typeof apiCreateScanJob._type) => {
 	const created = await db
 		.insert(scanJobs)
@@ -124,6 +455,8 @@ export const createScanJob = async (input: typeof apiCreateScanJob._type) => {
 			targetTag: input.targetTag,
 			commitWindow: input.commitWindow || DEFAULT_DELTA_COMMIT_WINDOW,
 			status: "queued",
+			scanPhase: "queued",
+			repositoryTaskStatus: "queued",
 		})
 		.returning();
 
@@ -169,6 +502,26 @@ export const findAllScanJobsByComposeId = async (composeId: string) =>
 		.where(eq(scanJobs.composeId, composeId))
 		.orderBy(desc(scanJobs.createdAt));
 
+export const updateScanJobNote = async (
+	scanJobId: string,
+	note: string | null,
+) => {
+	const updated = await db
+		.update(scanJobs)
+		.set({ note })
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.returning();
+
+	if (!updated[0]) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Scan job not found",
+		});
+	}
+
+	return updated[0];
+};
+
 export const updateScanJobStatus = async (
 	scanJobId: string,
 	status: (typeof scanJobStatusEnum.enumValues)[number],
@@ -178,12 +531,21 @@ export const updateScanJobStatus = async (
 		status,
 	};
 
+	if (status === "analyzing") {
+		patch.scanPhase = "analyzing";
+	}
+
+	if (status === "verifying") {
+		patch.scanPhase = "verifying";
+	}
+
 	if (status === "scanning") {
 		patch.startedAt = new Date().toISOString();
 	}
 
 	if (status === "completed" || status === "failed") {
 		patch.finishedAt = new Date().toISOString();
+		patch.scanPhase = status;
 	}
 
 	if (errorMessage) {
@@ -204,6 +566,630 @@ export const updateScanJobStatus = async (
 	}
 
 	return updated[0];
+};
+
+export const resetScanJobForRetry = async (
+	scanJobId: string,
+	input?: {
+		status?: (typeof scanJobStatusEnum.enumValues)[number];
+		scanPhase?: (typeof scanPhaseEnum.enumValues)[number];
+		errorMessage?: string | null;
+		repositoryTaskStatus?: (typeof scanTaskStatusEnum.enumValues)[number];
+	},
+) => {
+	const updated = await db
+		.update(scanJobs)
+		.set({
+			status: input?.status || "queued",
+			scanPhase: input?.scanPhase || "queued",
+			errorMessage:
+				input && "errorMessage" in input ? (input.errorMessage ?? null) : null,
+			finishedAt: null,
+			startedAt: null,
+			repositoryTaskStatus:
+				input?.repositoryTaskStatus || undefined,
+		})
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.returning();
+
+	if (!updated[0]) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Scan job not found",
+		});
+	}
+
+	return updated[0];
+};
+
+export const updateScanJobPhase = async (
+	scanJobId: string,
+	scanPhase: (typeof scanPhaseEnum.enumValues)[number],
+) => {
+	const updated = await db
+		.update(scanJobs)
+		.set({
+			scanPhase,
+		})
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.returning();
+
+	if (!updated[0]) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Scan job not found",
+		});
+	}
+
+	return updated[0];
+};
+
+export const updateScanJobRepositoryTaskStatus = async (
+	scanJobId: string,
+	repositoryTaskStatus: (typeof scanTaskStatusEnum.enumValues)[number],
+) => {
+	const updated = await db
+		.update(scanJobs)
+		.set({
+			repositoryTaskStatus,
+		})
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.returning();
+
+	if (!updated[0]) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Scan job not found",
+		});
+	}
+
+	return updated[0];
+};
+
+export const recalculateScanTaskCounts = async (scanJobId: string) => {
+	const moduleRows = await db
+		.select({
+			status: scanModuleTasks.status,
+			count: sql<number>`count(*)::int`,
+		})
+		.from(scanModuleTasks)
+		.where(eq(scanModuleTasks.scanJobId, scanJobId))
+		.groupBy(scanModuleTasks.status);
+
+	const functionRows = await db
+		.select({
+			status: scanFunctionTasks.status,
+			count: sql<number>`count(*)::int`,
+		})
+		.from(scanFunctionTasks)
+		.where(eq(scanFunctionTasks.scanJobId, scanJobId))
+		.groupBy(scanFunctionTasks.status);
+
+	const moduleCounts = {
+		total: 0,
+		completed: 0,
+		failed: 0,
+	};
+	for (const row of moduleRows) {
+		moduleCounts.total += row.count;
+		if (row.status === "completed") {
+			moduleCounts.completed += row.count;
+		}
+		if (row.status === "failed") {
+			moduleCounts.failed += row.count;
+		}
+	}
+
+	const functionCounts = {
+		total: 0,
+		completed: 0,
+		failed: 0,
+	};
+	for (const row of functionRows) {
+		functionCounts.total += row.count;
+		if (row.status === "completed") {
+			functionCounts.completed += row.count;
+		}
+		if (row.status === "failed") {
+			functionCounts.failed += row.count;
+		}
+	}
+
+	const updated = await db
+		.update(scanJobs)
+		.set({
+			moduleTasksTotal: moduleCounts.total,
+			moduleTasksCompleted: moduleCounts.completed,
+			moduleTasksFailed: moduleCounts.failed,
+			functionTasksTotal: functionCounts.total,
+			functionTasksCompleted: functionCounts.completed,
+			functionTasksFailed: functionCounts.failed,
+		})
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.returning();
+
+	return updated[0] || null;
+};
+
+export const createScanModuleTask = async (input: {
+	scanJobId: string;
+	moduleId: string;
+	moduleName: string;
+	priority?: number;
+	attempt?: number;
+	moduleScanMdPath?: string;
+	moduleScanJsonPath?: string;
+	functionPlanJsonPath?: string;
+	containerName?: string;
+	threadId?: string;
+}) => {
+	const created = await db
+		.insert(scanModuleTasks)
+		.values({
+			scanJobId: input.scanJobId,
+			moduleId: input.moduleId,
+			moduleName: input.moduleName,
+			priority: input.priority ?? 0,
+			attempt: input.attempt ?? 0,
+			moduleScanMdPath: input.moduleScanMdPath,
+			moduleScanJsonPath: input.moduleScanJsonPath,
+			functionPlanJsonPath: input.functionPlanJsonPath,
+			containerName: input.containerName,
+			threadId: input.threadId,
+		})
+		.returning();
+
+	await recalculateScanTaskCounts(input.scanJobId);
+
+	if (!created[0]) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Error creating scan module task",
+		});
+	}
+
+	return created[0];
+};
+
+export const findScanModuleTasksByScanJobId = async (scanJobId: string) =>
+	await db
+		.select()
+		.from(scanModuleTasks)
+		.where(eq(scanModuleTasks.scanJobId, scanJobId))
+		.orderBy(desc(scanModuleTasks.createdAt));
+
+export const findScanModuleTaskById = async (scanModuleTaskId: string) => {
+	const task = await db
+		.select()
+		.from(scanModuleTasks)
+		.where(eq(scanModuleTasks.scanModuleTaskId, scanModuleTaskId))
+		.limit(1)
+		.then((rows) => rows[0] || null);
+
+	if (!task) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Scan module task not found",
+		});
+	}
+
+	return task;
+};
+
+export const updateScanModuleTask = async (
+	scanModuleTaskId: string,
+	patch: Partial<ScanModuleTask>,
+) => {
+	const now = new Date().toISOString();
+	const updated = await db
+		.update(scanModuleTasks)
+		.set({
+			...patch,
+			updatedAt: now,
+		})
+		.where(eq(scanModuleTasks.scanModuleTaskId, scanModuleTaskId))
+		.returning();
+
+	const row = updated[0];
+	if (!row) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Scan module task not found",
+		});
+	}
+
+	await recalculateScanTaskCounts(row.scanJobId);
+	return row;
+};
+
+export const updateScanModuleTaskStatus = async (
+	scanModuleTaskId: string,
+	status: (typeof scanTaskStatusEnum.enumValues)[number],
+	errorMessage?: string,
+) => {
+	const patch: Partial<ScanModuleTask> = {
+		status,
+		errorMessage,
+	};
+	if (status === "running") {
+		patch.startedAt = new Date().toISOString();
+	}
+	if (status === "completed" || status === "failed") {
+		patch.completedAt = new Date().toISOString();
+	}
+	return await updateScanModuleTask(scanModuleTaskId, patch);
+};
+
+export const createScanFunctionTask = async (input: {
+	scanJobId: string;
+	scanModuleTaskId: string;
+	moduleId: string;
+	moduleName: string;
+	functionId: string;
+	functionName: string;
+	filePath?: string;
+	line?: number;
+	priority?: number;
+	attempt?: number;
+	score?: number;
+	riskType?: string;
+	summary?: string;
+	functionScanMdPath?: string;
+	functionScanJsonPath?: string;
+	containerName?: string;
+	threadId?: string;
+}) => {
+	const created = await db
+		.insert(scanFunctionTasks)
+		.values({
+			scanJobId: input.scanJobId,
+			scanModuleTaskId: input.scanModuleTaskId,
+			moduleId: input.moduleId,
+			moduleName: input.moduleName,
+			functionId: input.functionId,
+			functionName: input.functionName,
+			filePath: input.filePath,
+			line: input.line,
+			priority: input.priority ?? 0,
+			attempt: input.attempt ?? 0,
+			score: input.score,
+			riskType: input.riskType,
+			summary: input.summary,
+			functionScanMdPath: input.functionScanMdPath,
+			functionScanJsonPath: input.functionScanJsonPath,
+			containerName: input.containerName,
+			threadId: input.threadId,
+		})
+		.returning();
+
+	await recalculateScanTaskCounts(input.scanJobId);
+
+	if (!created[0]) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Error creating scan function task",
+		});
+	}
+
+	return created[0];
+};
+
+export const findScanFunctionTasksByScanJobId = async (scanJobId: string) =>
+	await db
+		.select()
+		.from(scanFunctionTasks)
+		.where(eq(scanFunctionTasks.scanJobId, scanJobId))
+		.orderBy(desc(scanFunctionTasks.createdAt));
+
+export const findScanFunctionTaskById = async (scanFunctionTaskId: string) => {
+	const task = await db
+		.select()
+		.from(scanFunctionTasks)
+		.where(eq(scanFunctionTasks.scanFunctionTaskId, scanFunctionTaskId))
+		.limit(1)
+		.then((rows) => rows[0] || null);
+
+	if (!task) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Scan function task not found",
+		});
+	}
+
+	return task;
+};
+
+export const findScanFunctionTasksByModuleTaskId = async (
+	scanModuleTaskId: string,
+) =>
+	await db
+		.select()
+		.from(scanFunctionTasks)
+		.where(eq(scanFunctionTasks.scanModuleTaskId, scanModuleTaskId))
+		.orderBy(desc(scanFunctionTasks.createdAt));
+
+export const updateScanFunctionTask = async (
+	scanFunctionTaskId: string,
+	patch: Partial<ScanFunctionTask>,
+) => {
+	const now = new Date().toISOString();
+	const updated = await db
+		.update(scanFunctionTasks)
+		.set({
+			...patch,
+			updatedAt: now,
+		})
+		.where(eq(scanFunctionTasks.scanFunctionTaskId, scanFunctionTaskId))
+		.returning();
+
+	const row = updated[0];
+	if (!row) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Scan function task not found",
+		});
+	}
+
+	await recalculateScanTaskCounts(row.scanJobId);
+	return row;
+};
+
+export const updateScanFunctionTaskStatus = async (
+	scanFunctionTaskId: string,
+	status: (typeof scanTaskStatusEnum.enumValues)[number],
+	errorMessage?: string,
+) => {
+	const patch: Partial<ScanFunctionTask> = {
+		status,
+		errorMessage,
+	};
+	if (status === "running") {
+		patch.startedAt = new Date().toISOString();
+	}
+	if (status === "completed" || status === "failed") {
+		patch.completedAt = new Date().toISOString();
+	}
+	return await updateScanFunctionTask(scanFunctionTaskId, patch);
+};
+
+export const retryFailedFullScanTasks = async (scanJobId: string) => {
+	const scanJob = await findScanJobById(scanJobId);
+	if (scanJob.scanType !== "full") {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Retry failed scanning tasks is only supported for full scan jobs",
+		});
+	}
+	if (scanJob.status !== "failed") {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Only failed full scan jobs can retry failed scanning tasks",
+		});
+	}
+
+	const [moduleTasks, functionTasks] = await Promise.all([
+		findScanModuleTasksByScanJobId(scanJobId),
+		findScanFunctionTasksByScanJobId(scanJobId),
+	]);
+
+	const runningModuleTask = moduleTasks.find((task) => task.status === "running");
+	const runningFunctionTask = functionTasks.find((task) => task.status === "running");
+	if (
+		scanJob.repositoryTaskStatus === "running" ||
+		runningModuleTask ||
+		runningFunctionTask
+	) {
+		throw new TRPCError({
+			code: "CONFLICT",
+			message: "Scan job is still running scanning tasks",
+		});
+	}
+
+	const failedModuleTasks = moduleTasks.filter((task) => task.status === "failed");
+	const failedFunctionTasks = functionTasks.filter((task) => task.status === "failed");
+
+	if (failedModuleTasks.length === 0 && failedFunctionTasks.length === 0) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "No failed module or function scanning tasks to retry",
+		});
+	}
+
+	const now = new Date().toISOString();
+	for (const task of failedModuleTasks) {
+		await db
+			.update(scanModuleTasks)
+			.set({
+				status: "queued",
+				errorMessage: null,
+				startedAt: null,
+				completedAt: null,
+				updatedAt: now,
+			})
+			.where(eq(scanModuleTasks.scanModuleTaskId, task.scanModuleTaskId));
+	}
+
+	for (const task of failedFunctionTasks) {
+		await db
+			.update(scanFunctionTasks)
+			.set({
+				status: "queued",
+				errorMessage: null,
+				startedAt: null,
+				completedAt: null,
+				updatedAt: now,
+			})
+			.where(eq(scanFunctionTasks.scanFunctionTaskId, task.scanFunctionTaskId));
+	}
+
+	await recalculateScanTaskCounts(scanJobId);
+	const nextPhase =
+		failedModuleTasks.length > 0 ? "module_scanning" : "function_scanning";
+	await resetScanJobForRetry(scanJobId, {
+		status: "queued",
+		scanPhase: nextPhase,
+		errorMessage: null,
+		repositoryTaskStatus: scanJob.repositoryTaskStatus,
+	});
+
+	return {
+		scanJobId,
+		retriedModuleTasks: failedModuleTasks.length,
+		retriedFunctionTasks: failedFunctionTasks.length,
+	};
+};
+
+const resetScanJobForCandidateRetry = async (
+	scanJobId: string,
+	status: "analyzing" | "verifying",
+) => {
+	const updated = await db
+		.update(scanJobs)
+		.set({
+			status,
+			scanPhase: status,
+			errorMessage: null,
+			finishedAt: null,
+		})
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.returning();
+
+	if (!updated[0]) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Scan job not found",
+		});
+	}
+
+	return updated[0];
+};
+
+export const retryFailedAnalysisTasks = async (scanJobId: string) => {
+	await findScanJobById(scanJobId);
+
+	const candidates = await findVulnerabilityCandidatesByScanJobId(scanJobId);
+	const failedAnalysisCandidates = candidates.filter(
+		(candidate) =>
+			candidate.status === "failed" && candidate.currentStage === "analyzing",
+	);
+
+	if (failedAnalysisCandidates.length === 0) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "No failed analysis tasks to retry",
+		});
+	}
+
+	const now = new Date().toISOString();
+	await Promise.all(
+		failedAnalysisCandidates.map(async (candidate) => {
+			await removeQueuedCandidateAnalysisWork(
+				candidate.vulnerabilityCandidateId,
+			).catch(() => {});
+			await deleteAnalysisResultsByCandidateId(
+				candidate.vulnerabilityCandidateId,
+			);
+			await resetCandidateAnalysisRuntimeFiles(
+				scanJobId,
+				candidate.vulnerabilityCandidateId,
+			).catch(() => {});
+			await updateVulnerabilityCandidateAnalysisThreadId(
+				candidate.vulnerabilityCandidateId,
+				"",
+			).catch(() => {});
+			await syncVulnerabilityCandidateResolvedRiskMetrics(
+				candidate.vulnerabilityCandidateId,
+			).catch(() => {});
+			await db
+				.update(vulnerabilityCandidates)
+				.set({
+					status: "queued",
+					currentStage: "analyzing",
+					updatedAt: now,
+				})
+				.where(
+					eq(
+						vulnerabilityCandidates.vulnerabilityCandidateId,
+						candidate.vulnerabilityCandidateId,
+					),
+				);
+			await enqueueCandidateAnalysisWork(
+				scanJobId,
+				candidate.vulnerabilityCandidateId,
+			);
+		}),
+	);
+
+	await resetScanJobForCandidateRetry(scanJobId, "analyzing");
+
+	return {
+		scanJobId,
+		retriedCandidates: failedAnalysisCandidates.length,
+	};
+};
+
+export const retryFailedVerificationTasks = async (scanJobId: string) => {
+	await findScanJobById(scanJobId);
+
+	const candidates = await findVulnerabilityCandidatesByScanJobId(scanJobId);
+	const failedVerificationCandidates = candidates.filter(
+		(candidate) =>
+			candidate.status === "failed" && candidate.currentStage === "verifying",
+	);
+
+	if (failedVerificationCandidates.length === 0) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "No failed verification tasks to retry",
+		});
+	}
+
+	const now = new Date().toISOString();
+	await Promise.all(
+		failedVerificationCandidates.map(async (candidate) => {
+			await removeQueuedCandidateVerificationWork(
+				candidate.vulnerabilityCandidateId,
+			).catch(() => {});
+			await deleteVerificationResultsByCandidateId(
+				candidate.vulnerabilityCandidateId,
+			);
+			await resetCandidateVerifierRuntimeFiles(
+				scanJobId,
+				candidate.vulnerabilityCandidateId,
+			).catch(() => {});
+			await updateVulnerabilityCandidateVerifierThreadId(
+				candidate.vulnerabilityCandidateId,
+				"",
+			).catch(() => {});
+			await syncVulnerabilityCandidateResolvedRiskMetrics(
+				candidate.vulnerabilityCandidateId,
+			).catch(() => {});
+			await db
+				.update(vulnerabilityCandidates)
+				.set({
+					status: "queued",
+					currentStage: "verifying",
+					updatedAt: now,
+				})
+				.where(
+					eq(
+						vulnerabilityCandidates.vulnerabilityCandidateId,
+						candidate.vulnerabilityCandidateId,
+					),
+				);
+			await enqueueCandidateVerificationWork(
+				scanJobId,
+				candidate.vulnerabilityCandidateId,
+			);
+		}),
+	);
+
+	await resetScanJobForCandidateRetry(scanJobId, "verifying");
+
+	return {
+		scanJobId,
+		retriedCandidates: failedVerificationCandidates.length,
+	};
 };
 
 const updateScanJobScanningThreadId = async (
@@ -265,9 +1251,49 @@ export const createVulnerabilityCandidate = async (input: {
 	filePath?: string;
 	line?: number;
 	confidence?: number;
+	score?: number;
 	status?: (typeof vulnerabilityCandidateStatusEnum.enumValues)[number];
 	currentStage?: VulnerabilityCandidateStage;
 }) => {
+	const existing = await db
+		.select()
+		.from(vulnerabilityCandidates)
+		.where(
+			sql`${vulnerabilityCandidates.scanJobId} = ${input.scanJobId}
+				and ${vulnerabilityCandidates.title} = ${input.title}
+				and ${vulnerabilityCandidates.filePath} is not distinct from ${input.filePath ?? null}
+				and ${vulnerabilityCandidates.line} is not distinct from ${input.line ?? null}`,
+		)
+		.limit(1)
+		.then((rows) => rows[0] || null);
+
+	if (existing) {
+		const patch: Partial<VulnerabilityCandidate> = {
+			updatedAt: new Date().toISOString(),
+		};
+		if (input.description && input.description !== existing.description) {
+			patch.description = input.description;
+		}
+		if (typeof input.confidence === "number") {
+			patch.confidence = input.confidence;
+		}
+		if (typeof input.score === "number") {
+			patch.score = input.score;
+		}
+		if (Object.keys(patch).length > 1) {
+			await db
+				.update(vulnerabilityCandidates)
+				.set(patch)
+				.where(
+					eq(
+						vulnerabilityCandidates.vulnerabilityCandidateId,
+						existing.vulnerabilityCandidateId,
+					),
+				);
+		}
+		return existing;
+	}
+
 	const created = await db
 		.insert(vulnerabilityCandidates)
 		.values({
@@ -277,6 +1303,7 @@ export const createVulnerabilityCandidate = async (input: {
 			filePath: input.filePath,
 			line: input.line,
 			confidence: input.confidence,
+			score: input.score,
 			status: input.status || "queued",
 			currentStage: input.currentStage || "analyzing",
 			updatedAt: new Date().toISOString(),
@@ -347,14 +1374,38 @@ export const findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId = as
 		const latestVerificationResult = latestVerificationResultByCandidateId.get(
 			candidate.vulnerabilityCandidateId,
 		);
+		const analysisReportPath = buildCandidateAnalysisReportPath(
+			candidate.scanJobId,
+			candidate.vulnerabilityCandidateId,
+		);
+		const verificationArtifactPaths = buildCandidateVerificationArtifactPaths(
+			candidate.scanJobId,
+			candidate.vulnerabilityCandidateId,
+		);
+		const resolvedConfidence =
+			typeof latestVerificationResult?.confidence === "number"
+				? latestVerificationResult.confidence
+				: typeof latestAnalysisResult?.confidence === "number"
+					? latestAnalysisResult.confidence
+					: candidate.confidence;
+		const resolvedScore =
+			typeof latestVerificationResult?.score === "number"
+				? latestVerificationResult.score
+				: typeof latestAnalysisResult?.score === "number"
+					? latestAnalysisResult.score
+					: candidate.score;
 
 		return {
 			...candidate,
+			confidence: resolvedConfidence,
+			score: resolvedScore,
 			latestAnalysisResult: latestAnalysisResult
 				? {
 						analysisResultId: latestAnalysisResult.analysisResultId,
 						result: latestAnalysisResult.result,
-						reportPath: latestAnalysisResult.reportPath,
+						confidence: latestAnalysisResult.confidence,
+						score: latestAnalysisResult.score,
+						reportPath: analysisReportPath,
 						runtimeSeconds: latestAnalysisResult.runtimeSeconds,
 						threadId: latestAnalysisResult.threadId,
 						summary: latestAnalysisResult.summary,
@@ -369,11 +1420,12 @@ export const findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId = as
 						isBug: latestVerificationResult.isBug,
 						isSecurity: latestVerificationResult.isSecurity,
 						confidence: latestVerificationResult.confidence,
-						reportPath: latestVerificationResult.reportPath,
-						issueDraftPath: latestVerificationResult.issueDraftPath,
-						pocPath: latestVerificationResult.pocPath,
-						dockerfilePath: latestVerificationResult.dockerfilePath,
-						runScriptPath: latestVerificationResult.runScriptPath,
+						score: latestVerificationResult.score,
+						reportPath: verificationArtifactPaths.reportPath,
+						issueDraftPath: verificationArtifactPaths.issueDraftPath,
+						pocPath: verificationArtifactPaths.pocPath,
+						dockerfilePath: verificationArtifactPaths.dockerfilePath,
+						runScriptPath: verificationArtifactPaths.runScriptPath,
 						runtimeSeconds: latestVerificationResult.runtimeSeconds,
 						threadId: latestVerificationResult.threadId,
 						summary: latestVerificationResult.summary,
@@ -496,10 +1548,70 @@ const updateVulnerabilityCandidateVerifierThreadId = async (
 	return updated[0] || null;
 };
 
+const updateVulnerabilityCandidateRiskMetrics = async (
+	vulnerabilityCandidateId: string,
+	input: {
+		confidence?: number;
+		score?: number;
+	},
+) => {
+	const patch: Partial<VulnerabilityCandidate> = {
+		updatedAt: new Date().toISOString(),
+	};
+
+	if (input.confidence !== undefined) {
+		patch.confidence = input.confidence;
+	}
+	if (input.score !== undefined) {
+		patch.score = input.score;
+	}
+
+	const updated = await db
+		.update(vulnerabilityCandidates)
+		.set(patch)
+		.where(
+			eq(
+				vulnerabilityCandidates.vulnerabilityCandidateId,
+				vulnerabilityCandidateId,
+			),
+		)
+		.returning();
+
+	return updated[0] || null;
+};
+
+const syncVulnerabilityCandidateResolvedRiskMetrics = async (
+	vulnerabilityCandidateId: string,
+) => {
+	const [candidate, latestAnalysisResult, latestVerificationResult] =
+		await Promise.all([
+			findVulnerabilityCandidateById(vulnerabilityCandidateId),
+			findLatestAnalysisResultByCandidateId(vulnerabilityCandidateId),
+			findLatestVerificationResultByCandidateId(vulnerabilityCandidateId),
+		]);
+
+	return await updateVulnerabilityCandidateRiskMetrics(vulnerabilityCandidateId, {
+		confidence:
+			typeof latestVerificationResult?.confidence === "number"
+				? latestVerificationResult.confidence
+				: typeof latestAnalysisResult?.confidence === "number"
+					? latestAnalysisResult.confidence
+					: candidate.confidence ?? undefined,
+		score:
+			typeof latestVerificationResult?.score === "number"
+				? latestVerificationResult.score
+				: typeof latestAnalysisResult?.score === "number"
+					? latestAnalysisResult.score
+					: candidate.score ?? undefined,
+	});
+};
+
 export const createAnalysisResult = async (input: {
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
 	result: string;
+	confidence?: number;
+	score?: number;
 	reportPath?: string;
 	runtimeSeconds?: number;
 	threadId?: string;
@@ -511,6 +1623,8 @@ export const createAnalysisResult = async (input: {
 			scanJobId: input.scanJobId,
 			vulnerabilityCandidateId: input.vulnerabilityCandidateId,
 			result: input.result,
+			confidence: input.confidence,
+			score: input.score,
 			reportPath: input.reportPath,
 			runtimeSeconds: input.runtimeSeconds,
 			threadId: input.threadId,
@@ -536,6 +1650,8 @@ export const findAnalysisResultsByScanJobId = async (scanJobId: string) =>
 			scanJobId: analysisResults.scanJobId,
 			vulnerabilityCandidateId: analysisResults.vulnerabilityCandidateId,
 			result: analysisResults.result,
+			confidence: analysisResults.confidence,
+			score: analysisResults.score,
 			reportPath: analysisResults.reportPath,
 			runtimeSeconds: analysisResults.runtimeSeconds,
 			threadId: analysisResults.threadId,
@@ -553,6 +1669,19 @@ export const findAnalysisResultsByScanJobId = async (scanJobId: string) =>
 		)
 		.where(eq(vulnerabilityCandidates.scanJobId, scanJobId))
 		.orderBy(desc(analysisResults.createdAt));
+
+const findLatestAnalysisResultByCandidateId = async (
+	vulnerabilityCandidateId: string,
+) => {
+	const result = await db
+		.select()
+		.from(analysisResults)
+		.where(eq(analysisResults.vulnerabilityCandidateId, vulnerabilityCandidateId))
+		.orderBy(desc(analysisResults.createdAt))
+		.limit(1);
+
+	return result[0] || null;
+};
 
 const deleteAnalysisResultsByCandidateId = async (
 	vulnerabilityCandidateId: string,
@@ -574,6 +1703,7 @@ export const createVerificationResult = async (input: {
 	isBug?: boolean;
 	isSecurity?: boolean;
 	confidence?: number;
+	score?: number;
 	reportPath?: string;
 	issueDraftPath?: string;
 	pocPath?: string;
@@ -592,6 +1722,7 @@ export const createVerificationResult = async (input: {
 			isBug: input.isBug,
 			isSecurity: input.isSecurity,
 			confidence: input.confidence,
+			score: input.score,
 			reportPath: input.reportPath,
 			issueDraftPath: input.issueDraftPath,
 			pocPath: input.pocPath,
@@ -624,6 +1755,7 @@ export const findVerificationResultsByScanJobId = async (scanJobId: string) =>
 			isBug: verificationResults.isBug,
 			isSecurity: verificationResults.isSecurity,
 			confidence: verificationResults.confidence,
+			score: verificationResults.score,
 			reportPath: verificationResults.reportPath,
 			issueDraftPath: verificationResults.issueDraftPath,
 			pocPath: verificationResults.pocPath,
@@ -645,6 +1777,24 @@ export const findVerificationResultsByScanJobId = async (scanJobId: string) =>
 		)
 		.where(eq(vulnerabilityCandidates.scanJobId, scanJobId))
 		.orderBy(desc(verificationResults.createdAt));
+
+const findLatestVerificationResultByCandidateId = async (
+	vulnerabilityCandidateId: string,
+) => {
+	const result = await db
+		.select()
+		.from(verificationResults)
+		.where(
+			eq(
+				verificationResults.vulnerabilityCandidateId,
+				vulnerabilityCandidateId,
+			),
+		)
+		.orderBy(desc(verificationResults.createdAt))
+		.limit(1);
+
+	return result[0] || null;
+};
 
 const deleteVerificationResultsByCandidateId = async (
 	vulnerabilityCandidateId: string,
@@ -710,7 +1860,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
     ca-certificates curl wget git jq unzip zip tar xz-utils file gnupg \\
     openssh-client ripgrep vim nano less rsync tree \\
     build-essential cmake ninja-build make autoconf automake libtool pkg-config \\
-    clang lldb lld gdb \\
+    clang clangd lldb lld gdb \\
     python3 python3-pip python3-venv \\
     pipx \\
     software-properties-common \\
@@ -727,12 +1877,38 @@ RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \\
 RUN PIPX_BIN_DIR=/usr/local/bin pipx install semgrep \
     && semgrep --version
 
+# Vulseek parsing helpers
+RUN python3 -m venv /opt/vulseek-venv \
+    && /opt/vulseek-venv/bin/pip install --upgrade pip \
+    && /opt/vulseek-venv/bin/pip install \
+      tree-sitter \
+      tree-sitter-c \
+      tree-sitter-cpp
+
+ENV PATH="/opt/vulseek-venv/bin:$PATH"
+
 # LLM Agent CLIs
 # Keep Claude non-fatal to avoid blocking build if registry/network fails.
 RUN npm install -g @anthropic-ai/claude-code || true
+# sandbox-agent is required by the experimental unified agent runtime.
+RUN npm install -g @sandbox-agent/cli@0.4.x \
+    && sandbox-agent --help >/dev/null
 # Codex CLI is required for scan agents.
 RUN npm install -g @openai/codex \
     && codex --version
+
+# Serena
+ENV PATH="/root/.local/bin:$PATH" \
+    UV_TOOL_BIN_DIR="/usr/local/bin"
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh \
+    && uv --version \
+    && uv tool install -p 3.13 serena-agent@latest --prerelease=allow \
+    && mkdir -p /root/.serena \
+    && serena init -b LSP \
+    && sed -i 's#^ls_specific_settings: {}#ls_specific_settings:\\n  cpp:\\n    ls_path: "/usr/bin/clangd"#' /root/.serena/serena_config.yml \
+    && sed -i 's#^ignored_paths: \\[\\]#ignored_paths:\\n- "/scan-context"\\n- "/scan-context/**"#' /root/.serena/serena_config.yml \
+    && sed -i 's#^project_serena_folder_location:.*#project_serena_folder_location: "/scan-context/.serena"#' /root/.serena/serena_config.yml \
+    && serena --help >/dev/null
 
 # CodeQL CLI
 RUN mkdir -p /opt/codeql \\
@@ -790,10 +1966,9 @@ const sanitizeForImageTag = (value: string) =>
 		.replace(/^-|-$/g, "")
 		.slice(0, 40) || "scan";
 
-const resolveCheckoutContext = async (
+export const resolveScanGitRepositoryContext = async (
 	input: typeof apiCheckoutScanEnvironment._type,
 ) => {
-	const dockerfileTemplate = buildScanDockerfileTemplate();
 	let gitUrl = "<GIT_URL>";
 	let gitBranch = "<GIT_BRANCH>";
 	let enableSubmodules = false;
@@ -922,6 +2097,21 @@ const resolveCheckoutContext = async (
 				gitBranch = "main";
 		}
 	}
+
+	return {
+		imageNameSeed,
+		gitUrl,
+		gitBranch,
+		enableSubmodules,
+	};
+};
+
+const resolveCheckoutContext = async (
+	input: typeof apiCheckoutScanEnvironment._type,
+) => {
+	const dockerfileTemplate = buildScanDockerfileTemplate();
+	const { imageNameSeed, gitUrl, gitBranch, enableSubmodules } =
+		await resolveScanGitRepositoryContext(input);
 
 	const imageTag = `vulseek-scan-${sanitizeForImageTag(imageNameSeed)}:latest`;
 	return {
@@ -1080,6 +2270,48 @@ export const findCheckoutImageStatus = async (
 };
 
 const escapeSingleQuotes = (value: string) => value.replace(/'/g, `'\"'\"'`);
+
+const buildNamespaceEnabledContainerArgs = () => {
+	const configured = process.env.VULSEEK_SCAN_CONTAINER_EXTRA_ARGS?.trim();
+	if (configured) {
+		return configured;
+	}
+
+	return [
+		"--security-opt seccomp=unconfined",
+		"--security-opt apparmor=unconfined",
+		"--cap-add SYS_ADMIN",
+	].join(" ");
+};
+
+let cachedCurrentDockerNetworkName: string | null | undefined;
+
+const resolveCurrentDockerNetworkName = async () => {
+	if (cachedCurrentDockerNetworkName !== undefined) {
+		return cachedCurrentDockerNetworkName;
+	}
+
+	try {
+		const { stdout } = await execAsync(
+			"docker inspect $(hostname) --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}'",
+		);
+		const networkName =
+			stdout
+				.split("\n")
+				.map((value) => value.trim())
+				.find((value) => value.length > 0) || null;
+		cachedCurrentDockerNetworkName = networkName;
+		return networkName;
+	} catch {
+		cachedCurrentDockerNetworkName = null;
+		return null;
+	}
+};
+
+const resolveCurrentDockerNetworkArg = async () => {
+	const networkName = await resolveCurrentDockerNetworkName();
+	return networkName ? `--network ${networkName}` : "";
+};
 const sanitizeContainerNamePart = (value: string) =>
 	value
 		.toLowerCase()
@@ -1110,6 +2342,44 @@ const buildCodexConfigToml = (agentProfile: AgentProfileLike) => {
 	].join("\n");
 };
 
+const loadCodexMcpConfigToml = async (agentsDir: string | null) => {
+	if (!agentsDir) {
+		return "";
+	}
+
+	const mcpDir = path.join(agentsDir, "mcp");
+	try {
+		const entries = await fs.readdir(mcpDir, { withFileTypes: true });
+		const tomlFiles = entries
+			.filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".toml"))
+			.map((entry) => entry.name)
+			.sort((left, right) => left.localeCompare(right));
+
+		if (tomlFiles.length === 0) {
+			return "";
+		}
+
+		const contents = await Promise.all(
+			tomlFiles.map((fileName) =>
+				fs.readFile(path.join(mcpDir, fileName), "utf-8"),
+			),
+		);
+
+		return contents
+			.map((content) => content.trim())
+			.filter(Boolean)
+			.join("\n\n");
+	} catch {
+		return "";
+	}
+};
+
+const joinTomlBlocks = (...blocks: Array<string | null | undefined>) =>
+	blocks
+		.map((block) => (block || "").trim())
+		.filter(Boolean)
+		.join("\n\n");
+
 const buildCodexAuthJson = (agentProfile: AgentProfileLike) =>
 	JSON.stringify(
 		{
@@ -1119,25 +2389,17 @@ const buildCodexAuthJson = (agentProfile: AgentProfileLike) =>
 		2,
 	);
 
-const isAnthropicHostedBaseUrl = (baseUrl: string) => {
-	try {
-		const url = new URL(baseUrl);
-		return /(^|\.)anthropic\.com$/i.test(url.hostname);
-	} catch {
-		return false;
-	}
-};
-
 const buildClaudeEnvPairs = (agentProfile: AgentProfileLike) => {
 	const envPairs = [
 		`ANTHROPIC_BASE_URL=${agentProfile.baseUrl}`,
+		`ANTHROPIC_API_KEY=${agentProfile.apiKey}`,
+		`ANTHROPIC_AUTH_TOKEN=${agentProfile.apiKey}`,
+		`ANTHROPIC_MODEL=${agentProfile.model}`,
+		`ANTHROPIC_DEFAULT_SONNET_MODEL=${agentProfile.model}`,
+		`ANTHROPIC_DEFAULT_OPUS_MODEL=${agentProfile.model}`,
+		`ANTHROPIC_DEFAULT_HAIKU_MODEL=${agentProfile.model}`,
 		`CLAUDE_CODE_ENTRYPOINT=dokploy-vulseek`,
 	];
-	if (isAnthropicHostedBaseUrl(agentProfile.baseUrl)) {
-		envPairs.push(`ANTHROPIC_API_KEY=${agentProfile.apiKey}`);
-	} else {
-		envPairs.push(`ANTHROPIC_AUTH_TOKEN=${agentProfile.apiKey}`);
-	}
 	return envPairs;
 };
 
@@ -1194,18 +2456,21 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 	const target = isApplicationJob
 		? await findApplicationById(scanJob.applicationId as string)
 		: await findComposeById(scanJob.composeId as string);
+	const targetDefaultAgentProfile =
+		("agentProfile" in target && target.agentProfile) ||
+		null;
 
 	const appName = target.appName;
 	const imageTag = toImageTagFromAppName(appName);
-	const contextVolumeName = target.environment.project.scanContextVolumeName;
 	const projectName = target.environment.project.name;
 	const serviceName = target.name || target.appName;
 	const projectProfileContextRoot = buildProjectProfileContextRoot();
 	const projectProfileCacheRoot = buildProjectProfileCacheRoot();
 
-	if (!contextVolumeName && !process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH?.trim()) {
+	const configuredHostRoot = resolveConfiguredScanContextHostPath();
+	if (!configuredHostRoot) {
 		throw new Error(
-			"Scan context storage is not configured for this project",
+			"Scan context host path is not configured. Restart dokploy-dev from dev.sh so /scan-context is mounted.",
 		);
 	}
 
@@ -1222,23 +2487,42 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 		target,
 		appName,
 		imageTag,
-		contextVolumeName,
+		contextVolumeName: target.environment.project.scanContextVolumeName,
 		projectName,
 		serviceName,
 		projectProfileContextRoot,
 		projectProfileCacheRoot,
 		scanAgentProfile:
 			("scanAgentProfile" in target && target.scanAgentProfile) ||
-			("agentProfile" in target ? target.agentProfile : null) ||
+			targetDefaultAgentProfile ||
 			null,
 		analysisAgentProfile:
 			("analysisAgentProfile" in target && target.analysisAgentProfile) ||
-			("agentProfile" in target ? target.agentProfile : null) ||
+			targetDefaultAgentProfile ||
 			null,
 		verifierAgentProfile:
 			("verifierAgentProfile" in target && target.verifierAgentProfile) ||
-			("agentProfile" in target ? target.agentProfile : null) ||
+			targetDefaultAgentProfile ||
 			null,
+		analysisConcurrency:
+			"analysisConcurrency" in target &&
+			typeof target.analysisConcurrency === "number"
+				? target.analysisConcurrency
+				: DEFAULT_ANALYSIS_CONCURRENCY,
+		verifyConcurrency:
+			"verifyConcurrency" in target && typeof target.verifyConcurrency === "number"
+				? target.verifyConcurrency
+				: DEFAULT_VERIFY_CONCURRENCY,
+		fullScanModuleConcurrency:
+			("fullScanModuleConcurrency" in target &&
+			typeof target.fullScanModuleConcurrency === "number"
+				? target.fullScanModuleConcurrency
+				: DEFAULT_FULL_SCAN_MODULE_CONCURRENCY),
+		fullScanFunctionConcurrency:
+			("fullScanFunctionConcurrency" in target &&
+			typeof target.fullScanFunctionConcurrency === "number"
+				? target.fullScanFunctionConcurrency
+				: DEFAULT_FULL_SCAN_FUNCTION_CONCURRENCY),
 	};
 };
 
@@ -1248,6 +2532,8 @@ const copyCodexAssetsToContainerHome = async (
 	agentsDir: string | null,
 	agentProfile?: AgentProfileLike | null,
 ) => {
+	const mcpConfigToml = await loadCodexMcpConfigToml(agentsDir);
+
 	await execAsync(
 		`docker exec ${containerName} bash -lc "mkdir -p '${codexHome}/skills'"`,
 	);
@@ -1263,7 +2549,7 @@ const copyCodexAssetsToContainerHome = async (
 			await writeContainerFile(
 				containerName,
 				`${codexHome}/config.toml`,
-				buildCodexConfigToml(agentProfile),
+				joinTomlBlocks(buildCodexConfigToml(agentProfile), mcpConfigToml),
 			);
 			await writeContainerFile(
 				containerName,
@@ -1280,11 +2566,21 @@ const copyCodexAssetsToContainerHome = async (
 
 	const codexConfigPath = path.join(agentsDir, "codex-config.toml");
 	try {
-		await fs.stat(codexConfigPath);
-		await execAsync(
-			`docker cp "${codexConfigPath}" ${containerName}:"${codexHome}/config.toml"`,
+		const baseConfigToml = await fs.readFile(codexConfigPath, "utf-8");
+		await writeContainerFile(
+			containerName,
+			`${codexHome}/config.toml`,
+			joinTomlBlocks(baseConfigToml, mcpConfigToml),
 		);
-	} catch {}
+	} catch {
+		if (mcpConfigToml) {
+			await writeContainerFile(
+				containerName,
+				`${codexHome}/config.toml`,
+				mcpConfigToml,
+			);
+		}
+	}
 
 	const codexAuthPath = path.join(agentsDir, "codex-auth.json");
 	try {
@@ -1295,9 +2591,6 @@ const copyCodexAssetsToContainerHome = async (
 	} catch {}
 };
 
-const resolveScanRuntimeBaseDir = () =>
-	path.resolve(process.cwd(), ".scan-runtime");
-
 const sanitizeContextPathPart = (value: string) =>
 	value
 		.trim()
@@ -1307,7 +2600,11 @@ const sanitizeContextPathPart = (value: string) =>
 		.replace(/-+/g, "-")
 		.replace(/^-|-$/g, "") || "default";
 
-const buildProjectProfileContextRoot = () => "/scan-context";
+const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
+
+const buildProjectProfileContextRoot = () => CONTAINER_SCAN_CONTEXT_ROOT;
+
+const toAgentVisiblePath = (containerPath: string) => containerPath;
 
 const buildProjectProfileCacheRoot = () =>
 	path.posix.join(buildProjectProfileContextRoot(), "cache");
@@ -1315,8 +2612,107 @@ const buildProjectProfileCacheRoot = () =>
 const buildScanJobContextRoot = (scanJobId: string) =>
 	path.posix.join(buildProjectProfileContextRoot(), "jobs", scanJobId);
 
+const buildScanCandidateResultPath = (scanJobId: string) =>
+	path.posix.join(
+		buildScanJobContextRoot(scanJobId),
+		"scanning",
+		"scan_candidates.json",
+	);
+
 const buildCandidateContextRoot = (scanJobId: string, candidateId: string) =>
 	path.posix.join(buildScanJobContextRoot(scanJobId), "candidates", candidateId);
+
+const buildCandidateAnalysisRoot = (scanJobId: string, candidateId: string) =>
+	path.posix.join(buildCandidateContextRoot(scanJobId, candidateId), "analysis");
+
+const buildCandidateVerifyRoot = (scanJobId: string, candidateId: string) =>
+	path.posix.join(buildCandidateContextRoot(scanJobId, candidateId), "verify");
+
+const buildCandidateAnalysisReportPath = (
+	scanJobId: string,
+	candidateId: string,
+) => path.posix.join(buildCandidateAnalysisRoot(scanJobId, candidateId), "01_report.md");
+
+const buildCandidateAnalysisResultPath = (
+	scanJobId: string,
+	candidateId: string,
+) =>
+	path.posix.join(
+		buildCandidateAnalysisRoot(scanJobId, candidateId),
+		"analysis_result.json",
+	);
+
+const buildCandidateVerificationArtifactPaths = (
+	scanJobId: string,
+	candidateId: string,
+) => {
+	const verifyRoot = buildCandidateVerifyRoot(scanJobId, candidateId);
+	return {
+		verifyRoot,
+		reportPath: `${verifyRoot}/01_verify_report.md`,
+		issueDraftPath: `${verifyRoot}/02_issue_draft.md`,
+		pocPath: `${verifyRoot}/03_poc/poc.txt`,
+		dockerfilePath: `${verifyRoot}/04_repro/Dockerfile`,
+		runScriptPath: `${verifyRoot}/04_repro/run.sh`,
+	};
+};
+
+const buildCandidateVerificationResultPath = (
+	scanJobId: string,
+	candidateId: string,
+) =>
+	path.posix.join(
+		buildCandidateVerifyRoot(scanJobId, candidateId),
+		"verification_result.json",
+	);
+
+const buildFullScanRoot = (scanJobId: string) =>
+	path.posix.join(buildScanJobContextRoot(scanJobId), "scanning", "full_scan");
+
+const buildFullScanRepositoryRoot = (scanJobId: string) =>
+	path.posix.join(buildFullScanRoot(scanJobId), "repository");
+
+const buildFullScanModulesRoot = (scanJobId: string) =>
+	path.posix.join(buildFullScanRoot(scanJobId), "modules");
+
+const buildFullScanModuleRoot = (scanJobId: string, moduleId: string) =>
+	path.posix.join(
+		buildFullScanModulesRoot(scanJobId),
+		sanitizeContextPathPart(moduleId),
+	);
+
+const buildFullScanFunctionRoot = (
+	scanJobId: string,
+	moduleId: string,
+	functionId: string,
+) =>
+	path.posix.join(
+		buildFullScanModuleRoot(scanJobId, moduleId),
+		"functions",
+		sanitizeContextPathPart(functionId),
+	);
+
+const buildFunctionScanResultPath = (
+	scanJobId: string,
+	moduleId: string,
+	functionId: string,
+) =>
+	path.posix.join(
+		buildFullScanFunctionRoot(scanJobId, moduleId, functionId),
+		"function_result.json",
+	);
+
+const buildMountedProjectProfileContextRoot = (
+	projectName: string,
+	profileName: string,
+) =>
+	path.join(
+		buildProjectProfileContextRoot(),
+		"projects",
+		sanitizeContextPathPart(projectName),
+		"profiles",
+		sanitizeContextPathPart(profileName),
+	);
 
 const buildHostProjectProfileContextRoot = (
 	hostRoot: string,
@@ -1331,42 +2727,36 @@ const buildHostProjectProfileContextRoot = (
 		sanitizeContextPathPart(profileName),
 	);
 
+const resolveConfiguredScanContextHostPath = () =>
+	process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH?.trim() || "";
+
 const resolveScanContextMount = async (input: {
 	contextVolumeName: string | null | undefined;
 	projectName: string;
 	profileName: string;
 }) => {
-	const configuredHostRoot =
-		process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH?.trim() || "";
-	if (configuredHostRoot) {
-		const hostProfileDir = buildHostProjectProfileContextRoot(
-			configuredHostRoot,
-			input.projectName,
-			input.profileName,
+	const configuredHostRoot = resolveConfiguredScanContextHostPath();
+	if (!configuredHostRoot) {
+		throw new Error(
+			"Scan context host path is not configured in process env DOKPLOY_SCAN_CONTEXT_HOST_PATH",
 		);
-		await fs.mkdir(hostProfileDir, { recursive: true });
-		return {
-			mountSource: hostProfileDir,
-			mountDescription: `host_path:${hostProfileDir}`,
-			dockerMountArg: `-v '${escapeSingleQuotes(hostProfileDir)}':/scan-context`,
-			usingHostPath: true,
-		};
 	}
 
-	if (!input.contextVolumeName) {
-		throw new Error("Scan context storage is not configured");
-	}
-
+	const hostProfileDir = buildHostProjectProfileContextRoot(
+		configuredHostRoot,
+		input.projectName,
+		input.profileName,
+	);
+	await fs.mkdir(hostProfileDir, { recursive: true });
 	return {
-		mountSource: input.contextVolumeName,
-		mountDescription: `volume:${input.contextVolumeName}`,
-		dockerMountArg: `-v ${input.contextVolumeName}:/scan-context`,
-		usingHostPath: false,
+		mountSource: hostProfileDir,
+		mountDescription: `host_path:${hostProfileDir}`,
+		dockerMountArg: `-v '${escapeSingleQuotes(hostProfileDir)}':${CONTAINER_SCAN_CONTEXT_ROOT}`,
 	};
 };
 
 const resolveScanRuntimeDir = (scanJobId: string) =>
-	path.join(resolveScanRuntimeBaseDir(), scanJobId);
+	path.join(buildProjectProfileContextRoot(), "jobs", scanJobId);
 
 const resolveScanJobScanningRuntimeDir = (scanJobId: string) =>
 	path.join(resolveScanRuntimeDir(scanJobId), "scanning");
@@ -1374,8 +2764,8 @@ const resolveScanJobScanningRuntimeDir = (scanJobId: string) =>
 const resolveCandidateRuntimeDir = (scanJobId: string, candidateId: string) =>
 	path.join(resolveScanRuntimeDir(scanJobId), "candidates", candidateId);
 
-export const getScanJobAppServerJsonlPath = (scanJobId: string) =>
-	path.join(resolveScanJobScanningRuntimeDir(scanJobId), "app-server-messages.jsonl");
+export const getScanJobAppServerJsonlPath = async (scanJobId: string) =>
+	path.join(await resolveScanJobArtifactsDir(scanJobId), "app-server-messages.jsonl");
 
 export const getScanJobAppServerTextPath = (scanJobId: string) =>
 	path.join(resolveScanJobScanningRuntimeDir(scanJobId), "app-server-text.log");
@@ -1383,14 +2773,14 @@ export const getScanJobAppServerTextPath = (scanJobId: string) =>
 export const getScanJobAppServerStderrPath = (scanJobId: string) =>
 	path.join(resolveScanJobScanningRuntimeDir(scanJobId), "app-server-stderr.log");
 
-export const getScanJobBridgeEventsPath = (scanJobId: string) =>
-	path.join(resolveScanJobScanningRuntimeDir(scanJobId), "bridge-events.jsonl");
-
-export const getCandidateAnalysisAppServerJsonlPath = (
+export const getCandidateAnalysisAppServerJsonlPath = async (
 	scanJobId: string,
 	candidateId: string,
 ) =>
-	path.join(resolveCandidateRuntimeDir(scanJobId, candidateId), "app-server-messages.jsonl");
+	path.join(
+		await resolveCandidateArtifactsDir(scanJobId, candidateId),
+		"app-server-messages.jsonl",
+	);
 
 export const getCandidateAnalysisAppServerTextPath = (
 	scanJobId: string,
@@ -1404,11 +2794,14 @@ export const getCandidateAnalysisAppServerStderrPath = (
 ) =>
 	path.join(resolveCandidateRuntimeDir(scanJobId, candidateId), "app-server-stderr.log");
 
-export const getCandidateVerifierAppServerJsonlPath = (
+export const getCandidateVerifierAppServerJsonlPath = async (
 	scanJobId: string,
 	candidateId: string,
 ) =>
-	path.join(resolveCandidateRuntimeDir(scanJobId, candidateId), "verify-app-server-messages.jsonl");
+	path.join(
+		await resolveCandidateArtifactsDir(scanJobId, candidateId),
+		"verify-app-server-messages.jsonl",
+	);
 
 export const getCandidateVerifierAppServerTextPath = (
 	scanJobId: string,
@@ -1422,64 +2815,417 @@ export const getCandidateVerifierAppServerStderrPath = (
 ) =>
 	path.join(resolveCandidateRuntimeDir(scanJobId, candidateId), "verify-app-server-stderr.log");
 
-const resetScanRuntimeFiles = async (scanJobId: string) => {
-	await fs.mkdir(resolveScanJobScanningRuntimeDir(scanJobId), { recursive: true });
+export const getModuleScannerAppServerJsonlPath = async (
+	scanJobId: string,
+	moduleId: string,
+) =>
+	path.join(
+		await resolveModuleArtifactsDir(scanJobId, moduleId),
+		"app-server-messages.jsonl",
+	);
+
+export const getFunctionScannerAppServerJsonlPath = async (
+	scanJobId: string,
+	moduleId: string,
+	functionId: string,
+) =>
+	path.join(
+		await resolveFunctionArtifactsDir(scanJobId, moduleId, functionId),
+		"app-server-messages.jsonl",
+	);
+
+const resolveScanJobTargetIdentity = async (scanJob: ScanJob) => {
+	if (scanJob.applicationId) {
+		const application = await findApplicationById(scanJob.applicationId);
+		return {
+			projectName: application.environment.project.name,
+			profileName: application.name || application.appName,
+		};
+	}
+
+	if (scanJob.composeId) {
+		const compose = await findComposeById(scanJob.composeId);
+		return {
+			projectName: compose.environment.project.name,
+			profileName: compose.name || compose.appName,
+		};
+	}
+
+	throw new Error("Invalid scan job target");
+};
+
+const resolveProjectProfileHostContextRootByScanJob = async (scanJob: ScanJob) => {
+	const { projectName, profileName } =
+		await resolveScanJobTargetIdentity(scanJob);
+	const mountedProfileDir = buildMountedProjectProfileContextRoot(
+		projectName,
+		profileName,
+	);
+
+	try {
+		await fs.access(mountedProfileDir);
+		return mountedProfileDir;
+	} catch {}
+
+	const configuredHostRoot = resolveConfiguredScanContextHostPath();
+	if (!configuredHostRoot) {
+		throw new Error(
+			"Scan context host path is not configured in process env DOKPLOY_SCAN_CONTEXT_HOST_PATH",
+		);
+	}
+
+	const hostProfileDir = buildHostProjectProfileContextRoot(
+		configuredHostRoot,
+		projectName,
+		profileName,
+	);
+	await fs.mkdir(hostProfileDir, { recursive: true });
+	return hostProfileDir;
+};
+
+const resolveRequiredProjectProfileHostContextRootByScanJob = async (
+	scanJob: ScanJob,
+) => {
+	const projectProfileHostContextRoot =
+		await resolveProjectProfileHostContextRootByScanJob(scanJob);
+	return projectProfileHostContextRoot;
+};
+
+type ScanJobFileTreeItem = {
+	id: string;
+	name: string;
+	type: "file" | "directory";
+	children?: ScanJobFileTreeItem[];
+};
+
+const resolveScanJobArtifactsDir = async (scanJobId: string) => {
+	const scanJob = await findScanJobById(scanJobId);
+	const projectProfileHostContextRoot =
+		await resolveRequiredProjectProfileHostContextRootByScanJob(scanJob);
+	return path.join(projectProfileHostContextRoot, "jobs", scanJobId, "scanning");
+};
+
+const resolveCandidateArtifactsDir = async (
+	scanJobId: string,
+	candidateId: string,
+) => {
+	const scanJob = await findScanJobById(scanJobId);
+	const projectProfileHostContextRoot =
+		await resolveRequiredProjectProfileHostContextRootByScanJob(scanJob);
+	return path.join(
+		projectProfileHostContextRoot,
+		"jobs",
+		scanJobId,
+		"candidates",
+		candidateId,
+	);
+};
+
+const resolveFullScanRootDir = async (scanJobId: string) =>
+	path.join(await resolveScanJobArtifactsDir(scanJobId), "full_scan");
+
+const resolveModuleArtifactsDir = async (
+	scanJobId: string,
+	moduleId: string,
+) =>
+	path.join(
+		await resolveFullScanRootDir(scanJobId),
+		"modules",
+		sanitizeContextPathPart(moduleId),
+	);
+
+const resolveFunctionArtifactsDir = async (
+	scanJobId: string,
+	moduleId: string,
+	functionId: string,
+) =>
+	path.join(
+		await resolveModuleArtifactsDir(scanJobId, moduleId),
+		"functions",
+		sanitizeContextPathPart(functionId),
+	);
+
+const resolveLiveScanJobArtifactsDir = (input: {
+	scanContextMount: Awaited<ReturnType<typeof resolveScanContextMount>>;
+	scanJobId: string;
+	projectName: string;
+	profileName: string;
+}) =>
+	path.join(
+		buildMountedProjectProfileContextRoot(input.projectName, input.profileName),
+		"jobs",
+		input.scanJobId,
+		"scanning",
+	);
+
+const resolveLiveCandidateArtifactsDir = (input: {
+	scanContextMount: Awaited<ReturnType<typeof resolveScanContextMount>>;
+	scanJobId: string;
+	candidateId: string;
+	projectName: string;
+	profileName: string;
+}) =>
+	path.join(
+		buildMountedProjectProfileContextRoot(input.projectName, input.profileName),
+		"jobs",
+		input.scanJobId,
+		"candidates",
+		input.candidateId,
+	);
+
+const initializeRuntimeFiles = async (input: {
+	runtimeDir: string;
+	jsonlPath: string;
+	textPath: string;
+	stderrPath: string;
+}) => {
+	await fs.mkdir(input.runtimeDir, { recursive: true });
 	await Promise.all([
-		fs.writeFile(getScanJobAppServerJsonlPath(scanJobId), "", "utf-8"),
-		fs.writeFile(getScanJobAppServerTextPath(scanJobId), "", "utf-8"),
-		fs.writeFile(getScanJobAppServerStderrPath(scanJobId), "", "utf-8"),
-		fs.writeFile(getScanJobBridgeEventsPath(scanJobId), "", "utf-8"),
+		fs.writeFile(input.jsonlPath, "", "utf-8"),
+		fs.writeFile(input.textPath, "", "utf-8"),
+		fs.writeFile(input.stderrPath, "", "utf-8"),
 	]);
+};
+
+const initializeCodexRuntimeMetadataFiles = async (input: {
+	cursorPath: string;
+	statePath: string;
+}) => {
+	await Promise.all([
+		fs.writeFile(
+			input.cursorPath,
+			JSON.stringify(createEmptyCodexRuntimeCursorState()),
+			"utf-8",
+		),
+		fs.writeFile(input.statePath, "{}", "utf-8"),
+	]);
+};
+
+const initializeRuntimeFilesInContainer = async (input: {
+	containerName: string;
+	runtimeDirInContainer: string;
+	jsonlFileName: string;
+	textFileName: string;
+	stderrFileName: string;
+}) => {
+	await execAsync(
+		`docker exec ${input.containerName} bash -lc "mkdir -p '${input.runtimeDirInContainer}' && : > '${input.runtimeDirInContainer}/${input.jsonlFileName}' && : > '${input.runtimeDirInContainer}/${input.textFileName}' && : > '${input.runtimeDirInContainer}/${input.stderrFileName}'"`,
+	);
+};
+
+const initializeCodexRuntimeMetadataFilesInContainer = async (input: {
+	containerName: string;
+	runtimeDirInContainer: string;
+	cursorFileName: string;
+	stateFileName: string;
+}) => {
+	await writeContainerFile(
+		input.containerName,
+		path.posix.join(input.runtimeDirInContainer, input.cursorFileName),
+		JSON.stringify(createEmptyCodexRuntimeCursorState()),
+	);
+	await execAsync(
+		`docker exec ${input.containerName} bash -lc "mkdir -p '${input.runtimeDirInContainer}' && : > '${input.runtimeDirInContainer}/${input.stateFileName}'"`,
+	);
+};
+
+const resetScanRuntimeFiles = async (scanJobId: string) => {
+	const runtimeDir = await resolveScanJobArtifactsDir(scanJobId);
+	const jsonlPath = path.join(runtimeDir, "app-server-messages.jsonl");
+	const textPath = path.join(runtimeDir, "app-server-text.log");
+	const stderrPath = path.join(runtimeDir, "app-server-stderr.log");
+	await initializeRuntimeFiles({ runtimeDir, jsonlPath, textPath, stderrPath });
 };
 
 export const resetCandidateAnalysisRuntimeFiles = async (
 	scanJobId: string,
 	candidateId: string,
 ) => {
-	const runtimeDir = resolveCandidateRuntimeDir(scanJobId, candidateId);
-	await fs.mkdir(runtimeDir, { recursive: true });
-	await Promise.all([
-		fs.writeFile(
-			getCandidateAnalysisAppServerJsonlPath(scanJobId, candidateId),
-			"",
-			"utf-8",
-		),
-		fs.writeFile(
-			getCandidateAnalysisAppServerTextPath(scanJobId, candidateId),
-			"",
-			"utf-8",
-		),
-		fs.writeFile(
-			getCandidateAnalysisAppServerStderrPath(scanJobId, candidateId),
-			"",
-			"utf-8",
-		),
-	]);
+	const runtimeDir = await resolveCandidateArtifactsDir(scanJobId, candidateId);
+	await initializeRuntimeFiles({
+		runtimeDir,
+		jsonlPath: path.join(runtimeDir, "app-server-messages.jsonl"),
+		textPath: path.join(runtimeDir, "app-server-text.log"),
+		stderrPath: path.join(runtimeDir, "app-server-stderr.log"),
+	});
 };
 
 export const resetCandidateVerifierRuntimeFiles = async (
 	scanJobId: string,
 	candidateId: string,
 ) => {
-	const runtimeDir = resolveCandidateRuntimeDir(scanJobId, candidateId);
-	await fs.mkdir(runtimeDir, { recursive: true });
-	await Promise.all([
-		fs.writeFile(
-			getCandidateVerifierAppServerJsonlPath(scanJobId, candidateId),
-			"",
-			"utf-8",
-		),
-		fs.writeFile(
-			getCandidateVerifierAppServerTextPath(scanJobId, candidateId),
-			"",
-			"utf-8",
-		),
-		fs.writeFile(
-			getCandidateVerifierAppServerStderrPath(scanJobId, candidateId),
-			"",
-			"utf-8",
-		),
-	]);
+	const runtimeDir = await resolveCandidateArtifactsDir(scanJobId, candidateId);
+	await initializeRuntimeFiles({
+		runtimeDir,
+		jsonlPath: path.join(runtimeDir, "verify-app-server-messages.jsonl"),
+		textPath: path.join(runtimeDir, "verify-app-server-text.log"),
+		stderrPath: path.join(runtimeDir, "verify-app-server-stderr.log"),
+	});
+};
+
+const resolveScanJobBrowsableRoot = async (scanJobId: string) => {
+	const scanJob = await findScanJobById(scanJobId);
+	const projectProfileHostContextRoot =
+		await resolveRequiredProjectProfileHostContextRootByScanJob(scanJob);
+	return path.join(projectProfileHostContextRoot, "jobs", scanJobId);
+};
+
+const assertWithinDirectory = (rootPath: string, targetPath: string) => {
+	const resolvedRoot = path.resolve(rootPath);
+	const resolvedTarget = path.resolve(targetPath);
+	const relativePath = path.relative(resolvedRoot, resolvedTarget);
+	if (relativePath === ".." || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+		throw new TRPCError({ code: "UNAUTHORIZED", message: "File path is outside the scan job context" });
+	}
+};
+
+const resolveBrowsableFilePath = (input: {
+	rootPath: string;
+	filePath: string;
+	containerRootPath: string;
+}) => {
+	const normalizedInput = input.filePath.trim();
+	if (!normalizedInput) {
+		throw new TRPCError({ code: "BAD_REQUEST", message: "File path is required" });
+	}
+
+	if (path.isAbsolute(normalizedInput)) {
+		if (
+			normalizedInput === input.containerRootPath ||
+			normalizedInput.startsWith(`${input.containerRootPath}/`)
+		) {
+			const relativePath = path.posix.relative(
+				input.containerRootPath,
+				normalizedInput,
+			);
+			return path.join(input.rootPath, relativePath);
+		}
+		return path.resolve(normalizedInput);
+	}
+
+	return path.join(input.rootPath, normalizedInput);
+};
+
+const buildFileTreeItems = async (dirPath: string): Promise<ScanJobFileTreeItem[]> => {
+	const entries = await fs.readdir(dirPath, { withFileTypes: true });
+	const sortedEntries = entries.sort((left, right) => {
+		if (left.isDirectory() && !right.isDirectory()) return -1;
+		if (!left.isDirectory() && right.isDirectory()) return 1;
+		return left.name.localeCompare(right.name);
+	});
+	return await Promise.all(sortedEntries.map(async (entry) => {
+		const fullPath = path.join(dirPath, entry.name);
+		if (entry.isDirectory()) {
+			return { id: fullPath, name: entry.name, type: "directory" as const, children: await buildFileTreeItems(fullPath) };
+		}
+		return { id: fullPath, name: entry.name, type: "file" as const };
+	}));
+};
+
+const shouldHideScanJobBrowsableEntry = (entryName: string) => entryName === ".codex";
+
+export const listScanJobDirectory = async (input: {
+	scanJobId: string;
+	directoryPath?: string;
+}) => {
+	const rootPath = await resolveScanJobBrowsableRoot(input.scanJobId);
+	try {
+		await fs.access(rootPath);
+	} catch {
+		return [];
+	}
+
+	const requestedDirectory = (input.directoryPath || "").trim();
+	const targetDirectoryPath = requestedDirectory
+		? resolveBrowsableFilePath({
+				rootPath,
+				filePath: requestedDirectory,
+				containerRootPath: path.posix.join(buildScanJobContextRoot(input.scanJobId)),
+			})
+		: rootPath;
+
+	assertWithinDirectory(rootPath, targetDirectoryPath);
+	const stat = await fs.stat(targetDirectoryPath).catch(() => null);
+	if (!stat || !stat.isDirectory()) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Directory not found" });
+	}
+
+	const entries = await fs.readdir(targetDirectoryPath, { withFileTypes: true });
+	const visibleEntries = entries.filter(
+		(entry) => !shouldHideScanJobBrowsableEntry(entry.name),
+	);
+	const sortedEntries = visibleEntries.sort((left, right) => {
+		if (left.isDirectory() && !right.isDirectory()) return -1;
+		if (!left.isDirectory() && right.isDirectory()) return 1;
+		return left.name.localeCompare(right.name);
+	});
+
+	return await Promise.all(
+		sortedEntries.map(async (entry) => {
+			const fullPath = path.join(targetDirectoryPath, entry.name);
+			if (entry.isDirectory()) {
+				const children = await fs.readdir(fullPath, { withFileTypes: true }).catch(() => []);
+				const hasChildren = children.some(
+					(child) => !shouldHideScanJobBrowsableEntry(child.name),
+				);
+				return {
+					id: fullPath,
+					name: entry.name,
+					type: "directory" as const,
+					hasChildren,
+				};
+			}
+
+			return {
+				id: fullPath,
+				name: entry.name,
+				type: "file" as const,
+				hasChildren: false,
+			};
+		}),
+	);
+};
+
+export const readScanJobFileContent = async (input: { scanJobId: string; filePath: string; }) => {
+	const rootPath = await resolveScanJobBrowsableRoot(input.scanJobId);
+	const targetPath = resolveBrowsableFilePath({
+		rootPath,
+		filePath: input.filePath,
+		containerRootPath: path.posix.join(buildScanJobContextRoot(input.scanJobId)),
+	});
+	assertWithinDirectory(rootPath, targetPath);
+	const stat = await fs.stat(targetPath).catch(() => null);
+	if (!stat || !stat.isFile()) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "File not found" });
+	}
+	const content = await fs.readFile(targetPath, "utf-8");
+	return { path: targetPath, relativePath: path.relative(rootPath, targetPath), content };
+};
+
+export const readCandidateFilesTree = async (input: { scanJobId: string; candidateId: string; }) => {
+	const rootPath = await resolveCandidateArtifactsDir(input.scanJobId, input.candidateId);
+	try {
+		await fs.access(rootPath);
+	} catch {
+		return [];
+	}
+	return await buildFileTreeItems(rootPath);
+};
+
+export const readCandidateFileContent = async (input: { scanJobId: string; candidateId: string; filePath: string; }) => {
+	const rootPath = await resolveCandidateArtifactsDir(input.scanJobId, input.candidateId);
+	const targetPath = resolveBrowsableFilePath({
+		rootPath,
+		filePath: input.filePath,
+		containerRootPath: buildCandidateContextRoot(input.scanJobId, input.candidateId),
+	});
+	assertWithinDirectory(rootPath, targetPath);
+	const stat = await fs.stat(targetPath).catch(() => null);
+	if (!stat || !stat.isFile()) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "File not found" });
+	}
+	const content = await fs.readFile(targetPath, "utf-8");
+	return { path: targetPath, relativePath: path.relative(rootPath, targetPath), content };
 };
 
 const appendScanRuntimeFile = async (filePath: string, chunk: string) => {
@@ -1487,16 +3233,483 @@ const appendScanRuntimeFile = async (filePath: string, chunk: string) => {
 	await fs.appendFile(filePath, chunk, "utf-8");
 };
 
-export const readScanJobAppServerMessages = async (
-	scanJobId: string,
-): Promise<JsonRpcMessage[]> => {
+const formatJsonRpcRuntimeLine = (line: string) => {
+	const trimmed = line.trim();
+	if (!trimmed) {
+		return "";
+	}
+
 	try {
-		const file = await fs.readFile(getScanJobAppServerJsonlPath(scanJobId), "utf-8");
-		return file
-			.split("\n")
-			.map((line) => line.trim())
-			.filter(Boolean)
-			.map((line) => JSON.parse(line) as JsonRpcMessage);
+		const parsed = JSON.parse(trimmed) as unknown;
+		if (
+			parsed &&
+			typeof parsed === "object" &&
+			"message" in parsed &&
+			typeof (parsed as Record<string, unknown>).message === "object"
+		) {
+			return `${trimmed}\n`;
+		}
+		return `${JSON.stringify({
+			timestamp: new Date().toISOString(),
+			message: parsed,
+		})}\n`;
+	} catch {
+		return `${trimmed}\n`;
+	}
+};
+
+const formatJsonRpcRuntimeMessage = (
+	message: JsonRpcMessage,
+	timestamp?: string,
+) =>
+	`${JSON.stringify({
+		timestamp: timestamp || new Date().toISOString(),
+		message,
+	})}\n`;
+
+const isJsonRpcLikeMessage = (value: unknown): value is JsonRpcMessage => {
+	if (!value || typeof value !== "object") {
+		return false;
+	}
+
+	const record = value as Record<string, unknown>;
+	return (
+		typeof record.method === "string" ||
+		"result" in record ||
+		"error" in record
+	);
+};
+
+const buildSandboxAgentTextDeltaMessage = (
+	itemId: string,
+	text: string,
+	method:
+		| "item/agentMessage/delta"
+		| "item/reasoning/textDelta"
+		| "item/plan/delta"
+		| "item/commandExecution/outputDelta" = "item/agentMessage/delta",
+): JsonRpcMessage => {
+	if (method === "item/plan/delta") {
+		return {
+			method,
+			params: {
+				delta: text,
+			},
+		};
+	}
+
+	if (method === "item/reasoning/textDelta") {
+		return {
+			method,
+			params: {
+				itemId,
+				textDelta: text,
+			},
+		};
+	}
+
+	if (method === "item/commandExecution/outputDelta") {
+		return {
+			method,
+			params: {
+				itemId,
+				outputDelta: text,
+			},
+		};
+	}
+
+	return {
+		method,
+		params: {
+			itemId,
+			delta: text,
+		},
+	};
+};
+
+const normalizeSandboxAgentPayloadToJsonRpc = (input: {
+	payload: unknown;
+	fallbackItemId: string;
+}): {
+	messages: JsonRpcMessage[];
+} => {
+	if (isJsonRpcLikeMessage(input.payload)) {
+		const message = input.payload;
+		return {
+			messages: [message],
+		};
+	}
+
+	const payloadRecord = asRecord(input.payload) || {};
+	const universalType = asString(payloadRecord.type) || "";
+	const universalData = asRecord(payloadRecord.data);
+	if (universalType) {
+		switch (universalType) {
+			case "turn.started":
+				return {
+					messages: [{ method: "turn/started", params: universalData || {} }],
+				};
+			case "turn.ended":
+				return {
+					messages: [
+						{
+							method: "turn/completed",
+							params:
+								universalData || {
+								turn: "completed",
+								},
+						},
+					],
+				};
+			case "item.delta": {
+				const delta = asRecord(universalData?.delta) || universalData || {};
+				const text = extractTextValue(delta) || "";
+				if (!text) {
+					return { messages: [] };
+				}
+				const deltaType = asString(delta.type) || "";
+				const itemId =
+					asString(universalData?.item_id) ||
+					asString(universalData?.itemId) ||
+					input.fallbackItemId;
+				if (/reason/i.test(deltaType)) {
+					return {
+						messages: [
+							buildSandboxAgentTextDeltaMessage(
+								itemId,
+								text,
+								"item/reasoning/textDelta",
+							),
+						],
+					};
+				}
+				if (/plan/i.test(deltaType)) {
+					return {
+						messages: [
+							buildSandboxAgentTextDeltaMessage(
+								itemId,
+								text,
+								"item/plan/delta",
+							),
+						],
+					};
+				}
+				if (/tool|command/i.test(deltaType)) {
+					return {
+						messages: [
+							buildSandboxAgentTextDeltaMessage(
+								itemId,
+								text,
+								"item/commandExecution/outputDelta",
+							),
+						],
+					};
+				}
+				return {
+					messages: [buildSandboxAgentTextDeltaMessage(itemId, text)],
+				};
+			}
+			case "item.completed": {
+				const item =
+					asRecord(universalData?.item) || universalData || {};
+				const text = extractTextValue(item) || "";
+				return {
+					messages: text
+						? [
+								{
+									method: "item/completed",
+									params: {
+										item: {
+											id:
+												asString(item.item_id) ||
+												asString(item.id) ||
+												input.fallbackItemId,
+											type: "agentMessage",
+											text,
+										},
+									},
+								},
+							]
+						: [],
+				};
+			}
+			case "error":
+				return {
+					messages: [
+						{
+							method: "error",
+							params: {
+								error: universalData || payloadRecord,
+							},
+						},
+					],
+				};
+			default: {
+				const text = extractTextValue(universalData) || "";
+				if (!text) {
+					return { messages: [] };
+				}
+				return {
+					messages: [
+						buildSandboxAgentTextDeltaMessage(
+							input.fallbackItemId,
+							text,
+						),
+					],
+				};
+			}
+		}
+	}
+
+	const update =
+		asRecord(payloadRecord.sessionUpdate) ||
+		asRecord(payloadRecord.update) ||
+		payloadRecord;
+	const updateType =
+		asString(update.type) || asString(update.kind) || "";
+
+	switch (updateType) {
+		case "turn_started":
+		case "turn.started":
+			return {
+				messages: [{ method: "turn/started", params: update }],
+			};
+		case "turn_ended":
+		case "turn_completed":
+		case "turn.ended":
+			return {
+				messages: [{ method: "turn/completed", params: update }],
+			};
+		case "agent_thought_chunk":
+			return {
+				messages: [
+					buildSandboxAgentTextDeltaMessage(
+						input.fallbackItemId,
+						extractTextValue(update) || "",
+						"item/reasoning/textDelta",
+					),
+				].filter((message) => Boolean(extractTextValue(message.params))),
+			};
+		case "tool_call":
+		case "tool_call_update": {
+			const updateStatus = (asString(update.status) || "").toLowerCase();
+			const toolCallErrorMessage =
+				extractTurnErrorMessage(update) ||
+				extractTurnErrorMessage(asRecord(update.rawOutput)) ||
+				extractTurnErrorMessage(asRecord(update.content));
+			if (
+				updateStatus === "failed" ||
+				updateStatus === "error" ||
+				asBoolean(update.isError)
+			) {
+				return {
+					messages: [
+						{
+							method: "error",
+							params: {
+								error: {
+									message:
+										toolCallErrorMessage ||
+										`${asString(update.title) || asString(update.name) || "Tool call"} failed`,
+								},
+							},
+						},
+					],
+				};
+			}
+			const text =
+				extractTextValue(update) ||
+				asString(update.title) ||
+				asString(update.name) ||
+				"";
+			return text
+				? {
+						messages: [
+							buildSandboxAgentTextDeltaMessage(
+								input.fallbackItemId,
+								text,
+								"item/commandExecution/outputDelta",
+							),
+						],
+					}
+				: { messages: [] };
+		}
+		case "plan_chunk":
+			return {
+				messages: [
+					buildSandboxAgentTextDeltaMessage(
+						input.fallbackItemId,
+						extractTextValue(update) || "",
+						"item/plan/delta",
+					),
+				].filter((message) => Boolean(extractTextValue(message.params))),
+			};
+		case "error":
+			return {
+				messages: [
+					{
+						method: "error",
+						params: {
+							error: update,
+						},
+					},
+				],
+			};
+		default: {
+			const text = extractTextValue(update) || "";
+			if (!text) {
+				return { messages: [] };
+			}
+			return {
+				messages: [
+					buildSandboxAgentTextDeltaMessage(
+						input.fallbackItemId,
+						text,
+					),
+				],
+			};
+		}
+	}
+};
+
+const parseJsonRpcMessageLine = (
+	raw: string,
+): { timestamp?: string; message: JsonRpcMessage } => {
+	const parsed = JSON.parse(raw) as unknown;
+	if (
+		parsed &&
+		typeof parsed === "object" &&
+		"message" in parsed &&
+		(parsed as Record<string, unknown>).message &&
+		typeof (parsed as Record<string, unknown>).message === "object"
+	) {
+		return {
+			timestamp: asString((parsed as Record<string, unknown>).timestamp),
+			message: (parsed as Record<string, unknown>).message as JsonRpcMessage,
+		};
+	}
+
+	return {
+		message: parsed as JsonRpcMessage,
+	};
+};
+
+const parseJsonRpcMessagesWithLineNumbers = (
+	file: string,
+): JsonRpcMessageWithLine[] =>
+	file
+		.split("\n")
+		.map((line, index) => ({ raw: line.trim(), line: index + 1 }))
+		.filter((entry) => Boolean(entry.raw))
+		.map((entry) => {
+			const parsed = parseJsonRpcMessageLine(entry.raw);
+			return {
+				line: entry.line,
+				timestamp: parsed.timestamp,
+				message: parsed.message,
+			};
+		});
+
+const STATUS_VIEW_STREAM_MAX_MESSAGES = 160;
+const STATUS_VIEW_STREAM_TAIL_MAX_BYTES = 512 * 1024;
+
+const readJsonRpcMessagesWithLineNumbersTail = async (
+	filePath: string,
+	options?: {
+		maxMessages?: number;
+		maxBytes?: number;
+	},
+): Promise<JsonRpcMessageWithLine[]> => {
+	const maxMessages = Math.max(1, options?.maxMessages ?? STATUS_VIEW_STREAM_MAX_MESSAGES);
+	const maxBytes = Math.max(4096, options?.maxBytes ?? STATUS_VIEW_STREAM_TAIL_MAX_BYTES);
+
+	try {
+		const stat = await fs.stat(filePath);
+		const readFrom = Math.max(0, stat.size - maxBytes);
+		const handle = await fs.open(filePath, "r");
+		try {
+			const length = stat.size - readFrom;
+			if (length <= 0) {
+				return [];
+			}
+
+			const buffer = Buffer.alloc(length);
+			await handle.read(buffer, 0, length, readFrom);
+			let content = buffer.toString("utf-8");
+			if (readFrom > 0) {
+				const firstNewlineIndex = content.indexOf("\n");
+				content =
+					firstNewlineIndex >= 0 ? content.slice(firstNewlineIndex + 1) : "";
+			}
+
+			return parseJsonRpcMessagesWithLineNumbers(content).slice(-maxMessages);
+		} finally {
+			await handle.close();
+		}
+	} catch {
+		return [];
+	}
+};
+
+type CodexRuntimeArtifacts = {
+	jsonlPath: string;
+	textPath: string;
+	stderrPath: string;
+	cursorPath: string;
+	statePath: string;
+	jsonlFileName: string;
+	textFileName: string;
+	stderrFileName: string;
+	cursorFileName: string;
+	stateFileName: string;
+};
+
+type CodexRuntimeCursorState = {
+	offset: number;
+	line: number;
+	agentMessageBuffers: Record<string, string>;
+};
+
+const createCodexRuntimeArtifacts = (input: {
+	runtimeDir: string;
+	jsonlFileName: string;
+	textFileName: string;
+	stderrFileName: string;
+}) => {
+	const runtimeBase = input.jsonlFileName.replace(/\.jsonl$/i, "");
+	return {
+		jsonlPath: path.join(input.runtimeDir, input.jsonlFileName),
+		textPath: path.join(input.runtimeDir, input.textFileName),
+		stderrPath: path.join(input.runtimeDir, input.stderrFileName),
+		cursorPath: path.join(input.runtimeDir, `.${runtimeBase}-cursor.json`),
+		statePath: path.join(input.runtimeDir, `.${runtimeBase}-state.json`),
+		jsonlFileName: input.jsonlFileName,
+		textFileName: input.textFileName,
+		stderrFileName: input.stderrFileName,
+		cursorFileName: `.${runtimeBase}-cursor.json`,
+		stateFileName: `.${runtimeBase}-state.json`,
+	} satisfies CodexRuntimeArtifacts;
+};
+
+const createEmptyCodexRuntimeCursorState = (): CodexRuntimeCursorState => ({
+	offset: 0,
+	line: 0,
+	agentMessageBuffers: {},
+});
+
+const readCandidateAnalysisAppServerMessagesWithLineNumbers = async (
+	scanJobId: string,
+	candidateId: string,
+): Promise<JsonRpcMessageWithLine[]> => {
+	try {
+		const file = await fs.readFile(
+			path.join(
+				await resolveCandidateArtifactsDir(scanJobId, candidateId),
+				"app-server-messages.jsonl",
+			),
+			"utf-8",
+		);
+		return parseJsonRpcMessagesWithLineNumbers(file);
 	} catch {
 		return [];
 	}
@@ -1505,17 +3718,27 @@ export const readScanJobAppServerMessages = async (
 const readCandidateAnalysisAppServerMessages = async (
 	scanJobId: string,
 	candidateId: string,
-): Promise<JsonRpcMessage[]> => {
+): Promise<JsonRpcMessage[]> =>
+	(
+		await readCandidateAnalysisAppServerMessagesWithLineNumbers(
+			scanJobId,
+			candidateId,
+		)
+	).map((entry) => entry.message);
+
+const readCandidateVerifierAppServerMessagesWithLineNumbers = async (
+	scanJobId: string,
+	candidateId: string,
+): Promise<JsonRpcMessageWithLine[]> => {
 	try {
 		const file = await fs.readFile(
-			getCandidateAnalysisAppServerJsonlPath(scanJobId, candidateId),
+			path.join(
+				await resolveCandidateArtifactsDir(scanJobId, candidateId),
+				"verify-app-server-messages.jsonl",
+			),
 			"utf-8",
 		);
-		return file
-			.split("\n")
-			.map((line) => line.trim())
-			.filter(Boolean)
-			.map((line) => JSON.parse(line) as JsonRpcMessage);
+		return parseJsonRpcMessagesWithLineNumbers(file);
 	} catch {
 		return [];
 	}
@@ -1524,25 +3747,109 @@ const readCandidateAnalysisAppServerMessages = async (
 const readCandidateVerifierAppServerMessages = async (
 	scanJobId: string,
 	candidateId: string,
-): Promise<JsonRpcMessage[]> => {
+): Promise<JsonRpcMessage[]> =>
+	(
+		await readCandidateVerifierAppServerMessagesWithLineNumbers(
+			scanJobId,
+			candidateId,
+		)
+	).map((entry) => entry.message);
+
+const readModuleScannerAppServerMessagesWithLineNumbers = async (
+	scanJobId: string,
+	moduleId: string,
+): Promise<JsonRpcMessageWithLine[]> => {
 	try {
 		const file = await fs.readFile(
-			getCandidateVerifierAppServerJsonlPath(scanJobId, candidateId),
+			path.join(
+				await resolveModuleArtifactsDir(scanJobId, moduleId),
+				"app-server-messages.jsonl",
+			),
 			"utf-8",
 		);
-		return file
-			.split("\n")
-			.map((line) => line.trim())
-			.filter(Boolean)
-			.map((line) => JSON.parse(line) as JsonRpcMessage);
+		return parseJsonRpcMessagesWithLineNumbers(file);
 	} catch {
 		return [];
 	}
 };
 
+const readFunctionScannerAppServerMessagesWithLineNumbers = async (
+	scanJobId: string,
+	moduleId: string,
+	functionId: string,
+): Promise<JsonRpcMessageWithLine[]> => {
+	try {
+		const file = await fs.readFile(
+			path.join(
+				await resolveFunctionArtifactsDir(scanJobId, moduleId, functionId),
+				"app-server-messages.jsonl",
+			),
+			"utf-8",
+		);
+		return parseJsonRpcMessagesWithLineNumbers(file);
+	} catch {
+		return [];
+	}
+};
+
+const readScanJobAppServerMessagesTailWithLineNumbers = async (
+	scanJobId: string,
+): Promise<JsonRpcMessageWithLine[]> =>
+	readJsonRpcMessagesWithLineNumbersTail(
+		path.join(
+			await resolveScanJobArtifactsDir(scanJobId),
+			"app-server-messages.jsonl",
+		),
+	);
+
+const readCandidateAnalysisAppServerMessagesTailWithLineNumbers = async (
+	scanJobId: string,
+	candidateId: string,
+): Promise<JsonRpcMessageWithLine[]> =>
+	readJsonRpcMessagesWithLineNumbersTail(
+		path.join(
+			await resolveCandidateArtifactsDir(scanJobId, candidateId),
+			"app-server-messages.jsonl",
+		),
+	);
+
+const readCandidateVerifierAppServerMessagesTailWithLineNumbers = async (
+	scanJobId: string,
+	candidateId: string,
+): Promise<JsonRpcMessageWithLine[]> =>
+	readJsonRpcMessagesWithLineNumbersTail(
+		path.join(
+			await resolveCandidateArtifactsDir(scanJobId, candidateId),
+			"verify-app-server-messages.jsonl",
+		),
+	);
+
+const readModuleScannerAppServerMessagesTailWithLineNumbers = async (
+	scanJobId: string,
+	moduleId: string,
+): Promise<JsonRpcMessageWithLine[]> =>
+	readJsonRpcMessagesWithLineNumbersTail(
+		path.join(
+			await resolveModuleArtifactsDir(scanJobId, moduleId),
+			"app-server-messages.jsonl",
+		),
+	);
+
+const readFunctionScannerAppServerMessagesTailWithLineNumbers = async (
+	scanJobId: string,
+	moduleId: string,
+	functionId: string,
+): Promise<JsonRpcMessageWithLine[]> =>
+	readJsonRpcMessagesWithLineNumbersTail(
+		path.join(
+			await resolveFunctionArtifactsDir(scanJobId, moduleId, functionId),
+			"app-server-messages.jsonl",
+		),
+	);
+
 export const readScanJobAppServerText = async (scanJobId: string) => {
 	try {
-		return await fs.readFile(getScanJobAppServerTextPath(scanJobId), "utf-8");
+		return await fs.readFile(path.join(await resolveScanJobArtifactsDir(scanJobId), "app-server-text.log"), "utf-8");
 	} catch {
 		return "";
 	}
@@ -1554,7 +3861,7 @@ export const readCandidateAnalysisAppServerText = async (
 ) => {
 	try {
 		return await fs.readFile(
-			getCandidateAnalysisAppServerTextPath(scanJobId, candidateId),
+			path.join(await resolveCandidateArtifactsDir(scanJobId, candidateId), "app-server-text.log"),
 			"utf-8",
 		);
 	} catch {
@@ -1568,7 +3875,7 @@ export const readCandidateVerifierAppServerText = async (
 ) => {
 	try {
 		return await fs.readFile(
-			getCandidateVerifierAppServerTextPath(scanJobId, candidateId),
+			path.join(await resolveCandidateArtifactsDir(scanJobId, candidateId), "verify-app-server-text.log"),
 			"utf-8",
 		);
 	} catch {
@@ -1576,18 +3883,38 @@ export const readCandidateVerifierAppServerText = async (
 	}
 };
 
-const readScanJobBridgeEvents = async (
+export const readModuleScannerAppServerText = async (
 	scanJobId: string,
-): Promise<ScanBridgeEventRecord[]> => {
+	moduleId: string,
+) => {
 	try {
-		const file = await fs.readFile(getScanJobBridgeEventsPath(scanJobId), "utf-8");
-		return file
-			.split("\n")
-			.map((line) => line.trim())
-			.filter(Boolean)
-			.map((line) => JSON.parse(line) as ScanBridgeEventRecord);
+		return await fs.readFile(
+			path.join(
+				await resolveModuleArtifactsDir(scanJobId, moduleId),
+				"app-server-text.log",
+			),
+			"utf-8",
+		);
 	} catch {
-		return [];
+		return "";
+	}
+};
+
+export const readFunctionScannerAppServerText = async (
+	scanJobId: string,
+	moduleId: string,
+	functionId: string,
+) => {
+	try {
+		return await fs.readFile(
+			path.join(
+				await resolveFunctionArtifactsDir(scanJobId, moduleId, functionId),
+				"app-server-text.log",
+			),
+			"utf-8",
+		);
+	} catch {
+		return "";
 	}
 };
 
@@ -1860,78 +4187,16 @@ const deriveCandidateVerifierRuntimeLiveAction = async (
 	return deriveRuntimeLiveActionFromMessages(messages);
 };
 
-const deriveLiveState = (event: ScanBridgeEventRecord) => {
-	if (event.type === "next_stage") {
-		const nextStage = asRecord(event.payload.nextStage) || {};
-		const stage = asString(nextStage.stage);
-		return {
-			stage: stage === "fuzzing" ? "fuzzing" : "analyzing",
-			actionType:
-				asString(asRecord(nextStage.metadata)?.currentActionType) ||
-				"orchestrating",
-			actionText:
-				asString(asRecord(nextStage.metadata)?.currentAction) ||
-				asString(nextStage.reason) ||
-				asString(nextStage.inputSummary) ||
-				"-",
-		};
-	}
-
-	return {
-		stage: "analyzing",
-		actionType: "other",
-		actionText: "-",
-	};
-};
-
-const resolveCandidateStageFromEvent = (
-	event: VulseekBridgeEvent,
-): VulnerabilityCandidateStage | null => {
-	if (event.type === "verification_result") {
-		return "verifying";
-	}
-
-	if (event.type === "next_stage") {
-		const nextStage = asRecord(event.payload.nextStage) || {};
-		const stage = asString(nextStage.stage);
-		if (stage === "fuzzing") {
-			return stage;
-		}
-		return "analyzing";
-	}
-
-	return null;
-};
-
-const resolveCandidateThreadIdFromEvent = (event: VulseekBridgeEvent) => {
-	if (event.type === "verification_result") {
-		return (
-			asString(event.payload.threadId) ||
-			asString(asRecord(event.payload.metadata)?.threadId) ||
-			undefined
-		);
-	}
-
-	if (event.type === "next_stage") {
-		const nextStage = asRecord(event.payload.nextStage) || {};
-		return (
-			asString(nextStage.threadId) ||
-			asString(asRecord(nextStage.metadata)?.threadId) ||
-			undefined
-		);
-	}
-
-	return undefined;
-};
-
 export const findScanJobStatusView = async (scanJobId: string) => {
-	const [candidates, analysisResultsList, verificationResultsList, bridgeEvents] =
+	const [scanJob, candidates, analysisResultsList, verificationResultsList, moduleTasks, functionTasks] =
 		await Promise.all([
-		findVulnerabilityCandidatesByScanJobId(scanJobId),
-		findAnalysisResultsByScanJobId(scanJobId),
-		findVerificationResultsByScanJobId(scanJobId),
-		readScanJobBridgeEvents(scanJobId),
-	]);
+			findScanJobById(scanJobId),
+			findVulnerabilityCandidatesByScanJobId(scanJobId),
+			findAnalysisResultsByScanJobId(scanJobId),
+			findVerificationResultsByScanJobId(scanJobId),
+			findScanModuleTasksByScanJobId(scanJobId),
+			findScanFunctionTasksByScanJobId(scanJobId),
+		]);
 
 	const latestAnalysisResultByCandidateId = new Map<string, AnalysisResult>();
 	for (const analysisResult of analysisResultsList) {
@@ -1977,15 +4242,6 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 		);
 		return latestVerificationResult?.result === "real_vulnerability";
 	}).length;
-	const latestEventByCandidate = new Map<string, ScanBridgeEventRecord>();
-
-	for (const event of bridgeEvents) {
-		const candidateId = asString(event.payload.candidateId);
-		if (candidateId) {
-			latestEventByCandidate.set(candidateId, event);
-		}
-	}
-
 	const completedCount = candidates.filter(
 		(candidate) => candidate.status === "completed",
 	).length;
@@ -1994,9 +4250,6 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 		candidates
 			.filter((candidate) => candidate.status === "running")
 			.map(async (candidate) => {
-			const latestEvent = latestEventByCandidate.get(
-				candidate.vulnerabilityCandidateId,
-			);
 			const candidateStage = (candidate.currentStage ||
 				"analyzing") as VulnerabilityCandidateStage;
 			const candidateRuntimeLiveAction =
@@ -2009,22 +4262,14 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 							scanJobId,
 							candidate.vulnerabilityCandidateId,
 						);
-			const liveState = latestEvent
-				? deriveLiveState(latestEvent)
-				: {
-						stage: "analyzing",
-						actionType: "other",
-						actionText: "-",
-					};
-			const resolvedStage = liveState.stage || "analyzing";
+			const resolvedStage = candidate.currentStage || "analyzing";
 			const resolvedActionType =
-				candidateRuntimeLiveAction?.actionType ||
-				liveState.actionType;
+				candidateRuntimeLiveAction?.actionType || "other";
 			const resolvedActionText =
 				candidateRuntimeLiveAction?.actionText &&
 					candidateRuntimeLiveAction.actionText !== "-"
 					? candidateRuntimeLiveAction.actionText
-					: liveState.actionText;
+					: "-";
 
 			return {
 				vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
@@ -2034,6 +4279,16 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 				stage: candidate.currentStage || resolvedStage,
 				actionType: resolvedActionType,
 				actionText: resolvedActionText,
+				streamMessages:
+					candidateStage === "verifying"
+						? await readCandidateVerifierAppServerMessagesTailWithLineNumbers(
+								scanJobId,
+								candidate.vulnerabilityCandidateId,
+							)
+						: await readCandidateAnalysisAppServerMessagesTailWithLineNumbers(
+								scanJobId,
+								candidate.vulnerabilityCandidateId,
+							),
 				updatedAt: candidate.updatedAt,
 			};
 		}),
@@ -2047,34 +4302,148 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 			title: candidate.title,
 			filePath: candidate.filePath,
 			line: candidate.line,
-			confidence: candidate.confidence,
+			stage: candidate.currentStage || "analyzing",
+			score: candidate.score,
 			createdAt: candidate.createdAt,
 		}));
 
+	const inProgressScannerAgents: Array<{
+		id: string;
+		title: string;
+		subtitle?: string;
+		stage: "repository_scanning" | "module_scanning" | "function_scanning";
+		scanModuleTaskId?: string;
+		scanFunctionTaskId?: string;
+		moduleId?: string;
+		functionId?: string;
+		streamMessages: JsonRpcMessageWithLine[];
+	}> = [];
+
+	if (scanJob.repositoryTaskStatus === "running") {
+		inProgressScannerAgents.push({
+			id: `repository-${scanJob.scanJobId}`,
+			title: "Repository Scanner",
+			subtitle: "Repository-wide planner and module partitioning",
+			stage: "repository_scanning",
+			streamMessages:
+				await readScanJobAppServerMessagesTailWithLineNumbers(scanJob.scanJobId),
+		});
+	}
+
+	inProgressScannerAgents.push(
+		...(
+			await Promise.all(
+				moduleTasks
+					.filter((task) => task.status === "running")
+					.map(async (task) => ({
+						id: `module-${task.scanModuleTaskId}`,
+						title: task.moduleName || task.moduleId,
+						subtitle: task.moduleId,
+						stage: "module_scanning" as const,
+						scanModuleTaskId: task.scanModuleTaskId,
+						moduleId: task.moduleId,
+						streamMessages:
+							await readModuleScannerAppServerMessagesTailWithLineNumbers(
+								scanJobId,
+								task.moduleId,
+							),
+					})),
+			)
+		),
+	);
+
+	inProgressScannerAgents.push(
+		...(
+			await Promise.all(
+				functionTasks
+					.filter((task) => task.status === "running")
+					.map(async (task) => ({
+						id: `function-${task.scanFunctionTaskId}`,
+						title: task.functionName || task.functionId,
+						subtitle: [
+							task.moduleName || task.moduleId,
+							task.filePath
+								? `${task.filePath}${task.line ? `:${task.line}` : ""}`
+								: null,
+						]
+							.filter(Boolean)
+							.join(" · "),
+						stage: "function_scanning" as const,
+						scanModuleTaskId: task.scanModuleTaskId,
+						scanFunctionTaskId: task.scanFunctionTaskId,
+						moduleId: task.moduleId,
+						functionId: task.functionId,
+						streamMessages:
+							await readFunctionScannerAppServerMessagesTailWithLineNumbers(
+								scanJobId,
+								task.moduleId,
+								task.functionId,
+							),
+					})),
+			)
+		),
+	);
+
 	return {
+		scan: {
+			scanJobId: scanJob.scanJobId,
+			status: scanJob.status,
+			scanPhase: scanJob.scanPhase,
+			repositoryTaskStatus: scanJob.repositoryTaskStatus,
+		},
 		summary: {
 			totalCandidates: candidates.length,
 			completedCandidates: completedCount,
 			analysisLikelyOrConfirmedCandidates: analysisLikelyOrConfirmedCount,
 			verifiedZeroDayCandidates: verifiedZeroDayCount,
+			moduleTasksTotal: scanJob.moduleTasksTotal,
+			moduleTasksCompleted: scanJob.moduleTasksCompleted,
+			moduleTasksFailed: scanJob.moduleTasksFailed,
+			functionTasksTotal: scanJob.functionTasksTotal,
+			functionTasksCompleted: scanJob.functionTasksCompleted,
+			functionTasksFailed: scanJob.functionTasksFailed,
 		},
+		inProgressScannerAgents,
+		moduleTasks: moduleTasks.map((task) => ({
+			scanModuleTaskId: task.scanModuleTaskId,
+			moduleId: task.moduleId,
+			moduleName: task.moduleName,
+			status: task.status,
+			priority: task.priority,
+			attempt: task.attempt,
+			moduleScanMdPath: task.moduleScanMdPath,
+			moduleScanJsonPath: task.moduleScanJsonPath,
+			functionPlanJsonPath: task.functionPlanJsonPath,
+			errorMessage: task.errorMessage,
+			startedAt: task.startedAt,
+			completedAt: task.completedAt,
+			updatedAt: task.updatedAt,
+		})),
+		functionTasks: functionTasks.map((task) => ({
+			scanFunctionTaskId: task.scanFunctionTaskId,
+			scanModuleTaskId: task.scanModuleTaskId,
+			moduleId: task.moduleId,
+			moduleName: task.moduleName,
+			functionId: task.functionId,
+			functionName: task.functionName,
+			filePath: task.filePath,
+			line: task.line,
+			status: task.status,
+			priority: task.priority,
+			attempt: task.attempt,
+			score: task.score,
+			riskType: task.riskType,
+			summary: task.summary,
+			functionScanMdPath: task.functionScanMdPath,
+			functionScanJsonPath: task.functionScanJsonPath,
+			errorMessage: task.errorMessage,
+			startedAt: task.startedAt,
+			completedAt: task.completedAt,
+			updatedAt: task.updatedAt,
+		})),
 		inProgressCandidates,
 		queuedCandidates,
-		recentBridgeEvents: bridgeEvents
-			.slice(-20)
-			.reverse()
-			.map((event) => ({
-				recordedAt: event.recordedAt,
-				type: event.type,
-				candidateId: asString(event.payload.candidateId) || null,
-				summary:
-					asString(event.payload.summary) ||
-					asString(event.payload.result) ||
-					asString(event.payload.reportPath) ||
-					asString(event.payload.nextActionHint) ||
-					asString(asRecord(event.payload.nextStage)?.reason) ||
-					"-",
-			})),
+		recentBridgeEvents: [],
 	};
 };
 
@@ -2113,45 +4482,6 @@ const extractTextValue = (value: unknown): string | null => {
 	}
 
 	return null;
-};
-
-const resolveCompletedAgentMessageText = (
-	message: JsonRpcMessage,
-	agentMessageBuffers: Map<string, string>,
-) => {
-	if (message.method === "item/agentMessage/delta") {
-		const params = asRecord(message.params);
-		const itemId = asString(params?.itemId);
-		const delta = asString(params?.delta) || "";
-		if (itemId && delta) {
-			agentMessageBuffers.set(
-				itemId,
-				`${agentMessageBuffers.get(itemId) || ""}${delta}`,
-			);
-		}
-		return "";
-	}
-
-	if (message.method !== "item/completed") {
-		return "";
-	}
-
-	const item = asRecord(
-		(message.params as Record<string, unknown> | undefined)?.item,
-	);
-	if (asString(item?.type) !== "agentMessage") {
-		return "";
-	}
-
-	const itemId = asString(item?.id);
-	const completedText = asString(item?.text) || "";
-	const bufferedText = itemId ? agentMessageBuffers.get(itemId) || "" : "";
-
-	if (itemId) {
-		agentMessageBuffers.delete(itemId);
-	}
-
-	return completedText || bufferedText;
 };
 
 const renderJsonRpcMessage = (message: JsonRpcMessage) => {
@@ -2239,26 +4569,29 @@ const renderClaudeStreamJsonMessage = (message: Record<string, unknown>) => {
 	return "";
 };
 
-type VulseekBridgeEvent = {
-	type:
-		| "candidate"
-		| "candidate_batch"
-		| "next_stage"
-		| "analysis_result"
-		| "verification_result";
-	payload: Record<string, unknown>;
+type FunctionResultCandidatePayload = {
+	title: string;
+	description?: string;
+	filePath?: string;
+	line?: number;
+	confidence?: number;
+	score?: number;
 };
 
-type BridgeParseError = {
-	message: string;
-	payloadSnippet: string;
+type AnalysisResultPayload = {
+	result: string;
+	summary?: string;
+	confidence?: number;
+	score?: number;
 };
 
-type BridgePersistResult = {
-	type: VulseekBridgeEvent["type"];
-	receivedCandidates: number;
-	createdCandidates: number;
-	droppedCandidates: number;
+type VerificationResultPayload = {
+	result: string;
+	summary?: string;
+	isBug?: boolean;
+	isSecurity?: boolean;
+	confidence?: number;
+	score?: number;
 };
 
 const normalizeAnalysisResult = (value: string | undefined) => {
@@ -2307,64 +4640,6 @@ const normalizeVerificationResult = (value: string | undefined) => {
 	}
 };
 
-const extractVulseekBridgeEvents = (buffer: string) => {
-	const events: VulseekBridgeEvent[] = [];
-	const parseErrors: BridgeParseError[] = [];
-	const pattern = /<VULSEEK_EVENT>\s*([\s\S]*?)\s*<\/VULSEEK_EVENT>/;
-	let remaining = buffer;
-
-	while (true) {
-		const match = remaining.match(pattern);
-		if (!match || match.index === undefined) {
-			break;
-		}
-
-		const [fullMatch, jsonPayload] = match;
-		const startIndex = match.index;
-		const endIndex = startIndex + fullMatch.length;
-
-		try {
-			if (!jsonPayload) {
-				remaining = remaining.slice(endIndex);
-				continue;
-			}
-
-			const parsed = JSON.parse(jsonPayload) as VulseekBridgeEvent;
-			if (
-				parsed &&
-				typeof parsed === "object" &&
-				typeof parsed.type === "string" &&
-				parsed.payload &&
-				typeof parsed.payload === "object"
-			) {
-				events.push(parsed);
-			} else {
-				parseErrors.push({
-					message: "Parsed VULSEEK_EVENT is missing type or payload",
-					payloadSnippet: jsonPayload.slice(0, 400),
-				});
-			}
-		} catch (error) {
-			parseErrors.push({
-				message:
-					error instanceof Error ? error.message : "Invalid VULSEEK_EVENT JSON",
-				payloadSnippet: (jsonPayload || "").slice(0, 400),
-			});
-		}
-
-		remaining = remaining.slice(endIndex);
-	}
-
-	const danglingStart = remaining.lastIndexOf("<VULSEEK_EVENT>");
-	if (danglingStart !== -1) {
-		remaining = remaining.slice(danglingStart);
-	} else {
-		remaining = "";
-	}
-
-	return { events, parseErrors, remaining };
-};
-
 const normalizeCandidatePayload = (payload: Record<string, unknown>) => ({
 	title: typeof payload.title === "string" ? payload.title : "",
 	description:
@@ -2373,264 +4648,221 @@ const normalizeCandidatePayload = (payload: Record<string, unknown>) => ({
 	line: typeof payload.line === "number" ? payload.line : undefined,
 	confidence:
 		typeof payload.confidence === "number" ? payload.confidence : undefined,
+	score: typeof payload.score === "number" ? payload.score : undefined,
 });
 
-const persistVulseekBridgeEvent = async (
-	scanJobId: string,
-	event: VulseekBridgeEvent,
-	options?: {
-		candidateId?: string;
-		runtimeSeconds?: number;
-		threadId?: string;
-	},
-): Promise<BridgePersistResult> => {
-	const bridgeEventsPath = getScanJobBridgeEventsPath(scanJobId);
-	const eventRecord = {
-		recordedAt: new Date().toISOString(),
-		type: event.type,
-		payload: event.payload,
-	};
+const parseJsonObjectFile = async (filePath: string, label: string) => {
+	let raw = "";
+	try {
+		raw = await fs.readFile(filePath, "utf-8");
+	} catch (error) {
+		throw new Error(
+			`${label} file not found at ${filePath}: ${error instanceof Error ? error.message : "unknown error"}`,
+		);
+	}
 
-	await appendScanRuntimeFile(
-		bridgeEventsPath,
-		`${JSON.stringify(eventRecord)}\n`,
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (error) {
+		throw new Error(
+			`${label} file contains invalid JSON at ${filePath}: ${error instanceof Error ? error.message : "unknown error"}`,
+		);
+	}
+
+	const record = asRecord(parsed);
+	if (!record) {
+		throw new Error(`${label} file must contain a top-level JSON object`);
+	}
+
+	return record;
+};
+
+const readCandidateResultFile = async (
+	filePath: string,
+	label: string,
+): Promise<{ candidates: FunctionResultCandidatePayload[] }> => {
+	const record = await parseJsonObjectFile(filePath, label);
+	const candidatesValue = record.candidates;
+	if (!Array.isArray(candidatesValue)) {
+		throw new Error(`${label} file must contain a candidates array`);
+	}
+
+	return {
+		candidates: candidatesValue
+			.filter((candidate): candidate is Record<string, unknown> =>
+				Boolean(candidate && typeof candidate === "object"),
+			)
+			.map((candidate) => normalizeCandidatePayload(candidate))
+			.filter((candidate) => Boolean(candidate.title)),
+	};
+};
+
+const readAnalysisResultFile = async (
+	filePath: string,
+): Promise<AnalysisResultPayload> => {
+	const record = await parseJsonObjectFile(filePath, "analysis result");
+	const result = normalizeAnalysisResult(asString(record.result));
+	if (!result) {
+		throw new Error("analysis result file must contain a non-empty result field");
+	}
+
+	return {
+		result,
+		summary: asString(record.summary) || undefined,
+		confidence: asNumber(record.confidence),
+		score: asNumber(record.score),
+	};
+};
+
+const readVerificationResultFile = async (
+	filePath: string,
+): Promise<VerificationResultPayload> => {
+	const record = await parseJsonObjectFile(filePath, "verification result");
+	const result = normalizeVerificationResult(asString(record.result));
+	if (!result) {
+		throw new Error(
+			"verification result file must contain a non-empty result field",
+		);
+	}
+
+	return {
+		result,
+		summary: asString(record.summary) || undefined,
+		isBug: asBoolean(record.isBug),
+		isSecurity: asBoolean(record.isSecurity),
+		confidence: asNumber(record.confidence),
+		score: asNumber(record.score),
+	};
+};
+
+const persistFunctionResultCandidates = async (input: {
+	scanJobId: string;
+	candidates: FunctionResultCandidatePayload[];
+}) => {
+	let createdCandidates = 0;
+	for (const candidate of input.candidates) {
+		if (!candidate.title) continue;
+		const createdCandidate = await createVulnerabilityCandidate({
+			scanJobId: input.scanJobId,
+			...candidate,
+		});
+		await enqueueCandidateAnalysisWork(
+			input.scanJobId,
+			createdCandidate.vulnerabilityCandidateId,
+		);
+		createdCandidates += 1;
+	}
+
+	return {
+		receivedCandidates: input.candidates.length,
+		createdCandidates,
+		droppedCandidates: Math.max(0, input.candidates.length - createdCandidates),
+	};
+};
+
+const persistAnalysisResultPayload = async (input: {
+	scanJobId: string;
+	candidateId: string;
+	payload: AnalysisResultPayload;
+	runtimeSeconds?: number;
+	threadId?: string;
+}) => {
+	const candidate = await findVulnerabilityCandidateById(input.candidateId);
+	const result = normalizeAnalysisResult(input.payload.result);
+	const summary = input.payload.summary;
+	const confidence = input.payload.confidence;
+	const score = input.payload.score;
+
+	if (input.threadId) {
+		await updateVulnerabilityCandidateAnalysisThreadId(
+			input.candidateId,
+			input.threadId,
+		);
+	}
+
+	await updateVulnerabilityCandidateCurrentStage(input.candidateId, "analyzing");
+	await deleteAnalysisResultsByCandidateId(input.candidateId);
+	await createAnalysisResult({
+		scanJobId: input.scanJobId,
+		vulnerabilityCandidateId: input.candidateId,
+		result,
+		confidence,
+		score,
+		reportPath: buildCandidateAnalysisReportPath(
+			input.scanJobId,
+			input.candidateId,
+		),
+		runtimeSeconds: input.runtimeSeconds,
+		threadId: input.threadId,
+		summary:
+			summary ||
+			(result === "real_vulnerability"
+				? `Real vulnerability: ${candidate.title}`
+				: result === "likely_vulnerability"
+					? `Likely vulnerability: ${candidate.title}`
+					: result === "false_positive"
+						? `False positive: ${candidate.title}`
+						: `Plausible but unproven: ${candidate.title}`),
+	});
+	await syncVulnerabilityCandidateResolvedRiskMetrics(input.candidateId);
+	return { result };
+};
+
+const persistVerificationResultPayload = async (input: {
+	scanJobId: string;
+	candidateId: string;
+	payload: VerificationResultPayload;
+	runtimeSeconds?: number;
+	threadId?: string;
+}) => {
+	const candidate = await findVulnerabilityCandidateById(input.candidateId);
+	const result = normalizeVerificationResult(input.payload.result);
+
+	if (input.threadId) {
+		await updateVulnerabilityCandidateVerifierThreadId(
+			input.candidateId,
+			input.threadId,
+		);
+	}
+
+	const verificationArtifactPaths = buildCandidateVerificationArtifactPaths(
+		input.scanJobId,
+		input.candidateId,
 	);
 
-	if (event.type === "candidate") {
-		const candidate = normalizeCandidatePayload(
-			event.payload.candidate as Record<string, unknown>,
-		);
-		if (candidate.title) {
-			await createVulnerabilityCandidate({
-				scanJobId,
-				...candidate,
-			});
-			await updateScanJobStatus(scanJobId, "analyzing").catch(() => {});
-			return {
-				type: event.type,
-				receivedCandidates: 1,
-				createdCandidates: 1,
-				droppedCandidates: 0,
-			};
-		}
-		return {
-			type: event.type,
-			receivedCandidates: 1,
-			createdCandidates: 0,
-			droppedCandidates: 1,
-		};
-	}
-
-	if (event.type === "candidate_batch") {
-		const candidates = Array.isArray(event.payload.candidates)
-			? event.payload.candidates
-			: [];
-		let createdCandidates = 0;
-		for (const candidateValue of candidates) {
-			if (!candidateValue || typeof candidateValue !== "object") continue;
-			const candidate = normalizeCandidatePayload(
-				candidateValue as Record<string, unknown>,
-			);
-			if (!candidate.title) continue;
-			await createVulnerabilityCandidate({
-				scanJobId,
-				...candidate,
-			});
-			createdCandidates += 1;
-		}
-		if (createdCandidates > 0) {
-			await updateScanJobStatus(scanJobId, "analyzing").catch(() => {});
-		}
-		return {
-			type: event.type,
-			receivedCandidates: candidates.length,
-			createdCandidates,
-			droppedCandidates: Math.max(0, candidates.length - createdCandidates),
-		};
-	}
-
-	if (event.type === "analysis_result") {
-		const candidateId =
-			asString(event.payload.candidateId) || options?.candidateId;
-		if (!candidateId) {
-			return {
-				type: event.type,
-				receivedCandidates: 0,
-				createdCandidates: 0,
-				droppedCandidates: 0,
-			};
-		}
-
-		const candidate = await findVulnerabilityCandidateById(candidateId);
-		const result = normalizeAnalysisResult(asString(event.payload.result));
-		const summary = asString(event.payload.summary);
-		const reportPath = asString(event.payload.reportPath);
-		const runtimeSeconds =
-			typeof event.payload.runtimeSeconds === "number"
-				? event.payload.runtimeSeconds
-				: options?.runtimeSeconds;
-		const threadId = asString(event.payload.threadId) || options?.threadId;
-
-		if (threadId) {
-			await updateVulnerabilityCandidateAnalysisThreadId(candidateId, threadId);
-		}
-
-		await updateVulnerabilityCandidateCurrentStage(candidateId, "analyzing");
-		await deleteAnalysisResultsByCandidateId(candidateId);
-		await createAnalysisResult({
-			scanJobId,
-			vulnerabilityCandidateId: candidateId,
-			result,
-			reportPath,
-			runtimeSeconds,
-			threadId,
-			summary:
-				summary ||
-				(result === "real_vulnerability"
-					? `Real vulnerability: ${candidate.title}`
-					: result === "likely_vulnerability"
-						? `Likely vulnerability: ${candidate.title}`
+	await updateVulnerabilityCandidateCurrentStage(input.candidateId, "verifying");
+	await deleteVerificationResultsByCandidateId(input.candidateId);
+	await createVerificationResult({
+		scanJobId: input.scanJobId,
+		vulnerabilityCandidateId: input.candidateId,
+		result,
+		isBug: input.payload.isBug,
+		isSecurity: input.payload.isSecurity,
+		confidence: input.payload.confidence,
+		score: input.payload.score,
+		reportPath: verificationArtifactPaths.reportPath,
+		issueDraftPath: verificationArtifactPaths.issueDraftPath,
+		pocPath: verificationArtifactPaths.pocPath,
+		dockerfilePath: verificationArtifactPaths.dockerfilePath,
+		runScriptPath: verificationArtifactPaths.runScriptPath,
+		runtimeSeconds: input.runtimeSeconds,
+		threadId: input.threadId,
+		summary:
+			input.payload.summary ||
+			(result === "real_vulnerability"
+				? `Verified vulnerability: ${candidate.title}`
+				: result === "likely_vulnerability"
+					? `Likely vulnerability after verification: ${candidate.title}`
+					: result === "api_misuse"
+						? `API misuse: ${candidate.title}`
 						: result === "false_positive"
 							? `False positive: ${candidate.title}`
-							: `Plausible but unproven: ${candidate.title}`),
-		});
-
-		await updateVulnerabilityCandidateStatus(candidateId, "completed");
-		return {
-			type: event.type,
-			receivedCandidates: 0,
-			createdCandidates: 0,
-			droppedCandidates: 0,
-		};
-	}
-
-	if (event.type === "verification_result") {
-		const candidateId =
-			asString(event.payload.candidateId) || options?.candidateId;
-		if (!candidateId) {
-			return {
-				type: event.type,
-				receivedCandidates: 0,
-				createdCandidates: 0,
-				droppedCandidates: 0,
-			};
-		}
-
-		const candidate = await findVulnerabilityCandidateById(candidateId);
-		const result = normalizeVerificationResult(asString(event.payload.result));
-		const summary = asString(event.payload.summary);
-		const reportPath = asString(event.payload.reportPath);
-		const issueDraftPath = asString(event.payload.issueDraftPath);
-		const pocPath = asString(event.payload.pocPath);
-		const dockerfilePath = asString(event.payload.dockerfilePath);
-		const runScriptPath = asString(event.payload.runScriptPath);
-		const isBug = asBoolean(event.payload.isBug);
-		const isSecurity = asBoolean(event.payload.isSecurity);
-		const confidence = asNumber(event.payload.confidence);
-		const runtimeSeconds =
-			typeof event.payload.runtimeSeconds === "number"
-				? event.payload.runtimeSeconds
-				: options?.runtimeSeconds;
-		const threadId = asString(event.payload.threadId) || options?.threadId;
-
-		if (threadId) {
-			await updateVulnerabilityCandidateVerifierThreadId(candidateId, threadId);
-		}
-
-		await updateVulnerabilityCandidateCurrentStage(candidateId, "verifying");
-		await deleteVerificationResultsByCandidateId(candidateId);
-		await createVerificationResult({
-			scanJobId,
-			vulnerabilityCandidateId: candidateId,
-			result,
-			isBug,
-			isSecurity,
-			confidence,
-			reportPath,
-			issueDraftPath,
-			pocPath,
-			dockerfilePath,
-			runScriptPath,
-			runtimeSeconds,
-			threadId,
-			summary:
-				summary ||
-				(result === "real_vulnerability"
-					? `Verified vulnerability: ${candidate.title}`
-					: result === "likely_vulnerability"
-						? `Likely vulnerability after verification: ${candidate.title}`
-						: result === "api_misuse"
-							? `API misuse: ${candidate.title}`
-							: result === "false_positive"
-								? `False positive: ${candidate.title}`
-								: `Plausible but unproven after verification: ${candidate.title}`),
-		});
-
-		await updateVulnerabilityCandidateStatus(candidateId, "completed");
-		return {
-			type: event.type,
-			receivedCandidates: 0,
-			createdCandidates: 0,
-			droppedCandidates: 0,
-		};
-	}
-
-	const candidateId = asString(event.payload.candidateId);
-	const currentStage = resolveCandidateStageFromEvent(event);
-	const threadId = resolveCandidateThreadIdFromEvent(event);
-	if (candidateId && currentStage) {
-		await updateVulnerabilityCandidateCurrentStage(candidateId, currentStage);
-		if (threadId) {
-			if (currentStage === "verifying") {
-				await updateVulnerabilityCandidateVerifierThreadId(candidateId, threadId);
-			} else {
-				await updateVulnerabilityCandidateAnalysisThreadId(candidateId, threadId);
-			}
-		}
-	}
-	return {
-		type: event.type,
-		receivedCandidates: 0,
-		createdCandidates: 0,
-		droppedCandidates: 0,
-	};
+							: `Plausible but unproven after verification: ${candidate.title}`),
+	});
+	await syncVulnerabilityCandidateResolvedRiskMetrics(input.candidateId);
+	return { result };
 };
-
-const copyScanRuntimeArtifactsToContainer = async (
-	containerName: string,
-	scanJobId: string,
-	scanRootDir: string,
-) => {
-	const copyTargets = [
-		{
-			source: getScanJobAppServerJsonlPath(scanJobId),
-			target: `${scanRootDir}/03_app_server_messages.jsonl`,
-		},
-		{
-			source: getScanJobAppServerTextPath(scanJobId),
-			target: `${scanRootDir}/03_app_server_text.log`,
-		},
-		{
-			source: getScanJobAppServerStderrPath(scanJobId),
-			target: `${scanRootDir}/03_app_server_stderr.log`,
-		},
-		{
-			source: getScanJobBridgeEventsPath(scanJobId),
-			target: `${scanRootDir}/03_bridge_events.jsonl`,
-		},
-	];
-
-	for (const copyTarget of copyTargets) {
-		try {
-			await fs.stat(copyTarget.source);
-			await execAsync(
-				`docker cp "${copyTarget.source}" ${containerName}:"${copyTarget.target}"`,
-			);
-		} catch {}
-	}
-};
-
-const DEFAULT_CODEX_TEST_PROMPT = "总结这个目录下的文件路径层级结构";
 
 const captureContainerCodexState = async (
 	containerName: string,
@@ -2667,24 +4899,6 @@ const captureContainerCodexState = async (
 	);
 };
 
-type ScanBridgeDebugStats = {
-	eventBlocks: number;
-	candidateEvents: number;
-	candidateRecordsReceived: number;
-	candidateRecordsCreated: number;
-	candidateRecordsDropped: number;
-	parseErrors: number;
-};
-
-const createEmptyScanBridgeDebugStats = (): ScanBridgeDebugStats => ({
-	eventBlocks: 0,
-	candidateEvents: 0,
-	candidateRecordsReceived: 0,
-	candidateRecordsCreated: 0,
-	candidateRecordsDropped: 0,
-	parseErrors: 0,
-});
-
 type PreparedRepositoryState = {
 	effectiveTargetMode: string;
 	targetRef: string | null;
@@ -2699,27 +4913,542 @@ type PreparedRepositoryState = {
 	markdown: string;
 };
 
+type LegacyFullScanModulePlan = {
+	scanJobId?: string;
+	target?: {
+		tag?: string;
+		commit?: string;
+	};
+	modules?: Array<{
+		name?: string;
+		artifactDir?: string;
+		summary?: string;
+		pathListFile?: string;
+	}>;
+};
+
+type LegacyFunctionPlanTask = {
+	functionId?: string;
+	id?: string;
+	functionName?: string;
+	name?: string;
+	filePath?: string;
+	path?: string;
+	line?: number;
+	startLine?: number;
+	priority?: number;
+	summary?: string;
+	riskType?: string;
+	score?: number;
+};
+
+type LegacyFunctionPlan = {
+	module?: {
+		name?: string;
+		moduleId?: string;
+	};
+	functions?: LegacyFunctionPlanTask[];
+	tasks?: LegacyFunctionPlanTask[];
+};
+
+type FullScanModulePlanModule = {
+	moduleId?: string;
+	name?: string;
+	summary?: string;
+	artifactDir?: string;
+	pathListFile?: string;
+	priority?: number;
+	files?: string[];
+	paths?: string[];
+};
+
+type FullScanModulePlan = {
+	modules?: FullScanModulePlanModule[];
+};
+
+const resolveExistingPath = async (candidates: string[]) => {
+	for (const candidate of candidates) {
+		try {
+			await fs.stat(candidate);
+			return candidate;
+		} catch {}
+	}
+	return null;
+};
+
+const findLegacyFullScanModulePlanPath = async (scanRuntimeDir: string) =>
+	await resolveExistingPath([
+		path.join(scanRuntimeDir, "full-scan", "repository", "module_plan.json"),
+		path.join(scanRuntimeDir, "full-scan", "02_module_plan.json"),
+		path.join(scanRuntimeDir, "full_scan", "02_module_plan.json"),
+	]);
+
+const findLegacyModuleSummaryPath = async (artifactDir: string) =>
+	await resolveExistingPath([
+		path.join(artifactDir, "module_scan.md"),
+		path.join(artifactDir, "01_module_summary.md"),
+		path.join(artifactDir, "02_candidate_drafts.md"),
+	]);
+
+const findLegacyModuleJsonPath = async (artifactDir: string) =>
+	await resolveExistingPath([
+		path.join(artifactDir, "module_scan.json"),
+		path.join(artifactDir, "02_candidate_drafts.json"),
+	]);
+
+const findLegacyFunctionPlanPath = async (artifactDir: string) =>
+	await resolveExistingPath([
+		path.join(artifactDir, "function_plan.json"),
+		path.join(artifactDir, "02_function_plan.json"),
+	]);
+
+const deriveFunctionTaskId = (input: {
+	moduleId: string;
+	functionId?: string;
+	functionName?: string;
+	filePath?: string;
+	line?: number;
+}) => {
+	const explicit = (input.functionId || "").trim();
+	if (explicit) {
+		return explicit;
+	}
+	const base = [
+		input.moduleId,
+		(input.functionName || "").trim(),
+		(input.filePath || "").trim(),
+		typeof input.line === "number" ? String(input.line) : "",
+	]
+		.filter(Boolean)
+		.join(":");
+	return sanitizeContainerNamePart(base) || nanoid();
+};
+
+const syncFunctionTasksFromPlanFile = async (input: {
+	scanJob: ScanJob;
+	scanModuleTask: ScanModuleTask;
+	functionPlanPath: string;
+}) => {
+	let parsed: LegacyFunctionPlan | LegacyFunctionPlanTask[] | null = null;
+	try {
+		parsed = JSON.parse(await fs.readFile(input.functionPlanPath, "utf-8"));
+	} catch {
+		return;
+	}
+
+	const tasks = Array.isArray(parsed)
+		? parsed
+		: Array.isArray(parsed?.functions)
+			? parsed.functions
+			: Array.isArray(parsed?.tasks)
+				? parsed.tasks
+				: [];
+
+	for (const task of tasks) {
+		const functionName = (task.functionName || task.name || "").trim();
+		const filePath = (task.filePath || task.path || "").trim() || null;
+		const line =
+			typeof task.line === "number"
+				? task.line
+				: typeof task.startLine === "number"
+					? task.startLine
+					: null;
+		const functionId = deriveFunctionTaskId({
+			moduleId: input.scanModuleTask.moduleId,
+			functionId: task.functionId || task.id,
+			functionName,
+			filePath: filePath || undefined,
+			line: line ?? undefined,
+		});
+
+		const existing = await db
+			.select()
+			.from(scanFunctionTasks)
+			.where(
+				and(
+					eq(scanFunctionTasks.scanJobId, input.scanJob.scanJobId),
+					eq(scanFunctionTasks.functionId, functionId),
+				),
+			)
+			.limit(1)
+			.then((rows) => rows[0] || null);
+
+		const patch = {
+			scanModuleTaskId: input.scanModuleTask.scanModuleTaskId,
+			moduleId: input.scanModuleTask.moduleId,
+			moduleName: input.scanModuleTask.moduleName,
+			functionName: functionName || functionId,
+			filePath: filePath || undefined,
+			line: line ?? undefined,
+			priority: typeof task.priority === "number" ? task.priority : 0,
+			score: typeof task.score === "number" ? task.score : undefined,
+			riskType: task.riskType || undefined,
+			summary: task.summary || undefined,
+			updatedAt: new Date().toISOString(),
+		};
+
+		if (existing) {
+			await db
+				.update(scanFunctionTasks)
+				.set(patch)
+				.where(eq(scanFunctionTasks.scanFunctionTaskId, existing.scanFunctionTaskId));
+			continue;
+		}
+
+		await db.insert(scanFunctionTasks).values({
+			scanJobId: input.scanJob.scanJobId,
+			scanModuleTaskId: input.scanModuleTask.scanModuleTaskId,
+			moduleId: input.scanModuleTask.moduleId,
+			moduleName: input.scanModuleTask.moduleName,
+			functionId,
+			functionName: functionName || functionId,
+			filePath: filePath || undefined,
+			line: line ?? undefined,
+			status: "queued",
+			priority: typeof task.priority === "number" ? task.priority : 0,
+			attempt: 0,
+			score: typeof task.score === "number" ? task.score : undefined,
+			riskType: task.riskType || undefined,
+			summary: task.summary || undefined,
+			functionScanJsonPath: undefined,
+			functionScanMdPath: undefined,
+			updatedAt: new Date().toISOString(),
+		});
+	}
+};
+
+const readFullScanModulePlan = async (modulePlanPath: string) => {
+	const parsed = JSON.parse(
+		await fs.readFile(modulePlanPath, "utf-8"),
+	) as FullScanModulePlan | FullScanModulePlanModule[];
+	if (Array.isArray(parsed)) {
+		return parsed;
+	}
+	return Array.isArray(parsed.modules) ? parsed.modules : [];
+};
+
+const writeModulePathListIfNeeded = async (input: {
+	scanJob: ScanJob;
+	moduleId: string;
+	hostArtifactDir: string;
+	module: FullScanModulePlanModule;
+}) => {
+	const listedPath =
+		typeof input.module.pathListFile === "string"
+			? input.module.pathListFile.trim()
+			: "";
+	if (listedPath) {
+		return await resolveLegacyArtifactHostPath(input.scanJob, listedPath);
+	}
+
+	const fileValues = Array.isArray(input.module.files)
+		? input.module.files
+		: Array.isArray(input.module.paths)
+			? input.module.paths
+			: [];
+	const normalized = fileValues
+		.map((value) => (typeof value === "string" ? value.trim() : ""))
+		.filter(Boolean);
+	if (normalized.length === 0) {
+		return "";
+	}
+
+	const hostPath = path.join(input.hostArtifactDir, "file_list.txt");
+	await fs.mkdir(input.hostArtifactDir, { recursive: true });
+	await fs.writeFile(hostPath, `${normalized.join("\n")}\n`, "utf-8");
+	return hostPath;
+};
+
+const syncScanModuleTasksFromPlanFile = async (input: {
+	scanJob: ScanJob;
+	modulePlanPath: string;
+}) => {
+	const modules = await readFullScanModulePlan(input.modulePlanPath);
+
+	for (const moduleEntry of modules) {
+		const moduleName = (moduleEntry.name || "").trim();
+		if (!moduleName) {
+			continue;
+		}
+
+		const moduleId =
+			sanitizeContainerNamePart(
+				(moduleEntry.moduleId || "").trim() || moduleName,
+			) || nanoid();
+		const containerArtifactDir =
+			(moduleEntry.artifactDir || "").trim() ||
+			buildFullScanModuleRoot(input.scanJob.scanJobId, moduleId);
+		const hostArtifactDir = await resolveLegacyArtifactHostPath(
+			input.scanJob,
+			containerArtifactDir,
+		);
+		await fs.mkdir(hostArtifactDir, { recursive: true });
+		const pathListHostPath = await writeModulePathListIfNeeded({
+			scanJob: input.scanJob,
+			moduleId,
+			hostArtifactDir,
+			module: moduleEntry,
+		});
+		const functionPlanPath = path.join(hostArtifactDir, "function_plan.json");
+		const existing = await db
+			.select()
+			.from(scanModuleTasks)
+			.where(
+				and(
+					eq(scanModuleTasks.scanJobId, input.scanJob.scanJobId),
+					eq(scanModuleTasks.moduleId, moduleId),
+				),
+			)
+			.limit(1)
+			.then((rows) => rows[0] || null);
+
+		const patch = {
+			moduleName,
+			priority: typeof moduleEntry.priority === "number" ? moduleEntry.priority : 0,
+			moduleScanMdPath: path.join(hostArtifactDir, "module_scan.md"),
+			moduleScanJsonPath: path.join(hostArtifactDir, "module_scan.json"),
+			functionPlanJsonPath: functionPlanPath,
+			errorMessage: undefined,
+			updatedAt: new Date().toISOString(),
+		};
+
+		if (existing) {
+			await db
+				.update(scanModuleTasks)
+				.set({
+					...patch,
+				})
+				.where(eq(scanModuleTasks.scanModuleTaskId, existing.scanModuleTaskId));
+			continue;
+		}
+
+		const created = await createScanModuleTask({
+			scanJobId: input.scanJob.scanJobId,
+			moduleId,
+			moduleName,
+			priority:
+				typeof moduleEntry.priority === "number" ? moduleEntry.priority : 0,
+			moduleScanMdPath: patch.moduleScanMdPath,
+			moduleScanJsonPath: patch.moduleScanJsonPath,
+			functionPlanJsonPath: patch.functionPlanJsonPath,
+		});
+
+		if (pathListHostPath) {
+			await fs.writeFile(
+				path.join(hostArtifactDir, "00_module_seed.txt"),
+				[
+					`module_id=${moduleId}`,
+					`module_name=${moduleName}`,
+					`path_list=${pathListHostPath}`,
+				].join("\n"),
+				"utf-8",
+			).catch(() => {});
+		}
+	}
+
+	await recalculateScanTaskCounts(input.scanJob.scanJobId);
+	return await findScanModuleTasksByScanJobId(input.scanJob.scanJobId);
+};
+
+const syncLegacyFullScanTasksFromArtifacts = async (input: {
+	scanJob: ScanJob;
+	scanRuntimeDir: string;
+}) => {
+	if (input.scanJob.scanType !== "full") {
+		return;
+	}
+
+	const modulePlanPath = await findLegacyFullScanModulePlanPath(input.scanRuntimeDir);
+	if (!modulePlanPath) {
+		return;
+	}
+
+	let parsed: LegacyFullScanModulePlan | null = null;
+	try {
+		parsed = JSON.parse(await fs.readFile(modulePlanPath, "utf-8"));
+	} catch {
+		return;
+	}
+
+	const modules = Array.isArray(parsed?.modules) ? parsed.modules : [];
+	if (modules.length === 0) {
+		await updateScanJobRepositoryTaskStatus(input.scanJob.scanJobId, "completed").catch(
+			() => {},
+		);
+		await recalculateScanTaskCounts(input.scanJob.scanJobId).catch(() => {});
+		return;
+	}
+
+	await updateScanJobRepositoryTaskStatus(input.scanJob.scanJobId, "completed").catch(
+		() => {},
+	);
+
+	for (const moduleEntry of modules) {
+		const moduleName = (moduleEntry.name || "").trim();
+		if (!moduleName) {
+			continue;
+		}
+
+		const artifactDir = moduleEntry.artifactDir?.trim() || "";
+		const moduleId = sanitizeContainerNamePart(moduleName) || moduleName;
+		const hostArtifactDir = artifactDir
+			? await resolveLegacyArtifactHostPath(input.scanJob, artifactDir)
+			: "";
+		let functionPlanJsonPath = hostArtifactDir
+			? await findLegacyFunctionPlanPath(hostArtifactDir)
+			: null;
+		const moduleScanMdPath = hostArtifactDir
+			? await findLegacyModuleSummaryPath(hostArtifactDir)
+			: null;
+		const moduleScanJsonPath = hostArtifactDir
+			? await findLegacyModuleJsonPath(hostArtifactDir)
+			: null;
+
+		const existing = await db
+			.select()
+			.from(scanModuleTasks)
+			.where(
+				and(
+					eq(scanModuleTasks.scanJobId, input.scanJob.scanJobId),
+					eq(scanModuleTasks.moduleId, moduleId),
+				),
+			)
+			.limit(1)
+			.then((rows) => rows[0] || null);
+
+		const patch = {
+			moduleName,
+			status: "completed" as const,
+			moduleScanMdPath: moduleScanMdPath || undefined,
+			moduleScanJsonPath: moduleScanJsonPath || undefined,
+			functionPlanJsonPath: functionPlanJsonPath || undefined,
+			startedAt: input.scanJob.startedAt || input.scanJob.createdAt,
+			completedAt: input.scanJob.finishedAt || new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+		};
+
+		if (existing) {
+			await db
+				.update(scanModuleTasks)
+				.set(patch)
+				.where(eq(scanModuleTasks.scanModuleTaskId, existing.scanModuleTaskId));
+		} else {
+			await db.insert(scanModuleTasks).values({
+				scanJobId: input.scanJob.scanJobId,
+				moduleId,
+				moduleName,
+				status: "completed",
+				priority: 0,
+				attempt: 1,
+				moduleScanMdPath: moduleScanMdPath || undefined,
+				moduleScanJsonPath: moduleScanJsonPath || undefined,
+				functionPlanJsonPath: functionPlanJsonPath || undefined,
+				startedAt: input.scanJob.startedAt || input.scanJob.createdAt,
+				completedAt: input.scanJob.finishedAt || new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			});
+		}
+
+		const moduleTask = await db
+			.select()
+			.from(scanModuleTasks)
+			.where(
+				and(
+					eq(scanModuleTasks.scanJobId, input.scanJob.scanJobId),
+					eq(scanModuleTasks.moduleId, moduleId),
+				),
+			)
+			.limit(1)
+			.then((rows) => rows[0] || null);
+
+		if (moduleTask && hostArtifactDir && !functionPlanJsonPath) {
+			const fileListPath = path.join(hostArtifactDir, "file_list.txt");
+			try {
+				await fs.stat(fileListPath);
+				functionPlanJsonPath =
+					await generateFunctionPlanForModuleTaskInContainer({
+						scanJob: input.scanJob,
+						scanModuleTask: moduleTask,
+						hostArtifactDir,
+					});
+				await db
+					.update(scanModuleTasks)
+					.set({
+						functionPlanJsonPath,
+						updatedAt: new Date().toISOString(),
+					})
+					.where(
+						eq(scanModuleTasks.scanModuleTaskId, moduleTask.scanModuleTaskId),
+					);
+			} catch (error) {
+				console.error(
+					"Failed to generate function plan for module task",
+					moduleTask.scanModuleTaskId,
+					error,
+				);
+			}
+		}
+
+		if (moduleTask && functionPlanJsonPath) {
+			await syncFunctionTasksFromPlanFile({
+				scanJob: input.scanJob,
+				scanModuleTask: moduleTask,
+				functionPlanPath: functionPlanJsonPath,
+			});
+		}
+	}
+
+	await recalculateScanTaskCounts(input.scanJob.scanJobId).catch(() => {});
+};
+
+export const syncFullScanTasksFromArtifacts = async (scanJobId: string) => {
+	const scanJob = await findScanJobById(scanJobId);
+	const scanRuntimeDir = await resolveScanJobArtifactsDir(scanJobId);
+	await syncLegacyFullScanTasksFromArtifacts({
+		scanJob,
+		scanRuntimeDir,
+	});
+	return await findScanJobById(scanJobId);
+};
+
 const prepareRepositoryForScanInContainer = async (input: {
 	containerName: string;
 	scanJob: ScanJob;
 	scanRootDir: string;
 }): Promise<PreparedRepositoryState> => {
 	const forceLatestRef = input.scanJob.scanType === "delta";
+	const preferLatestTag = input.scanJob.scanType === "full";
 	const targetRef = input.scanJob.targetRef?.trim() || "";
 	const targetTag = input.scanJob.targetTag?.trim() || "";
 	const requestedCommit = input.scanJob.commitSha?.trim() || "";
 	const requestedBase = input.scanJob.baseSha?.trim() || "";
 	const commitWindow = input.scanJob.commitWindow || DEFAULT_DELTA_COMMIT_WINDOW;
+	const isDeltaScan = input.scanJob.scanType === "delta";
 
 	const shellScript = [
-		"set -euo pipefail",
-		"cd /workspace/repo",
 		`SCAN_ROOT='${escapeSingleQuotes(input.scanRootDir)}'`,
 		"mkdir -p \"$SCAN_ROOT\"",
+		"PREPARE_STDOUT=\"$SCAN_ROOT/00_repository_prepare.stdout.log\"",
+		"PREPARE_STDERR=\"$SCAN_ROOT/00_repository_prepare.stderr.log\"",
+		": > \"$PREPARE_STDOUT\"",
+		": > \"$PREPARE_STDERR\"",
+		"exec > >(tee -a \"$PREPARE_STDOUT\") 2> >(tee -a \"$PREPARE_STDERR\" >&2)",
+		"set -Eeuo pipefail",
+		"CURRENT_CMD=\"(initializing)\"",
+		"trap 'rc=$?; echo \"[error] command failed (exit ${rc}): ${CURRENT_CMD}\" >&2' ERR",
+		"run() {",
+		"  CURRENT_CMD=\"$*\"",
+		"  echo \"[cmd] $CURRENT_CMD\"",
+		"  \"$@\"",
+		"}",
+		"cd /workspace/repo",
 		"CURRENT_BRANCH=\"$(git symbolic-ref --quiet --short HEAD || true)\"",
-		"git fetch --all --tags --prune",
+		"run git fetch --all --tags --prune",
 		"if [ -n \"$CURRENT_BRANCH\" ]; then",
-		"  git pull --ff-only origin \"$CURRENT_BRANCH\" || true",
+		"  CURRENT_CMD=\"git pull --ff-only origin $CURRENT_BRANCH\"",
+		"  if ! git pull --ff-only origin \"$CURRENT_BRANCH\"; then",
+		"    echo \"[warn] command failed but ignored: $CURRENT_CMD\" >&2",
+		"  fi",
 		"fi",
 		`TARGET_REF='${escapeSingleQuotes(targetRef)}'`,
 		`TARGET_TAG='${escapeSingleQuotes(targetTag)}'`,
@@ -2727,6 +5456,7 @@ const prepareRepositoryForScanInContainer = async (input: {
 		`REQUESTED_BASE='${escapeSingleQuotes(requestedBase)}'`,
 		`COMMIT_WINDOW='${commitWindow}'`,
 		`FORCE_LATEST_REF='${forceLatestRef ? "true" : "false"}'`,
+		`PREFER_LATEST_TAG='${preferLatestTag ? "true" : "false"}'`,
 		"RESOLVED_TARGET=\"\"",
 		"EFFECTIVE_TARGET_MODE=\"explicit\"",
 		"if [ \"$FORCE_LATEST_REF\" = \"true\" ]; then",
@@ -2742,23 +5472,45 @@ const prepareRepositoryForScanInContainer = async (input: {
 		"    TARGET_TAG=\"\"",
 		"    REQUESTED_COMMIT=\"\"",
 		"  fi",
+		"elif [ \"$PREFER_LATEST_TAG\" = \"true\" ] && [ -z \"$TARGET_TAG\" ]; then",
+		"  CURRENT_CMD=\"git for-each-ref --sort=-creatordate --count=1 --format=%(refname:short) refs/tags\"",
+		"  LATEST_TAG=\"$(git for-each-ref --sort=-creatordate --count=1 --format='%(refname:short)' refs/tags)\"",
+		"  if [ -n \"$LATEST_TAG\" ]; then",
+		"    EFFECTIVE_TARGET_MODE=\"latest-tag\"",
+		"    TARGET_TAG=\"$LATEST_TAG\"",
+		"    TARGET_REF=\"\"",
+		"    REQUESTED_COMMIT=\"\"",
+		"    CURRENT_CMD=\"git rev-parse --verify refs/tags/$TARGET_TAG^{commit}\"",
+		"    git rev-parse --verify \"refs/tags/$TARGET_TAG^{commit}\" >/dev/null",
+		"    run git checkout -f \"refs/tags/$TARGET_TAG\"",
+		"    RESOLVED_TARGET=\"$(git rev-parse HEAD)\"",
+		"  else",
+		"    EFFECTIVE_TARGET_MODE=\"latest-head-no-tag\"",
+		"    RESOLVED_TARGET=\"$(git rev-parse HEAD)\"",
+		"  fi",
 		"elif [ -n \"$TARGET_TAG\" ]; then",
+		"  CURRENT_CMD=\"git rev-parse --verify refs/tags/$TARGET_TAG^{commit}\"",
 		"  git rev-parse --verify \"refs/tags/$TARGET_TAG^{commit}\" >/dev/null",
-		"  git checkout -f \"refs/tags/$TARGET_TAG\"",
+		"  run git checkout -f \"refs/tags/$TARGET_TAG\"",
 		"  RESOLVED_TARGET=\"$(git rev-parse HEAD)\"",
 		"elif [ -n \"$TARGET_REF\" ]; then",
+		"  CURRENT_CMD=\"git rev-parse --verify $TARGET_REF^{commit}\"",
 		"  if git rev-parse --verify \"$TARGET_REF^{commit}\" >/dev/null 2>&1; then",
-		"    git checkout -f \"$TARGET_REF\"",
-		"  elif git rev-parse --verify \"origin/$TARGET_REF^{commit}\" >/dev/null 2>&1; then",
-		"    git checkout -f \"origin/$TARGET_REF\"",
+		"    run git checkout -f \"$TARGET_REF\"",
 		"  else",
-		"    echo \"Unable to resolve targetRef: $TARGET_REF\" >&2",
-		"    exit 1",
+		"    CURRENT_CMD=\"git rev-parse --verify origin/$TARGET_REF^{commit}\"",
+		"    if git rev-parse --verify \"origin/$TARGET_REF^{commit}\" >/dev/null 2>&1; then",
+		"      run git checkout -f \"origin/$TARGET_REF\"",
+		"    else",
+		"      echo \"Unable to resolve targetRef: $TARGET_REF\" >&2",
+		"      exit 1",
+		"    fi",
 		"  fi",
 		"  RESOLVED_TARGET=\"$(git rev-parse HEAD)\"",
 		"elif [ -n \"$REQUESTED_COMMIT\" ]; then",
+		"  CURRENT_CMD=\"git rev-parse --verify $REQUESTED_COMMIT^{commit}\"",
 		"  if git rev-parse --verify \"$REQUESTED_COMMIT^{commit}\" >/dev/null 2>&1; then",
-		"    git checkout -f \"$REQUESTED_COMMIT\"",
+		"    run git checkout -f \"$REQUESTED_COMMIT\"",
 		"    RESOLVED_TARGET=\"$(git rev-parse HEAD)\"",
 		"  else",
 		"    echo \"Unable to resolve commitSha: $REQUESTED_COMMIT\" >&2",
@@ -2770,11 +5522,17 @@ const prepareRepositoryForScanInContainer = async (input: {
 		"TARGET_SUBJECT=\"$(git log -1 --format=%s \"$RESOLVED_TARGET\")\"",
 		"TARGET_SHORT=\"$(git rev-parse --short \"$RESOLVED_TARGET\")\"",
 		"CURRENT_EXACT_TAG=\"$(git describe --tags --exact-match HEAD 2>/dev/null || true)\"",
-		"if [ -n \"$REQUESTED_BASE\" ] && git rev-parse --verify \"$REQUESTED_BASE^{commit}\" >/dev/null 2>&1; then",
-		"  RESOLVED_BASE=\"$REQUESTED_BASE\"",
-		"else",
-		"  RESOLVED_BASE=\"$(git rev-parse \"$RESOLVED_TARGET~$COMMIT_WINDOW\" 2>/dev/null || true)\"",
-		"fi",
+		...(isDeltaScan
+			? [
+					"if [ -n \"$REQUESTED_BASE\" ] && git rev-parse --verify \"$REQUESTED_BASE^{commit}\" >/dev/null 2>&1; then",
+					"  RESOLVED_BASE=\"$REQUESTED_BASE\"",
+					"else",
+					"  RESOLVED_BASE=\"$(git rev-parse \"$RESOLVED_TARGET~$COMMIT_WINDOW\" 2>/dev/null || true)\"",
+					"fi",
+				]
+			: [
+					"RESOLVED_BASE=\"\"",
+				]),
 		"{",
 		"  echo '# Repository State'",
 		"  echo",
@@ -2783,14 +5541,19 @@ const prepareRepositoryForScanInContainer = async (input: {
 		"  echo \"- target_ref: ${TARGET_REF:-<none>}\"",
 		"  echo \"- requested_commit_sha: ${REQUESTED_COMMIT:-<none>}\"",
 		"  echo \"- requested_base_sha: ${REQUESTED_BASE:-<none>}\"",
-		"  echo \"- commit_window: ${COMMIT_WINDOW}\"",
 		"  echo \"- resolved_target_sha: ${RESOLVED_TARGET}\"",
 		"  echo \"- resolved_target_short: ${TARGET_SHORT}\"",
 		"  echo \"- resolved_base_sha: ${RESOLVED_BASE:-<none>}\"",
 		"  echo \"- target_subject: ${TARGET_SUBJECT}\"",
-		"  echo",
-		"  echo '## Recent Commits'",
-		"  git log --oneline -n \"$((COMMIT_WINDOW + 1))\" \"$RESOLVED_TARGET\" || true",
+		...(isDeltaScan
+			? [
+					"  echo \"- commit_window: ${COMMIT_WINDOW}\"",
+					"  echo",
+					"  echo '## Recent Commits'",
+					"  CURRENT_CMD=\"git log --oneline -n $((COMMIT_WINDOW + 1)) $RESOLVED_TARGET\"",
+					"  git log --oneline -n \"$((COMMIT_WINDOW + 1))\" \"$RESOLVED_TARGET\" || true",
+				]
+			: []),
 		"} > \"$SCAN_ROOT/00_repository_state.md\"",
 		"jq -n \\",
 		"  --arg effectiveTargetMode \"$EFFECTIVE_TARGET_MODE\" \\",
@@ -2820,7 +5583,39 @@ const prepareRepositoryForScanInContainer = async (input: {
 
 	await execAsync(
 		`docker exec ${input.containerName} bash -lc "echo '${encoded}' | base64 -d | bash"`,
-	);
+	).catch(async (error) => {
+		let prepareStdout = "";
+		let prepareStderr = "";
+		try {
+			const stdoutRead = await execAsync(
+				`docker exec ${input.containerName} bash -lc "cat '${input.scanRootDir}/00_repository_prepare.stdout.log' 2>/dev/null || true"`,
+			);
+			prepareStdout = stdoutRead.stdout.trim();
+		} catch {}
+		try {
+			const stderrRead = await execAsync(
+				`docker exec ${input.containerName} bash -lc "cat '${input.scanRootDir}/00_repository_prepare.stderr.log' 2>/dev/null || true"`,
+			);
+			prepareStderr = stderrRead.stdout.trim();
+		} catch {}
+
+		const message = error instanceof Error ? error.message : "Repository prepare failed";
+		const tail = (value: string) =>
+			value
+				.split("\n")
+				.slice(-40)
+				.join("\n")
+				.trim();
+		throw new Error(
+			[
+				message,
+				prepareStdout ? `prepare_stdout_tail:\n${tail(prepareStdout)}` : "",
+				prepareStderr ? `prepare_stderr_tail:\n${tail(prepareStderr)}` : "",
+			]
+				.filter(Boolean)
+				.join("\n\n"),
+		);
+	});
 
 	const repositoryState = await execAsync(
 		`docker exec ${input.containerName} bash -lc "cat '${input.scanRootDir}/00_repository_state.md'"`,
@@ -2839,106 +5634,830 @@ const prepareRepositoryForScanInContainer = async (input: {
 	};
 };
 
-const runClaudeHeadlessTurnInContainer = async (input: {
+const runParallel = async <T>(
+	items: T[],
+	concurrency: number,
+	worker: (item: T) => Promise<void>,
+) => {
+	let cursor = 0;
+	let failed = 0;
+	const runNext = async () => {
+		while (cursor < items.length) {
+			const item = items[cursor++];
+			if (item === undefined) {
+				break;
+			}
+			try {
+				await worker(item);
+			} catch {
+				failed += 1;
+			}
+		}
+	};
+	await Promise.all(
+		Array.from({ length: Math.min(concurrency, items.length) }).map(() =>
+			runNext(),
+		),
+	);
+	return { total: items.length, failed };
+};
+
+const buildRepositoryScannerPrompt = (input: {
+	scanJob: ScanJob;
+	repositoryRoot: string;
+	modulesRoot: string;
+	repositoryState: PreparedRepositoryState;
+	agentProvider: string;
+	thinkingLevel: string;
+}) =>
+	[
+		"You are the repository-scanner for a full scan job.",
+		"Use the installed skill named repository-scanner as your working method.",
+		"Do not emit candidate or candidate_batch events.",
+		"Analyze the full checked-out repository, not a recent commit window.",
+		`Target ref: ${input.repositoryState.currentBranch || input.repositoryState.targetRef || "<none>"}.`,
+		`Target tag: ${input.repositoryState.currentExactTag || input.repositoryState.targetTag || "<none>"}.`,
+		`Target commit: ${input.repositoryState.resolvedTargetSha}.`,
+		`Use ${input.agentProvider} with reasoning effort around ${input.thinkingLevel}.`,
+		`Write repository markdown report to ${toAgentVisiblePath(input.repositoryRoot)}/repository_scan.md.`,
+		`Write repository JSON report to ${toAgentVisiblePath(input.repositoryRoot)}/repository_scan.json.`,
+		`Write module plan JSON to ${toAgentVisiblePath(input.repositoryRoot)}/module_plan.json.`,
+		`Write an optional markdown module plan summary to ${toAgentVisiblePath(input.repositoryRoot)}/module_plan.md.`,
+		`Create one module artifact directory under ${toAgentVisiblePath(input.modulesRoot)}/<moduleId>.`,
+		"Each module entry in module_plan.json must contain: moduleId, name, summary, artifactDir, pathListFile, priority.",
+		"Each module's pathListFile must point to a file_list.txt that you create inside that module artifact directory.",
+		"file_list.txt should contain repository-relative source file paths, one path per line.",
+		"",
+		`Repository state:\n${input.repositoryState.markdown}`,
+	].join("\n");
+
+const buildModuleScannerPrompt = (input: {
+	scanJob: ScanJob;
+	scanModuleTask: ScanModuleTask;
+	moduleRoot: string;
+	repositoryRoot: string;
+	pathListFileInContainer: string;
+	thinkingLevel: string;
+}) =>
+	[
+		"You are the module-scanner for one full-scan module task.",
+		"Use the installed skill named module-scanner as your working method.",
+		"Use the installed skill named tree-sitter for function extraction.",
+		"Do not emit candidate or candidate_batch events.",
+		`scan_job_id: ${input.scanJob.scanJobId}`,
+		`module_id: ${input.scanModuleTask.moduleId}`,
+		`module_name: ${input.scanModuleTask.moduleName}`,
+		`use_reasoning_effort: ${input.thinkingLevel}`,
+		`repository_scan_md: ${toAgentVisiblePath(input.repositoryRoot)}/repository_scan.md`,
+		`repository_scan_json: ${toAgentVisiblePath(input.repositoryRoot)}/repository_scan.json`,
+		`module_path_list: ${toAgentVisiblePath(input.pathListFileInContainer)}`,
+		`write_module_scan_md_to: ${toAgentVisiblePath(input.moduleRoot)}/module_scan.md`,
+		`write_module_scan_json_to: ${toAgentVisiblePath(input.moduleRoot)}/module_scan.json`,
+		`write_function_plan_json_to: ${toAgentVisiblePath(input.moduleRoot)}/function_plan.json`,
+		"function_plan.json must contain tasks/functions with: functionId, functionName, filePath, line, priority, summary, riskType.",
+	].join("\n");
+
+const buildFunctionScannerPrompt = (input: {
+	scanJob: ScanJob;
+	scanModuleTask: ScanModuleTask;
+	scanFunctionTask: ScanFunctionTask;
+	functionRoot: string;
+	repositoryRoot: string;
+	moduleRoot: string;
+	thinkingLevel: string;
+}) =>
+	[
+		"You are the function-scanner for one full-scan function task.",
+		"Use the installed skill named function-scanner as your working method.",
+		"Persist structured candidate output only to the required JSON result file.",
+		`scan_job_id: ${input.scanJob.scanJobId}`,
+		`module_id: ${input.scanModuleTask.moduleId}`,
+		`module_name: ${input.scanModuleTask.moduleName}`,
+		`function_id: ${input.scanFunctionTask.functionId}`,
+		`function_name: ${input.scanFunctionTask.functionName}`,
+		`function_file: ${input.scanFunctionTask.filePath || "-"}`,
+		`function_line: ${input.scanFunctionTask.line ?? "-"}`,
+		`function_summary: ${input.scanFunctionTask.summary || "-"}`,
+		`function_risk_type: ${input.scanFunctionTask.riskType || "-"}`,
+		`use_reasoning_effort: ${input.thinkingLevel}`,
+		`repository_scan_md: ${toAgentVisiblePath(input.repositoryRoot)}/repository_scan.md`,
+		`repository_scan_json: ${toAgentVisiblePath(input.repositoryRoot)}/repository_scan.json`,
+		`module_scan_md: ${toAgentVisiblePath(input.moduleRoot)}/module_scan.md`,
+		`module_scan_json: ${toAgentVisiblePath(input.moduleRoot)}/module_scan.json`,
+		`function_plan_json: ${toAgentVisiblePath(input.moduleRoot)}/function_plan.json`,
+		`write_optional_function_scan_md_to: ${toAgentVisiblePath(input.functionRoot)}/function_scan.md`,
+		`write_function_result_json_to: ${toAgentVisiblePath(buildFunctionScanResultPath(input.scanJob.scanJobId, input.scanFunctionTask.moduleId, input.scanFunctionTask.functionId))}`,
+		"function_result.json must contain a top-level object with a candidates array.",
+		"Each candidate object may include only: title, description, filePath, line, confidence, score.",
+		"Always write function_result.json, even when there are no candidates; use an empty array in that case.",
+	].join("\n");
+
+const runSingleTurnAgentInContainer = async (input: {
+	scanJob: ScanJob;
+	agentProfile: AgentProfileLike | null;
 	containerName: string;
+	codexHome: string;
+	runtimeDirHost: string;
+	runtimeRootInContainer: string;
+	cwd: string;
+	prompt: string | ((containerName: string) => Promise<string>);
+	runtimeFileNames?: {
+		jsonl: string;
+		text: string;
+		stderr: string;
+	};
+	setupMarkdownPathInContainer?: string;
+	setupMarkdown?: string;
+	onThreadId?: (threadId: string) => Promise<void>;
+}) => {
+	const {
+		imageTag,
+		contextVolumeName,
+		projectName,
+		serviceName,
+		projectProfileContextRoot,
+		projectProfileCacheRoot,
+	} = await resolveScanExecutionContext(input.scanJob);
+	const agentsDir = await resolveAgentsDirectory();
+	const agentProvider = input.agentProfile?.provider || "codex";
+	const scanContextMount = await resolveScanContextMount({
+		contextVolumeName,
+		projectName,
+		profileName: serviceName,
+	});
+	const containerEnvPairs = [
+		...getGlobalContainerEnvironmentPairs(),
+		`VULSEEK_PROJECT_PROFILE_DIR=${projectProfileContextRoot}`,
+		`VULSEEK_PROJECT_CACHE_DIR=${projectProfileCacheRoot}`,
+	];
+	const runtimeFileNames = input.runtimeFileNames || {
+		jsonl: "app-server-messages.jsonl",
+		text: "app-server-text.log",
+		stderr: "app-server-stderr.log",
+	};
+	const containerEnvArgs = containerEnvPairs
+		.map((pair) => `-e '${escapeSingleQuotes(pair)}'`)
+		.join(" ");
+	const namespaceEnabledContainerArgs = buildNamespaceEnabledContainerArgs();
+	const jsonlPath = path.join(input.runtimeDirHost, runtimeFileNames.jsonl);
+	const textPath = path.join(input.runtimeDirHost, runtimeFileNames.text);
+	const stderrPath = path.join(input.runtimeDirHost, runtimeFileNames.stderr);
+	const runtimeArtifacts = createCodexRuntimeArtifacts({
+		runtimeDir: input.runtimeDirHost,
+		jsonlFileName: runtimeFileNames.jsonl,
+		textFileName: runtimeFileNames.text,
+		stderrFileName: runtimeFileNames.stderr,
+	});
+
+	await initializeRuntimeFiles({
+		runtimeDir: input.runtimeDirHost,
+		jsonlPath,
+		textPath,
+		stderrPath,
+	});
+	await initializeCodexRuntimeMetadataFiles({
+		cursorPath: runtimeArtifacts.cursorPath,
+		statePath: runtimeArtifacts.statePath,
+	});
+
+	const containerNetworkArg = await resolveCurrentDockerNetworkArg();
+	await execAsync(
+		`docker run -d --rm --name ${input.containerName} ${containerNetworkArg} ${namespaceEnabledContainerArgs} ${scanContextMount.dockerMountArg} ${containerEnvArgs} ${imageTag} bash -lc "mkdir -p '${input.runtimeRootInContainer}' '${input.codexHome}/skills' && sleep infinity"`,
+	);
+
+	try {
+		await initializeRuntimeFilesInContainer({
+			containerName: input.containerName,
+			runtimeDirInContainer: input.runtimeRootInContainer,
+			jsonlFileName: runtimeFileNames.jsonl,
+			textFileName: runtimeFileNames.text,
+			stderrFileName: runtimeFileNames.stderr,
+		});
+		await initializeCodexRuntimeMetadataFilesInContainer({
+			containerName: input.containerName,
+			runtimeDirInContainer: input.runtimeRootInContainer,
+			cursorFileName: runtimeArtifacts.cursorFileName,
+			stateFileName: runtimeArtifacts.stateFileName,
+		});
+		await copyCodexAssetsToContainerHome(
+			input.containerName,
+			input.codexHome,
+			agentsDir,
+			input.agentProfile,
+		);
+		if (input.setupMarkdownPathInContainer && input.setupMarkdown) {
+			await writeContainerFile(
+				input.containerName,
+				input.setupMarkdownPathInContainer,
+				input.setupMarkdown,
+			);
+		}
+		const resolvedPrompt =
+			typeof input.prompt === "string"
+				? input.prompt
+				: await input.prompt(input.containerName);
+		const sandboxRuntime = await prepareSandboxAgentRuntime({
+			containerName: input.containerName,
+			runtimeDirHost: input.runtimeDirHost,
+			runtimeDirInContainer: input.runtimeRootInContainer,
+			provider: agentProvider,
+			homeDir: "/root",
+			envPairs:
+				agentProvider === "claude_code" && input.agentProfile
+					? buildClaudeEnvPairs(input.agentProfile)
+					: [`CODEX_HOME=${input.codexHome}`],
+		});
+		let sessionId = "";
+		const result = await runSandboxAgentHeadlessTurnInContainer({
+			baseUrl: sandboxRuntime.server.baseUrl,
+			provider: agentProvider === "claude_code" ? "claude" : "codex",
+			cwd: input.cwd,
+			prompt: resolvedPrompt,
+			model: input.agentProfile?.model,
+			thinkingLevel: input.agentProfile?.thinkingLevel,
+			jsonlPath,
+			textPath,
+			stderrPath,
+			onSessionId: async (nextSessionId) => {
+				sessionId = nextSessionId;
+				await input.onThreadId?.(nextSessionId);
+			},
+		});
+		return {
+			threadId: result.sessionId || sessionId,
+			jsonlPath,
+			textPath,
+			stderrPath,
+		};
+	} finally {
+		await execAsync(`docker rm -f ${input.containerName}`).catch(() => {});
+	}
+};
+
+const runSandboxAgentHeadlessTurnInContainer = async (input: {
+	baseUrl: string;
+	provider: "codex" | "claude";
 	cwd: string;
 	prompt: string;
-	model: string;
-	thinkingLevel: string;
-	envPairs: string[];
-	sessionId?: string;
+	model?: string;
+	thinkingLevel?: string;
 	jsonlPath: string;
 	textPath: string;
 	stderrPath: string;
 	onSessionId?: (sessionId: string) => Promise<void>;
-	onBridgeEvent?: (event: VulseekBridgeEvent) => Promise<void>;
-	onBridgeParseError?: (error: BridgeParseError) => Promise<void>;
 }) => {
-	const promptFilePath = `/tmp/dokploy-claude-prompt-${nanoid()}.txt`;
-	await writeContainerFile(input.containerName, promptFilePath, input.prompt);
+	const client: any = await SandboxAgent.connect({
+		baseUrl: input.baseUrl,
+		fetch: sandboxAgentFetch,
+	} as never);
 
-	const exportLines = buildShellExports([
-		`HOME=/root`,
-		`VULSEEK_THINKING_LEVEL=${input.thinkingLevel}`,
-		...input.envPairs,
-	]);
-	const claudeCommand = [
-		`cd '${escapeSingleQuotes(input.cwd)}'`,
-		exportLines,
-		`claude -p \"$(cat '${promptFilePath}')\" --output-format stream-json --model '${escapeSingleQuotes(input.model)}'${input.sessionId ? ` --resume '${escapeSingleQuotes(input.sessionId)}'` : ""}`,
-	].join(" && ");
+	const session: any = await client.createSession({
+		agent: input.provider,
+		cwd: input.cwd,
+		model: input.model || undefined,
+		thoughtLevel: input.thinkingLevel || undefined,
+		mode: input.provider === "codex" ? "full-access" : undefined,
+	} as never);
 
-	const child = spawn(
-		"docker",
-		["exec", "-i", input.containerName, "bash", "-lc", claudeCommand],
-		{
-			env: {
-				...process.env,
-				HOME: "/root",
+	const sessionId =
+		asString(session?.agentSessionId) ||
+		asString(session?.id) ||
+		"";
+	if (sessionId) {
+		await input.onSessionId?.(sessionId);
+	}
+
+	let eventWriteChain = Promise.resolve();
+	const appendRuntimeError = async (message: string) => {
+		const errorMessage = {
+			method: "error",
+			params: {
+				error: {
+					message,
+				},
 			},
-			stdio: ["ignore", "pipe", "pipe"],
-		},
-	);
+		} satisfies JsonRpcMessage;
+		await appendScanRuntimeFile(
+			input.jsonlPath,
+			formatJsonRpcRuntimeMessage(errorMessage),
+		);
+		const rendered = renderJsonRpcMessage(errorMessage);
+		if (rendered) {
+			await appendScanRuntimeFile(input.textPath, rendered);
+		}
+	};
 
-	let resolvedSessionId = input.sessionId || "";
-	let bridgeEventBuffer = "";
-
-	const stdoutLines = createInterface({ input: child.stdout });
-	stdoutLines.on("line", async (line) => {
-		try {
-			await appendScanRuntimeFile(input.jsonlPath, `${line}\n`);
-			const parsed = JSON.parse(line) as Record<string, unknown>;
-			const rendered = renderClaudeStreamJsonMessage(parsed);
+	const appendNormalizedMessages = async (
+		event: SandboxAgentSessionEvent,
+	) => {
+		const normalized = normalizeSandboxAgentPayloadToJsonRpc({
+			payload: event.payload,
+			fallbackItemId:
+				asString(event.sessionId) || sessionId || "sandbox-agent",
+		});
+		if (normalized.messages.length > 0) {
+			await appendScanRuntimeFile(
+				input.jsonlPath,
+				normalized.messages
+					.map((message) =>
+						formatJsonRpcRuntimeMessage(message, event.createdAt),
+					)
+					.join(""),
+			);
+			const rendered = normalized.messages
+				.map((message) => renderJsonRpcMessage(message))
+				.join("");
 			if (rendered) {
 				await appendScanRuntimeFile(input.textPath, rendered);
-				bridgeEventBuffer += rendered;
-				const { events, parseErrors, remaining } =
-					extractVulseekBridgeEvents(bridgeEventBuffer);
-				bridgeEventBuffer = remaining;
-				for (const parseError of parseErrors) {
-					await input.onBridgeParseError?.(parseError);
-				}
-				for (const event of events) {
-					await input.onBridgeEvent?.(event);
-				}
 			}
-
-			const nextSessionId = extractClaudeSessionId(parsed);
-			if (nextSessionId && nextSessionId !== resolvedSessionId) {
-				resolvedSessionId = nextSessionId;
-				await input.onSessionId?.(resolvedSessionId);
-			}
-		} catch (error) {
-			const message =
-				error instanceof Error ? error.message : "Failed to parse Claude stream-json";
-			await appendScanRuntimeFile(input.stderrPath, `[parse-error] ${message}\n`);
 		}
+	};
+
+	session.onEvent((event: SandboxAgentSessionEvent) => {
+		eventWriteChain = eventWriteChain
+			.then(() => appendNormalizedMessages(event))
+			.catch(async (error) => {
+				await appendScanRuntimeFile(
+					input.stderrPath,
+					`[sandbox-agent-event] ${
+						error instanceof Error ? error.message : "unknown error"
+					}\n`,
+				);
+			});
 	});
 
-	child.stderr.on("data", (chunk) => {
-		void appendScanRuntimeFile(input.stderrPath, chunk.toString());
+	session.onPermissionRequest((request: Record<string, unknown>) => {
+		const permissionId =
+			asString(request.id) ||
+			asString(request.permissionId) ||
+			asString(asRecord(request.permission)?.id);
+		if (!permissionId) {
+			return;
+		}
+
+		void (async () => {
+			try {
+				await session.respondPermission(permissionId, "always");
+			} catch {
+				try {
+					await session.respondPermission(permissionId, "once");
+				} catch (error) {
+					await appendScanRuntimeFile(
+						input.stderrPath,
+						`[sandbox-agent-permission] ${
+							error instanceof Error ? error.message : "failed to auto-approve permission"
+						}\n`,
+					);
+				}
+			}
+		})();
 	});
 
-	const exitCode = await new Promise<number>((resolve, reject) => {
-		child.on("error", (error) => reject(error));
-		child.on("close", (code) => resolve(code ?? 0));
-	});
+	await appendScanRuntimeFile(
+		input.jsonlPath,
+		formatJsonRpcRuntimeMessage({ method: "turn/started", params: {} }),
+	);
 
-	await execAsync(
-		`docker exec ${input.containerName} bash -lc "rm -f '${promptFilePath}'"`,
-	).catch(() => {});
-
-	if (exitCode !== 0) {
-		throw new Error(`claude headless exited with code ${exitCode}`);
+	try {
+		try {
+			await withTimeout(
+				session.prompt([
+					{
+						type: "text",
+						text: input.prompt,
+					},
+				]),
+				SANDBOX_AGENT_PROMPT_TIMEOUT_MS,
+				() =>
+					new Error(
+						`sandbox-agent session.prompt timed out after ${Math.round(
+							SANDBOX_AGENT_PROMPT_TIMEOUT_MS / 1000,
+						)}s`,
+					),
+			);
+		} catch (error) {
+			if (isPromptPayloadSchemaError(error)) {
+				await withTimeout(
+					session.prompt(input.prompt),
+					SANDBOX_AGENT_PROMPT_TIMEOUT_MS,
+					() =>
+						new Error(
+							`sandbox-agent session.prompt timed out after ${Math.round(
+								SANDBOX_AGENT_PROMPT_TIMEOUT_MS / 1000,
+							)}s`,
+						),
+				);
+			} else {
+				throw error;
+			}
+		}
+		await appendScanRuntimeFile(
+			input.jsonlPath,
+			formatJsonRpcRuntimeMessage({
+				method: "turn/completed",
+				params: { turn: "completed" },
+			}),
+		);
+		await eventWriteChain;
+	} catch (error) {
+		const message =
+			error instanceof Error ? error.message : "sandbox-agent prompt failed";
+		await eventWriteChain.catch(() => {});
+		await appendRuntimeError(message);
+		await appendScanRuntimeFile(input.stderrPath, `[sandbox-agent] ${message}\n`);
+		throw error;
+	} finally {
+		try {
+			await session.close?.();
+		} catch {}
+		try {
+			await client.disconnect?.();
+		} catch {}
 	}
 
 	return {
-		sessionId: resolvedSessionId,
+		sessionId,
 	};
+};
+
+const runRepositoryScannerInContainer = async (scanJob: ScanJob) => {
+	const executionContext = await resolveScanExecutionContext(scanJob);
+	const scanContextMount = await resolveScanContextMount({
+		contextVolumeName: executionContext.contextVolumeName,
+		projectName: executionContext.projectName,
+		profileName: executionContext.serviceName,
+	});
+	const scanRuntimeDir = resolveLiveScanJobArtifactsDir({
+		scanContextMount,
+		scanJobId: scanJob.scanJobId,
+		projectName: executionContext.projectName,
+		profileName: executionContext.serviceName,
+	});
+	const scanRootDir = path.posix.join(
+		buildScanJobContextRoot(scanJob.scanJobId),
+		"scanning",
+	);
+	const repositoryRoot = buildFullScanRepositoryRoot(scanJob.scanJobId);
+	const repositoryRuntimeDir = scanRuntimeDir;
+
+	await updateScanJobPhase(scanJob.scanJobId, "repository_scanning").catch(() => {});
+	await updateScanJobRepositoryTaskStatus(scanJob.scanJobId, "running").catch(
+		() => {},
+	);
+
+	await runSingleTurnAgentInContainer({
+		scanJob,
+		agentProfile: executionContext.scanAgentProfile,
+		containerName: [
+			sanitizeContainerNamePart(executionContext.projectName),
+			sanitizeContainerNamePart(executionContext.serviceName),
+			"repository-scan",
+			sanitizeContainerNamePart(scanJob.scanJobId),
+		].join("-"),
+		codexHome: `${scanRootDir}/.codex`,
+		runtimeDirHost: repositoryRuntimeDir,
+		runtimeRootInContainer: scanRootDir,
+		cwd: "/workspace/repo",
+		prompt: async (containerName) => {
+			const repositoryState = await prepareRepositoryForScanInContainer({
+				containerName,
+				scanJob,
+				scanRootDir,
+			});
+			await updateScanJobTargetContext(scanJob.scanJobId, {
+				targetRef: repositoryState.currentBranch || repositoryState.targetRef,
+				targetTag: repositoryState.currentExactTag || repositoryState.targetTag,
+				commitSha: repositoryState.resolvedTargetSha,
+				baseSha: repositoryState.resolvedBaseSha,
+				commitWindow: repositoryState.commitWindow,
+			});
+			return buildRepositoryScannerPrompt({
+				scanJob,
+				repositoryRoot,
+				modulesRoot: buildFullScanModulesRoot(scanJob.scanJobId),
+				repositoryState,
+				agentProvider: executionContext.scanAgentProfile?.provider || "codex",
+				thinkingLevel:
+					executionContext.scanAgentProfile?.thinkingLevel || "medium",
+			});
+		},
+		setupMarkdownPathInContainer: `${repositoryRoot}/00_setup.md`,
+		setupMarkdown: [
+			"# Repository Scanner Setup",
+			"",
+			`- scan_job_id: ${scanJob.scanJobId}`,
+			`- scan_type: ${scanJob.scanType}`,
+			`- agent_profile: ${executionContext.scanAgentProfile?.name || executionContext.scanAgentProfile?.agentProfileId || "default"}`,
+		].join("\n"),
+		onThreadId: async (threadId) => {
+			await updateScanJobScanningThreadId(scanJob.scanJobId, threadId);
+		},
+	});
+
+	const modulePlanHostPath = path.join(
+		await resolveScanJobArtifactsDir(scanJob.scanJobId),
+		"full_scan",
+		"repository",
+		"module_plan.json",
+	);
+	const moduleTasks = await syncScanModuleTasksFromPlanFile({
+		scanJob,
+		modulePlanPath: modulePlanHostPath,
+	});
+	await updateScanJobRepositoryTaskStatus(scanJob.scanJobId, "completed").catch(
+		() => {},
+	);
+	return { moduleTasks };
+};
+
+const runModuleScannerTaskInContainer = async (scanModuleTaskId: string) => {
+	const scanModuleTask = await findScanModuleTaskById(scanModuleTaskId);
+	const scanJob = await findScanJobById(scanModuleTask.scanJobId);
+	const executionContext = await resolveScanExecutionContext(scanJob);
+	const moduleRoot = buildFullScanModuleRoot(scanJob.scanJobId, scanModuleTask.moduleId);
+	const moduleRuntimeDir = path.join(
+		await resolveScanJobArtifactsDir(scanJob.scanJobId),
+		"full_scan",
+		"modules",
+		sanitizeContextPathPart(scanModuleTask.moduleId),
+	);
+	const pathListHostPath = path.join(moduleRuntimeDir, "file_list.txt");
+	const pathListFileInContainer = await resolveHostPathToScanContextContainerPath(
+		scanJob,
+		pathListHostPath,
+	);
+
+	await updateScanModuleTaskStatus(scanModuleTaskId, "running");
+	await updateScanJobPhase(scanJob.scanJobId, "module_scanning").catch(() => {});
+
+	try {
+		await runSingleTurnAgentInContainer({
+			scanJob,
+			agentProfile: executionContext.scanAgentProfile,
+			containerName: [
+				sanitizeContainerNamePart(executionContext.projectName),
+				sanitizeContainerNamePart(executionContext.serviceName),
+				"module-scan",
+				sanitizeContainerNamePart(scanModuleTask.moduleId).slice(0, 24),
+				nanoid(6),
+			].join("-"),
+			codexHome: `${moduleRoot}/.codex`,
+			runtimeDirHost: moduleRuntimeDir,
+			runtimeRootInContainer: moduleRoot,
+			cwd: "/workspace/repo",
+			prompt: buildModuleScannerPrompt({
+				scanJob,
+				scanModuleTask,
+				moduleRoot,
+				repositoryRoot: buildFullScanRepositoryRoot(scanJob.scanJobId),
+				pathListFileInContainer,
+				thinkingLevel: executionContext.scanAgentProfile?.thinkingLevel || "medium",
+			}),
+			setupMarkdownPathInContainer: `${moduleRoot}/00_setup.md`,
+			setupMarkdown: [
+				"# Module Scanner Setup",
+				"",
+				`- scan_job_id: ${scanJob.scanJobId}`,
+				`- module_id: ${scanModuleTask.moduleId}`,
+				`- module_name: ${scanModuleTask.moduleName}`,
+			].join("\n"),
+			onThreadId: async (threadId) => {
+				await updateScanModuleTask(scanModuleTaskId, { threadId });
+			},
+		});
+
+		const functionPlanHostPath = path.join(moduleRuntimeDir, "function_plan.json");
+		const refreshedModuleTask = await updateScanModuleTask(scanModuleTaskId, {
+			moduleScanMdPath: path.join(moduleRuntimeDir, "module_scan.md"),
+			moduleScanJsonPath: path.join(moduleRuntimeDir, "module_scan.json"),
+			functionPlanJsonPath: functionPlanHostPath,
+			errorMessage: undefined,
+		});
+		try {
+			await fs.stat(functionPlanHostPath);
+		} catch {
+			await generateFunctionPlanForModuleTaskInContainer({
+				scanJob,
+				scanModuleTask: refreshedModuleTask,
+				hostArtifactDir: moduleRuntimeDir,
+			});
+		}
+		await syncFunctionTasksFromPlanFile({
+			scanJob,
+			scanModuleTask: refreshedModuleTask,
+			functionPlanPath: functionPlanHostPath,
+		});
+		await updateScanModuleTaskStatus(scanModuleTaskId, "completed");
+	} catch (error) {
+		await updateScanModuleTaskStatus(
+			scanModuleTaskId,
+			"failed",
+			error instanceof Error ? error.message : "Unknown error",
+		).catch(() => {});
+		throw error;
+	}
+};
+
+const runFunctionScannerTaskInContainer = async (scanFunctionTaskId: string) => {
+	const scanFunctionTask = await findScanFunctionTaskById(scanFunctionTaskId);
+	const scanModuleTask = await findScanModuleTaskById(scanFunctionTask.scanModuleTaskId);
+	const scanJob = await findScanJobById(scanFunctionTask.scanJobId);
+	const executionContext = await resolveScanExecutionContext(scanJob);
+	const functionRoot = buildFullScanFunctionRoot(
+		scanJob.scanJobId,
+		scanFunctionTask.moduleId,
+		scanFunctionTask.functionId,
+	);
+	const functionRuntimeDir = path.join(
+		await resolveScanJobArtifactsDir(scanJob.scanJobId),
+		"full_scan",
+		"modules",
+		sanitizeContextPathPart(scanFunctionTask.moduleId),
+		"functions",
+		sanitizeContextPathPart(scanFunctionTask.functionId),
+	);
+
+	await updateScanFunctionTaskStatus(scanFunctionTaskId, "running");
+	await updateScanJobPhase(scanJob.scanJobId, "function_scanning").catch(() => {});
+
+	try {
+		await runSingleTurnAgentInContainer({
+			scanJob,
+			agentProfile: executionContext.scanAgentProfile,
+			containerName: [
+				sanitizeContainerNamePart(executionContext.projectName),
+				sanitizeContainerNamePart(executionContext.serviceName),
+				"function-scan",
+				sanitizeContainerNamePart(scanFunctionTask.functionId).slice(0, 24),
+				nanoid(6),
+			].join("-"),
+			codexHome: `${functionRoot}/.codex`,
+			runtimeDirHost: functionRuntimeDir,
+			runtimeRootInContainer: functionRoot,
+			cwd: "/workspace/repo",
+			prompt: buildFunctionScannerPrompt({
+				scanJob,
+				scanModuleTask,
+				scanFunctionTask,
+				functionRoot,
+				repositoryRoot: buildFullScanRepositoryRoot(scanJob.scanJobId),
+				moduleRoot: buildFullScanModuleRoot(
+					scanJob.scanJobId,
+					scanFunctionTask.moduleId,
+				),
+				thinkingLevel: executionContext.scanAgentProfile?.thinkingLevel || "medium",
+			}),
+			setupMarkdownPathInContainer: `${functionRoot}/00_setup.md`,
+			setupMarkdown: [
+				"# Function Scanner Setup",
+				"",
+				`- scan_job_id: ${scanJob.scanJobId}`,
+				`- module_id: ${scanFunctionTask.moduleId}`,
+				`- function_id: ${scanFunctionTask.functionId}`,
+				`- function_name: ${scanFunctionTask.functionName}`,
+			].join("\n"),
+			onThreadId: async (threadId) => {
+				await updateScanFunctionTask(scanFunctionTaskId, { threadId });
+			},
+		});
+		const functionResultHostPath = path.join(
+			functionRuntimeDir,
+			"function_result.json",
+		);
+		const functionResult = await readCandidateResultFile(
+			functionResultHostPath,
+			"function result",
+		);
+		await persistFunctionResultCandidates({
+			scanJobId: scanJob.scanJobId,
+			candidates: functionResult.candidates,
+		});
+		await updateScanFunctionTask(scanFunctionTaskId, {
+			functionScanMdPath: path.join(functionRuntimeDir, "function_scan.md"),
+			functionScanJsonPath: functionResultHostPath,
+			errorMessage: undefined,
+		});
+		await updateScanFunctionTaskStatus(scanFunctionTaskId, "completed");
+	} catch (error) {
+		await updateScanFunctionTaskStatus(
+			scanFunctionTaskId,
+			"failed",
+			error instanceof Error ? error.message : "Unknown error",
+		).catch(() => {});
+		throw error;
+	}
+};
+
+export const processScanModuleQueueJob = async (
+	scanJobId: string,
+	scanModuleTaskId: string,
+) => {
+	const [scanJob, moduleTask] = await Promise.all([
+		findScanJobById(scanJobId),
+		findScanModuleTaskById(scanModuleTaskId),
+	]);
+	if (moduleTask.scanJobId !== scanJobId || moduleTask.status === "completed") {
+		await reconcileScanJobCandidatePipelineStatus(scanJobId).catch(() => {});
+		return;
+	}
+
+	const executionContext = await resolveScanExecutionContext(scanJob);
+	const releaseModuleSlot = await acquireScanTaskExecutionSlot(
+		moduleExecutionStateByKey,
+		resolveModuleScanConcurrencyKey(scanJob),
+		executionContext.fullScanModuleConcurrency,
+	);
+
+	try {
+		await runModuleScannerTaskInContainer(scanModuleTaskId);
+		await enqueuePendingFunctionScanWorkForModule(scanJobId, scanModuleTaskId);
+	} finally {
+		releaseModuleSlot();
+		await recalculateScanTaskCounts(scanJobId).catch(() => {});
+		await reconcileScanJobCandidatePipelineStatus(scanJobId).catch(() => {});
+	}
+};
+
+export const processScanFunctionQueueJob = async (
+	scanJobId: string,
+	scanFunctionTaskId: string,
+) => {
+	const [scanJob, functionTask] = await Promise.all([
+		findScanJobById(scanJobId),
+		findScanFunctionTaskById(scanFunctionTaskId),
+	]);
+	if (
+		functionTask.scanJobId !== scanJobId ||
+		functionTask.status === "completed"
+	) {
+		await reconcileScanJobCandidatePipelineStatus(scanJobId).catch(() => {});
+		return;
+	}
+
+	const executionContext = await resolveScanExecutionContext(scanJob);
+	const releaseFunctionSlot = await acquireScanTaskExecutionSlot(
+		functionExecutionStateByKey,
+		resolveFunctionScanConcurrencyKey(scanJob),
+		executionContext.fullScanFunctionConcurrency,
+	);
+
+	try {
+		await runFunctionScannerTaskInContainer(scanFunctionTaskId);
+	} finally {
+		releaseFunctionSlot();
+		await recalculateScanTaskCounts(scanJobId).catch(() => {});
+		await reconcileScanJobCandidatePipelineStatus(scanJobId).catch(() => {});
+	}
+};
+
+const runProgrammaticFullScan = async (scanJobId: string) => {
+	const scanJob = await findScanJobById(scanJobId);
+	let moduleTasks = await findScanModuleTasksByScanJobId(scanJobId);
+	if (
+		scanJob.repositoryTaskStatus !== "completed" &&
+		moduleTasks.length === 0
+	) {
+		const repositoryRun = await runRepositoryScannerInContainer(scanJob);
+		moduleTasks = repositoryRun.moduleTasks;
+	} else if (moduleTasks.length > 0) {
+		await updateScanJobRepositoryTaskStatus(scanJob.scanJobId, "completed").catch(
+			() => {},
+		);
+	}
+
+	await enqueuePendingModuleScanWork(scanJobId);
+
+	const refreshedModuleTasks = moduleTasks.length
+		? moduleTasks
+		: await findScanModuleTasksByScanJobId(scanJobId);
+	for (const moduleTask of refreshedModuleTasks) {
+		if (
+			moduleTask.status !== "completed" ||
+			!moduleTask.functionPlanJsonPath
+		) {
+			continue;
+		}
+		await syncFunctionTasksFromPlanFile({
+			scanJob,
+			scanModuleTask: moduleTask,
+			functionPlanPath: moduleTask.functionPlanJsonPath,
+		}).catch(() => {});
+		await enqueuePendingFunctionScanWorkForModule(
+			scanJobId,
+			moduleTask.scanModuleTaskId,
+		);
+	}
+
+	await recalculateScanTaskCounts(scanJobId).catch(() => {});
+	await reconcileScanJobCandidatePipelineStatus(scanJobId).catch(() => {});
 };
 
 export const runScanJobInContainer = async (scanJobId: string) => {
 	const scanJob = await findScanJobById(scanJobId);
+	if (scanJob.scanType === "full") {
+		await runProgrammaticFullScan(scanJobId);
+		return;
+	}
 	const {
 		isApplicationJob,
 		appName,
@@ -2961,9 +6480,6 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 	const scanRootDir = path.posix.join(buildScanJobContextRoot(scanJob.scanJobId), "scanning");
 	const startedAt = new Date().toISOString();
 	const agentsDir = await resolveAgentsDirectory();
-	const appServerJsonlPath = getScanJobAppServerJsonlPath(scanJob.scanJobId);
-	const appServerTextPath = getScanJobAppServerTextPath(scanJob.scanJobId);
-	const appServerStderrPath = getScanJobAppServerStderrPath(scanJob.scanJobId);
 	const agentProvider = scanAgentProfile?.provider || "codex";
 	const containerEnvPairs = [
 		...getGlobalContainerEnvironmentPairs(),
@@ -2979,9 +6495,23 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 		projectName,
 		profileName: serviceName,
 	});
+	const scanRuntimeDir = resolveLiveScanJobArtifactsDir({
+		scanContextMount,
+		scanJobId: scanJob.scanJobId,
+		projectName,
+		profileName: serviceName,
+	});
+	const appServerJsonlPath = path.join(scanRuntimeDir, "app-server-messages.jsonl");
+	const appServerTextPath = path.join(scanRuntimeDir, "app-server-text.log");
+	const appServerStderrPath = path.join(scanRuntimeDir, "app-server-stderr.log");
+	const runtimeArtifacts = createCodexRuntimeArtifacts({
+		runtimeDir: scanRuntimeDir,
+		jsonlFileName: "app-server-messages.jsonl",
+		textFileName: "app-server-text.log",
+		stderrFileName: "app-server-stderr.log",
+	});
 	const stageSummary: string[] = [];
 	let repositoryState: PreparedRepositoryState | null = null;
-	const bridgeDebugStats = createEmptyScanBridgeDebugStats();
 	let result:
 		| {
 				appName: string;
@@ -2993,8 +6523,9 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 		  }
 		| undefined;
 	try {
+		const namespaceEnabledContainerArgs = buildNamespaceEnabledContainerArgs();
 		await execAsync(
-			`docker run -d --rm --name ${containerName} ${scanContextMount.dockerMountArg} ${containerEnvArgs} ${imageTag} bash -lc "sleep infinity"`,
+			`docker run -d --rm --name ${containerName} ${namespaceEnabledContainerArgs} ${scanContextMount.dockerMountArg} ${containerEnvArgs} ${imageTag} bash -lc "sleep infinity"`,
 		);
 
 		stageSummary.push(`- container: ${containerName}`);
@@ -3009,7 +6540,7 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 			`- agent_profile: ${scanAgentProfile?.name || scanAgentProfile?.agentProfileId || "default"}`,
 		);
 		stageSummary.push(`- agent_provider: ${agentProvider}`);
-		stageSummary.push(`- agent_model: ${scanAgentProfile?.model || "gpt-5.3-codex"}`);
+		stageSummary.push(`- agent_model: ${scanAgentProfile?.model || "gpt-5.4"}`);
 		stageSummary.push(`- started_at: ${startedAt}`);
 
 		await execAsync(
@@ -3032,7 +6563,9 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 				`- target_tag: ${scanJob.targetTag || "<none>"}`,
 				`- commit_sha: ${scanJob.commitSha || "<none>"}`,
 				`- base_sha: ${scanJob.baseSha || "<none>"}`,
-				`- commit_window: ${scanJob.commitWindow}`,
+				...(scanJob.scanType === "delta"
+					? [`- commit_window: ${scanJob.commitWindow}`]
+					: []),
 				`- started_at: ${startedAt}`,
 			].join("\n"),
 		);
@@ -3054,20 +6587,23 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 						: "- using_agent_profile_runtime_env: true",
 				);
 			} else {
-				const codexConfigPath = path.join(agentsDir, "codex-config.toml");
+				await copyCodexAssetsToContainerHome(
+					containerName,
+					"/root/.codex",
+					agentsDir,
+					null,
+				);
 				try {
-					await fs.stat(codexConfigPath);
-					await execAsync(`docker cp "${codexConfigPath}" ${containerName}:/root/.codex/config.toml`);
+					await execAsync(
+						`docker exec ${containerName} bash -lc "test -f /root/.codex/config.toml"`,
+					);
 					stageSummary.push("- copied_codex_config: true");
 				} catch {
 					stageSummary.push("- copied_codex_config: false");
 				}
-
-				const codexAuthPath = path.join(agentsDir, "codex-auth.json");
 				try {
-					await fs.stat(codexAuthPath);
 					await execAsync(
-						`docker cp "${codexAuthPath}" ${containerName}:/root/.codex/auth.json`,
+						`docker exec ${containerName} bash -lc "test -f /root/.codex/auth.json"`,
 					);
 					stageSummary.push("- copied_codex_auth: true");
 				} catch {
@@ -3102,414 +6638,108 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 		});
 
 		try {
-			const testPrompt = DEFAULT_CODEX_TEST_PROMPT;
+			const candidateResultPath = buildScanCandidateResultPath(scanJob.scanJobId);
 			const codexPrompt = [
+				"先概括当前仓库的目录结构，再开始正式扫描。",
 				`Run a ${scanJob.scanType} vulnerability scan for this repository.`,
 				scanJob.scanType === "delta"
 					? "For delta scan, always use the latest fetched ref/HEAD in the repository as the scan target."
-					: "For full scan, use the explicitly prepared repository target revision.",
+					: "For full scan, use the explicitly prepared repository target revision and analyze the full repository codebase, not a recent commit window.",
 				`Target ref: ${repositoryState?.currentBranch || repositoryState?.targetRef || "<none>"}.`,
 				`Target tag: ${repositoryState?.currentExactTag || repositoryState?.targetTag || "<none>"}.`,
 				`Target commit: ${repositoryState?.resolvedTargetSha || "<none>"}.`,
-				`Base commit: ${repositoryState?.resolvedBaseSha || "<none>"}.`,
-				`Commit window k: ${repositoryState?.commitWindow || scanJob.commitWindow}.`,
+				...(scanJob.scanType === "delta"
+					? [
+							`Base commit: ${repositoryState?.resolvedBaseSha || "<none>"}.`,
+							`Commit window k: ${repositoryState?.commitWindow || scanJob.commitWindow}.`,
+						]
+					: [
+							"Do not bias the scan toward recent commits or recent diffs.",
+							"Do not use recent commit windows as the main search strategy for full scan.",
+				]),
 				`Use ${agentProvider} as the runtime agent and keep reasoning effort around ${scanAgentProfile?.thinkingLevel || "medium"}.`,
-				`Before analyzing, use the repository state already prepared in ${scanRootDir}/00_repository_state.md and work from the checked out target revision in /workspace/repo.`,
-				"Event emission is a hard requirement: if you identify candidates, print the literal <VULSEEK_EVENT>...</VULSEEK_EVENT> block to stdout before any prose claiming success.",
-				"Do not say that you emitted candidate events unless the literal block was actually printed in this turn.",
-				"If no candidates were found, say explicitly that no candidate event was emitted.",
-				"Before finishing, print exactly one self-check line: VULSEEK_EVENT_SELF_CHECK candidate=<N> candidate_batch=<N> next_stage=<N>.",
+				`Before analyzing, use the repository state already prepared in ${toAgentVisiblePath(`${scanRootDir}/00_repository_state.md`)} and work from the checked out target revision in /workspace/repo.`,
+				`Use the installed skill named ${scanJob.scanType === "delta" ? "delta-scan" : "full-scan"} as your working method.`,
+				"Persist final candidate output only to the required JSON result file.",
+				`Write final candidate JSON to ${toAgentVisiblePath(candidateResultPath)}.`,
+				"scan_candidates.json must contain a top-level object with a candidates array.",
+				"Each candidate object may include only: title, description, filePath, line, confidence, score.",
+				"Always write scan_candidates.json, even when there are no candidates; use an empty array in that case.",
 				"Focus on security-relevant code paths and produce concise actionable findings.",
-				`Write a markdown report to ${scanRootDir}/03_codex_report.md.`,
+				`Write a markdown report to ${toAgentVisiblePath(`${scanRootDir}/03_codex_report.md`)}.`,
 				repositoryState?.markdown
 					? `Repository state:\n${repositoryState.markdown}`
 					: "",
 			].join("\n");
 
-			await resetScanRuntimeFiles(scanJob.scanJobId);
-
-			if (agentProvider === "claude_code") {
-				if (!scanAgentProfile) {
-					throw new Error("Claude Code scan runtime requires an agent profile");
-				}
-
-				const claudeEnvPairs = buildClaudeEnvPairs(scanAgentProfile);
-				let sessionId = scanJob.scanningThreadId || "";
-				await runClaudeHeadlessTurnInContainer({
-					containerName,
-					cwd: "/workspace/repo",
-					prompt: testPrompt,
-					model: scanAgentProfile.model,
-					thinkingLevel: scanAgentProfile.thinkingLevel,
-					envPairs: claudeEnvPairs,
-					sessionId,
-					jsonlPath: appServerJsonlPath,
-					textPath: appServerTextPath,
-					stderrPath: appServerStderrPath,
-					onBridgeParseError: async (parseError) => {
-						bridgeDebugStats.parseErrors += 1;
-						await appendScanRuntimeFile(
-							appServerStderrPath,
-							`[bridge-debug] invalid VULSEEK_EVENT: ${parseError.message}; payload=${parseError.payloadSnippet}\n`,
-						);
-					},
-					onSessionId: async (nextSessionId) => {
-						sessionId = nextSessionId;
-						await updateScanJobScanningThreadId(scanJob.scanJobId, nextSessionId);
-					},
-					onBridgeEvent: async (event) => {
-						bridgeDebugStats.eventBlocks += 1;
-						const persistResult = await persistVulseekBridgeEvent(
-							scanJob.scanJobId,
-							event,
-						);
-						if (
-							persistResult.type === "candidate" ||
-							persistResult.type === "candidate_batch"
-						) {
-							bridgeDebugStats.candidateEvents += 1;
-							bridgeDebugStats.candidateRecordsReceived +=
-								persistResult.receivedCandidates;
-							bridgeDebugStats.candidateRecordsCreated +=
-								persistResult.createdCandidates;
-							bridgeDebugStats.candidateRecordsDropped +=
-								persistResult.droppedCandidates;
-						}
-					},
-				});
-				await runClaudeHeadlessTurnInContainer({
-					containerName,
-					cwd: "/workspace/repo",
-					prompt: codexPrompt,
-					model: scanAgentProfile.model,
-					thinkingLevel: scanAgentProfile.thinkingLevel,
-					envPairs: claudeEnvPairs,
-					sessionId,
-					jsonlPath: appServerJsonlPath,
-					textPath: appServerTextPath,
-					stderrPath: appServerStderrPath,
-					onBridgeParseError: async (parseError) => {
-						bridgeDebugStats.parseErrors += 1;
-						await appendScanRuntimeFile(
-							appServerStderrPath,
-							`[bridge-debug] invalid VULSEEK_EVENT: ${parseError.message}; payload=${parseError.payloadSnippet}\n`,
-						);
-					},
-					onSessionId: async (nextSessionId) => {
-						sessionId = nextSessionId;
-						await updateScanJobScanningThreadId(scanJob.scanJobId, nextSessionId);
-					},
-					onBridgeEvent: async (event) => {
-						bridgeDebugStats.eventBlocks += 1;
-						const persistResult = await persistVulseekBridgeEvent(
-							scanJob.scanJobId,
-							event,
-						);
-						if (
-							persistResult.type === "candidate" ||
-							persistResult.type === "candidate_batch"
-						) {
-							bridgeDebugStats.candidateEvents += 1;
-							bridgeDebugStats.candidateRecordsReceived +=
-								persistResult.receivedCandidates;
-							bridgeDebugStats.candidateRecordsCreated +=
-								persistResult.createdCandidates;
-							bridgeDebugStats.candidateRecordsDropped +=
-								persistResult.droppedCandidates;
-						}
-					},
-				});
-			} else {
-
-			const rpcChild = spawn(
-				"docker",
-				[
-					"exec",
-					"-i",
-					containerName,
-					"bash",
-					"-lc",
-					"cd /workspace/repo && codex app-server",
-				],
-				{
-					env: {
-						...process.env,
-						HOME: "/root",
-					},
-					stdio: ["pipe", "pipe", "pipe"],
-				},
-			);
-
-			let nextRequestId = 1;
-			let threadId = "";
-			let turnCompletionStatus = "";
-			let turnCompletionError = "";
-			let childExitCode: number | null = null;
-			const pendingRequests = new Map<
-				number,
-				{
-					resolve: (value: JsonRpcMessage) => void;
-					reject: (error: Error) => void;
-				}
-			>();
-
-			const sendJsonRpcMessage = (message: JsonRpcMessage) => {
-				rpcChild.stdin.write(
-					`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`,
-				);
-			};
-
-			const sendJsonRpcRequest = (
-				method: string,
-				params?: Record<string, unknown>,
-			) => {
-				const id = nextRequestId++;
-				const payload: JsonRpcMessage = {
-					id,
-					method,
-					params,
-				};
-
-				return new Promise<JsonRpcMessage>((resolve, reject) => {
-					pendingRequests.set(id, { resolve, reject });
-					sendJsonRpcMessage(payload);
-				});
-			};
-
-			let resolveTurnCompleted: (() => void) | undefined;
-			let rejectTurnCompleted: ((error: Error) => void) | undefined;
-			let bridgeEventBuffer = "";
-			let turnCompleted = new Promise<void>((resolve, reject) => {
-				resolveTurnCompleted = resolve;
-				rejectTurnCompleted = reject;
+			await initializeRuntimeFiles({ runtimeDir: scanRuntimeDir, jsonlPath: appServerJsonlPath, textPath: appServerTextPath, stderrPath: appServerStderrPath });
+			await initializeCodexRuntimeMetadataFiles({
+				cursorPath: runtimeArtifacts.cursorPath,
+				statePath: runtimeArtifacts.statePath,
 			});
-
-			const resetTurnCompletion = () => {
-				turnCompletionStatus = "";
-				turnCompletionError = "";
-				turnCompleted = new Promise<void>((resolve, reject) => {
-					resolveTurnCompleted = resolve;
-					rejectTurnCompleted = reject;
-				});
-			};
-
-			const stdoutLines = createInterface({ input: rpcChild.stdout });
-			let stdoutLineProcessing = Promise.resolve();
-			const agentMessageBuffers = new Map<string, string>();
-			stdoutLines.on("line", (line) => {
-				stdoutLineProcessing = stdoutLineProcessing.then(async () => {
-					try {
-						await appendScanRuntimeFile(appServerJsonlPath, `${line}\n`);
-						const message = JSON.parse(line) as JsonRpcMessage;
-						const rendered = renderJsonRpcMessage(message);
-						if (rendered) {
-							await appendScanRuntimeFile(appServerTextPath, rendered);
-						}
-						const bridgeText = resolveCompletedAgentMessageText(
-							message,
-							agentMessageBuffers,
-						);
-						if (bridgeText) {
-							bridgeEventBuffer += bridgeText;
-							const { events, parseErrors, remaining } =
-								extractVulseekBridgeEvents(bridgeEventBuffer);
-							bridgeEventBuffer = remaining;
-							for (const parseError of parseErrors) {
-								bridgeDebugStats.parseErrors += 1;
-								await appendScanRuntimeFile(
-									appServerStderrPath,
-									`[bridge-debug] invalid VULSEEK_EVENT: ${parseError.message}; payload=${parseError.payloadSnippet}\n`,
-								);
-							}
-							for (const event of events) {
-								bridgeDebugStats.eventBlocks += 1;
-								const persistResult = await persistVulseekBridgeEvent(
-									scanJob.scanJobId,
-									event,
-								);
-								if (
-									persistResult.type === "candidate" ||
-									persistResult.type === "candidate_batch"
-								) {
-									bridgeDebugStats.candidateEvents += 1;
-									bridgeDebugStats.candidateRecordsReceived +=
-										persistResult.receivedCandidates;
-									bridgeDebugStats.candidateRecordsCreated +=
-										persistResult.createdCandidates;
-									bridgeDebugStats.candidateRecordsDropped +=
-										persistResult.droppedCandidates;
-								}
-							}
-						}
-
-						if (typeof message.id === "number" && pendingRequests.has(message.id)) {
-							const pendingRequest = pendingRequests.get(message.id);
-							pendingRequests.delete(message.id);
-							if (message.error?.message) {
-								pendingRequest?.reject(new Error(message.error.message));
-							} else {
-								pendingRequest?.resolve(message);
-							}
-							return;
-						}
-
-						if (message.method === "thread/started") {
-							threadId =
-								extractNamedString(
-									(message.params as Record<string, unknown> | undefined)?.thread,
-									["threadId", "id"],
-								) ||
-								extractNamedString(message.params, ["threadId"]) ||
-								threadId;
-							if (threadId) {
-								await updateScanJobScanningThreadId(scanJob.scanJobId, threadId);
-							}
-						}
-
-						if (message.method === "turn/completed") {
-							const turnRecord = (message.params as Record<string, unknown> | undefined)
-								?.turn as Record<string, unknown> | undefined;
-							turnCompletionStatus =
-								extractNamedString(turnRecord, ["status"]) ||
-								extractNamedString(message.params, ["status"]) ||
-								"completed";
-							turnCompletionError =
-								extractTurnErrorMessage(turnRecord) ||
-								message.error?.message ||
-								(turnCompletionStatus === "failed"
-									? "Codex turn completed with failed status"
-									: "");
-							resolveTurnCompleted?.();
-						}
-					} catch (error) {
-						const message =
-							error instanceof Error ? error.message : "Failed to parse JSON-RPC";
-						await appendScanRuntimeFile(
-							appServerStderrPath,
-							`[parse-error] ${message}\n`,
-						);
-					}
-				});
+			await initializeRuntimeFilesInContainer({
+				containerName,
+				runtimeDirInContainer: scanRootDir,
+				jsonlFileName: "app-server-messages.jsonl",
+				textFileName: "app-server-text.log",
+				stderrFileName: "app-server-stderr.log",
 			});
-
-			const runTurn = async (prompt: string) => {
-				resetTurnCompletion();
-				await sendJsonRpcRequest("turn/start", {
-					threadId,
-					input: [{ type: "text", text: prompt, text_elements: [] }],
-					cwd: "/workspace/repo",
-					approvalPolicy: "never",
-					sandboxPolicy: {
-						type: "externalSandbox",
-						networkAccess: "enabled",
-					},
-				});
-				await turnCompleted;
-				if (turnCompletionStatus === "failed") {
-					throw new Error(turnCompletionError || "Codex turn failed");
-				}
-			};
-
-			rpcChild.stderr.on("data", (chunk) => {
-				void appendScanRuntimeFile(appServerStderrPath, chunk.toString());
+			await initializeCodexRuntimeMetadataFilesInContainer({
+				containerName,
+				runtimeDirInContainer: scanRootDir,
+				cursorFileName: runtimeArtifacts.cursorFileName,
+				stateFileName: runtimeArtifacts.stateFileName,
 			});
-
-			const childExited = new Promise<void>((resolve, reject) => {
-				rpcChild.on("error", (error) => {
-					for (const pendingRequest of pendingRequests.values()) {
-						pendingRequest.reject(error);
-					}
-					pendingRequests.clear();
-					reject(error);
-				});
-
-				rpcChild.on("close", (code) => {
-					childExitCode = code;
-					for (const pendingRequest of pendingRequests.values()) {
-						pendingRequest.reject(
-							new Error(`codex app-server exited before response (code ${code})`),
-						);
-					}
-					pendingRequests.clear();
-					if (!turnCompletionStatus) {
-						rejectTurnCompleted?.(
-							new Error(
-								`codex app-server exited before turn completion (code ${code})`,
-							),
-						);
-					}
-					resolve();
-				});
+			const sandboxRuntime = await prepareSandboxAgentRuntime({
+				containerName,
+				runtimeDirHost: scanRuntimeDir,
+				runtimeDirInContainer: scanRootDir,
+				provider: agentProvider,
+				homeDir: "/root",
+				envPairs:
+					agentProvider === "claude_code" && scanAgentProfile
+						? buildClaudeEnvPairs(scanAgentProfile)
+						: ["CODEX_HOME=/root/.codex"],
 			});
-
-			await sendJsonRpcRequest("initialize", {
-				clientInfo: {
-					name: "dokploy",
-					version: "vulseek",
-				},
-				capabilities: {
-					experimentalApi: true,
-				},
-			});
-			sendJsonRpcMessage({ method: "initialized" });
-
-			const threadStarted = await sendJsonRpcRequest("thread/start", {
+			await runSandboxAgentHeadlessTurnInContainer({
+				baseUrl: sandboxRuntime.server.baseUrl,
+				provider: agentProvider === "claude_code" ? "claude" : "codex",
 				cwd: "/workspace/repo",
-				approvalPolicy: "never",
-				serviceName: "dokploy_scan",
-				experimentalRawEvents: false,
-				persistExtendedHistory: false,
+				prompt: codexPrompt,
+				model: scanAgentProfile?.model,
+				thinkingLevel: scanAgentProfile?.thinkingLevel,
+				jsonlPath: appServerJsonlPath,
+				textPath: appServerTextPath,
+				stderrPath: appServerStderrPath,
+				onSessionId: async (nextSessionId) => {
+					await updateScanJobScanningThreadId(scanJob.scanJobId, nextSessionId);
+				},
 			});
-			threadId =
-				extractNamedString(
-					(threadStarted.result as Record<string, unknown> | undefined)?.thread,
-					["threadId", "id"],
-				) ||
-				extractNamedString(threadStarted.result, ["threadId"]) ||
-				extractNamedString(
-					(threadStarted.params as Record<string, unknown> | undefined)?.thread,
-					["threadId", "id"],
-				) ||
-				threadId;
-
-			if (!threadId) {
-				throw new Error("Codex app-server did not return a thread id");
-			}
-			await updateScanJobScanningThreadId(scanJob.scanJobId, threadId);
-
-			stageSummary.push(`- codex_test_prompt: ${testPrompt}`);
-			await runTurn(testPrompt);
-			await runTurn(codexPrompt);
-			try {
-				rpcChild.stdin.end();
-			} catch {}
-			await childExited;
-			await stdoutLineProcessing;
-
-			if (childExitCode !== null && childExitCode !== 0) {
-				throw new Error(`codex app-server exited with code ${childExitCode}`);
-			}
-			}
+			const candidateResult = await readCandidateResultFile(
+				path.join(scanRuntimeDir, "scan_candidates.json"),
+				"scan candidate result",
+			);
+			const persistResult = await persistFunctionResultCandidates({
+				scanJobId: scanJob.scanJobId,
+				candidates: candidateResult.candidates,
+			});
 			await appendScanRuntimeFile(
 				appServerStderrPath,
 				[
-					`[bridge-debug] event_blocks=${bridgeDebugStats.eventBlocks}`,
-					`candidate_events=${bridgeDebugStats.candidateEvents}`,
-					`candidate_records_received=${bridgeDebugStats.candidateRecordsReceived}`,
-					`candidate_records_created=${bridgeDebugStats.candidateRecordsCreated}`,
-					`candidate_records_dropped=${bridgeDebugStats.candidateRecordsDropped}`,
-					`parse_errors=${bridgeDebugStats.parseErrors}`,
+					`[candidate-result] records_received=${persistResult.receivedCandidates}`,
+					`records_created=${persistResult.createdCandidates}`,
+					`records_dropped=${persistResult.droppedCandidates}`,
 				].join(" ") + "\n",
 			);
-			if (bridgeDebugStats.candidateEvents === 0) {
+			if (persistResult.receivedCandidates === 0) {
 				await appendScanRuntimeFile(
 					appServerStderrPath,
-					"[bridge-debug] scan agent did not emit any candidate or candidate_batch event\n",
+					"[candidate-result] scan agent wrote an empty candidates array\n",
 				);
-			} else if (bridgeDebugStats.candidateRecordsCreated === 0) {
+			} else if (persistResult.createdCandidates === 0) {
 				await appendScanRuntimeFile(
 					appServerStderrPath,
-					"[bridge-debug] candidate events were received but no candidate row was created; check payload title/shape\n",
+					"[candidate-result] candidate records were parsed but no candidate row was created; check payload title/shape\n",
 				);
 			}
 		} catch (error) {
@@ -3518,12 +6748,6 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 				scanRootDir,
 				"05_codex_runtime_after_failure.md",
 			).catch(() => {});
-			await copyScanRuntimeArtifactsToContainer(
-				containerName,
-				scanJob.scanJobId,
-				scanRootDir,
-			);
-
 			const failedStdoutSnippet = (
 				await readScanJobAppServerText(scanJob.scanJobId)
 			).slice(-8_000);
@@ -3541,8 +6765,9 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 					`- error: ${error instanceof Error ? error.message : "Unknown error"}`,
 					`- app_name: ${appName}`,
 					`- image_tag: ${imageTag}`,
-					`- app_server_jsonl: ${scanRootDir}/03_app_server_messages.jsonl`,
-					`- app_server_text: ${scanRootDir}/03_app_server_text.log`,
+					`- app_server_jsonl: ${scanRootDir}/app-server-messages.jsonl`,
+					`- app_server_text: ${scanRootDir}/app-server-text.log`,
+					`- app_server_stderr: ${scanRootDir}/app-server-stderr.log`,
 					"",
 					"## App Server Text (tail)",
 					"```text",
@@ -3558,11 +6783,6 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 			throw error;
 		}
 
-		await copyScanRuntimeArtifactsToContainer(
-			containerName,
-			scanJob.scanJobId,
-			scanRootDir,
-		);
 		await captureContainerCodexState(
 			containerName,
 			scanRootDir,
@@ -3586,8 +6806,9 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 				`- status: completed`,
 				`- app_name: ${appName}`,
 				`- image_tag: ${imageTag}`,
-				`- app_server_jsonl: ${scanRootDir}/03_app_server_messages.jsonl`,
-				`- app_server_text: ${scanRootDir}/03_app_server_text.log`,
+					`- app_server_jsonl: ${scanRootDir}/app-server-messages.jsonl`,
+					`- app_server_text: ${scanRootDir}/app-server-text.log`,
+					`- app_server_stderr: ${scanRootDir}/app-server-stderr.log`,
 				"",
 				"## App Server Text (tail)",
 				"```text",
@@ -3601,17 +6822,29 @@ export const runScanJobInContainer = async (scanJobId: string) => {
 			].join("\n"),
 		);
 
-	result = {
-		appName,
-		imageTag,
-		contextVolumeName,
-		scanRootDir,
-		codexStdoutSnippet,
-		codexStderrSnippet,
-	};
-	} finally {
-		await execAsync(`docker rm -f ${containerName}`).catch(() => {});
-	}
+		await syncLegacyFullScanTasksFromArtifacts({
+			scanJob,
+			scanRuntimeDir,
+		}).catch(async (error) => {
+			await appendScanRuntimeFile(
+				appServerStderrPath,
+				`[task-sync] failed to sync legacy full-scan artifacts: ${
+					error instanceof Error ? error.message : "unknown error"
+				}\n`,
+			);
+		});
+
+		result = {
+			appName,
+			imageTag,
+			contextVolumeName,
+			scanRootDir,
+			codexStdoutSnippet,
+			codexStderrSnippet,
+		};
+		} finally {
+			// await execAsync(`docker rm -f ${containerName}`).catch(() => {});
+		}
 
 	return result as NonNullable<typeof result>;
 };
@@ -3627,35 +6860,194 @@ export const runCandidateAnalysisAgentInContainer = async (input: {
 	const scanJob = await findScanJobById(candidate.scanJobId);
 	const {
 		appName,
+		contextVolumeName,
+		projectName,
+		serviceName,
+		analysisAgentProfile,
+	} = await resolveScanExecutionContext(scanJob);
+
+	const stage = input.stage;
+	const candidateRuntimeRootInContainer = buildCandidateContextRoot(
+		scanJob.scanJobId,
+		candidate.vulnerabilityCandidateId,
+	);
+	const codexHome = `${candidateRuntimeRootInContainer}/.codex`;
+	const containerName = [
+		sanitizeContainerNamePart(projectName),
+		sanitizeContainerNamePart(serviceName),
+		sanitizeContainerNamePart(candidate.vulnerabilityCandidateId.slice(0, 8)),
+		stage,
+		String(Date.now()),
+	].join("-");
+	const scanContextMount = await resolveScanContextMount({
+		contextVolumeName,
+		projectName,
+		profileName: serviceName,
+	});
+	const candidateRuntimeDir = resolveLiveCandidateArtifactsDir({
+		scanContextMount,
+		scanJobId: scanJob.scanJobId,
+		candidateId: candidate.vulnerabilityCandidateId,
+		projectName,
+		profileName: serviceName,
+	});
+	const appServerJsonlPath = path.join(candidateRuntimeDir, "app-server-messages.jsonl");
+	const appServerTextPath = path.join(candidateRuntimeDir, "app-server-text.log");
+	const appServerStderrPath = path.join(candidateRuntimeDir, "app-server-stderr.log");
+	await updateVulnerabilityCandidateCurrentStage(
+		candidate.vulnerabilityCandidateId,
+		stage,
+	);
+
+	const startedAt = Date.now();
+	let currentThreadId = getCandidateAnalysisThreadId(candidate);
+	const result = await runSingleTurnAgentInContainer({
+		scanJob,
+		agentProfile: analysisAgentProfile,
+		containerName,
+		codexHome,
+		runtimeDirHost: candidateRuntimeDir,
+		runtimeRootInContainer: candidateRuntimeRootInContainer,
+		cwd: "/workspace/repo",
+		prompt: input.prompt,
+		setupMarkdownPathInContainer: `${candidateRuntimeRootInContainer}/01_setup.md`,
+		setupMarkdown: [
+			"# Candidate Stage Setup",
+			"",
+			`- scan_job_id: ${scanJob.scanJobId}`,
+			`- candidate_id: ${candidate.vulnerabilityCandidateId}`,
+			`- stage: ${stage}`,
+			`- agent: analysis`,
+			`- agent_profile: ${analysisAgentProfile?.name || analysisAgentProfile?.agentProfileId || "default"}`,
+			`- agent_provider: ${analysisAgentProfile?.provider || "codex"}`,
+			`- agent_model: ${analysisAgentProfile?.model || "gpt-5.4"}`,
+			`- app_name: ${appName}`,
+			`- context_storage: ${scanContextMount.mountDescription}`,
+		].join("\n"),
+		onThreadId: async (threadId) => {
+			currentThreadId = threadId;
+			await updateVulnerabilityCandidateAnalysisThreadId(
+				candidate.vulnerabilityCandidateId,
+				threadId,
+			);
+		},
+	});
+	await persistAnalysisResultPayload({
+		scanJobId: scanJob.scanJobId,
+		candidateId: candidate.vulnerabilityCandidateId,
+		payload: await readAnalysisResultFile(
+			path.join(candidateRuntimeDir, "analysis", "analysis_result.json"),
+		),
+		runtimeSeconds: (Date.now() - startedAt) / 1000,
+		threadId: result.threadId || currentThreadId || undefined,
+	});
+
+	return {
+		scanJobId: scanJob.scanJobId,
+		vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
+		stage,
+		threadId: result.threadId,
+		runtimeDir: candidateRuntimeDir,
+		codexStdoutSnippet: (
+			await readCandidateAnalysisAppServerText(
+				scanJob.scanJobId,
+				candidate.vulnerabilityCandidateId,
+			)
+		).slice(-8_000),
+		codexStderrSnippet: await fs
+			.readFile(appServerStderrPath, "utf-8")
+			.catch(() => ""),
+	};
+};
+
+const resolveLegacyArtifactHostPath = async (
+	scanJob: ScanJob,
+	maybeContainerPath: string,
+) => {
+	if (!maybeContainerPath) {
+		return maybeContainerPath;
+	}
+
+	const projectProfileHostContextRoot =
+		await resolveRequiredProjectProfileHostContextRootByScanJob(scanJob);
+	const containerJobRoot = buildScanJobContextRoot(scanJob.scanJobId);
+
+	if (
+		maybeContainerPath === containerJobRoot ||
+		maybeContainerPath.startsWith(`${containerJobRoot}/`)
+	) {
+		const relativePath = path.posix.relative(containerJobRoot, maybeContainerPath);
+		return path.join(
+			projectProfileHostContextRoot,
+			"jobs",
+			scanJob.scanJobId,
+			relativePath,
+		);
+	}
+
+	return maybeContainerPath;
+};
+
+const resolveHostPathToScanContextContainerPath = async (
+	scanJob: ScanJob,
+	hostPath: string,
+) => {
+	const projectProfileHostContextRoot =
+		await resolveRequiredProjectProfileHostContextRootByScanJob(scanJob);
+	const resolvedRoot = path.resolve(projectProfileHostContextRoot);
+	const resolvedTarget = path.resolve(hostPath);
+	const relativePath = path.relative(resolvedRoot, resolvedTarget);
+	if (
+		relativePath === ".." ||
+		relativePath.startsWith(`..${path.sep}`) ||
+		path.isAbsolute(relativePath)
+	) {
+		throw new Error(`Path is outside project profile context root: ${hostPath}`);
+	}
+
+	return path.posix.join("/scan-context", relativePath.split(path.sep).join("/"));
+};
+
+const generateFunctionPlanForModuleTaskInContainer = async (input: {
+	scanJob: ScanJob;
+	scanModuleTask: ScanModuleTask;
+	hostArtifactDir: string;
+}) => {
+	const {
 		imageTag,
 		contextVolumeName,
 		projectName,
 		serviceName,
 		projectProfileContextRoot,
 		projectProfileCacheRoot,
-		analysisAgentProfile,
-	} = await resolveScanExecutionContext(scanJob);
+	} = await resolveScanExecutionContext(input.scanJob);
+	const agentsDir = await resolveAgentsDirectory();
+	if (!agentsDir) {
+		throw new Error("Agents directory not found");
+	}
 
-	const stage = input.stage;
-	const candidateRuntimeDir = resolveCandidateRuntimeDir(
-		scanJob.scanJobId,
-		candidate.vulnerabilityCandidateId,
-	);
-	const candidateRuntimeRootInContainer = buildCandidateContextRoot(scanJob.scanJobId, candidate.vulnerabilityCandidateId);
-	const codexHome = `${candidateRuntimeRootInContainer}/.codex`;
-	const appServerJsonlPath = getCandidateAnalysisAppServerJsonlPath(
-		scanJob.scanJobId,
-		candidate.vulnerabilityCandidateId,
-	);
-	const appServerTextPath = getCandidateAnalysisAppServerTextPath(
-		scanJob.scanJobId,
-		candidate.vulnerabilityCandidateId,
-	);
-	const appServerStderrPath = getCandidateAnalysisAppServerStderrPath(
-		scanJob.scanJobId,
-		candidate.vulnerabilityCandidateId,
-	);
-	const agentProvider = analysisAgentProfile?.provider || "codex";
+	const fileListHostPath = path.join(input.hostArtifactDir, "file_list.txt");
+	const outputHostPath = path.join(input.hostArtifactDir, "function_plan.json");
+	const runtimeHostPath = path.join(input.hostArtifactDir, "module-scanner-runtime.log");
+
+	try {
+		await fs.stat(fileListHostPath);
+	} catch {
+		throw new Error(`Module file list not found: ${fileListHostPath}`);
+	}
+
+	const containerName = [
+		sanitizeContainerNamePart(projectName),
+		sanitizeContainerNamePart(serviceName),
+		"module",
+		sanitizeContainerNamePart(input.scanModuleTask.moduleId.slice(0, 24)),
+		nanoid(6),
+	].join("-");
+	const scanContextMount = await resolveScanContextMount({
+		contextVolumeName,
+		projectName,
+		profileName: serviceName,
+	});
 	const containerEnvPairs = [
 		...getGlobalContainerEnvironmentPairs(),
 		`VULSEEK_PROJECT_PROFILE_DIR=${projectProfileContextRoot}`,
@@ -3664,403 +7056,51 @@ export const runCandidateAnalysisAgentInContainer = async (input: {
 	const containerEnvArgs = containerEnvPairs
 		.map((pair) => `-e '${escapeSingleQuotes(pair)}'`)
 		.join(" ");
-	const containerName = [
-		sanitizeContainerNamePart(projectName),
-		sanitizeContainerNamePart(serviceName),
-		sanitizeContainerNamePart(candidate.vulnerabilityCandidateId.slice(0, 8)),
-		stage,
-		String(Date.now()),
-	].join("-");
-	const agentsDir = await resolveAgentsDirectory();
-	const scanContextMount = await resolveScanContextMount({
-		contextVolumeName,
-		projectName,
-		profileName: serviceName,
-	});
-
-	await fs.mkdir(candidateRuntimeDir, { recursive: true });
-		await Promise.all([
-			fs.writeFile(appServerJsonlPath, "", { flag: "a" }),
-			fs.writeFile(appServerTextPath, "", { flag: "a" }),
-			fs.writeFile(appServerStderrPath, "", { flag: "a" }),
-		]);
-		await updateVulnerabilityCandidateCurrentStage(
-			candidate.vulnerabilityCandidateId,
-			stage,
-		);
+	const fileListContainerPath = await resolveHostPathToScanContextContainerPath(
+		input.scanJob,
+		fileListHostPath,
+	);
+	const outputContainerPath = await resolveHostPathToScanContextContainerPath(
+		input.scanJob,
+		outputHostPath,
+	);
+	const runtimeContainerPath = await resolveHostPathToScanContextContainerPath(
+		input.scanJob,
+		runtimeHostPath,
+	);
 
 	await execAsync(
-		`docker run -d --rm --name ${containerName} ${scanContextMount.dockerMountArg} ${containerEnvArgs} ${imageTag} bash -lc "mkdir -p '${candidateRuntimeRootInContainer}' '${codexHome}/skills' && sleep infinity"`,
+		`docker run -d --rm --name ${containerName} ${namespaceEnabledContainerArgs} ${scanContextMount.dockerMountArg} ${containerEnvArgs} ${imageTag} bash -lc "mkdir -p /root/.codex/skills && sleep infinity"`,
 	);
 
 	try {
-		await copyCodexAssetsToContainerHome(
-			containerName,
-			codexHome,
-			agentsDir,
-			analysisAgentProfile,
+		await execAsync(`docker cp "${agentsDir}/." ${containerName}:/root/.codex/skills/`);
+		const script = [
+			"set -euo pipefail",
+			`mkdir -p '${escapeSingleQuotes(path.posix.dirname(outputContainerPath))}'`,
+			`python3 - <<'PY' > '${escapeSingleQuotes(
+				runtimeContainerPath,
+			)}' 2>&1
+import importlib
+for name in ("tree_sitter", "tree_sitter_c", "tree_sitter_cpp"):
+    importlib.import_module(name)
+print("tree-sitter runtime dependencies ready")
+PY`,
+			`cd /workspace/repo && python3 /root/.codex/skills/tools/extract_functions.py --file-list '${escapeSingleQuotes(
+				fileListContainerPath,
+			)}' --out '${escapeSingleQuotes(outputContainerPath)}' >> '${escapeSingleQuotes(
+				runtimeContainerPath,
+			)}' 2>&1`,
+		].join("\n");
+		const encoded = Buffer.from(script, "utf-8").toString("base64");
+		await execAsync(
+			`docker exec ${containerName} bash -lc "echo '${encoded}' | base64 -d | bash"`,
 		);
-		await writeContainerFile(
-			containerName,
-			`${candidateRuntimeRootInContainer}/01_setup.md`,
-			[
-				"# Candidate Stage Setup",
-				"",
-				`- scan_job_id: ${scanJob.scanJobId}`,
-				`- candidate_id: ${candidate.vulnerabilityCandidateId}`,
-				`- stage: ${stage}`,
-				`- agent: analysis`,
-				`- agent_profile: ${analysisAgentProfile?.name || analysisAgentProfile?.agentProfileId || "default"}`,
-				`- agent_provider: ${agentProvider}`,
-				`- agent_model: ${analysisAgentProfile?.model || "gpt-5.3-codex"}`,
-				`- app_name: ${appName}`,
-				`- image_tag: ${imageTag}`,
-				`- context_storage: ${scanContextMount.mountDescription}`,
-			].join("\n"),
-		);
-
-		if (agentProvider === "claude_code") {
-			if (!analysisAgentProfile) {
-				throw new Error("Claude Code analysis runtime requires an agent profile");
-			}
-
-			let sessionId = getCandidateAnalysisThreadId(candidate);
-			const startedAt = Date.now();
-			await runClaudeHeadlessTurnInContainer({
-				containerName,
-				cwd: "/workspace/repo",
-				prompt: [
-					`Current analysis stage: ${stage}.`,
-					`Use reasoning effort around ${analysisAgentProfile.thinkingLevel}.`,
-					input.prompt,
-				].join("\n\n"),
-				model: analysisAgentProfile.model,
-				thinkingLevel: analysisAgentProfile.thinkingLevel,
-				envPairs: buildClaudeEnvPairs(analysisAgentProfile),
-				sessionId,
-				jsonlPath: appServerJsonlPath,
-				textPath: appServerTextPath,
-				stderrPath: appServerStderrPath,
-				onBridgeEvent: async (event) => {
-					await persistVulseekBridgeEvent(scanJob.scanJobId, event, {
-						candidateId: candidate.vulnerabilityCandidateId,
-						runtimeSeconds: (Date.now() - startedAt) / 1000,
-						threadId: sessionId || candidate.analysisThreadId || undefined,
-					});
-				},
-				onSessionId: async (nextSessionId) => {
-					sessionId = nextSessionId;
-					await updateVulnerabilityCandidateAnalysisThreadId(
-						candidate.vulnerabilityCandidateId,
-						nextSessionId,
-					);
-				},
-			});
-
-			return {
-				scanJobId: scanJob.scanJobId,
-				vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-				stage,
-				threadId: sessionId,
-				runtimeDir: candidateRuntimeDir,
-				codexStdoutSnippet: (
-					await readCandidateAnalysisAppServerText(
-						scanJob.scanJobId,
-						candidate.vulnerabilityCandidateId,
-					)
-				).slice(-8_000),
-				codexStderrSnippet: await fs
-					.readFile(appServerStderrPath, "utf-8")
-					.catch(() => ""),
-			};
-		}
-
-		const rpcChild = spawn(
-			"docker",
-			[
-				"exec",
-				"-i",
-				containerName,
-				"bash",
-				"-lc",
-				`cd /workspace/repo && export CODEX_HOME='${escapeSingleQuotes(
-					codexHome,
-				)}' && codex app-server`,
-			],
-			{
-				env: {
-					...process.env,
-					HOME: "/root",
-				},
-				stdio: ["pipe", "pipe", "pipe"],
-			},
-		);
-
-		let nextRequestId = 1;
-		let threadId = getCandidateAnalysisThreadId(candidate);
-		let turnCompletionStatus = "";
-		let turnCompletionError = "";
-		let childExitCode: number | null = null;
-		const startedAt = Date.now();
-		const pendingRequests = new Map<
-			number,
-			{
-				resolve: (value: JsonRpcMessage) => void;
-				reject: (error: Error) => void;
-			}
-		>();
-
-		const sendJsonRpcMessage = (message: JsonRpcMessage) => {
-			rpcChild.stdin.write(
-				`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`,
-			);
-		};
-
-		const sendJsonRpcRequest = (
-			method: string,
-			params?: Record<string, unknown>,
-		) => {
-			const id = nextRequestId++;
-			const payload: JsonRpcMessage = { id, method, params };
-			return new Promise<JsonRpcMessage>((resolve, reject) => {
-				pendingRequests.set(id, { resolve, reject });
-				sendJsonRpcMessage(payload);
-			});
-		};
-
-		let resolveTurnCompleted: (() => void) | undefined;
-		let rejectTurnCompleted: ((error: Error) => void) | undefined;
-		let turnCompleted = new Promise<void>((resolve, reject) => {
-			resolveTurnCompleted = resolve;
-			rejectTurnCompleted = reject;
-		});
-
-		const resetTurnCompletion = () => {
-			turnCompletionStatus = "";
-			turnCompletionError = "";
-			turnCompleted = new Promise<void>((resolve, reject) => {
-				resolveTurnCompleted = resolve;
-				rejectTurnCompleted = reject;
-			});
-		};
-
-		const stdoutLines = createInterface({ input: rpcChild.stdout });
-		let bridgeEventBuffer = "";
-		const agentMessageBuffers = new Map<string, string>();
-		stdoutLines.on("line", async (line) => {
-			try {
-				await appendScanRuntimeFile(appServerJsonlPath, `${line}\n`);
-				const message = JSON.parse(line) as JsonRpcMessage;
-				const rendered = renderJsonRpcMessage(message);
-				if (rendered) {
-					await appendScanRuntimeFile(appServerTextPath, rendered);
-				}
-				const bridgeText = resolveCompletedAgentMessageText(
-					message,
-					agentMessageBuffers,
-				);
-				if (bridgeText) {
-					bridgeEventBuffer += bridgeText;
-					const { events, parseErrors, remaining } =
-						extractVulseekBridgeEvents(bridgeEventBuffer);
-					bridgeEventBuffer = remaining;
-					for (const parseError of parseErrors) {
-						await appendScanRuntimeFile(
-							appServerStderrPath,
-							`[bridge-debug] invalid VULSEEK_EVENT: ${parseError.message}; payload=${parseError.payloadSnippet}\n`,
-						);
-					}
-					for (const event of events) {
-						try {
-							await persistVulseekBridgeEvent(scanJob.scanJobId, event, {
-								candidateId: candidate.vulnerabilityCandidateId,
-								runtimeSeconds: (Date.now() - startedAt) / 1000,
-								threadId: threadId || candidate.analysisThreadId || undefined,
-							});
-						} catch (error) {
-							await appendScanRuntimeFile(
-								appServerStderrPath,
-								`[bridge-debug] failed to persist VULSEEK_EVENT type=${event.type}: ${
-									error instanceof Error ? error.message : "unknown error"
-								}\n`,
-							);
-							throw error;
-						}
-					}
-				}
-
-				if (typeof message.id === "number" && pendingRequests.has(message.id)) {
-					const pendingRequest = pendingRequests.get(message.id);
-					pendingRequests.delete(message.id);
-					if (message.error?.message) {
-						pendingRequest?.reject(new Error(message.error.message));
-					} else {
-						pendingRequest?.resolve(message);
-					}
-					return;
-				}
-
-				if (message.method === "thread/started") {
-					threadId =
-						extractNamedString(
-							(message.params as Record<string, unknown> | undefined)?.thread,
-							["threadId", "id"],
-						) ||
-						extractNamedString(message.params, ["threadId"]) ||
-						threadId;
-					if (threadId) {
-						await updateVulnerabilityCandidateAnalysisThreadId(
-							candidate.vulnerabilityCandidateId,
-							threadId,
-						);
-					}
-				}
-
-				if (message.method === "turn/completed") {
-					const turnRecord = (message.params as Record<string, unknown> | undefined)
-						?.turn as Record<string, unknown> | undefined;
-					turnCompletionStatus =
-						extractNamedString(turnRecord, ["status"]) ||
-						extractNamedString(message.params, ["status"]) ||
-						"completed";
-					turnCompletionError =
-						extractTurnErrorMessage(turnRecord) ||
-						message.error?.message ||
-						(turnCompletionStatus === "failed"
-							? "Codex turn completed with failed status"
-							: "");
-					resolveTurnCompleted?.();
-				}
-			} catch (error) {
-				const message =
-					error instanceof Error ? error.message : "Failed to parse JSON-RPC";
-				await appendScanRuntimeFile(appServerStderrPath, `[parse-error] ${message}\n`);
-			}
-		});
-
-		rpcChild.stderr.on("data", (chunk) => {
-			void appendScanRuntimeFile(appServerStderrPath, chunk.toString());
-		});
-
-		const childExited = new Promise<void>((resolve, reject) => {
-			rpcChild.on("error", (error) => {
-				for (const pendingRequest of pendingRequests.values()) {
-					pendingRequest.reject(error);
-				}
-				pendingRequests.clear();
-				reject(error);
-			});
-
-			rpcChild.on("close", (code) => {
-				childExitCode = code;
-				for (const pendingRequest of pendingRequests.values()) {
-					pendingRequest.reject(
-						new Error(`codex app-server exited before response (code ${code})`),
-					);
-				}
-				pendingRequests.clear();
-				if (!turnCompletionStatus) {
-					rejectTurnCompleted?.(
-						new Error(
-							`codex app-server exited before turn completion (code ${code})`,
-						),
-					);
-				}
-				resolve();
-			});
-		});
-
-		await sendJsonRpcRequest("initialize", {
-			clientInfo: {
-				name: "dokploy",
-				version: "vulseek",
-			},
-			capabilities: {
-				experimentalApi: true,
-			},
-		});
-		sendJsonRpcMessage({ method: "initialized" });
-
-		if (threadId) {
-			try {
-				await sendJsonRpcRequest("thread/resume", {
-					threadId,
-					cwd: "/workspace/repo",
-					approvalPolicy: "never",
-					persistExtendedHistory: true,
-				});
-			} catch {
-				threadId = "";
-			}
-		}
-
-		if (!threadId) {
-			const threadStarted = await sendJsonRpcRequest("thread/start", {
-				cwd: "/workspace/repo",
-				approvalPolicy: "never",
-				serviceName: "dokploy_candidate_analysis",
-				experimentalRawEvents: false,
-				persistExtendedHistory: true,
-			});
-			threadId =
-				extractNamedString(
-					(threadStarted.result as Record<string, unknown> | undefined)?.thread,
-					["threadId", "id"],
-				) ||
-				extractNamedString(threadStarted.result, ["threadId"]) ||
-				threadId;
-			if (!threadId) {
-				throw new Error("Codex app-server did not return a thread id");
-			}
-			await updateVulnerabilityCandidateAnalysisThreadId(
-				candidate.vulnerabilityCandidateId,
-				threadId,
-			);
-		}
-
-		resetTurnCompletion();
-		await sendJsonRpcRequest("turn/start", {
-			threadId,
-			input: [{ type: "text", text: input.prompt, text_elements: [] }],
-			cwd: "/workspace/repo",
-			approvalPolicy: "never",
-			sandboxPolicy: {
-				type: "externalSandbox",
-				networkAccess: "enabled",
-			},
-		});
-		await turnCompleted;
-		if (turnCompletionStatus === "failed") {
-			throw new Error(turnCompletionError || "Codex turn failed");
-		}
-
-		try {
-			rpcChild.stdin.end();
-		} catch {}
-		await childExited;
-		if (childExitCode !== null && childExitCode !== 0) {
-			throw new Error(`codex app-server exited with code ${childExitCode}`);
-		}
-
-		return {
-			scanJobId: scanJob.scanJobId,
-			vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-			stage,
-			threadId,
-			runtimeDir: candidateRuntimeDir,
-			codexStdoutSnippet: (
-				await readCandidateAnalysisAppServerText(
-					scanJob.scanJobId,
-					candidate.vulnerabilityCandidateId,
-				)
-			).slice(-8_000),
-			codexStderrSnippet: await fs
-				.readFile(appServerStderrPath, "utf-8")
-				.catch(() => ""),
-		};
 	} finally {
 		await execAsync(`docker rm -f ${containerName}`).catch(() => {});
 	}
+
+	return outputHostPath;
 };
 
 export const runCandidateVerifierInContainer = async (input: {
@@ -4073,34 +7113,18 @@ export const runCandidateVerifierInContainer = async (input: {
 	const scanJob = await findScanJobById(candidate.scanJobId);
 	const {
 		appName,
-		imageTag,
 		contextVolumeName,
 		projectName,
 		serviceName,
-		projectProfileContextRoot,
-		projectProfileCacheRoot,
 		verifierAgentProfile,
 	} = await resolveScanExecutionContext(scanJob);
 
 	const stage: VulnerabilityCandidateStage = "verifying";
-	const candidateRuntimeDir = resolveCandidateRuntimeDir(
+	const candidateRuntimeRootInContainer = buildCandidateContextRoot(
 		scanJob.scanJobId,
 		candidate.vulnerabilityCandidateId,
 	);
-	const candidateRuntimeRootInContainer = buildCandidateContextRoot(scanJob.scanJobId, candidate.vulnerabilityCandidateId);
 	const codexHome = `${candidateRuntimeRootInContainer}/.codex-verify`;
-	const appServerJsonlPath = path.join(candidateRuntimeDir, "verify-app-server-messages.jsonl");
-	const appServerTextPath = path.join(candidateRuntimeDir, "verify-app-server-text.log");
-	const appServerStderrPath = path.join(candidateRuntimeDir, "verify-app-server-stderr.log");
-	const agentProvider = verifierAgentProfile?.provider || "codex";
-	const containerEnvPairs = [
-		...getGlobalContainerEnvironmentPairs(),
-		`VULSEEK_PROJECT_PROFILE_DIR=${projectProfileContextRoot}`,
-		`VULSEEK_PROJECT_CACHE_DIR=${projectProfileCacheRoot}`,
-	];
-	const containerEnvArgs = containerEnvPairs
-		.map((pair) => `-e '${escapeSingleQuotes(pair)}'`)
-		.join(" ");
 	const containerName = [
 		sanitizeContainerNamePart(projectName),
 		sanitizeContainerNamePart(serviceName),
@@ -4108,363 +7132,80 @@ export const runCandidateVerifierInContainer = async (input: {
 		"verify",
 		String(Date.now()),
 	].join("-");
-	const agentsDir = await resolveAgentsDirectory();
 	const scanContextMount = await resolveScanContextMount({
 		contextVolumeName,
 		projectName,
 		profileName: serviceName,
 	});
-
-	await fs.mkdir(candidateRuntimeDir, { recursive: true });
-	await Promise.all([
-		fs.writeFile(appServerJsonlPath, "", { flag: "a" }),
-		fs.writeFile(appServerTextPath, "", { flag: "a" }),
-		fs.writeFile(appServerStderrPath, "", { flag: "a" }),
-	]);
+	const candidateRuntimeDir = resolveLiveCandidateArtifactsDir({
+		scanContextMount,
+		scanJobId: scanJob.scanJobId,
+		candidateId: candidate.vulnerabilityCandidateId,
+		projectName,
+		profileName: serviceName,
+	});
+	const appServerJsonlPath = path.join(candidateRuntimeDir, "verify-app-server-messages.jsonl");
+	const appServerTextPath = path.join(candidateRuntimeDir, "verify-app-server-text.log");
+	const appServerStderrPath = path.join(candidateRuntimeDir, "verify-app-server-stderr.log");
 	await updateVulnerabilityCandidateCurrentStage(
 		candidate.vulnerabilityCandidateId,
 		stage,
 	);
 
-	await execAsync(
-		`docker run -d --rm --name ${containerName} ${scanContextMount.dockerMountArg} ${containerEnvArgs} ${imageTag} bash -lc "mkdir -p '${candidateRuntimeRootInContainer}' '${codexHome}/skills' && sleep infinity"`,
-	);
-
-	try {
-		await copyCodexAssetsToContainerHome(
-			containerName,
-			codexHome,
-			agentsDir,
-			verifierAgentProfile,
-		);
-		await writeContainerFile(
-			containerName,
-			`${candidateRuntimeRootInContainer}/verify/00_setup.md`,
-			[
-				"# Candidate Verify Setup",
-				"",
-				`- scan_job_id: ${scanJob.scanJobId}`,
-				`- candidate_id: ${candidate.vulnerabilityCandidateId}`,
-				`- agent: verifier`,
-				`- agent_profile: ${verifierAgentProfile?.name || verifierAgentProfile?.agentProfileId || "default"}`,
-				`- agent_provider: ${agentProvider}`,
-				`- agent_model: ${verifierAgentProfile?.model || "gpt-5.3-codex"}`,
-				`- app_name: ${appName}`,
-				`- image_tag: ${imageTag}`,
-				`- context_storage: ${scanContextMount.mountDescription}`,
-			].join("\n"),
-		);
-
-		if (agentProvider === "claude_code") {
-			if (!verifierAgentProfile) {
-				throw new Error("Claude Code verifier runtime requires an agent profile");
-			}
-
-			let sessionId = getCandidateVerifierThreadId(candidate);
-			const startedAt = Date.now();
-			await runClaudeHeadlessTurnInContainer({
-				containerName,
-				cwd: "/workspace/repo",
-				prompt: input.prompt,
-				model: verifierAgentProfile.model,
-				thinkingLevel: verifierAgentProfile.thinkingLevel,
-				envPairs: buildClaudeEnvPairs(verifierAgentProfile),
-				sessionId,
-				jsonlPath: appServerJsonlPath,
-				textPath: appServerTextPath,
-				stderrPath: appServerStderrPath,
-				onBridgeEvent: async (event) => {
-					await persistVulseekBridgeEvent(scanJob.scanJobId, event, {
-						candidateId: candidate.vulnerabilityCandidateId,
-						runtimeSeconds: (Date.now() - startedAt) / 1000,
-						threadId: sessionId || candidate.verifierThreadId || undefined,
-					});
-				},
-				onSessionId: async (nextSessionId) => {
-					sessionId = nextSessionId;
-					await updateVulnerabilityCandidateVerifierThreadId(
-						candidate.vulnerabilityCandidateId,
-						nextSessionId,
-					);
-				},
-			});
-
-			return {
-				scanJobId: scanJob.scanJobId,
-				vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-				stage,
-				threadId: sessionId,
-				runtimeDir: candidateRuntimeDir,
-			};
-		}
-
-		const rpcChild = spawn(
-			"docker",
-			[
-				"exec",
-				"-i",
-				containerName,
-				"bash",
-				"-lc",
-				`cd /workspace/repo && export CODEX_HOME='${escapeSingleQuotes(
-					codexHome,
-				)}' && codex app-server`,
-			],
-			{
-				env: {
-					...process.env,
-					HOME: "/root",
-				},
-				stdio: ["pipe", "pipe", "pipe"],
-			},
-		);
-
-		let nextRequestId = 1;
-		let threadId = getCandidateVerifierThreadId(candidate);
-		let turnCompletionStatus = "";
-		let turnCompletionError = "";
-		let childExitCode: number | null = null;
-		const startedAt = Date.now();
-		const pendingRequests = new Map<
-			number,
-			{
-				resolve: (value: JsonRpcMessage) => void;
-				reject: (error: Error) => void;
-			}
-		>();
-
-		const sendJsonRpcMessage = (message: JsonRpcMessage) => {
-			rpcChild.stdin.write(
-				`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`,
-			);
-		};
-
-		const sendJsonRpcRequest = (
-			method: string,
-			params?: Record<string, unknown>,
-		) => {
-			const id = nextRequestId++;
-			const payload: JsonRpcMessage = { id, method, params };
-			return new Promise<JsonRpcMessage>((resolve, reject) => {
-				pendingRequests.set(id, { resolve, reject });
-				sendJsonRpcMessage(payload);
-			});
-		};
-
-		let resolveTurnCompleted: (() => void) | undefined;
-		let rejectTurnCompleted: ((error: Error) => void) | undefined;
-		let turnCompleted = new Promise<void>((resolve, reject) => {
-			resolveTurnCompleted = resolve;
-			rejectTurnCompleted = reject;
-		});
-
-		const resetTurnCompletion = () => {
-			turnCompletionStatus = "";
-			turnCompletionError = "";
-			turnCompleted = new Promise<void>((resolve, reject) => {
-				resolveTurnCompleted = resolve;
-				rejectTurnCompleted = reject;
-			});
-		};
-
-		const stdoutLines = createInterface({ input: rpcChild.stdout });
-		let bridgeEventBuffer = "";
-		const agentMessageBuffers = new Map<string, string>();
-		stdoutLines.on("line", async (line) => {
-			try {
-				await appendScanRuntimeFile(appServerJsonlPath, `${line}\n`);
-				const message = JSON.parse(line) as JsonRpcMessage;
-				const rendered = renderJsonRpcMessage(message);
-				if (rendered) {
-					await appendScanRuntimeFile(appServerTextPath, rendered);
-				}
-				const bridgeText = resolveCompletedAgentMessageText(
-					message,
-					agentMessageBuffers,
-				);
-				if (bridgeText) {
-					bridgeEventBuffer += bridgeText;
-					const { events, parseErrors, remaining } =
-						extractVulseekBridgeEvents(bridgeEventBuffer);
-					bridgeEventBuffer = remaining;
-					for (const parseError of parseErrors) {
-						await appendScanRuntimeFile(
-							appServerStderrPath,
-							`[bridge-debug] invalid VULSEEK_EVENT: ${parseError.message}; payload=${parseError.payloadSnippet}\n`,
-						);
-					}
-					for (const event of events) {
-						await persistVulseekBridgeEvent(scanJob.scanJobId, event, {
-							candidateId: candidate.vulnerabilityCandidateId,
-							runtimeSeconds: (Date.now() - startedAt) / 1000,
-							threadId: threadId || candidate.verifierThreadId || undefined,
-						});
-					}
-				}
-
-				if (typeof message.id === "number" && pendingRequests.has(message.id)) {
-					const pendingRequest = pendingRequests.get(message.id);
-					pendingRequests.delete(message.id);
-					if (message.error?.message) {
-						pendingRequest?.reject(new Error(message.error.message));
-					} else {
-						pendingRequest?.resolve(message);
-					}
-					return;
-				}
-
-				if (message.method === "thread/started") {
-					threadId =
-						extractNamedString(
-							(message.params as Record<string, unknown> | undefined)?.thread,
-							["threadId", "id"],
-						) ||
-						extractNamedString(message.params, ["threadId"]) ||
-						threadId;
-					if (threadId) {
-						await updateVulnerabilityCandidateVerifierThreadId(
-							candidate.vulnerabilityCandidateId,
-							threadId,
-						);
-					}
-				}
-
-				if (message.method === "turn/completed") {
-					const turnRecord = (message.params as Record<string, unknown> | undefined)
-						?.turn as Record<string, unknown> | undefined;
-					turnCompletionStatus =
-						extractNamedString(turnRecord, ["status"]) ||
-						extractNamedString(message.params, ["status"]) ||
-						"completed";
-					turnCompletionError =
-						extractTurnErrorMessage(turnRecord) ||
-						message.error?.message ||
-						(turnCompletionStatus === "failed"
-							? "Codex turn completed with failed status"
-							: "");
-					resolveTurnCompleted?.();
-				}
-			} catch (error) {
-				const message =
-					error instanceof Error ? error.message : "Failed to parse JSON-RPC";
-				await appendScanRuntimeFile(appServerStderrPath, `[parse-error] ${message}\n`);
-			}
-		});
-
-		rpcChild.stderr.on("data", (chunk) => {
-			void appendScanRuntimeFile(appServerStderrPath, chunk.toString());
-		});
-
-		const childExited = new Promise<void>((resolve, reject) => {
-			rpcChild.on("error", (error) => {
-				for (const pendingRequest of pendingRequests.values()) {
-					pendingRequest.reject(error);
-				}
-				pendingRequests.clear();
-				reject(error);
-			});
-
-			rpcChild.on("close", (code) => {
-				childExitCode = code;
-				for (const pendingRequest of pendingRequests.values()) {
-					pendingRequest.reject(
-						new Error(`codex app-server exited before response (code ${code})`),
-					);
-				}
-				pendingRequests.clear();
-				if (!turnCompletionStatus) {
-					rejectTurnCompleted?.(
-						new Error(
-							`codex app-server exited before turn completion (code ${code})`,
-						),
-					);
-				}
-				resolve();
-			});
-		});
-
-		await sendJsonRpcRequest("initialize", {
-			clientInfo: {
-				name: "dokploy",
-				version: "vulseek",
-			},
-			capabilities: {
-				experimentalApi: true,
-			},
-		});
-		sendJsonRpcMessage({ method: "initialized" });
-
-		if (threadId) {
-			try {
-				await sendJsonRpcRequest("thread/resume", {
-					threadId,
-					cwd: "/workspace/repo",
-					approvalPolicy: "never",
-					persistExtendedHistory: true,
-				});
-			} catch {
-				threadId = "";
-			}
-		}
-
-		if (!threadId) {
-			const threadStarted = await sendJsonRpcRequest("thread/start", {
-				cwd: "/workspace/repo",
-				approvalPolicy: "never",
-				serviceName: "dokploy_candidate_verify",
-				experimentalRawEvents: false,
-				persistExtendedHistory: true,
-			});
-			threadId =
-				extractNamedString(
-					(threadStarted.result as Record<string, unknown> | undefined)?.thread,
-					["threadId", "id"],
-				) ||
-				extractNamedString(threadStarted.result, ["threadId"]) ||
-				threadId;
-			if (!threadId) {
-				throw new Error("Codex app-server did not return a thread id");
-			}
+	const startedAt = Date.now();
+	let currentThreadId = getCandidateVerifierThreadId(candidate);
+	const result = await runSingleTurnAgentInContainer({
+		scanJob,
+		agentProfile: verifierAgentProfile,
+		containerName,
+		codexHome,
+		runtimeDirHost: candidateRuntimeDir,
+		runtimeRootInContainer: candidateRuntimeRootInContainer,
+		runtimeFileNames: {
+			jsonl: "verify-app-server-messages.jsonl",
+			text: "verify-app-server-text.log",
+			stderr: "verify-app-server-stderr.log",
+		},
+		cwd: "/workspace/repo",
+		prompt: input.prompt,
+		setupMarkdownPathInContainer: `${candidateRuntimeRootInContainer}/verify/00_setup.md`,
+		setupMarkdown: [
+			"# Candidate Verify Setup",
+			"",
+			`- scan_job_id: ${scanJob.scanJobId}`,
+			`- candidate_id: ${candidate.vulnerabilityCandidateId}`,
+			`- agent: verifier`,
+			`- agent_profile: ${verifierAgentProfile?.name || verifierAgentProfile?.agentProfileId || "default"}`,
+			`- agent_provider: ${verifierAgentProfile?.provider || "codex"}`,
+			`- agent_model: ${verifierAgentProfile?.model || "gpt-5.4"}`,
+			`- app_name: ${appName}`,
+			`- context_storage: ${scanContextMount.mountDescription}`,
+		].join("\n"),
+		onThreadId: async (threadId) => {
+			currentThreadId = threadId;
 			await updateVulnerabilityCandidateVerifierThreadId(
 				candidate.vulnerabilityCandidateId,
 				threadId,
 			);
-		}
+		},
+	});
+	await persistVerificationResultPayload({
+		scanJobId: scanJob.scanJobId,
+		candidateId: candidate.vulnerabilityCandidateId,
+		payload: await readVerificationResultFile(
+			path.join(candidateRuntimeDir, "verify", "verification_result.json"),
+		),
+		runtimeSeconds: (Date.now() - startedAt) / 1000,
+		threadId: result.threadId || currentThreadId || undefined,
+	});
 
-		resetTurnCompletion();
-		await sendJsonRpcRequest("turn/start", {
-			threadId,
-			input: [{ type: "text", text: input.prompt, text_elements: [] }],
-			cwd: "/workspace/repo",
-			approvalPolicy: "never",
-			sandboxPolicy: {
-				type: "externalSandbox",
-				networkAccess: "enabled",
-			},
-		});
-		await turnCompleted;
-		if (turnCompletionStatus === "failed") {
-			throw new Error(turnCompletionError || "Codex turn failed");
-		}
-
-		try {
-			rpcChild.stdin.end();
-		} catch {}
-		await childExited;
-		if (childExitCode !== null && childExitCode !== 0) {
-			throw new Error(`codex app-server exited with code ${childExitCode}`);
-		}
-
-		return {
-			scanJobId: scanJob.scanJobId,
-			vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-			stage,
-			threadId,
-			runtimeDir: candidateRuntimeDir,
-		};
-	} finally {
-		await execAsync(`docker rm -f ${containerName}`).catch(() => {});
-	}
+	return {
+		scanJobId: scanJob.scanJobId,
+		vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
+		stage,
+		threadId: result.threadId,
+		runtimeDir: candidateRuntimeDir,
+	};
 };
 
 const buildCandidateAnalysisPrompt = async (input: {
@@ -4472,10 +7213,13 @@ const buildCandidateAnalysisPrompt = async (input: {
 	candidate: VulnerabilityCandidate;
 }) => {
 	await resolveScanExecutionContext(input.scanJob);
-	const reportPath = path.posix.join(
-		buildCandidateContextRoot(input.scanJob.scanJobId, input.candidate.vulnerabilityCandidateId),
-		"analysis",
-		"01_report.md",
+	const reportPath = buildCandidateAnalysisReportPath(
+		input.scanJob.scanJobId,
+		input.candidate.vulnerabilityCandidateId,
+	);
+	const resultPath = buildCandidateAnalysisResultPath(
+		input.scanJob.scanJobId,
+		input.candidate.vulnerabilityCandidateId,
 	);
 
 	return [
@@ -4489,15 +7233,15 @@ const buildCandidateAnalysisPrompt = async (input: {
 		`candidate_line: ${
 			typeof input.candidate.line === "number" ? input.candidate.line : "-"
 		}`,
-		`write_report_to: ${reportPath}`,
+		`write_report_to: ${toAgentVisiblePath(reportPath)}`,
+		`write_result_json_to: ${toAgentVisiblePath(resultPath)}`,
 		"",
 		"Use the installed skill named deep-analysis as your working method.",
-		"Event emission is mandatory.",
-		'After writing the report, print exactly one literal <VULSEEK_EVENT>...</VULSEEK_EVENT> block with {"type":"analysis_result","payload":{...}}.',
-		"Use payload fields: result, reportPath, summary.",
-		"Do not use deep_analysis_result. Use analysis_result only.",
-		"Do not include scanJobId or candidateId in the event payload; Dokploy will attach them.",
-		"Dokploy will supplement runtimeSeconds and threadId if needed.",
+		"Strictly follow the fixed markdown template defined in the skill.",
+		"After the report is written, write analysis_result.json as a top-level object.",
+		"Required JSON fields for this run: result, score, summary.",
+		"Optional JSON field: confidence.",
+		"Compute score as a 0-10 estimated severity score. Consider CVSS-style dimensions and real-world impact breadth, including whether the vulnerable path appears in common usage scenarios.",
 		"",
 		"Recommended result enum values:",
 		"- real_vulnerability",
@@ -4513,15 +7257,20 @@ const buildCandidateVerificationPrompt = async (input: {
 	analysisResult: AnalysisResult;
 }) => {
 	await resolveScanExecutionContext(input.scanJob);
-	const verifyRoot = path.posix.join(
-		buildCandidateContextRoot(input.scanJob.scanJobId, input.candidate.vulnerabilityCandidateId),
-		"verify",
+	const {
+		reportPath,
+		issueDraftPath,
+		pocPath,
+		dockerfilePath,
+		runScriptPath,
+	} = buildCandidateVerificationArtifactPaths(
+		input.scanJob.scanJobId,
+		input.candidate.vulnerabilityCandidateId,
 	);
-	const reportPath = `${verifyRoot}/01_verify_report.md`;
-	const issueDraftPath = `${verifyRoot}/02_issue_draft.md`;
-	const pocPath = `${verifyRoot}/03_poc/poc.txt`;
-	const dockerfilePath = `${verifyRoot}/04_repro/Dockerfile`;
-	const runScriptPath = `${verifyRoot}/04_repro/run.sh`;
+	const resultPath = buildCandidateVerificationResultPath(
+		input.scanJob.scanJobId,
+		input.candidate.vulnerabilityCandidateId,
+	);
 
 	return [
 		"You are the verifier agent for one vulnerability candidate.",
@@ -4536,19 +7285,20 @@ const buildCandidateVerificationPrompt = async (input: {
 		}`,
 		`analysis_result: ${input.analysisResult.result}`,
 		`analysis_summary: ${input.analysisResult.summary || "-"}`,
-		`analysis_report_path: ${input.analysisResult.reportPath || "-"}`,
-		`write_verify_report_to: ${reportPath}`,
-		`write_issue_draft_to: ${issueDraftPath}`,
-		`write_poc_to: ${pocPath}`,
-		`write_repro_dockerfile_to: ${dockerfilePath}`,
-		`write_repro_run_script_to: ${runScriptPath}`,
+		`analysis_report_path: ${input.analysisResult.reportPath ? toAgentVisiblePath(input.analysisResult.reportPath) : "-"}`,
+		`write_verify_report_to: ${toAgentVisiblePath(reportPath)}`,
+		`write_issue_draft_to: ${toAgentVisiblePath(issueDraftPath)}`,
+		`write_poc_to: ${toAgentVisiblePath(pocPath)}`,
+		`write_repro_dockerfile_to: ${toAgentVisiblePath(dockerfilePath)}`,
+		`write_repro_run_script_to: ${toAgentVisiblePath(runScriptPath)}`,
+		`write_result_json_to: ${toAgentVisiblePath(resultPath)}`,
 		"",
 		"Use the installed skill named verify as your working method.",
-		"Event emission is mandatory.",
-		'After writing the artifacts, print exactly one literal <VULSEEK_EVENT>...</VULSEEK_EVENT> block with {"type":"verification_result","payload":{...}}.',
-		"Use payload fields: result, isBug, isSecurity, confidence, reportPath, issueDraftPath, pocPath, dockerfilePath, runScriptPath, summary.",
-		"Do not include scanJobId or candidateId in the event payload; Dokploy will attach them.",
-		"Dokploy will supplement runtimeSeconds and threadId if needed.",
+		"Strictly follow the fixed markdown templates defined in the skill.",
+		"After the verification artifacts are written, write verification_result.json as a top-level object.",
+		"Required JSON fields for this run: result, isBug, isSecurity, score, summary.",
+		"Optional JSON field: confidence.",
+		"Compute score as a 0-10 estimated severity score. Consider CVSS-style dimensions and real-world impact breadth, including whether the vulnerable path appears in common usage scenarios.",
 		"",
 		"Recommended result enum values:",
 		"- real_vulnerability",
@@ -4559,77 +7309,524 @@ const buildCandidateVerificationPrompt = async (input: {
 	].join("\n");
 };
 
-export const runScanJobAnalysisPipeline = async (scanJobId: string) => {
-	const scanJob = await findScanJobById(scanJobId);
-	const candidates = await findVulnerabilityCandidatesByScanJobId(scanJobId);
-	if (candidates.length === 0) {
-		return { total: 0, failed: 0 };
+const shouldVerifyFromAnalysisResult = (
+	result: string | null | undefined,
+) =>
+	result === "real_vulnerability" || result === "likely_vulnerability";
+
+const resolveVerificationConcurrencyKey = (
+	scanJob: Pick<ScanJob, "applicationId" | "composeId" | "scanJobId">,
+) => {
+	if (scanJob.applicationId) {
+		return `application:${scanJob.applicationId}`;
 	}
 
-	await updateScanJobStatus(scanJobId, "analyzing").catch(() => {});
+	if (scanJob.composeId) {
+		return `compose:${scanJob.composeId}`;
+	}
 
-	let failed = 0;
-	let cursor = 0;
-	const runNext = async () => {
-		while (cursor < candidates.length) {
-			const candidate = candidates[cursor++];
-			if (!candidate) {
-				break;
-			}
-			await updateVulnerabilityCandidateStatus(
-				candidate.vulnerabilityCandidateId,
-				"running",
-			);
-			await updateVulnerabilityCandidateCurrentStage(
-				candidate.vulnerabilityCandidateId,
-				"analyzing",
-			);
+	return `scan-job:${scanJob.scanJobId}`;
+};
 
-			try {
-				const prompt = await buildCandidateAnalysisPrompt({
-					scanJob,
-					candidate,
-				});
-				await runCandidateAnalysisAgentInContainer({
-					vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-					stage: "analyzing",
-					prompt,
-				});
+const resolveAnalysisConcurrencyKey = (
+	scanJob: Pick<ScanJob, "applicationId" | "composeId" | "scanJobId">,
+) => {
+	if (scanJob.applicationId) {
+		return `application:${scanJob.applicationId}`;
+	}
 
-				const refreshed = await findVulnerabilityCandidateById(
-					candidate.vulnerabilityCandidateId,
-				);
-				if (refreshed.status === "running") {
-					await updateVulnerabilityCandidateStatus(
-						candidate.vulnerabilityCandidateId,
-						"completed",
-					);
-				}
-			} catch (error) {
-				failed += 1;
-				await updateVulnerabilityCandidateStatus(
-					candidate.vulnerabilityCandidateId,
-					"failed",
-				).catch(() => {});
-			}
+	if (scanJob.composeId) {
+		return `compose:${scanJob.composeId}`;
+	}
+
+	return `scan-job:${scanJob.scanJobId}`;
+};
+
+const resolveModuleScanConcurrencyKey = (
+	scanJob: Pick<ScanJob, "scanJobId">,
+) => `scan-job:${scanJob.scanJobId}:module`;
+
+const resolveFunctionScanConcurrencyKey = (
+	scanJob: Pick<ScanJob, "scanJobId">,
+) => `scan-job:${scanJob.scanJobId}:function`;
+
+const enqueueCandidateAnalysisWork = async (
+	scanJobId: string,
+	vulnerabilityCandidateId: string,
+) => {
+	await candidateAnalysisQueue.add(
+		"analysis",
+		{
+			scanJobId,
+			vulnerabilityCandidateId,
+		},
+		{
+			jobId: `analysis:${vulnerabilityCandidateId}`,
+			removeOnComplete: true,
+			removeOnFail: true,
+		},
+	);
+};
+
+const enqueueModuleScanWork = async (
+	scanJobId: string,
+	scanModuleTaskId: string,
+) => {
+	await moduleScanQueue.add(
+		"module",
+		{
+			scanJobId,
+			scanModuleTaskId,
+		},
+		{
+			jobId: `module:${scanModuleTaskId}`,
+			removeOnComplete: true,
+			removeOnFail: true,
+		},
+	);
+};
+
+const enqueueFunctionScanWork = async (
+	scanJobId: string,
+	scanFunctionTaskId: string,
+) => {
+	await functionScanQueue.add(
+		"function",
+		{
+			scanJobId,
+			scanFunctionTaskId,
+		},
+		{
+			jobId: `function:${scanFunctionTaskId}`,
+			removeOnComplete: true,
+			removeOnFail: true,
+		},
+	);
+};
+
+const enqueuePendingModuleScanWork = async (scanJobId: string) => {
+	const moduleTasks = await findScanModuleTasksByScanJobId(scanJobId);
+	for (const moduleTask of moduleTasks) {
+		if (moduleTask.status === "completed" || moduleTask.status === "failed") {
+			continue;
 		}
-	};
+		await enqueueModuleScanWork(scanJobId, moduleTask.scanModuleTaskId);
+	}
+};
 
-	const workers = Array.from({
-		length: Math.min(ANALYSIS_CONCURRENCY, candidates.length),
-	}).map(() => runNext());
-	await Promise.all(workers);
+const enqueuePendingFunctionScanWorkForModule = async (
+	scanJobId: string,
+	scanModuleTaskId: string,
+) => {
+	const functionTasks = await findScanFunctionTasksByModuleTaskId(scanModuleTaskId);
+	for (const functionTask of functionTasks) {
+		if (
+			functionTask.scanJobId !== scanJobId ||
+			functionTask.status === "completed" ||
+			functionTask.status === "failed"
+		) {
+			continue;
+		}
+		await enqueueFunctionScanWork(scanJobId, functionTask.scanFunctionTaskId);
+	}
+};
+
+const enqueueCandidateVerificationWork = async (
+	scanJobId: string,
+	vulnerabilityCandidateId: string,
+) => {
+	await candidateVerificationQueue.add(
+		"verification",
+		{
+			scanJobId,
+			vulnerabilityCandidateId,
+		},
+		{
+			jobId: `verification:${vulnerabilityCandidateId}`,
+			removeOnComplete: true,
+			removeOnFail: true,
+		},
+	);
+};
+
+const removeQueuedCandidateAnalysisWork = async (
+	vulnerabilityCandidateId: string,
+) => {
+	const existingJob = await candidateAnalysisQueue.getJob(
+		`analysis:${vulnerabilityCandidateId}`,
+	);
+	if (existingJob) {
+		await existingJob.remove().catch(() => {});
+	}
+};
+
+const forceRemoveCandidateQueueJob = async (
+	queue: Queue<ScanCandidateQueueJob>,
+	jobId: string,
+) => {
+	const existingJob = await queue.getJob(jobId).catch(() => null);
+	if (existingJob) {
+		const state = await existingJob.getState().catch(() => null);
+		if (state && state !== "active") {
+			await existingJob.remove().catch(() => {});
+			return;
+		}
+	}
+
+	const client = await queue.client;
+	const jobKey = queue.toKey(jobId);
+	await client
+		.multi()
+		.lrem(queue.toKey("active"), 0, jobId)
+		.lrem(queue.toKey("wait"), 0, jobId)
+		.lrem(queue.toKey("paused"), 0, jobId)
+		.zrem(queue.toKey("delayed"), jobId)
+		.zrem(queue.toKey("prioritized"), jobId)
+		.zrem(queue.toKey("completed"), jobId)
+		.zrem(queue.toKey("failed"), jobId)
+		.zrem(queue.toKey("waiting-children"), jobId)
+		.del(
+			jobKey,
+			`${jobKey}:lock`,
+			`${jobKey}:logs`,
+			`${jobKey}:dependencies`,
+			`${jobKey}:processed`,
+		)
+		.exec();
+};
+
+const removeQueuedCandidateVerificationWork = async (
+	vulnerabilityCandidateId: string,
+) => {
+	await forceRemoveCandidateQueueJob(
+		candidateVerificationQueue,
+		`verification:${vulnerabilityCandidateId}`,
+	).catch(() => {});
+};
+
+const getPendingAnalysisCandidates = async (scanJobId: string) => {
+	const [candidates, analysisResultsList] = await Promise.all([
+		findVulnerabilityCandidatesByScanJobId(scanJobId),
+		findAnalysisResultsByScanJobId(scanJobId),
+	]);
+	const analysisCandidateIds = new Set(
+		analysisResultsList.map((item) => item.vulnerabilityCandidateId),
+	);
+
+	const pendingCandidates = candidates.filter(
+		(candidate) =>
+			!analysisCandidateIds.has(candidate.vulnerabilityCandidateId) &&
+			candidate.status !== "failed",
+	);
+	const failed = candidates.filter(
+		(candidate) =>
+			!analysisCandidateIds.has(candidate.vulnerabilityCandidateId) &&
+			candidate.status === "failed",
+	).length;
 
 	return {
-		total: candidates.length,
+		candidates,
+		pendingCandidates,
 		failed,
 	};
 };
 
-export const runScanJobVerificationPipeline = async (scanJobId: string) => {
-	const scanJob = await findScanJobById(scanJobId);
-	const candidates = await findVulnerabilityCandidatesByScanJobId(scanJobId);
-	const analysisResultsList = await findAnalysisResultsByScanJobId(scanJobId);
+const getPendingVerificationCandidates = async (scanJobId: string) => {
+	const [candidates, analysisResultsList, verificationResultsList] =
+		await Promise.all([
+			findVulnerabilityCandidatesByScanJobId(scanJobId),
+			findAnalysisResultsByScanJobId(scanJobId),
+			findVerificationResultsByScanJobId(scanJobId),
+		]);
+	const latestAnalysisResultByCandidateId = new Map<string, AnalysisResult>();
+	for (const analysisResult of analysisResultsList) {
+		if (
+			!latestAnalysisResultByCandidateId.has(
+				analysisResult.vulnerabilityCandidateId,
+			)
+		) {
+			latestAnalysisResultByCandidateId.set(
+				analysisResult.vulnerabilityCandidateId,
+				analysisResult as AnalysisResult,
+			);
+		}
+	}
+	const latestVerificationResultByCandidateId = new Map<
+		string,
+		VerificationResult
+	>();
+	for (const verificationResult of verificationResultsList) {
+		if (
+			!latestVerificationResultByCandidateId.has(
+				verificationResult.vulnerabilityCandidateId,
+			)
+		) {
+			latestVerificationResultByCandidateId.set(
+				verificationResult.vulnerabilityCandidateId,
+				verificationResult as VerificationResult,
+			);
+		}
+	}
+
+	const pendingCandidates = candidates.filter((candidate) => {
+		const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
+			candidate.vulnerabilityCandidateId,
+		);
+		if (!latestAnalysisResult) {
+			return false;
+		}
+
+		if (!shouldVerifyFromAnalysisResult(latestAnalysisResult.result)) {
+			return false;
+		}
+
+		if (
+			latestVerificationResultByCandidateId.has(
+				candidate.vulnerabilityCandidateId,
+			)
+		) {
+			return false;
+		}
+
+		return candidate.status !== "failed";
+	});
+
+	const failed = candidates.filter((candidate) => {
+		const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
+			candidate.vulnerabilityCandidateId,
+		);
+		if (!latestAnalysisResult) {
+			return false;
+		}
+
+		if (!shouldVerifyFromAnalysisResult(latestAnalysisResult.result)) {
+			return false;
+		}
+
+		if (
+			latestVerificationResultByCandidateId.has(
+				candidate.vulnerabilityCandidateId,
+			)
+		) {
+			return false;
+		}
+
+		return candidate.status === "failed";
+	}).length;
+
+	return {
+		candidates,
+		pendingCandidates,
+		totalTargets: candidates.filter((candidate) => {
+			const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
+				candidate.vulnerabilityCandidateId,
+			);
+			if (!latestAnalysisResult) {
+				return false;
+			}
+
+			return shouldVerifyFromAnalysisResult(latestAnalysisResult.result);
+		}).length,
+		failed,
+	};
+};
+
+const getPendingScanTaskState = async (scanJobId: string) => {
+	const [scanJob, moduleTasks, functionTasks] = await Promise.all([
+		findScanJobById(scanJobId),
+		findScanModuleTasksByScanJobId(scanJobId),
+		findScanFunctionTasksByScanJobId(scanJobId),
+	]);
+
+	const repositoryPending =
+		scanJob.repositoryTaskStatus !== "completed" &&
+		scanJob.repositoryTaskStatus !== "failed";
+	const modulePending = moduleTasks.filter(
+		(moduleTask) =>
+			moduleTask.status !== "completed" && moduleTask.status !== "failed",
+	);
+	const functionPending = functionTasks.filter(
+		(functionTask) =>
+			functionTask.status !== "completed" && functionTask.status !== "failed",
+	);
+
+	return {
+		scanJob,
+		repositoryPending,
+		modulePending,
+		functionPending,
+		moduleFailed: moduleTasks.filter((task) => task.status === "failed").length,
+		functionFailed: functionTasks.filter((task) => task.status === "failed").length,
+	};
+};
+
+export const reconcileScanJobCandidatePipelineStatus = async (
+	scanJobId: string,
+) => {
+	const [scanState, analysisState, verificationState] = await Promise.all([
+		getPendingScanTaskState(scanJobId),
+		getPendingAnalysisCandidates(scanJobId),
+		getPendingVerificationCandidates(scanJobId),
+	]);
+
+	if (scanState.repositoryPending) {
+		if (scanState.scanJob.status !== "scanning") {
+			await updateScanJobStatus(scanJobId, "scanning").catch(() => {});
+		}
+		await updateScanJobPhase(scanJobId, "repository_scanning").catch(() => {});
+		return {
+			status: "scanning" as const,
+			scanPhase: "repository_scanning" as const,
+			analysisFailed: analysisState.failed,
+			verificationFailed: verificationState.failed,
+			moduleFailed: scanState.moduleFailed,
+			functionFailed: scanState.functionFailed,
+		};
+	}
+
+	if (scanState.functionPending.length > 0) {
+		if (scanState.scanJob.status !== "scanning") {
+			await updateScanJobStatus(scanJobId, "scanning").catch(() => {});
+		}
+		await updateScanJobPhase(scanJobId, "function_scanning").catch(() => {});
+		return {
+			status: "scanning" as const,
+			scanPhase: "function_scanning" as const,
+			analysisFailed: analysisState.failed,
+			verificationFailed: verificationState.failed,
+			moduleFailed: scanState.moduleFailed,
+			functionFailed: scanState.functionFailed,
+		};
+	}
+
+	if (scanState.modulePending.length > 0) {
+		if (scanState.scanJob.status !== "scanning") {
+			await updateScanJobStatus(scanJobId, "scanning").catch(() => {});
+		}
+		await updateScanJobPhase(scanJobId, "module_scanning").catch(() => {});
+		return {
+			status: "scanning" as const,
+			scanPhase: "module_scanning" as const,
+			analysisFailed: analysisState.failed,
+			verificationFailed: verificationState.failed,
+			moduleFailed: scanState.moduleFailed,
+			functionFailed: scanState.functionFailed,
+		};
+	}
+
+	if (scanState.scanJob.repositoryTaskStatus === "failed") {
+		await updateScanJobStatus(
+			scanJobId,
+			"failed",
+			"Repository scanning failed",
+		).catch(() => {});
+		return {
+			status: "failed" as const,
+			scanPhase: "repository_scanning" as const,
+			analysisFailed: analysisState.failed,
+			verificationFailed: verificationState.failed,
+			moduleFailed: scanState.moduleFailed,
+			functionFailed: scanState.functionFailed,
+		};
+	}
+
+	if (scanState.moduleFailed > 0 || scanState.functionFailed > 0) {
+		await updateScanJobStatus(
+			scanJobId,
+			"failed",
+			`${scanState.moduleFailed} module tasks failed, ${scanState.functionFailed} function tasks failed`,
+		).catch(() => {});
+		return {
+			status: "failed" as const,
+			scanPhase: "function_scanning" as const,
+			analysisFailed: analysisState.failed,
+			verificationFailed: verificationState.failed,
+			moduleFailed: scanState.moduleFailed,
+			functionFailed: scanState.functionFailed,
+		};
+	}
+
+	if (analysisState.pendingCandidates.length > 0) {
+		if (scanState.scanJob.status !== "analyzing") {
+			await updateScanJobStatus(scanJobId, "analyzing").catch(() => {});
+		}
+		return {
+			status: "analyzing" as const,
+			scanPhase: "analyzing" as const,
+			analysisFailed: analysisState.failed,
+			verificationFailed: verificationState.failed,
+			moduleFailed: scanState.moduleFailed,
+			functionFailed: scanState.functionFailed,
+		};
+	}
+
+	if (verificationState.pendingCandidates.length > 0) {
+		if (scanState.scanJob.status !== "verifying") {
+			await updateScanJobStatus(scanJobId, "verifying").catch(() => {});
+		}
+		return {
+			status: "verifying" as const,
+			scanPhase: "verifying" as const,
+			analysisFailed: analysisState.failed,
+			verificationFailed: verificationState.failed,
+			moduleFailed: scanState.moduleFailed,
+			functionFailed: scanState.functionFailed,
+		};
+	}
+
+	if (analysisState.failed > 0) {
+		await updateScanJobStatus(
+			scanJobId,
+			"failed",
+			`${analysisState.failed} candidate analyses failed`,
+		).catch(() => {});
+		return {
+			status: "failed" as const,
+			scanPhase: "analyzing" as const,
+			analysisFailed: analysisState.failed,
+			verificationFailed: verificationState.failed,
+			moduleFailed: scanState.moduleFailed,
+			functionFailed: scanState.functionFailed,
+		};
+	}
+
+	if (verificationState.failed > 0) {
+		await updateScanJobStatus(
+			scanJobId,
+			"failed",
+			`${verificationState.failed} candidate verifications failed`,
+		).catch(() => {});
+		return {
+			status: "failed" as const,
+			scanPhase: "verifying" as const,
+			analysisFailed: analysisState.failed,
+			verificationFailed: verificationState.failed,
+			moduleFailed: scanState.moduleFailed,
+			functionFailed: scanState.functionFailed,
+		};
+	}
+
+	if (scanState.scanJob.status !== "completed") {
+		await updateScanJobStatus(scanJobId, "completed").catch(() => {});
+	}
+	return {
+		status: "completed" as const,
+		scanPhase: "completed" as const,
+		analysisFailed: 0,
+		verificationFailed: 0,
+		moduleFailed: scanState.moduleFailed,
+		functionFailed: scanState.functionFailed,
+	};
+};
+
+const normalizeCandidateStatusesForScanJob = async (scanJobId: string) => {
+	const [candidates, analysisResultsList, verificationResultsList] =
+		await Promise.all([
+			findVulnerabilityCandidatesByScanJobId(scanJobId),
+			findAnalysisResultsByScanJobId(scanJobId),
+			findVerificationResultsByScanJobId(scanJobId),
+		]);
+
 	const latestAnalysisResultByCandidateId = new Map<string, AnalysisResult>();
 	for (const analysisResult of analysisResultsList) {
 		if (
@@ -4644,88 +7841,548 @@ export const runScanJobVerificationPipeline = async (scanJobId: string) => {
 		}
 	}
 
-	const verificationTargets = candidates
-		.map((candidate) => ({
-			candidate,
-			analysisResult: latestAnalysisResultByCandidateId.get(
-				candidate.vulnerabilityCandidateId,
-			),
-		}))
-		.filter(
-			(value): value is {
-				candidate: VulnerabilityCandidate;
-				analysisResult: AnalysisResult;
-			} => {
-				const analysisResult = value.analysisResult;
-				return Boolean(
-					analysisResult &&
-						(analysisResult.result === "real_vulnerability" ||
-							analysisResult.result === "likely_vulnerability"),
-				);
-			},
-		);
-
-	if (verificationTargets.length === 0) {
-		return { total: 0, failed: 0 };
+	const latestVerificationResultByCandidateId = new Map<
+		string,
+		VerificationResult
+	>();
+	for (const verificationResult of verificationResultsList) {
+		if (
+			!latestVerificationResultByCandidateId.has(
+				verificationResult.vulnerabilityCandidateId,
+			)
+		) {
+			latestVerificationResultByCandidateId.set(
+				verificationResult.vulnerabilityCandidateId,
+				verificationResult as VerificationResult,
+			);
+		}
 	}
 
-	await updateScanJobStatus(scanJobId, "verifying").catch(() => {});
-
-	let failed = 0;
-	let cursor = 0;
-	const runNext = async () => {
-		while (cursor < verificationTargets.length) {
-			const current = verificationTargets[cursor++];
-			if (!current) {
-				break;
-			}
-
-			await updateVulnerabilityCandidateStatus(
-				current.candidate.vulnerabilityCandidateId,
-				"running",
-			);
-			await updateVulnerabilityCandidateCurrentStage(
-				current.candidate.vulnerabilityCandidateId,
-				"verifying",
-			);
-
-			try {
-				const prompt = await buildCandidateVerificationPrompt({
-					scanJob,
-					candidate: current.candidate,
-					analysisResult: current.analysisResult,
-				});
-				await runCandidateVerifierInContainer({
-					vulnerabilityCandidateId: current.candidate.vulnerabilityCandidateId,
-					prompt,
-				});
-
-				const refreshed = await findVulnerabilityCandidateById(
-					current.candidate.vulnerabilityCandidateId,
-				);
-				if (refreshed.status === "running") {
-					await updateVulnerabilityCandidateStatus(
-						current.candidate.vulnerabilityCandidateId,
-						"completed",
-					);
-				}
-			} catch {
-				failed += 1;
-				await updateVulnerabilityCandidateStatus(
-					current.candidate.vulnerabilityCandidateId,
-					"failed",
+	for (const candidate of candidates) {
+		const verificationResult = latestVerificationResultByCandidateId.get(
+			candidate.vulnerabilityCandidateId,
+		);
+		if (verificationResult) {
+			if (candidate.currentStage !== "verifying") {
+				await updateVulnerabilityCandidateCurrentStage(
+					candidate.vulnerabilityCandidateId,
+					"verifying",
 				).catch(() => {});
 			}
+			if (candidate.status !== "completed") {
+				await updateVulnerabilityCandidateStatus(
+					candidate.vulnerabilityCandidateId,
+					"completed",
+				).catch(() => {});
+			}
+			continue;
 		}
-	};
 
-	const workers = Array.from({
-		length: Math.min(VERIFIER_CONCURRENCY, verificationTargets.length),
-	}).map(() => runNext());
-	await Promise.all(workers);
+		const analysisResult = latestAnalysisResultByCandidateId.get(
+			candidate.vulnerabilityCandidateId,
+		);
+		if (!analysisResult) {
+			continue;
+		}
+
+		if (shouldVerifyFromAnalysisResult(analysisResult.result)) {
+				if (candidate.currentStage !== "verifying") {
+					await updateVulnerabilityCandidateCurrentStage(
+						candidate.vulnerabilityCandidateId,
+						"verifying",
+					).catch(() => {});
+				}
+				if (
+					candidate.status !== "failed" &&
+					candidate.status !== "running" &&
+					candidate.status !== "queued"
+				) {
+					await updateVulnerabilityCandidateStatus(
+						candidate.vulnerabilityCandidateId,
+						"queued",
+					).catch(() => {});
+				}
+				continue;
+		}
+
+		if (candidate.currentStage !== "analyzing") {
+			await updateVulnerabilityCandidateCurrentStage(
+				candidate.vulnerabilityCandidateId,
+				"analyzing",
+			).catch(() => {});
+		}
+		if (candidate.status !== "completed") {
+			await updateVulnerabilityCandidateStatus(
+				candidate.vulnerabilityCandidateId,
+				"completed",
+			).catch(() => {});
+		}
+	}
+};
+
+export const processCandidateAnalysisQueueJob = async (
+	scanJobId: string,
+	vulnerabilityCandidateId: string,
+) => {
+	const [scanJob, candidate, existingAnalysisResult, existingVerificationResult] =
+		await Promise.all([
+			findScanJobById(scanJobId),
+			findVulnerabilityCandidateById(vulnerabilityCandidateId),
+			findLatestAnalysisResultByCandidateId(vulnerabilityCandidateId),
+			findLatestVerificationResultByCandidateId(vulnerabilityCandidateId),
+		]);
+
+	if (existingAnalysisResult) {
+			if (
+				shouldVerifyFromAnalysisResult(existingAnalysisResult.result) &&
+				!existingVerificationResult
+			) {
+				await updateVulnerabilityCandidateStatus(
+					vulnerabilityCandidateId,
+					"queued",
+				).catch(() => {});
+			await updateVulnerabilityCandidateCurrentStage(
+				vulnerabilityCandidateId,
+				"verifying",
+			).catch(() => {});
+			await enqueueCandidateVerificationWork(
+				scanJobId,
+				vulnerabilityCandidateId,
+			);
+		}
+		return;
+	}
+
+	const executionContext = await resolveScanExecutionContext(scanJob);
+	const releaseAnalysisSlot = await acquireAnalysisExecutionSlot(
+		resolveAnalysisConcurrencyKey(scanJob),
+		executionContext.analysisConcurrency,
+	);
+
+	await updateVulnerabilityCandidateStatus(vulnerabilityCandidateId, "running");
+	await updateVulnerabilityCandidateCurrentStage(
+		vulnerabilityCandidateId,
+		"analyzing",
+	);
+
+	try {
+		const prompt = await buildCandidateAnalysisPrompt({
+			scanJob,
+			candidate,
+		});
+		await runCandidateAnalysisAgentInContainer({
+			vulnerabilityCandidateId,
+			stage: "analyzing",
+			prompt,
+		});
+
+		const latestAnalysisResult = await findLatestAnalysisResultByCandidateId(
+			vulnerabilityCandidateId,
+		);
+		if (!latestAnalysisResult) {
+			throw new Error(
+				`Analysis finished without a persisted analysis result for candidate ${vulnerabilityCandidateId}`,
+			);
+		}
+
+			if (shouldVerifyFromAnalysisResult(latestAnalysisResult.result)) {
+				await updateVulnerabilityCandidateStatus(
+					vulnerabilityCandidateId,
+					"queued",
+				).catch(() => {});
+			await updateVulnerabilityCandidateCurrentStage(
+				vulnerabilityCandidateId,
+				"verifying",
+			).catch(() => {});
+			await enqueueCandidateVerificationWork(
+				scanJobId,
+				vulnerabilityCandidateId,
+			);
+			return;
+		}
+
+		const refreshed = await findVulnerabilityCandidateById(
+			vulnerabilityCandidateId,
+		);
+		if (
+			refreshed.status === "running" &&
+			refreshed.currentStage === "analyzing"
+		) {
+			await updateVulnerabilityCandidateStatus(
+				vulnerabilityCandidateId,
+				"completed",
+			);
+		}
+	} catch (error) {
+		await updateVulnerabilityCandidateStatus(
+			vulnerabilityCandidateId,
+			"failed",
+		).catch(() => {});
+		throw error;
+	} finally {
+		releaseAnalysisSlot();
+		await reconcileScanJobCandidatePipelineStatus(scanJobId).catch(() => {});
+	}
+};
+
+export const processCandidateVerificationQueueJob = async (
+	scanJobId: string,
+	vulnerabilityCandidateId: string,
+) => {
+	const [scanJob, candidate, latestAnalysisResult, existingVerificationResult] =
+		await Promise.all([
+			findScanJobById(scanJobId),
+			findVulnerabilityCandidateById(vulnerabilityCandidateId),
+			findLatestAnalysisResultByCandidateId(vulnerabilityCandidateId),
+			findLatestVerificationResultByCandidateId(vulnerabilityCandidateId),
+		]);
+
+	if (existingVerificationResult) {
+		return;
+	}
+
+	if (!latestAnalysisResult || !shouldVerifyFromAnalysisResult(latestAnalysisResult.result)) {
+		return;
+	}
+
+	const executionContext = await resolveScanExecutionContext(scanJob);
+	const releaseVerificationSlot = await acquireVerificationExecutionSlot(
+		resolveVerificationConcurrencyKey(scanJob),
+		executionContext.verifyConcurrency,
+	);
+
+	await updateVulnerabilityCandidateStatus(vulnerabilityCandidateId, "running");
+	await updateVulnerabilityCandidateCurrentStage(
+		vulnerabilityCandidateId,
+		"verifying",
+	);
+
+	try {
+		const prompt = await buildCandidateVerificationPrompt({
+			scanJob,
+			candidate,
+			analysisResult: latestAnalysisResult,
+		});
+		await runCandidateVerifierInContainer({
+			vulnerabilityCandidateId,
+			prompt,
+		});
+
+		const latestVerificationResult = await findLatestVerificationResultByCandidateId(
+			vulnerabilityCandidateId,
+		);
+		if (!latestVerificationResult) {
+			throw new Error(
+				`Verification finished without a persisted verification result for candidate ${vulnerabilityCandidateId}`,
+			);
+		}
+
+		const refreshed = await findVulnerabilityCandidateById(
+			vulnerabilityCandidateId,
+		);
+		if (
+			refreshed.status === "running" &&
+			refreshed.currentStage === "verifying"
+		) {
+			await updateVulnerabilityCandidateStatus(
+				vulnerabilityCandidateId,
+				"completed",
+			);
+		}
+	} catch (error) {
+		await updateVulnerabilityCandidateStatus(
+			vulnerabilityCandidateId,
+			"failed",
+		).catch(() => {});
+		throw error;
+	} finally {
+		releaseVerificationSlot();
+		await reconcileScanJobCandidatePipelineStatus(scanJobId).catch(() => {});
+	}
+};
+
+export const runScanJobAnalysisPipeline = async (scanJobId: string) => {
+	const initialState = await getPendingAnalysisCandidates(scanJobId);
+	if (initialState.candidates.length === 0) {
+		return { total: 0, failed: 0 };
+	}
+	if (initialState.pendingCandidates.length > 0) {
+		await updateScanJobStatus(scanJobId, "analyzing").catch(() => {});
+		for (const candidate of initialState.pendingCandidates) {
+			await enqueueCandidateAnalysisWork(
+				scanJobId,
+				candidate.vulnerabilityCandidateId,
+			);
+		}
+	}
+
+	while (true) {
+		const state = await getPendingAnalysisCandidates(scanJobId);
+		if (state.pendingCandidates.length === 0) {
+			return {
+				total: state.candidates.length,
+				failed: state.failed,
+			};
+		}
+
+		await updateScanJobStatus(scanJobId, "analyzing").catch(() => {});
+		for (const candidate of state.pendingCandidates) {
+			await enqueueCandidateAnalysisWork(
+				scanJobId,
+				candidate.vulnerabilityCandidateId,
+			);
+		}
+		await sleep(1_000);
+	}
+};
+
+export const runScanJobVerificationPipeline = async (scanJobId: string) => {
+	const initialState = await getPendingVerificationCandidates(scanJobId);
+	if (initialState.totalTargets === 0) {
+		return { total: 0, failed: 0 };
+	}
+	if (
+		initialState.pendingCandidates.length === 0 &&
+		initialState.failed === 0
+	) {
+		return { total: initialState.totalTargets, failed: 0 };
+	}
+
+	while (true) {
+		const state = await getPendingVerificationCandidates(scanJobId);
+		if (state.pendingCandidates.length === 0) {
+			return {
+				total: state.totalTargets,
+				failed: state.failed,
+			};
+		}
+
+		await updateScanJobStatus(scanJobId, "verifying").catch(() => {});
+		for (const candidate of state.pendingCandidates) {
+			await updateVulnerabilityCandidateCurrentStage(
+				candidate.vulnerabilityCandidateId,
+				"verifying",
+			).catch(() => {});
+			await enqueueCandidateVerificationWork(
+				scanJobId,
+				candidate.vulnerabilityCandidateId,
+			);
+		}
+		await sleep(1_000);
+	}
+};
+
+export const recoverPendingScanCandidateQueues = async () => {
+	const jobs = await db
+		.select({
+			scanJobId: scanJobs.scanJobId,
+			status: scanJobs.status,
+			scanPhase: scanJobs.scanPhase,
+		})
+		.from(scanJobs)
+		.where(
+			sql`${scanJobs.status} <> 'completed' and ${scanJobs.status} <> 'failed'`,
+		);
+
+	let analysisCandidates = 0;
+	let verificationCandidates = 0;
+
+	for (const job of jobs) {
+		const currentScanJob = await findScanJobById(job.scanJobId);
+		await normalizeCandidateStatusesForScanJob(job.scanJobId);
+		const analysisState = await getPendingAnalysisCandidates(job.scanJobId);
+		const verificationState = await getPendingVerificationCandidates(job.scanJobId);
+
+		for (const candidate of analysisState.pendingCandidates) {
+			await updateVulnerabilityCandidateCurrentStage(
+				candidate.vulnerabilityCandidateId,
+				"analyzing",
+			).catch(() => {});
+			if (candidate.status !== "failed") {
+				if (candidate.status !== "running") {
+					await updateVulnerabilityCandidateStatus(
+						candidate.vulnerabilityCandidateId,
+						"queued",
+					).catch(() => {});
+				}
+				await enqueueCandidateAnalysisWork(
+					job.scanJobId,
+					candidate.vulnerabilityCandidateId,
+				);
+				analysisCandidates += 1;
+			}
+		}
+
+		for (const candidate of verificationState.pendingCandidates) {
+			if (candidate.status !== "running") {
+				await updateVulnerabilityCandidateStatus(
+					candidate.vulnerabilityCandidateId,
+					"queued",
+				).catch(() => {});
+			}
+			await updateVulnerabilityCandidateCurrentStage(
+				candidate.vulnerabilityCandidateId,
+				"verifying",
+			).catch(() => {});
+			await enqueueCandidateVerificationWork(
+				job.scanJobId,
+				candidate.vulnerabilityCandidateId,
+			);
+			verificationCandidates += 1;
+		}
+
+		if (
+			job.status !== "scanning" &&
+			job.status !== "queued" &&
+			verificationState.pendingCandidates.length > 0
+		) {
+			await updateScanJobStatus(job.scanJobId, "verifying").catch(() => {});
+		} else if (
+			job.status !== "scanning" &&
+			job.status !== "queued" &&
+			analysisState.pendingCandidates.length > 0
+		) {
+			await updateScanJobStatus(job.scanJobId, "analyzing").catch(() => {});
+		}
+
+		await reconcileScanJobCandidatePipelineStatus(job.scanJobId).catch(() => {});
+	}
 
 	return {
-		total: verificationTargets.length,
-		failed,
+		scanJobs: jobs.length,
+		analysisCandidates,
+		verificationCandidates,
+	};
+};
+
+export const recoverPendingFullScanQueues = async () => {
+	const jobs = await db
+		.select({
+			scanJobId: scanJobs.scanJobId,
+			scanType: scanJobs.scanType,
+			status: scanJobs.status,
+			repositoryTaskStatus: scanJobs.repositoryTaskStatus,
+		})
+		.from(scanJobs)
+		.where(
+			sql`${scanJobs.status} <> 'completed' and ${scanJobs.status} <> 'failed'`,
+		);
+
+	let moduleTasksEnqueued = 0;
+	let functionTasksEnqueued = 0;
+
+	for (const job of jobs) {
+		if (job.scanType !== "full") {
+			continue;
+		}
+
+		if (job.repositoryTaskStatus === "completed") {
+			const moduleTasks = await findScanModuleTasksByScanJobId(job.scanJobId);
+			for (const moduleTask of moduleTasks) {
+				if (moduleTask.status !== "completed" && moduleTask.status !== "failed") {
+					await enqueueModuleScanWork(job.scanJobId, moduleTask.scanModuleTaskId);
+					moduleTasksEnqueued += 1;
+					continue;
+				}
+
+				if (
+					moduleTask.status === "completed" &&
+					moduleTask.functionPlanJsonPath
+				) {
+					const scanJob = await findScanJobById(job.scanJobId);
+					await syncFunctionTasksFromPlanFile({
+						scanJob,
+						scanModuleTask: moduleTask,
+						functionPlanPath: moduleTask.functionPlanJsonPath,
+					}).catch(() => {});
+					const functionTasks = await findScanFunctionTasksByModuleTaskId(
+						moduleTask.scanModuleTaskId,
+					);
+					for (const functionTask of functionTasks) {
+						if (
+							functionTask.status === "completed" ||
+							functionTask.status === "failed"
+						) {
+							continue;
+						}
+						await enqueueFunctionScanWork(
+							job.scanJobId,
+							functionTask.scanFunctionTaskId,
+						);
+						functionTasksEnqueued += 1;
+					}
+				}
+			}
+		}
+
+		await recalculateScanTaskCounts(job.scanJobId).catch(() => {});
+		await reconcileScanJobCandidatePipelineStatus(job.scanJobId).catch(() => {});
+	}
+
+	return {
+		scanJobs: jobs.length,
+		moduleTasksEnqueued,
+		functionTasksEnqueued,
+	};
+};
+
+export const startCandidateVerification = async (
+	vulnerabilityCandidateId: string,
+) => {
+	const candidate = await findVulnerabilityCandidateById(vulnerabilityCandidateId);
+	const scanJob = await findScanJobById(candidate.scanJobId);
+	const latestAnalysisResult = await findLatestAnalysisResultByCandidateId(
+		vulnerabilityCandidateId,
+	);
+
+	if (
+		!latestAnalysisResult ||
+		(latestAnalysisResult.result !== "real_vulnerability" &&
+			latestAnalysisResult.result !== "likely_vulnerability")
+	) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message:
+				"Verification can only be started for candidates with likely or real analysis results",
+		});
+	}
+
+	const hasPreviousVerification = Boolean(candidate.verifierThreadId);
+	if (
+		candidate.currentStage === "verifying" &&
+		(candidate.status === "running" || candidate.status === "queued")
+	) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Candidate verification is already queued or running",
+		});
+	}
+
+	if (hasPreviousVerification || candidate.status === "failed") {
+		await removeQueuedCandidateVerificationWork(
+			vulnerabilityCandidateId,
+		).catch(() => {});
+	}
+
+	await updateVulnerabilityCandidateStatus(vulnerabilityCandidateId, "queued");
+	await updateVulnerabilityCandidateCurrentStage(
+		vulnerabilityCandidateId,
+		"verifying",
+	);
+
+	if (hasPreviousVerification) {
+		await deleteVerificationResultsByCandidateId(vulnerabilityCandidateId);
+		await syncVulnerabilityCandidateResolvedRiskMetrics(
+			vulnerabilityCandidateId,
+		).catch(() => {});
+	}
+	await enqueueCandidateVerificationWork(
+		scanJob.scanJobId,
+		vulnerabilityCandidateId,
+	);
+
+	return {
+		started: true,
+		reverify: hasPreviousVerification,
 	};
 };

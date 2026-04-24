@@ -53,14 +53,25 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { encodeBase64 } from "../utils/docker/utils";
 import { getDokployUrl } from "./admin";
-import { getAgentProfileById } from "./ai";
+import {
+	getAgentProfileById,
+	getAgentProfilesByOrganizationId,
+} from "./ai";
 import { createDeploymentCompose, updateDeploymentStatus } from "./deployment";
+import { findEnvironmentById } from "./environment";
 import { validUniqueServerAppName } from "./project";
 
 export type Compose = typeof compose.$inferSelect;
 
 export const createCompose = async (input: typeof apiCreateCompose._type) => {
 	const appName = buildAppName("compose", input.appName);
+	const environment = await findEnvironmentById(input.environmentId);
+	const defaultAgentProfile =
+		(
+			await getAgentProfilesByOrganizationId(
+				environment.project.organizationId,
+			)
+		).find((profile) => profile.isEnabled) || null;
 
 	const valid = await validUniqueServerAppName(appName);
 	if (!valid) {
@@ -76,6 +87,13 @@ export const createCompose = async (input: typeof apiCreateCompose._type) => {
 			...input,
 			composeFile: input.composeFile || "",
 			appName,
+			scanAgentProfileId: defaultAgentProfile?.agentProfileId ?? null,
+			analysisAgentProfileId: defaultAgentProfile?.agentProfileId ?? null,
+			verifierAgentProfileId: defaultAgentProfile?.agentProfileId ?? null,
+			analysisConcurrency: 2,
+			verifyConcurrency: 1,
+			fullScanModuleConcurrency: 4,
+			fullScanFunctionConcurrency: 4,
 		})
 		.returning()
 		.then((value) => value[0]);
@@ -93,6 +111,13 @@ export const createCompose = async (input: typeof apiCreateCompose._type) => {
 export const createComposeByTemplate = async (
 	input: typeof compose.$inferInsert,
 ) => {
+	const environment = await findEnvironmentById(input.environmentId);
+	const defaultAgentProfile =
+		(
+			await getAgentProfilesByOrganizationId(
+				environment.project.organizationId,
+			)
+		).find((profile) => profile.isEnabled) || null;
 	const appName = cleanAppName(input.appName);
 	if (appName) {
 		const valid = await validUniqueServerAppName(appName);
@@ -109,6 +134,20 @@ export const createComposeByTemplate = async (
 		.values({
 			...input,
 			appName,
+			scanAgentProfileId:
+				input.scanAgentProfileId ?? defaultAgentProfile?.agentProfileId ?? null,
+			analysisAgentProfileId:
+				input.analysisAgentProfileId ??
+				defaultAgentProfile?.agentProfileId ??
+				null,
+			verifierAgentProfileId:
+				input.verifierAgentProfileId ??
+				defaultAgentProfile?.agentProfileId ??
+				null,
+			analysisConcurrency: input.analysisConcurrency ?? 2,
+			verifyConcurrency: input.verifyConcurrency ?? 1,
+			fullScanModuleConcurrency: input.fullScanModuleConcurrency ?? 4,
+			fullScanFunctionConcurrency: input.fullScanFunctionConcurrency ?? 4,
 		})
 		.returning()
 		.then((value) => value[0]);
@@ -146,6 +185,7 @@ export const findComposeById = async (composeId: string) => {
 					deployments: true,
 				},
 			},
+			customGitSSHKey: true,
 		},
 	});
 	if (!result) {
