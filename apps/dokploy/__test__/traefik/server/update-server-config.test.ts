@@ -69,6 +69,7 @@ const baseAdmin: User = {
 	twoFactorEnabled: false,
 	containerEnvironment: "",
 	scanContextHostPath: "",
+	scanJobConcurrency: 1,
 };
 
 beforeEach(() => {

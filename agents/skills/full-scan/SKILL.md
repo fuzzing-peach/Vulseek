@@ -1,267 +1,494 @@
-# full-scan skill
-
-Scan the entire codebase for potential vulnerability locations using pattern matching. Build a tasklist of candidates for the Analysis Agent to investigate with static analysis and fuzzing.
-
-Unlike `delta-scan` (which is targeted and change-aware), `full-scan` is a broad sweep with no specific CVE or diff as a starting point. Use it for first-time audits, or to complement delta-scan with untargeted discovery.
-
+---
+name: full-scan
+description: Run a repository-wide full scan through a main-agent and scan-subagent workflow. The main agent partitions the repository into modules, gives each subagent minimal shared context, collects module-level security-sensitive candidates, performs global deduplication and prioritization, and then writes final candidates to a JSON result file.
 ---
 
-## When to Use
+# Full Scan
 
-- First-time audit of a codebase with no prior recon data
-- Systematic sweep to find locations that delta-scan would not reach (no recent CVE, no recent PR)
-- To complement `delta-scan` after targeted hunting is complete
+Use this skill when Vulseek asks you to perform a full scan over the latest repository state.
 
----
+Unlike `delta-scan`, this skill is not commit-driven. It is repository-driven.
 
-## Prerequisites
+Your job is not to prove that a vulnerability exists. Your job is to identify all code locations that are security-relevant enough to deserve later deep analysis.
 
-- C/C++ source code available
-- `semgrep` installed and working (`semgrep --version`)
-- `recon` skill already run: `.vulseek/recon/recon_report.txt` exists (used for scoring; full-scan still works without it but scoring accuracy degrades)
+This skill uses a two-layer workflow:
 
----
+- one main agent
+- multiple scan subagents
 
-## Step 1 — Semgrep Pattern Sweep
+The main agent owns repository modeling, module partitioning, shared context generation, result aggregation, global prioritization, deduplication, and final `scan_candidates.json` writing.
 
-Create the output directory:
+Scan subagents own module-level security-sensitive screening only.
 
-```bash
-mkdir -p .vulseek/full-scan
+## Required Result JSON
+
+After all module outputs are aggregated, the main agent must write a JSON file such as `scan_candidates.json`.
+
+The result JSON must be one top-level object:
+
+```json
+{
+  "candidates": [
+    {
+      "title": "Candidate title",
+      "description": "Why this location is worth deeper analysis",
+      "filePath": "src/example.c",
+      "line": 88,
+      "confidence": 0.76,
+      "score": 6.2
+    }
+  ]
+}
 ```
 
-Run all built-in vulnerability rules:
+Rules:
 
-```bash
-semgrep scan \
-  --config skills/semgrep/rules/ \
-  --lang c --lang cpp \
-  --json \
-  . > .vulseek/full-scan/semgrep_results.json
+- always include `candidates`
+- use `[]` when no candidate survives aggregation
+- each candidate may contain only `title`, `description`, `filePath`, `line`, `confidence`, and `score`
+- if the runtime provides a `write_result_json_to` path, write the JSON there
+- when possible, write atomically: write a temporary file first, then rename it into place
+- do not emit any structured stdout protocol
+
+Only the main agent may write the final result file.
+
+Scan subagents must not write final merged candidates directly.
+
+## High-Level Objective
+
+For the current repository snapshot:
+
+1. build a lightweight repository model
+2. partition the repository into modules
+3. give each scan subagent one module plus minimal shared context
+4. let each scan subagent identify security-sensitive candidate locations inside its module
+5. collect all module outputs
+6. merge, deduplicate, correlate, and prioritize candidates globally
+7. write the final candidate list to `scan_candidates.json`
+
+## Output Philosophy
+
+At the full-scan stage, a candidate means:
+
+- the location is security-relevant
+- it is worth later deep analysis
+- it may represent a dangerous function, a critical decision point, a missing check, or an inconsistent security handling pattern
+- it does not need to be a proven vulnerability yet
+
+Recall matters more than precision, but the main agent must still remove obvious noise before writing the final result file.
+
+## Repository Scope
+
+Prioritize real runtime code.
+
+Usually high-priority areas include:
+
+- protocol parsing
+- decoding
+- file loading
+- IPC handling
+- public library APIs
+- authentication / authorization / signature verification
+- state machines
+- memory and resource management
+- lifecycle management
+- callback registration and invocation
+- concurrency, locking, and shared state
+- error handling and rollback paths
+
+Usually lower-priority areas include:
+
+- docs
+- comments
+- tests unless they reveal real runtime API contracts
+- generated code unless it is executed as part of the product
+- vendored third-party code unless the runtime explicitly asks to include it
+
+## Main Agent Workflow
+
+The full-scan main agent should work in four phases.
+
+### Phase 1 - Lightweight Repository Analysis
+
+Before starting any scan subagent, perform a lightweight repository pass.
+
+Do not do deep vulnerability analysis here.
+
+Do only enough work to understand repository structure and produce a module plan.
+
+Tasks:
+
+1. read the top-level directory structure
+2. identify the build system and its module boundaries
+3. identify core runtime directories
+4. identify directories to skip or down-rank
+5. identify major public APIs, major entry surfaces, and major shared infrastructure
+6. partition the repository into modules
+
+Module partitioning may use:
+
+- directory layout
+- CMake subdirectories, targets, libraries, modules
+- Go packages
+- Java modules or packages
+- public header vs private implementation boundaries
+- explicit build-script component boundaries
+
+A module should be large enough to preserve local semantics, but small enough to be reviewed by one scan subagent.
+
+Recommended artifacts:
+
+- `01_repository_layout.md`
+- `02_module_plan.json`
+- `02_module_plan.md`
+- `02_shared_context.md`
+
+### Phase 2 - Prepare Minimal Shared Context
+
+Each scan subagent must receive:
+
+- the assigned module boundary
+- the module file list
+- a short repository-level summary
+- the main build-system and module boundaries
+- identified core source directories
+- down-ranked or skipped directories
+- likely attack-surface categories
+- major public APIs, entry points, and shared infrastructure locations
+- a clear instruction that this stage is only security-sensitive screening, not deep confirmation
+
+The purpose of shared context is to stop subagents from becoming blind local readers with no repository-level understanding.
+
+### Phase 3 - Run Scan Subagents
+
+You must create one scan subagent per module.
+
+Subagent spawning is mandatory for full scan. Do not replace subagents with a sequential single-agent emulation.
+
+Run at most 4 scan subagents concurrently. If there are more than 4 modules, queue them and continue as slots free up.
+
+Each scan subagent must use the installed skill named `full-scan-subagent`.
+
+Each scan subagent must use the same model and the same reasoning effort as the main agent. Do not downgrade, upgrade, or switch models when spawning subagents.
+
+Each subagent should return a module report or structured candidate draft list to the main agent.
+
+Scan subagents must not do deep reachability proof, exploit confirmation, or final merged candidate writing.
+
+### Phase 4 - Aggregate and Write Final Candidates
+
+After all module scans complete, the main agent must:
+
+1. read every module `02_candidate_drafts.json`
+2. validate that each module output follows the fixed subagent schema
+3. merge duplicate candidate drafts
+4. merge multiple reasons pointing to the same location
+5. do lightweight cross-module correlation
+6. identify obvious noise and remove it
+7. prioritize candidates globally
+8. write the main full-scan report
+9. write final candidates to `scan_candidates.json`
+
+## Subagent Output Contract
+
+Every scan subagent must write `02_candidate_drafts.json` using the fixed schema defined by `full-scan-subagent`.
+
+The main agent should assume this structure:
+
+```json
+{
+  "module": {
+    "name": "tls-handshake",
+    "summary": "Implements TLS handshake state transitions and related message parsing.",
+    "entryPoints": [
+      "DoTlsHandshake",
+      "ProcessClientHello"
+    ]
+  },
+  "candidates": [
+    {
+      "title": "Missing state validation before handshake transition",
+      "description": "Handshake transition appears security-sensitive and may lack a required state gate.",
+      "filePath": "src/tls/handshake.c",
+      "line": 214,
+      "confidence": 0.78,
+      "sensitivityType": "security_decision",
+      "reasonCategory": "missing_security_logic",
+      "reason": "Module handles untrusted protocol messages and this transition appears to bypass the state check used in sibling paths."
+    }
+  ],
+  "notes": [
+    "Did not inspect generated files under src/generated/."
+  ]
+}
 ```
 
-If project-specific rules exist from a prior `recon` or `delta-scan` run, include them:
+At minimum, the main agent should read:
 
-```bash
-semgrep scan \
-  --config skills/semgrep/rules/ \
-  --config .vulseek/semgrep/ \
-  --lang c --lang cpp \
-  --json \
-  . > .vulseek/full-scan/semgrep_results.json
-```
+- `module.name`
+- `module.summary`
+- `module.entryPoints`
+- `candidates`
+- `notes`
 
-Rule categories and what each finds:
+If a module file is malformed, the main agent should not silently trust it. It should either:
 
-| Rule file | Bug class | Severity |
-|-----------|-----------|----------|
-| `entry-points.yaml` | `main()`, `recv`, `fread`, `fgets`, `getenv` — untrusted input sources | INFO |
-| `dangerous-functions.yaml` | `strcpy`, `strcat`, `gets`, `sprintf`, variable-length `memcpy`/`memmove` | WARNING/ERROR |
-| `format-string.yaml` | CWE-134: `printf`/`fprintf`/`syslog` with non-literal format argument | WARNING/ERROR |
-| `memory-safety.yaml` | `malloc` without NULL check, `realloc` pointer overwrite, `malloc(user_len)` | WARNING/INFO |
+- repair obvious formatting issues if safe to do so
+- or skip the malformed module output and record that in the main report
 
----
+## Main-Agent Aggregation Rules
 
-## Step 2 — Supplemental grep Patterns
+When aggregating all module outputs, follow this order:
 
-Capture vulnerability classes that semgrep rules do not cover:
+1. read all module `02_candidate_drafts.json` files
+2. flatten all `candidates` into one working set
+3. attach module context from `module.name` and `module.summary`
+4. perform initial deduplication using a concrete location key such as:
+   - `filePath + line + title`
+   - or `filePath + title` when `line` is unavailable
+5. merge multiple reasons for the same candidate
+6. merge repeated observations from different modules when they point to the same public/shared function
+7. keep track of which modules reported the same candidate
+8. perform lightweight cross-module correlation
+9. remove obvious noise
+10. apply the global prioritization rules
+11. write final candidate JSON only after the merged list is stable
 
-```bash
-# Integer sign confusion: signed variable used as size in memcpy/read
-grep -rn --include="*.c" --include="*.cpp" \
-  -E "(int|signed)\s+\w+\s*=.*len|memcpy\s*\(.*,\s*[a-z_]+->len\b" \
-  . >> .vulseek/full-scan/grep_results.txt
+When merging duplicates, preserve:
 
-# Allocation using a length field without an explicit upper-bound check
-grep -rn --include="*.c" --include="*.cpp" \
-  -E "malloc\s*\(\s*\w+->(len|size|length|count)\s*[+*]?" \
-  . >> .vulseek/full-scan/grep_results.txt
+- strongest confidence
+- all materially distinct reasons
+- all reporting modules
+- any useful module-level notes that help explain missing logic or inconsistency
 
-# Integer arithmetic before allocation — potential overflow
-grep -rn --include="*.c" --include="*.cpp" \
-  -E "malloc\s*\(\s*\w+\s*[+*]\s*\w+" \
-  . >> .vulseek/full-scan/grep_results.txt
+## Scan Subagent Instructions
 
-# free() at end of line without nulling the pointer (UAF precursor)
-grep -rn --include="*.c" --include="*.cpp" \
-  -E "free\s*\(\s*\w+\s*\);" \
-  . >> .vulseek/full-scan/grep_results.txt
+Each scan subagent is responsible for one module.
 
-# strncat/strncpy with arithmetic in the length argument (off-by-one)
-grep -rn --include="*.c" --include="*.cpp" \
-  -E "(strncat|strncpy)\s*\([^,]+,[^,]+,\s*\w+\s*-\s*" \
-  . >> .vulseek/full-scan/grep_results.txt
+Its job is to identify all candidate locations in that module that are security-relevant enough for later deep analysis.
 
-# Return value of read()/recv() used as a signed size
-grep -rn --include="*.c" --include="*.cpp" \
-  -E "(ret|n|r|bytes)\s*=\s*(read|recv|fread)\s*\(.*\).*memcpy|memmove" \
-  . >> .vulseek/full-scan/grep_results.txt
-```
+A scan subagent works in three phases.
 
----
+### Subagent Phase 1 - Understand Module Responsibility
 
-## Step 3 — Filter and Score Hits
+Quickly read enough code to understand:
 
-Parse both output files and apply the following filter and scoring rules.
+- what role the module plays in the project
+- what functionality it implements
+- what interfaces it exposes externally
 
-### Discard (never add to tasklist)
+Output:
 
-- Hits in `tests/`, `test/`, `examples/`, `doc/`, `docs/`, `fuzz/` directories
-- Hits in vendored or frozen third-party directories (check `.gitmodules`, `third_party/`, `vendor/`, `external/`)
-- Hits where the enclosing 10 lines already contain an explicit bounds check or a safe wrapper call (e.g., `snprintf`, `strlcpy`, size validation `if`)
-- Duplicate hits: same `file:line` or same `file + enclosing function` already present
+- a one- or two-sentence module responsibility summary
+- the main module interfaces or entry points
 
-### Score each remaining hit (add scores; keep top N)
+This is context for later judgments. Do not spend too much time here.
 
-| Signal | Score |
-|--------|-------|
-| Hit is in a module flagged as **under-audited** in `recon_report.txt` | +3 |
-| Hit's CWE class is **dominant** in the project's CVE history | +2 |
-| Hit is in a function whose name contains `parse`, `decode`, `read`, `recv`, `input`, `process`, `unpack` | +2 |
-| Hit involves a **user-controlled length or size** (e.g., `malloc(input->len)`) | +2 |
-| Hit is in a file with **no existing fuzz harness** in the project | +1 |
-| Hit is in a module with **low churn** (≤ 3 commits in the last 12 months) | +1 |
-| Hit file was **modified in the last 6 months** (`git log --since`) | +1 |
-| Hit has semgrep severity `ERROR` | +1 |
+### Subagent Phase 2 - Function-by-Function Screening
 
-**Cap:** Keep the top **20 hits** by score (configurable via `FULL_SCAN_LIMIT`, default 20). Discard lower-scoring hits if total > cap.
+Traverse the module's functions and do a fast security-sensitivity judgment.
 
----
+For each function, ask:
 
-## Step 4 — Build Tasklist
+- does it receive or process externally controllable input?
+- does it make a security-relevant decision?
+- does it call potentially dangerous operations?
+- does it perform input validation, boundary checks, permission checks, state checks, resource handling, lifecycle handling, or concurrency control?
 
-For each retained hit, add a task:
+If the function is security-sensitive, record:
 
-```bash
-python skills/tasklist/tasklist.py -l full add \
-  "<file_basename>-<enclosing_function>-<operation>" \
-  --notes "full-scan: rule <rule_id_or_grep_pattern> | <file:line> | <vulnerability_type> | score <N> | <one-line description>"
-```
+- location
+- sensitivity type
+- short reason for marking it
 
-**Naming convention:** `<file_basename>-<enclosing_function>-<operation>`
+If the function is clearly not security-relevant, skip it.
 
-Examples:
-- `ssl_sess-ParseTicket-memcpy`
-- `xml-decode_attr-sprintf`
-- `http-parse_header-strcat`
-- `tls13-HandleKeyShare-malloc`
+Do not fully reverse-engineer the whole function. Use fast judgment based on:
 
-**Vulnerability type** is derived from the matching rule:
-- `dangerous-functions.yaml` → `buffer-overflow`
-- `format-string.yaml` → `format-string`
-- `memory-safety.yaml` → `null-deref` or `heap-overflow`
-- `grep: malloc+arithmetic` → `integer-overflow`
-- `grep: free without null` → `use-after-free`
-- `grep: signed-size` → `integer-sign-confusion`
+- function signature
+- key lines
+- obvious callees and callers
+- nearby checks and operations
 
-Print a summary before finishing:
+### Subagent Phase 3 - Module-Level Observations
 
-```
-Full-Scan Summary
-=================
-Semgrep hits (raw):       N
-grep hits (raw):          N
-After dedup/filter:       N
-After cap (top 20):       N
-Added to tasklist:        N
+After function-level screening, do one more pass from the module-level perspective.
 
-Top candidates:
-  #1  ssl_sess-ParseTicket-memcpy    src/ssl_sess.c:2759  score=8  [dangerous-functions]
-  #2  xml-decode_attr-sprintf        src/xml.c:412        score=7  [format-string]
-  ...
-```
+Look for signals that are hard to see from a single-function view.
 
----
+Focus on two classes of signals:
 
-## Step 5 — Dispatch to Analysis Agent
+1. missing security logic that should exist given the module's responsibility
+2. inconsistent security handling across similar functions in the same module
 
-**Agent prompt:** `.agents/skills/vulseek-agents/analyzer.md`
+These module-level observations should also be returned as candidate drafts.
 
-Maximum concurrency: **3 agents in parallel**. Use a slot counter: start a new agent only when fewer than 3 are running.
+## What Counts As Security-Sensitive
 
-For each `pending` task, in order:
+Mark a location when it is close to any of the following:
 
-### 5.1 Mark as running
+- external input handling
+- parsing or decoding
+- authentication, authorization, signature verification, certificate validation
+- permissions or policy decisions
+- trust-boundary transitions
+- state-machine transitions
+- boundary checks, length checks, offset checks, integer checks
+- memory ownership, allocation, free, reuse, pointer lifetime
+- file, socket, IPC, process, thread, lock, callback, allocator, or `FILE*` lifecycle
+- cleanup, rollback, teardown, error handling
+- shared global state, locking, synchronization, races, cross-thread visibility
 
-```bash
-python .agents/skills/tasklist/tasklist.py -l full update <id> running
-```
+Examples of lower-priority signals:
 
-### 5.2 Compose the subagent prompt
+- pure logging
+- formatting only
+- cosmetic conversions
+- clearly inert wrappers with no policy or dangerous side effects
 
-Pass the following context block as the subagent's initial message:
+Lower priority does not always mean ignore. Use judgment.
 
-```
-Read .agents/skills/vulseek-agents/analyzer.md and follow its instructions.
+## Candidate Draft Quality Rules
 
-Task:
-  id:    <id>
-  name:  <name>
-  notes: <full notes field>
+A module candidate draft should point to a concrete location or a concrete missing/inconsistent pattern.
 
-Context files (read if available):
-  .vulseek/recon/recon_report.txt
+Good candidate draft forms include:
 
-Working directory: <absolute path to target repository>
-```
+- a security-sensitive function
+- a security-critical decision point
+- a dangerous sink that should be examined later
+- a missing validation or missing state check implied by module responsibility
+- an inconsistency across similar functions or related modules
 
-### 5.3 Wait and replenish
+Each candidate draft should carry, when known:
 
-Wait for the subagent to set the task status to `finished` (it does this as its final action via `tasklist.py -l full update <id> finished`). When a slot opens, immediately dispatch the next `pending` task.
+- title
+- short description
+- file path
+- line
+- rough confidence
+- module name
+- reason category
 
-### 5.4 Resume on interruption
+Description should stay short and structural.
 
-On restart, check for tasks stuck in `running` status (agent crashed mid-run): reset them to `pending` and re-dispatch.
+Put longer supporting reasoning into the module report, not into the final merged candidate JSON.
 
-```bash
-python .agents/skills/tasklist/tasklist.py -l full list --status running
-# for each: reset to pending
-python .agents/skills/tasklist/tasklist.py -l full update <id> pending
-```
+## Global Prioritization Rules For The Main Agent
 
-Continue until no tasks remain in `pending` or `running`.
+After collecting all module outputs, prioritize candidates in descending order using a combination of the following factors.
 
----
+### 1. Exposure
 
-## Step 6 — Report Results
+How close is the location to external input?
 
-After all tasks complete:
+Higher priority:
 
-```
-Full-Scan Results
-=================
-Total tasks:     N
-CONFIRMED:       N  ← real vulnerabilities
-NO_VULN:         N
-NEEDS_REVIEW:    N
+- network input
+- file input
+- IPC
+- config input
+- public API entry
 
-Confirmed findings:
-  #<id> <name>  <file:line>  Reproducer: <path>
-  ...
-```
+### 2. Security Decision Criticality
 
----
+Functions that make high-impact security decisions rank above helper functions.
 
-## Output Layout
+Higher priority:
 
-```
-<target>/
-└── .vulseek/
-    ├── full.json
-    ├── full-scan/
-    │   ├── semgrep_results.json   # raw semgrep JSON output
-    │   ├── grep_results.txt       # raw grep output
-    │   └── summary.txt            # scoring table + final results
-    └── analysis/
-        └── <id>-<name>/           # written by analysis agent
-            └── report.md
-```
+- authentication
+- signature verification
+- certificate validation
+- authorization
+- permission checks
+- state-machine gates
+- boundary checks
+- resource lifecycle decisions
 
----
+Lower priority:
 
-## Notes
+- logging
+- formatting
+- ordinary data movement
+- generic helpers without security decisions
 
-- If `.vulseek/full.json` already has entries for the same `file + function`, skip re-adding those locations. Append only new candidates.
-- `FULL_SCAN_LIMIT` environment variable overrides the default cap of 20 tasks.
-- For large codebases (> 500 KLOC), limit semgrep scan scope to core source directories: `semgrep scan --config ... src/ lib/`
-- If CodeQL database exists at `.vulseek/analysis/codeql/`, run a reachability pre-filter before adding to tasklist: discard hits with no taint path from any entry point (reduces false-positive rate significantly).
+### 3. Suspicious Missing-Logic Signal
+
+A subagent report that says:
+
+- this module should have had a check here but it appears missing
+- this module should have had a guard, validation, or state gate here but it does not
+
+should rank above a signal that only says:
+
+- there is a dangerous function call here
+
+### 4. Cross-Module Inconsistency
+
+If similar modules, code paths, or implementations treat the same security concern differently, rank that candidate higher.
+
+### Ranking Intuition
+
+Rank highest when the signal is:
+
+- highly exposed
+- highly security-critical
+- shows a likely missing protection
+- or reveals a cross-module inconsistency
+
+Rank much lower when the signal is:
+
+- weakly exposed
+- only a helper function
+- only a generic dangerous call with no stronger context
+- not supported by any broader inconsistency or missing-logic observation
+
+## Result File Rules
+
+Only the main agent may write final merged candidates.
+
+Completion rules for the main agent:
+
+- do not write final merged candidates from scan subagents
+- write `scan_candidates.json` only after global aggregation and prioritization is finished
+- do not invent fake candidates when no candidate survives aggregation
+- if no final candidate survives, still write `{"candidates":[]}`
+
+## Recommended Output Artifacts
+
+Recommended main-agent artifacts:
+
+- `01_repository_layout.md`
+- `02_module_plan.json`
+- `02_module_plan.md`
+- `02_shared_context.md`
+- `03_codex_report.md`
+
+Recommended per-module artifacts:
+
+- `modules/<moduleName>/01_module_summary.md`
+- `modules/<moduleName>/02_candidate_drafts.json`
+- `modules/<moduleName>/02_candidate_drafts.md`
+
+## Non-Goals
+
+Do not:
+
+- try to prove exploitability at the full-scan stage
+- require CodeQL reachability proof before reporting a candidate
+- require fuzzing before reporting a candidate
+- allow subagents to write final merged candidates independently
+- skip global deduplication and prioritization
+- flood the system with repeated low-value candidates from adjacent helper functions
+
+## Completion Condition
+
+Stop only when:
+
+1. repository structure was modeled
+2. modules were partitioned
+3. each module was screened
+4. module outputs were aggregated
+5. final candidates were globally deduplicated and prioritized
+6. the final report was written
+7. final `scan_candidates.json` was written

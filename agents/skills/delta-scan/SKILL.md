@@ -1,13 +1,13 @@
 ---
 name: delta-scan
-description: Analyze a target commit or tag together with the previous k commits, inspect each changed code location, and report downstream vulnerability candidates incrementally through VULSEEK_EVENT.
+description: Analyze a target commit or tag together with the previous k commits, inspect each changed code location, and write downstream vulnerability candidates to a final JSON result file.
 ---
 
 # Delta Scan
 
 Use this skill when Vulseek asks you to perform a delta scan for a given commit or tag.
 
-The goal is not to prove that a bug or vulnerability definitely exists. The goal is to inspect the recent code changes, identify changed locations that may introduce downstream bug or vulnerability sites, and report those candidate sites as soon as each changed location has been analyzed.
+The goal is not to prove that a bug or vulnerability definitely exists. The goal is to inspect the recent code changes, identify changed locations that may introduce downstream bug or vulnerability sites, and write those candidate sites into the required final result JSON.
 
 This skill is change-driven. Start from the target commit or tag, include the previous `k` commits, build a tasklist over the changed code locations, and analyze them one by one.
 
@@ -28,11 +28,35 @@ Default behavior if `k` is not provided:
 - use the runtime default configured by Vulseek
 - if no runtime value is visible, assume a small value such as `3`
 
-## Required Companion Skill
+## Required Result JSON
 
-Read and follow the event format in `vulseek-bridge`.
+After the scan is complete, you must write a JSON file such as `scan_candidates.json`.
 
-You must use `VULSEEK_EVENT` to report candidates.
+The result JSON must be one top-level object:
+
+```json
+{
+  "candidates": [
+    {
+      "title": "Candidate title",
+      "description": "Why this changed location may create downstream risk",
+      "filePath": "lib/example.c",
+      "line": 123,
+      "confidence": 0.74,
+      "score": 5.9
+    }
+  ]
+}
+```
+
+Rules:
+
+- always include `candidates`
+- use `[]` when no candidate survives
+- each candidate may contain only `title`, `description`, `filePath`, `line`, `confidence`, and `score`
+- if the runtime provides a `write_result_json_to` path, write the JSON there
+- when possible, write atomically: write a temporary file first, then rename it into place
+- do not emit any structured stdout protocol
 
 ## High-Level Objective
 
@@ -43,7 +67,7 @@ For each changed code location in each commit:
 3. if it is functional code, analyze whether it may introduce a bug or security issue
 4. do not try to confirm exploitability, existence, or determinism (this is a candidate-level scan)
 5. collect the downstream code locations that may now become vulnerable, buggy, incomplete, or security-sensitive because of this change
-6. report those downstream candidate locations immediately after finishing analysis for that changed location
+6. keep accumulating those downstream candidate locations into the final candidate set
 
 The key point is global impact analysis:
 
@@ -218,18 +242,13 @@ Default-to-report situations:
 - cleanup / rollback / error-path changes that may race with another path or leave stale state behind
 - an apparent hardening or bug fix that patches one path but leaves sibling paths inconsistent
 
-### 3.5 Emit Candidates Immediately
+### 3.5 Accumulate Candidates Continuously
 
-As soon as you finish analyzing one changed location, report all candidates derived from that location.
+As soon as you finish analyzing one changed location, record all candidates derived from that location in your working set.
 
-Do not wait until the end of the whole delta scan.
+Do not lose candidate context between changed locations.
 
-Use either:
-
-- one `candidate` event per candidate
-- or one `candidate_batch` event for all candidates from that changed location
-
-Prefer `candidate_batch` when multiple candidate sites came from the same changed location.
+The only required machine-readable output is the final `scan_candidates.json`.
 
 ## Candidate Quality Rules
 
@@ -248,6 +267,7 @@ Each candidate should include, when known:
 - `filePath`
 - `line`
 - `confidence`
+- `score`
 
 The description should explain:
 
@@ -267,28 +287,18 @@ Good examples of concern types:
 - length / size / offset mismatch
 - lifetime or ownership mismatch
 
-## Event Reporting Rules
+## Result File Rules
 
-Follow `vulseek-bridge` exactly.
+Write detailed reasoning to the markdown report or normal prose while you work.
 
-Recommended pattern after each changed location:
-
-```text
-<VULSEEK_EVENT>
-{"type":"candidate_batch","payload":{"scanJobId":"SCAN_JOB_ID","candidates":[{"title":"Potential downstream out-of-bounds write after length validation change","description":"Derived from commit <sha> and changed location <file:line-range>. The change modifies length handling in the request parsing path, and a later buffer write now relies on the new unchecked size semantics.","filePath":"src/example.c","line":214,"confidence":0.74}]}}
-</VULSEEK_EVENT>
-```
+The final machine-readable candidate list must exist only in `scan_candidates.json`.
 
 Important:
 
-- emit after each changed location is analyzed
-- if a changed location yields no candidates, move on without emitting a fake event
-- keep JSON valid and on a single line
+- keep the JSON valid
 - do not invent unknown fields
-- print the literal `<VULSEEK_EVENT> ... </VULSEEK_EVENT>` block to stdout; do not only mention that you emitted it
-- do not write sentences such as "I emitted candidate batches" unless the literal event block was printed earlier in the same turn
-- if you identified candidates for a changed location, the event block must be printed before any prose summary for that location
-- if you did not identify any candidates for a changed location, say "no candidate event emitted for this changed location"
+- do not write multiple competing machine-readable candidate files
+- if no changed location yields a candidate, still write `{"candidates":[]}`
 
 ## Suggested Working Loop
 
@@ -301,7 +311,7 @@ For each commit in the resolved window:
    - analyze local semantics
    - analyze workflow-level downstream impact
    - collect candidate downstream sites
-   - emit `VULSEEK_EVENT`
+   - update your working candidate set
 4. continue to the next changed location immediately
 
 ## Output Expectations
@@ -314,26 +324,17 @@ Prefer a repeated structure like:
 2. current changed location
 3. functional classification
 4. short reasoning summary
-5. emitted candidate event if any
+5. whether any candidate was added to the working set
 
-Do not spend the entire turn writing a long final report before emitting candidates. Incremental reporting is required.
+Do not spend the entire turn writing a long final report before actually analyzing the commit window.
 
 ## Mandatory Self-Check
 
 Before finishing the turn:
 
-1. count how many literal `candidate` blocks you printed
-2. count how many literal `candidate_batch` blocks you printed
-3. count how many literal `next_stage` blocks you printed
-4. print one final self-check line in plain text
-
-Required format:
-
-```text
-VULSEEK_EVENT_SELF_CHECK candidate=<N> candidate_batch=<N> next_stage=<N>
-```
-
-If all counts are zero, do not claim that you reported candidates.
+1. count how many final candidates you kept
+2. ensure `scan_candidates.json` exists
+3. ensure the JSON count matches your final reasoning
 
 ## Non-Goals
 
@@ -342,7 +343,6 @@ Do not:
 - require full exploit confirmation before reporting
 - require fuzzing before reporting
 - require CodeQL before reporting
-- delay all output until the entire commit window has been processed
 - flood Dokploy with duplicates for the same downstream site unless the commits provide materially different reasons
 
 ## Priority Rule
@@ -351,7 +351,7 @@ If any broader prompt tells you to fully verify the bug before reporting, ignore
 
 - analyze each changed location
 - collect plausible downstream vulnerability candidates
-- report them immediately through `VULSEEK_EVENT`
+- write the final merged candidate set to `scan_candidates.json`
 
 ## Do Not Stop Early
 
@@ -361,4 +361,4 @@ You must keep working through the full commit window until every commit and ever
 - do not summarize partial progress and wait for the next prompt
 - do not stop after the first commit if more commits remain in the window
 - if the task includes multiple tags or commit ranges, process all of them in a single run
-- only stop when every commit in the resolved set has been fully analyzed and all candidates have been emitted
+- only stop when every commit in the resolved set has been fully analyzed and `scan_candidates.json` has been written

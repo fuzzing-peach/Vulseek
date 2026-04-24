@@ -34,24 +34,43 @@ Helpful optional inputs:
 - existing CodeQL database
 - repository state summary
 
-## Required Companion Skill
+## Lookup Priority
 
-Read and follow `vulseek-bridge` if Dokploy asks you to emit structured events.
+For code lookup, function lookup, caller/callee inspection, contract lookup, and related-file discovery:
 
-If Dokploy asks for a structured verification event, emit it through `VULSEEK_EVENT`. Otherwise, focus on producing the required files.
+1. prefer Serena first
+2. use CodeQL or `semgrep` when structural or flow queries are needed
+3. use `rg`, `grep`, `find`, `sed`, or `awk` only as fallback or for broad text search
 
-When you emit `verification_result`, include structured fields whenever you can support them:
+Do not default to grep-only navigation when Serena can resolve the symbol or file context more precisely.
+
+You should also identify and preserve the current affected version context:
+
+- current target version
+- current target tag if present
+- current target commit
+
+## Required Result JSON
+
+After the verification artifacts are written, you must write a JSON file such as `verification_result.json`.
+
+The result JSON must be one top-level object. Required fields:
 
 - `result`
 - `isBug`
 - `isSecurity`
-- `confidence`
-- `reportPath`
-- `issueDraftPath`
-- `pocPath`
-- `dockerfilePath`
-- `runScriptPath`
+- `score`
 - `summary`
+
+Optional field:
+
+- `confidence`
+
+If the runtime provides a specific `write_result_json_to` path, write the JSON there.
+
+When possible, write atomically: write a temporary file first, then rename it into place.
+
+Do not emit any structured stdout protocol.
 
 ## High-Level Objective
 
@@ -64,8 +83,11 @@ For one candidate:
 5. if it is a real product vulnerability, determine whether it is already known, already fixed elsewhere, or genuinely new
 6. recover the concrete scenario, trigger surface, and exploitability context
 7. assess impact using CVSS-style reasoning
-8. judge whether project maintainers are likely to accept it as a security issue and disclose a CVE
-9. produce a verification report, issue draft, PoC, Docker reproduction environment, and run script
+8. compute an estimated 0-10 score that combines CVSS-style severity with affected usage breadth
+9. judge whether project maintainers are likely to accept it as a security issue and disclose a CVE
+10. produce a verification report, issue draft, PoC, Docker reproduction environment, and run script
+
+The verification-stage `score` should be the final estimated score for the candidate and should override any earlier analysis-stage estimate.
 
 ## Verification Standard
 
@@ -76,6 +98,79 @@ At this stage, rigor matters more than recall.
 - separate product bugs from caller misuse
 - separate theoretically suspicious behavior from actually reproducible security impact
 - when evidence is incomplete, say exactly what is missing
+
+## API Misuse Decision Framework
+
+API misuse must be treated as a narrow conclusion, not a convenient fallback.
+
+Only classify an issue as API misuse if the caller-side responsibility is clearly justified.
+
+You must evaluate all of these dimensions and discuss them explicitly in the report:
+
+### 1. Documented Contract
+
+Check whether the alleged caller obligation is clearly documented in a place the caller can reasonably discover.
+
+Acceptable evidence includes:
+
+- public API documentation
+- header comments
+- parameter descriptions
+- project manuals
+- standards/specifications the API implements
+
+Only call it misuse when the contract is explicit enough that a normal caller could reasonably know it.
+
+If the constraint is not documented, weakly documented, ambiguous, or discoverable only by reading the implementation, do not classify the issue as API misuse.
+
+### 2. Security Responsibility Boundary
+
+Decide whether the responsibility belongs to the API or the caller.
+
+Core rule:
+
+- if the function performs a security-sensitive decision or guarantee, such as verification, authorization, authentication, signature checking, certificate validation, permission checking, or policy enforcement, then correctness belongs to the function itself
+- if the function is only a low-level primitive with no claim of enforcing higher-level safety properties, then caller misuse is more plausible
+
+The higher-level and more security-semantic the API is, the harder it is to excuse defects as misuse.
+
+### 3. Caller Capability And Reasonable Obligation
+
+Ask whether the caller can realistically perform the missing validation.
+
+Do not classify as misuse if avoidance requires:
+
+- hidden implementation knowledge
+- advanced cryptographic or protocol expertise not exposed by the API
+- knowledge of subtle internal invariants
+- effort beyond what a normal caller should reasonably be expected to do
+
+Misuse is only plausible if the caller obligation is simple, documented, and realistically enforceable.
+
+### 4. Misuse Prevalence Signal
+
+Check whether multiple independent call sites use the API in the same problematic way.
+
+If the same pattern appears across multiple callers, treat that as a strong signal that:
+
+- the API design is misleading
+- the default behavior is unsafe
+- the documentation is inadequate
+- or the library should shift more responsibility onto itself
+
+In that case, do not dismiss the issue as mere misuse without strong counter-evidence.
+
+## Default Bias
+
+If the evidence is mixed, do not default to `api misuse`.
+
+Prefer a product-side interpretation when:
+
+- the API is public
+- the API has security semantics
+- documentation is incomplete
+- multiple callers make the same mistake
+- or the library could reasonably defend itself
 
 ## Step 1 - Reconstruct the Prior Claim
 
@@ -124,6 +219,15 @@ Questions to answer:
 - does the issue only arise when the caller violates documented preconditions?
 - is the issue actually caused by unsupported embedding or invalid API use?
 
+You must not answer the last two questions casually.
+
+If you think the answer may be "yes", support it with:
+
+- concrete documentation evidence
+- a clear responsibility argument
+- a realistic caller-capability argument
+- and a prevalence check across call sites
+
 ## Step 3 - Determine Whether It Is API Misuse
 
 You must explicitly consider whether the issue is really API misuse.
@@ -143,6 +247,9 @@ Do not classify as API misuse if:
 - the library fails to validate untrusted input in a common usage pattern
 - the API contract is ambiguous, weak, misleading, or incomplete
 - the library enters an unsafe state under plausible external input
+- the function is supposed to make a security decision and callers are entitled to trust its result
+- avoiding the issue would require hidden implementation knowledge or non-obvious expert reasoning
+- multiple independent call sites use the API in the same problematic way
 
 For this step, collect:
 
@@ -150,6 +257,16 @@ For this step, collect:
 - whether the precondition is documented
 - whether the caller behavior is realistic
 - whether the library still should defensively reject it
+- whether the security responsibility belongs to the API itself
+- whether typical callers can realistically perform the missing check
+- whether the same pattern appears across multiple call sites in the repository
+
+If you conclude `api misuse`, your report must explicitly justify all four dimensions:
+
+1. documented contract
+2. security responsibility boundary
+3. caller capability and obligation
+4. misuse prevalence signal
 
 ## Step 4 - Reproduce or Refute
 
@@ -171,6 +288,8 @@ You may use:
 - compiler sanitizers
 - existing build systems
 - ad hoc harness code
+
+When tracing the target code, prefer Serena first for symbol-aware inspection before switching to raw text tools.
 
 Your goal is not just "can I crash it".
 
@@ -342,8 +461,16 @@ Use the language and filenames that best fit the target. You do not need to crea
 
 Write a detailed markdown report.
 
+You must strictly follow the fixed markdown template in `verification-report-template.md`.
+
+Do not invent your own section structure.
+Do not rename the headings.
+Do not omit a heading.
+If a section is unknown, write `Unknown`, `None`, or `Not observed` explicitly instead of deleting the section.
+
 It must include:
 
+- current affected version
 - candidate summary
 - previous analysis claim
 - verification conclusion
@@ -359,9 +486,49 @@ It must include:
 - maintainer disclosure-likelihood assessment
 - final recommendation
 
+The report must explicitly answer:
+
+- which current version was verified as affected
+- whether the finding was observed on the current target tag, branch head, or exact commit
+
+If both tag and commit are available, include both. If only a commit is available, include the commit. If a release version string is available from the repository state, prefer stating that first.
+
+## Path Hygiene For Reports
+
+Do not leak environment-specific absolute paths into the verification report, issue draft, PoC comments, Dockerfile comments, or run script comments.
+
+Forbidden examples:
+
+- `/scan-context/jobs/...`
+- `/workspace/repo/...`
+- `/tmp/...`
+- any host-specific absolute path
+
+Use instead:
+
+- repository-relative paths such as `wolfcrypt/src/chacha20_poly1305.c`
+- artifact-relative paths such as `verify/01_verify_report.md`
+- or just the filename when that is sufficient
+
+If you need to mention a generated artifact in prose, prefer:
+
+- `01_verify_report.md`
+- `02_issue_draft.md`
+- `03_poc/...`
+- `04_repro/Dockerfile`
+- `04_repro/run.sh`
+
+The result JSON is the only machine-readable summary for this stage. The human-readable markdown files must avoid environment-specific absolute paths.
+
 ### 2. Issue Draft
 
 Write a shorter markdown file suitable for filing an issue.
+
+You must strictly follow the fixed markdown template in `issue-draft-template.md`.
+
+Do not rename the headings.
+Do not add extra major sections unless strictly necessary for correctness.
+If a field is unknown, write `Unknown` instead of omitting it.
 
 It should be concise and developer-facing:
 
@@ -437,4 +604,4 @@ Before finishing:
 2. ensure the verification report states the final conclusion clearly
 3. ensure the issue draft is shorter than the full report
 4. ensure the Dockerfile and run script are coherent with the selected revision
-5. if Dokploy requested a structured event, emit it only after the files are written
+5. ensure `verification_result.json` matches the final report and written artifacts
