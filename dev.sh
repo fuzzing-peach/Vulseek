@@ -22,12 +22,19 @@ ENV_FILE="env.development"
 
 # 当前脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_SCAN_CONTEXT_HOST_PATH="$(cd "${SCRIPT_DIR}/.." && pwd)/dokploy-data"
+SCAN_CONTEXT_HOST_PATH=""
 
 # 显示帮助信息
 show_help() {
     echo -e "${BLUE}Dokploy 开发环境管理脚本 (Docker Swarm)${NC}"
     echo ""
     echo "使用方法: ./dev.sh [命令] [选项]"
+    echo ""
+    echo "全局选项:"
+    echo "  --scan-context-host-path PATH"
+    echo "             指定宿主机 scan context 根目录，并挂载到 dokploy-dev:/scan-context"
+    echo "             默认值: ${DEFAULT_SCAN_CONTEXT_HOST_PATH}"
     echo ""
     echo "基础命令:"
     echo "  init        - 初始化 Docker Swarm 和网络"
@@ -215,6 +222,7 @@ start_redis() {
 # 启动 Dokploy 主服务
 start_dokploy() {
     echo -e "${BLUE}🚀 启动 Dokploy 主应用...${NC}"
+    local effective_scan_context_host_path="${SCAN_CONTEXT_HOST_PATH:-$DEFAULT_SCAN_CONTEXT_HOST_PATH}"
     
     # 检查镜像是否存在
     if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
@@ -230,8 +238,10 @@ start_dokploy() {
     
     # 构建环境变量文件路径
     local env_file_path="${SCRIPT_DIR}/${ENV_FILE}"
+    mkdir -p "${effective_scan_context_host_path}"
     
     echo -e "${BLUE}📝 使用环境文件: $env_file_path${NC}"
+    echo -e "${BLUE}📁 Scan Context Host Path: ${effective_scan_context_host_path}${NC}"
     
     # 读取环境文件并构建 --env 参数
     local env_args=""
@@ -255,6 +265,7 @@ start_dokploy() {
         --publish published=23000,target=3000,mode=host \
         --publish published=29229,target=9229,mode=host \
         --publish published=25555,target=5555,mode=host \
+        --env DOKPLOY_SCAN_CONTEXT_HOST_PATH="${effective_scan_context_host_path}" \
         $env_args \
         --mount type=bind,source="${SCRIPT_DIR}/apps",target=/app/apps \
         --mount type=bind,source="${SCRIPT_DIR}/agents",target=/app/agents \
@@ -266,6 +277,7 @@ start_dokploy() {
         --mount type=volume,source=dokploy_node_modules,target=/app/apps/dokploy/node_modules \
         --mount type=volume,source=server_node_modules,target=/app/packages/server/node_modules \
         --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
+        --mount type=bind,source="${effective_scan_context_host_path}",target=/scan-context \
         --mount type=volume,source=dokploy_data,target=/etc/dokploy \
         --mount type=volume,source=docker_config,target=/root/.docker \
         --constraint "'node.role==manager'" \
@@ -423,6 +435,7 @@ enter_shell() {
 
 # 查看服务状态
 show_status() {
+    local effective_scan_context_host_path="${SCAN_CONTEXT_HOST_PATH:-$DEFAULT_SCAN_CONTEXT_HOST_PATH}"
     echo -e "${BLUE}📊 服务状态:${NC}"
     echo ""
     docker service ls --filter "name=dokploy"
@@ -433,6 +446,7 @@ show_status() {
     echo -e "  ${BLUE}Traefik 面板:${NC}  http://localhost:28080"
     echo -e "  ${BLUE}PostgreSQL:${NC}    localhost:25432 (用户: dokploy, 密码: dokploy_dev_password)"
     echo -e "  ${BLUE}Redis:${NC}         localhost:26379"
+    echo -e "  ${BLUE}Scan Context:${NC}  ${effective_scan_context_host_path}"
     echo ""
 }
 
@@ -729,8 +743,36 @@ clean_all() {
     fi
 }
 
+# 参数解析
+COMMAND="${1:-}"
+if [ -n "$COMMAND" ]; then
+    shift
+fi
+POSITIONAL_ARGS=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --scan-context-host-path)
+            if [ -z "${2:-}" ]; then
+                echo -e "${RED}❌ --scan-context-host-path 需要一个路径参数${NC}"
+                exit 1
+            fi
+            SCAN_CONTEXT_HOST_PATH="$2"
+            shift 2
+            ;;
+        --help|-h)
+            show_help
+            exit 0
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
 # 主命令处理
-case "$1" in
+case "$COMMAND" in
     init)
         init_swarm
         ;;
@@ -744,13 +786,13 @@ case "$1" in
         stop_all
         ;;
     restart)
-        restart_service "$2"
+        restart_service "${POSITIONAL_ARGS[0]}"
         ;;
     logs)
-        show_logs "$2"
+        show_logs "${POSITIONAL_ARGS[0]}"
         ;;
     shell)
-        enter_shell "$2"
+        enter_shell "${POSITIONAL_ARGS[0]}"
         ;;
     ps|status)
         show_status
@@ -789,7 +831,7 @@ case "$1" in
         show_env
         ;;
     update)
-        update_service "$2"
+        update_service "${POSITIONAL_ARGS[0]}"
         ;;
     clean)
         clean_all
@@ -798,10 +840,10 @@ case "$1" in
         show_help
         ;;
     *)
-        if [ -z "$1" ]; then
+        if [ -z "$COMMAND" ]; then
             show_help
         else
-            echo -e "${RED}❌ 未知命令: $1${NC}"
+            echo -e "${RED}❌ 未知命令: $COMMAND${NC}"
             echo ""
             show_help
             exit 1

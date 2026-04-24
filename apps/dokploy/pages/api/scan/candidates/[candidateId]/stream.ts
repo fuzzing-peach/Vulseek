@@ -3,10 +3,11 @@ import {
 	findComposeById,
 	findScanJobById,
 	findVulnerabilityCandidateById,
-	readCandidateAnalysisAppServerText,
+	getCandidateAnalysisAppServerTextPath,
 	validateRequest,
 } from "@dokploy/server";
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getFileStreamBuffer } from "@/server/utils/file-stream-buffer";
 
 const sendEvent = (
 	res: NextApiResponse,
@@ -62,7 +63,7 @@ export default async function handler(
 	const currentCandidateStage = isStage(candidate.currentStage)
 		? candidate.currentStage
 		: "analyzing";
-	const stage = currentCandidateStage;
+	let activeStage = currentCandidateStage;
 
 	res.writeHead(200, {
 		"Content-Type": "text/event-stream",
@@ -72,42 +73,53 @@ export default async function handler(
 	});
 	res.flushHeaders?.();
 
-	let lastText = await readCandidateAnalysisAppServerText(
-		scanJob.scanJobId,
-		candidate.vulnerabilityCandidateId,
+	const buffer = getFileStreamBuffer(
+		getCandidateAnalysisAppServerTextPath(
+			scanJob.scanJobId,
+			candidate.vulnerabilityCandidateId,
+		),
 	);
-	sendEvent(res, "snapshot", { text: lastText, stage });
+	let lastText = (await buffer.getSnapshot()).content;
+	sendEvent(res, "snapshot", { text: lastText, stage: activeStage });
 
 	const cleanup = () => {
+		unsubscribe();
 		clearInterval(heartbeat);
-		clearInterval(poll);
+		clearInterval(statusPoll);
 	};
+
+	const unsubscribe = buffer.subscribe((event) => {
+		try {
+			if (event.type === "append") {
+				lastText += event.content;
+				sendEvent(res, "append", {
+					text: event.content,
+					stage: activeStage,
+				});
+				return;
+			}
+
+			lastText = event.content;
+			sendEvent(res, "snapshot", { text: lastText, stage: activeStage });
+		} catch (error) {
+			sendEvent(res, "error", {
+				message: error instanceof Error ? error.message : "Unknown stream error",
+			});
+			cleanup();
+			res.end();
+		}
+	});
 
 	const heartbeat = setInterval(() => {
 		res.write(": keepalive\n\n");
 	}, 15000);
 
-	const poll = setInterval(async () => {
+	const statusPoll = setInterval(async () => {
 		try {
 			const latestCandidate = await findVulnerabilityCandidateById(candidateId);
-			const activeStage = isStage(latestCandidate.currentStage)
+			activeStage = isStage(latestCandidate.currentStage)
 				? latestCandidate.currentStage
 				: "analyzing";
-			const nextText = await readCandidateAnalysisAppServerText(
-				latestCandidate.scanJobId,
-				latestCandidate.vulnerabilityCandidateId,
-			);
-			if (nextText !== lastText) {
-				if (nextText.startsWith(lastText)) {
-					sendEvent(res, "append", {
-						text: nextText.slice(lastText.length),
-						stage: activeStage,
-					});
-				} else {
-					sendEvent(res, "snapshot", { text: nextText, stage: activeStage });
-				}
-				lastText = nextText;
-			}
 
 			if (
 				latestCandidate.status === "completed" ||

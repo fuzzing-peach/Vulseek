@@ -2,14 +2,38 @@ import {
 	findApplicationById,
 	findComposeById,
 	findScanJobById,
-	readScanJobAppServerMessages,
+	getScanJobAppServerJsonlPath,
 	validateRequest,
 } from "@dokploy/server";
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getFileStreamBuffer } from "@/server/utils/file-stream-buffer";
+import {
+	advanceJsonRpcParseState,
+	JSONRPC_INCREMENTAL_ONLY_SNAPSHOT_MAX_BYTES,
+	parseJsonRpcChunk,
+	parseJsonRpcSnapshot,
+	type JsonRpcStreamMessage as StreamMessage,
+} from "@/server/utils/jsonrpc-stream";
 
-type StreamMessage = {
-	line: number;
-	message: Record<string, unknown>;
+const SNAPSHOT_MAX_MESSAGES = 400;
+
+const buildSnapshotPayload = (
+	content: string,
+	parseState: { nextLine: number; pending: string },
+	offset: number,
+) => {
+	if (offset > JSONRPC_INCREMENTAL_ONLY_SNAPSHOT_MAX_BYTES) {
+		advanceJsonRpcParseState(content, parseState);
+		return {
+			messages: [] as StreamMessage[],
+			incrementalOnly: true,
+		};
+	}
+
+	return {
+		messages: parseJsonRpcSnapshot(content, parseState, SNAPSHOT_MAX_MESSAGES),
+		incrementalOnly: false,
+	};
 };
 
 const sendEvent = (
@@ -20,12 +44,6 @@ const sendEvent = (
 	res.write(`event: ${event}\n`);
 	res.write(`data: ${JSON.stringify(payload)}\n\n`);
 };
-
-const toStreamMessages = (messages: Record<string, unknown>[]): StreamMessage[] =>
-	messages.map((message, index) => ({
-		line: index + 1,
-		message,
-	}));
 
 export default async function handler(
 	req: NextApiRequest,
@@ -72,44 +90,67 @@ export default async function handler(
 	});
 	res.flushHeaders?.();
 
-	let lastMessages = await readScanJobAppServerMessages(scanJobId);
+	const buffer = getFileStreamBuffer(
+		await getScanJobAppServerJsonlPath(scanJobId),
+	);
+	const snapshot = await buffer.getSnapshot();
+	const parseState = { nextLine: 0, pending: "" };
+	let { messages: lastMessages, incrementalOnly } = buildSnapshotPayload(
+		snapshot.content,
+		parseState,
+		snapshot.offset,
+	);
 	sendEvent(res, "snapshot", {
-		messages: toStreamMessages(lastMessages as Record<string, unknown>[]),
+		messages: lastMessages as StreamMessage[],
+		incrementalOnly,
 	});
 
 	const cleanup = () => {
+		unsubscribe();
 		clearInterval(heartbeat);
-		clearInterval(poll);
+		clearInterval(statusPoll);
 	};
+
+	const unsubscribe = buffer.subscribe((event) => {
+		try {
+			if (event.type === "append") {
+				const appendedMessages = parseJsonRpcChunk(event.content, parseState);
+				if (appendedMessages.length > 0) {
+					lastMessages = [...lastMessages, ...appendedMessages];
+					sendEvent(res, "append", {
+						messages: appendedMessages,
+					});
+				}
+				return;
+			}
+
+			parseState.nextLine = 0;
+			parseState.pending = "";
+			const snapshotPayload = buildSnapshotPayload(
+				event.content,
+				parseState,
+				event.offset,
+			);
+			lastMessages = snapshotPayload.messages;
+			sendEvent(res, "snapshot", {
+				messages: lastMessages as StreamMessage[],
+				incrementalOnly: snapshotPayload.incrementalOnly,
+			});
+		} catch (error) {
+			sendEvent(res, "error", {
+				message: error instanceof Error ? error.message : "Unknown stream error",
+			});
+			cleanup();
+			res.end();
+		}
+	});
 
 	const heartbeat = setInterval(() => {
 		res.write(": keepalive\n\n");
 	}, 15000);
 
-	const poll = setInterval(async () => {
+	const statusPoll = setInterval(async () => {
 		try {
-			const nextMessages = await readScanJobAppServerMessages(scanJobId);
-			if (nextMessages.length !== lastMessages.length) {
-				if (
-					nextMessages.length >= lastMessages.length &&
-					lastMessages.every(
-						(message, index) =>
-							JSON.stringify(message) === JSON.stringify(nextMessages[index]),
-					)
-				) {
-					sendEvent(res, "append", {
-						messages: toStreamMessages(
-							nextMessages.slice(lastMessages.length) as Record<string, unknown>[],
-						),
-					});
-				} else {
-					sendEvent(res, "snapshot", {
-						messages: toStreamMessages(nextMessages as Record<string, unknown>[]),
-					});
-				}
-				lastMessages = nextMessages;
-			}
-
 			const latestScanJob = await findScanJobById(scanJobId);
 			if (
 				latestScanJob.status === "completed" ||

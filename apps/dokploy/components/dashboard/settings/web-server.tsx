@@ -47,7 +47,6 @@ export const WebServer = () => {
 							<ShowDokployActions />
 							<ShowTraefikActions />
 							<ShowStorageActions />
-
 							<UpdateServer />
 						</div>
 

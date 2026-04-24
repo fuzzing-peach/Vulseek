@@ -2,10 +2,11 @@ import {
 	findApplicationById,
 	findComposeById,
 	findScanJobById,
-	readScanJobAppServerText,
+	getScanJobAppServerTextPath,
 	validateRequest,
 } from "@dokploy/server";
 import type { NextApiRequest, NextApiResponse } from "next";
+import { getFileStreamBuffer } from "@/server/utils/file-stream-buffer";
 
 const sendEvent = (
 	res: NextApiResponse,
@@ -61,32 +62,43 @@ export default async function handler(
 	});
 	res.flushHeaders?.();
 
-	let lastText = await readScanJobAppServerText(scanJobId);
+	const buffer = getFileStreamBuffer(getScanJobAppServerTextPath(scanJobId));
+	let lastText = (await buffer.getSnapshot()).content;
 	sendEvent(res, "snapshot", { text: lastText });
 
 	const cleanup = () => {
+		unsubscribe();
 		clearInterval(heartbeat);
-		clearInterval(poll);
+		clearInterval(statusPoll);
 	};
+
+	const unsubscribe = buffer.subscribe((event) => {
+		try {
+			if (event.type === "append") {
+				lastText += event.content;
+				sendEvent(res, "append", {
+					text: event.content,
+				});
+				return;
+			}
+
+			lastText = event.content;
+			sendEvent(res, "snapshot", { text: lastText });
+		} catch (error) {
+			sendEvent(res, "error", {
+				message: error instanceof Error ? error.message : "Unknown stream error",
+			});
+			cleanup();
+			res.end();
+		}
+	});
 
 	const heartbeat = setInterval(() => {
 		res.write(": keepalive\n\n");
 	}, 15000);
 
-	const poll = setInterval(async () => {
+	const statusPoll = setInterval(async () => {
 		try {
-			const nextText = await readScanJobAppServerText(scanJobId);
-			if (nextText !== lastText) {
-				if (nextText.startsWith(lastText)) {
-					sendEvent(res, "append", {
-						text: nextText.slice(lastText.length),
-					});
-				} else {
-					sendEvent(res, "snapshot", { text: nextText });
-				}
-				lastText = nextText;
-			}
-
 			const latestScanJob = await findScanJobById(scanJobId);
 			if (
 				latestScanJob.status === "completed" ||
@@ -113,4 +125,3 @@ export default async function handler(
 		res.end();
 	});
 }
-
