@@ -62,14 +62,16 @@ export const configureSandboxAgentTraefikProxy = async (input: {
 	const routerName = `sandbox-agent-${routeId}`;
 	const serviceName = `${routerName}-service`;
 	const middlewareName = `${routerName}-strip-prefix`;
+	const router = {
+		rule: `PathPrefix(\`${routePath}\`)`,
+		service: serviceName,
+		entryPoints: ["web", "websecure"],
+		middlewares: [middlewareName],
+	};
 	const config = {
 		http: {
 			routers: {
-				[routerName]: {
-					rule: `PathPrefix(\`${routePath}\`)`,
-					service: serviceName,
-					entryPoints: ["web", "websecure"],
-				},
+				[routerName]: router,
 			},
 			middlewares: {
 				[middlewareName]: {
@@ -92,8 +94,6 @@ export const configureSandboxAgentTraefikProxy = async (input: {
 			},
 		},
 	};
-
-	config.http.routers[routerName].middlewares = [middlewareName];
 	const fileName = `${routerName}.yml`;
 	await writeTraefikDynamicConfig(fileName, stringify(config));
 

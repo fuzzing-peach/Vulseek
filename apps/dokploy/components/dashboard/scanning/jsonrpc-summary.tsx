@@ -10,6 +10,8 @@ export type JsonRpcStreamMessage = {
 type SummaryLine = {
 	id: string;
 	kind:
+		| "session"
+		| "prompt"
 		| "system"
 		| "reasoning"
 		| "command"
@@ -24,6 +26,7 @@ const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 16;
 const SUMMARY_REASONING_MAX = 420;
 const SUMMARY_AGENT_MAX = 600;
 const SUMMARY_AGENT_LIVE_MAX = 420;
+const SUMMARY_PROMPT_MAX = 1600;
 
 const isContainerNearBottom = (container: HTMLDivElement) =>
 	container.scrollHeight - container.scrollTop - container.clientHeight <=
@@ -35,6 +38,16 @@ const scrollContainerToBottom = (container: HTMLDivElement) => {
 
 const trimSummary = (value: string, max = 220) => {
 	const normalized = value.replace(/\s+/g, " ").trim();
+	if (!normalized) {
+		return "";
+	}
+	return normalized.length > max
+		? `${normalized.slice(0, Math.max(0, max - 3))}...`
+		: normalized;
+};
+
+const trimMultiline = (value: string, max = 220) => {
+	const normalized = value.replace(/\r\n/g, "\n").trim();
 	if (!normalized) {
 		return "";
 	}
@@ -204,6 +217,30 @@ export const extractJsonRpcSummaryLines = (
 		const message = entry.message;
 		const method = typeof message.method === "string" ? message.method : "";
 		const params = (message.params as Record<string, unknown> | undefined) || {};
+
+		if (method === "session/prompt") {
+			const sessionId =
+				typeof params.sessionId === "string" ? params.sessionId : "";
+			const prompt = trimMultiline(
+				getTextContent(params.prompt),
+				SUMMARY_PROMPT_MAX,
+			);
+			if (sessionId) {
+				lines.push({
+					id: `session-${sessionId}-${entry.line}`,
+					kind: "session",
+					text: `session ${sessionId}`,
+				});
+			}
+			if (prompt) {
+				lines.push({
+					id: `prompt-${sessionId || entry.line}`,
+					kind: "prompt",
+					text: prompt,
+				});
+			}
+			continue;
+		}
 
 		if (method === "session/update") {
 			const sessionId =
@@ -499,6 +536,14 @@ export const extractJsonRpcSummaryLines = (
 };
 
 const getSummaryLineClassName = (line: SummaryLine) => {
+	if (line.kind === "session") {
+		return "text-xs font-semibold uppercase tracking-wide text-slate-500";
+	}
+
+	if (line.kind === "prompt") {
+		return "text-sm font-normal text-violet-700";
+	}
+
 	if (line.kind === "reasoning") {
 		return line.text === "[reasoning started]"
 			? "text-sm font-medium italic text-amber-700/90"
@@ -529,6 +574,14 @@ const getSummaryLineClassName = (line: SummaryLine) => {
 };
 
 const getSummaryLinePrefix = (line: SummaryLine) => {
+	if (line.kind === "session") {
+		return "#";
+	}
+
+	if (line.kind === "prompt") {
+		return "<";
+	}
+
 	if (line.kind === "command") {
 		return "$";
 	}
@@ -550,7 +603,9 @@ const renderSummaryLineContent = (line: SummaryLine) => {
 			</div>
 			<div
 				title={
-					line.kind === "command" || line.kind === "command_subtitle"
+					line.kind === "command" ||
+					line.kind === "command_subtitle" ||
+					line.kind === "prompt"
 						? content
 						: undefined
 				}

@@ -208,6 +208,21 @@ export const findCandidateVerificationTaskByCandidateIdRepo = async (
 		.limit(1)
 		.then((rows) => rows[0] || null);
 
+export const findCandidateVerificationTaskByIdRepo = async (
+	candidateVerificationTaskId: string,
+) =>
+	await db
+		.select()
+		.from(candidateVerificationTasks)
+		.where(
+			eq(
+				candidateVerificationTasks.candidateVerificationTaskId,
+				candidateVerificationTaskId,
+			),
+		)
+		.limit(1)
+		.then((rows) => rows[0] || null);
+
 export const listVerificationResultsByScanJobIdRepo = async (scanJobId: string) =>
   await db
     .select({

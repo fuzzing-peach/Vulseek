@@ -37,9 +37,7 @@ const formatTriggerSource = (triggerSource: string) =>
 export const ShowScanJobs = ({ id, type }: Props) => {
 	const router = useRouter();
 	const { projectId, environmentId } = router.query;
-	const routeSegment = router.asPath.includes("/services/")
-		? "services"
-		: "profiles";
+	const routeSegment = "profiles";
 
 	const query =
 		type === "application"

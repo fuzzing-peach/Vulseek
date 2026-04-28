@@ -26,7 +26,6 @@ import {
 } from "@/components/dashboard/scanning/candidate-list-query-state";
 import {
 	JsonRpcSummaryPanel,
-	type JsonRpcStreamMessage,
 } from "@/components/dashboard/scanning/jsonrpc-summary";
 import { useSandboxAgentSession } from "@/components/dashboard/scanning/use-sandbox-agent-session";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
@@ -249,47 +248,26 @@ const LazyFileTree = ({
 };
 
 const LiveCandidateAgentOutput = ({
-	candidateId,
-	stage,
-	initialMessages,
+	taskId,
 }: {
-	candidateId: string;
-	stage: string;
-	initialMessages: JsonRpcStreamMessage[];
+	taskId: string;
 }) => {
-	const requestedStage = stage === "verifying" ? "verifying" : "analyzing";
 	const { messages } = useSandboxAgentSession({
-		kind: "candidate",
-		vulnerabilityCandidateId: candidateId,
-		stage: requestedStage,
-		enabled: !!candidateId,
-		initialMessages,
+		taskId,
+		enabled: !!taskId,
 	});
 
 	return <JsonRpcSummaryPanel messages={messages} />;
 };
 
 const LiveScannerAgentOutput = ({
-	scanJobId,
-	stage,
-	scanModuleTaskId,
-	scanFunctionTaskId,
-	initialMessages,
+	taskId,
 }: {
-	scanJobId: string;
-	stage: "repository_scanning" | "module_scanning" | "function_scanning";
-	scanModuleTaskId?: string;
-	scanFunctionTaskId?: string;
-	initialMessages: JsonRpcStreamMessage[];
+	taskId: string;
 }) => {
 	const { messages } = useSandboxAgentSession({
-		kind: "scanner",
-		scanJobId,
-		stage,
-		scanModuleTaskId,
-		scanFunctionTaskId,
-		enabled: !!scanJobId,
-		initialMessages,
+		taskId,
+		enabled: !!taskId,
 	});
 
 	return <JsonRpcSummaryPanel messages={messages} />;
@@ -310,12 +288,12 @@ const CandidateWorkflowSection = ({
 		progressClassName?: string;
 	}>;
 	inProgressCandidates: Array<{
+		taskId: string;
 		vulnerabilityCandidateId: string;
 		title: string;
 		filePath: string | null;
 		line: number | null;
 		stage: string;
-		streamMessages: JsonRpcStreamMessage[];
 	}>;
 }) => (
 	<div className="flex flex-col gap-6">
@@ -392,9 +370,7 @@ const CandidateWorkflowSection = ({
 									</td>
 									<td className="w-[66%] px-4 py-3 align-top">
 										<LiveCandidateAgentOutput
-											candidateId={candidate.vulnerabilityCandidateId}
-											stage={candidate.stage}
-											initialMessages={candidate.streamMessages}
+											taskId={candidate.taskId}
 										/>
 									</td>
 								</tr>
@@ -2070,13 +2046,7 @@ export const ShowScanJobDetail = ({
 															</td>
 															<td className="w-[66%] px-4 py-3 align-top">
 																<LiveScannerAgentOutput
-																	scanJobId={scanJobId}
-																	stage={agent.stage}
-																	scanModuleTaskId={agent.scanModuleTaskId}
-																	scanFunctionTaskId={agent.scanFunctionTaskId}
-																	initialMessages={
-																		(agent.streamMessages || []) as JsonRpcStreamMessage[]
-																	}
+																	taskId={agent.taskId}
 																/>
 															</td>
 														</tr>

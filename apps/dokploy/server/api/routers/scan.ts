@@ -767,18 +767,21 @@ export const scanRouter = createTRPCRouter({
 	scannerSession: protectedProcedure
 		.input(
 			z.object({
-				scanJobId: z.string().min(1),
 				stage: z.enum([
 					"repository_scanning",
 					"module_scanning",
 					"function_scanning",
 				]),
-				scanModuleTaskId: z.string().min(1).optional(),
-				scanFunctionTaskId: z.string().min(1).optional(),
+				taskId: z.string().min(1),
 			}),
 		)
 		.query(async ({ input, ctx }) => {
-			const scanJob = await findScanJobById(input.scanJobId);
+			const session = await findScanJobSandboxAgentSession(input);
+			if (!session) {
+				return null;
+			}
+
+			const scanJob = await findScanJobById(session.scanJobId);
 			let organizationId: string | undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
@@ -800,11 +803,6 @@ export const scanRouter = createTRPCRouter({
 					code: "UNAUTHORIZED",
 					message: "You are not authorized to access this scan session",
 				});
-			}
-
-			const session = await findScanJobSandboxAgentSession(input);
-			if (!session) {
-				return null;
 			}
 
 			return {

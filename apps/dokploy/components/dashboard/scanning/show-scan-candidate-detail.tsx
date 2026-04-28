@@ -175,12 +175,15 @@ export const ShowScanCandidateDetail = ({
 	);
 	const candidateStreamStage =
 		candidate?.currentStage === "verifying" ? "verifying" : "analyzing";
-	const { messages: liveJsonRpcMessages } = useSandboxAgentSession({
-		kind: "candidate",
-		vulnerabilityCandidateId: candidateId,
-		stage: candidateStreamStage,
-		enabled: !!candidateId && candidate?.status === "running",
-		initialMessages: [],
+	const candidateTaskId =
+		candidateStreamStage === "verifying"
+			? candidate?.latestVerificationResult?.candidateVerificationTaskId || ""
+			: candidate?.latestAnalysisResult?.candidateAnalysisTaskId || "";
+	const {
+		messages: liveJsonRpcMessages,
+	} = useSandboxAgentSession({
+		taskId: candidateTaskId,
+		enabled: !!candidateTaskId && candidate?.status === "running",
 	});
 	const canVerify =
 		candidate?.latestAnalysisResult?.result === "real_vulnerability" ||

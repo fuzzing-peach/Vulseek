@@ -2929,8 +2929,17 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 					candidateRuntimeLiveAction.actionText !== "-"
 					? candidateRuntimeLiveAction.actionText
 					: "-";
+			const taskId =
+				candidateStage === "verifying"
+					? latestVerificationResultByCandidateId.get(
+							candidate.vulnerabilityCandidateId,
+						)?.candidateVerificationTaskId || ""
+					: latestAnalysisResultByCandidateId.get(
+							candidate.vulnerabilityCandidateId,
+						)?.candidateAnalysisTaskId || "";
 
 			return {
+				taskId,
 				vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
 				title: candidate.title,
 				filePath: candidate.filePath,
@@ -2938,16 +2947,6 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 				stage: candidate.currentStage || resolvedStage,
 				actionType: resolvedActionType,
 				actionText: resolvedActionText,
-				streamMessages:
-					candidateStage === "verifying"
-						? await readCandidateVerifierAppServerMessagesTailWithLineNumbers(
-								scanJobId,
-								candidate.vulnerabilityCandidateId,
-							)
-						: await readCandidateAnalysisAppServerMessagesTailWithLineNumbers(
-								scanJobId,
-								candidate.vulnerabilityCandidateId,
-							),
 				updatedAt: candidate.updatedAt,
 			};
 		}),
@@ -2968,24 +2967,21 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 
 	const inProgressScannerAgents: Array<{
 		id: string;
+		taskId: string;
 		title: string;
 		subtitle?: string;
 		stage: "repository_scanning" | "module_scanning" | "function_scanning";
-		scanModuleTaskId?: string;
-		scanFunctionTaskId?: string;
 		moduleId?: string;
 		functionId?: string;
-		streamMessages: JsonRpcMessageWithLine[];
 	}> = [];
 
 	if (scanJob.repositoryTaskStatus === "running") {
 		inProgressScannerAgents.push({
 			id: `repository-${scanJob.scanJobId}`,
+			taskId: scanJob.repositoryTaskId || scanJob.scanJobId,
 			title: "Repository Scanner",
 			subtitle: "Repository-wide planner and module partitioning",
 			stage: "repository_scanning",
-			streamMessages:
-				await readScanJobAppServerMessagesTailWithLineNumbers(scanJob.scanJobId),
 		});
 	}
 
@@ -2996,16 +2992,11 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 					.filter((task) => task.status === "running")
 					.map(async (task) => ({
 						id: `module-${task.scanModuleTaskId}`,
+						taskId: task.scanModuleTaskId,
 						title: task.moduleName || task.moduleId,
 						subtitle: task.moduleId,
 						stage: "module_scanning" as const,
-						scanModuleTaskId: task.scanModuleTaskId,
 						moduleId: task.moduleId,
-						streamMessages:
-							await readModuleScannerAppServerMessagesTailWithLineNumbers(
-								scanJobId,
-								task.moduleId,
-							),
 					})),
 			)
 		),
@@ -3018,6 +3009,7 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 					.filter((task) => task.status === "running")
 					.map(async (task) => ({
 						id: `function-${task.scanFunctionTaskId}`,
+						taskId: task.scanFunctionTaskId,
 						title: task.functionName || task.functionId,
 						subtitle: [
 							task.moduleName || task.moduleId,
@@ -3028,16 +3020,8 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 							.filter(Boolean)
 							.join(" · "),
 						stage: "function_scanning" as const,
-						scanModuleTaskId: task.scanModuleTaskId,
-						scanFunctionTaskId: task.scanFunctionTaskId,
 						moduleId: task.moduleId,
 						functionId: task.functionId,
-						streamMessages:
-							await readFunctionScannerAppServerMessagesTailWithLineNumbers(
-								scanJobId,
-								task.moduleId,
-								task.functionId,
-							),
 					})),
 			)
 		),

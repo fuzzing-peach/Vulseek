@@ -197,6 +197,21 @@ export const findCandidateAnalysisTaskByCandidateIdRepo = async (
 		.limit(1)
 		.then((rows) => rows[0] || null);
 
+export const findCandidateAnalysisTaskByIdRepo = async (
+	candidateAnalysisTaskId: string,
+) =>
+	await db
+		.select()
+		.from(candidateAnalysisTasks)
+		.where(
+			eq(
+				candidateAnalysisTasks.candidateAnalysisTaskId,
+				candidateAnalysisTaskId,
+			),
+		)
+		.limit(1)
+		.then((rows) => rows[0] || null);
+
 export const listAnalysisResultsByScanJobIdRepo = async (scanJobId: string) =>
   await db
     .select({

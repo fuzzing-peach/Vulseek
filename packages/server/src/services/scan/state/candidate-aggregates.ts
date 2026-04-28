@@ -7,6 +7,7 @@ export const buildCandidatesWithLatestResults = <
 	},
 	AnalysisResult extends {
 		analysisResultId: string;
+		candidateAnalysisTaskId?: string;
 		vulnerabilityCandidateId: string;
 		result: string;
 		confidence?: number | null;
@@ -19,6 +20,7 @@ export const buildCandidatesWithLatestResults = <
 	},
 	VerificationResult extends {
 		verificationResultId: string;
+		candidateVerificationTaskId?: string;
 		vulnerabilityCandidateId: string;
 		result: string;
 		isBug?: boolean | null;
@@ -116,6 +118,8 @@ export const buildCandidatesWithLatestResults = <
 			latestAnalysisResult: latestAnalysisResult
 				? {
 						analysisResultId: latestAnalysisResult.analysisResultId,
+						candidateAnalysisTaskId:
+							latestAnalysisResult.candidateAnalysisTaskId,
 						result: latestAnalysisResult.result,
 						confidence: latestAnalysisResult.confidence,
 						score: latestAnalysisResult.score,
@@ -130,6 +134,8 @@ export const buildCandidatesWithLatestResults = <
 			latestVerificationResult: latestVerificationResult
 				? {
 						verificationResultId: latestVerificationResult.verificationResultId,
+						candidateVerificationTaskId:
+							latestVerificationResult.candidateVerificationTaskId,
 						result: latestVerificationResult.result,
 						isBug: latestVerificationResult.isBug,
 						isSecurity: latestVerificationResult.isSecurity,
