@@ -35,6 +35,16 @@ export * from "./services/redis";
 export * from "./services/registry";
 export * from "./services/rollbacks";
 export * from "./services/scan";
+export * from "./services/scan/constants";
+export * from "./services/scan/api/scan-jobs";
+export * from "./services/scan/api/candidate-records";
+export * from "./services/scan/api/scan-tasks";
+export * from "./services/scan/live-session";
+export type {
+	ScanCandidateQueueJob,
+	ScanFunctionQueueJob,
+	ScanModuleQueueJob,
+} from "./services/scan/types";
 export * from "./services/schedule";
 export * from "./services/security";
 export * from "./services/server";

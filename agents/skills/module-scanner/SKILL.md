@@ -69,11 +69,20 @@ Use `tree-sitter` to extract concrete function definitions from the module file 
 
 Rules:
 
+- prefer calling `extract_functions.py` first for function inventory generation
 - do not manually invent the function list from memory
 - do not rely on loose grep-only heuristics when tree-sitter extraction is available
 - if tree-sitter extraction fails for some files, note the failure and continue with the successfully extracted functions
 - current expected first-class language support is C/C++
 - if tree-sitter extracts functions from excluded external paths, remove them from the final plan unless the exception rule applies
+
+Preferred invocation:
+
+```bash
+python3 /opt/dokploy-agents/tools/extract_functions.py \
+  --file-list <file-list.txt> \
+  --out <output.json>
+```
 
 ## Lookup Priority
 

@@ -15,7 +15,7 @@ import {
 	parseCandidateListQueryState,
 } from "@/components/dashboard/scanning/candidate-list-query-state";
 import { JsonRpcSummaryPanel } from "@/components/dashboard/scanning/jsonrpc-summary";
-import { useJsonRpcStream } from "@/components/dashboard/scanning/use-jsonrpc-stream";
+import { useSandboxAgentSession } from "@/components/dashboard/scanning/use-sandbox-agent-session";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
 import { DateTooltip } from "@/components/shared/date-tooltip";
@@ -175,11 +175,10 @@ export const ShowScanCandidateDetail = ({
 	);
 	const candidateStreamStage =
 		candidate?.currentStage === "verifying" ? "verifying" : "analyzing";
-	const { messages: liveJsonRpcMessages } = useJsonRpcStream({
-		url:
-			candidateId && candidate?.status === "running"
-				? `/api/scan/candidates/${candidateId}/jsonrpc-stream?stage=${candidateStreamStage}`
-				: null,
+	const { messages: liveJsonRpcMessages } = useSandboxAgentSession({
+		kind: "candidate",
+		vulnerabilityCandidateId: candidateId,
+		stage: candidateStreamStage,
 		enabled: !!candidateId && candidate?.status === "running",
 		initialMessages: [],
 	});

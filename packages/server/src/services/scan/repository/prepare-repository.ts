@@ -1,0 +1,243 @@
+import { execAsync } from "../../../utils/process/execAsync";
+
+const escapeSingleQuotes = (value: string) => value.replace(/'/g, `'"'"'`);
+
+export type PreparedRepositoryState = {
+	effectiveTargetMode: string;
+	targetRef: string | null;
+	targetTag: string | null;
+	requestedCommitSha: string | null;
+	requestedBaseSha: string | null;
+	commitWindow: number;
+	resolvedTargetSha: string;
+	resolvedBaseSha: string | null;
+	currentBranch: string | null;
+	currentExactTag: string | null;
+	markdown: string;
+};
+
+export const prepareRepositoryForScanInContainer = async (input: {
+	containerName: string;
+	scanType: "delta" | "full";
+	targetRef?: string | null;
+	targetTag?: string | null;
+	commitSha?: string | null;
+	baseSha?: string | null;
+	commitWindow: number;
+	scanRootDir: string;
+}): Promise<PreparedRepositoryState> => {
+	const forceLatestRef = input.scanType === "delta";
+	const preferLatestTag = input.scanType === "full";
+	const targetRef = input.targetRef?.trim() || "";
+	const targetTag = input.targetTag?.trim() || "";
+	const requestedCommit = input.commitSha?.trim() || "";
+	const requestedBase = input.baseSha?.trim() || "";
+	const commitWindow = input.commitWindow;
+	const isDeltaScan = input.scanType === "delta";
+
+	const shellScript = [
+		`SCAN_ROOT='${escapeSingleQuotes(input.scanRootDir)}'`,
+		"mkdir -p \"$SCAN_ROOT\"",
+		"PREPARE_STDOUT=\"$SCAN_ROOT/00_repository_prepare.stdout.log\"",
+		"PREPARE_STDERR=\"$SCAN_ROOT/00_repository_prepare.stderr.log\"",
+		": > \"$PREPARE_STDOUT\"",
+		": > \"$PREPARE_STDERR\"",
+		"exec > >(tee -a \"$PREPARE_STDOUT\") 2> >(tee -a \"$PREPARE_STDERR\" >&2)",
+		"set -Eeuo pipefail",
+		"CURRENT_CMD=\"(initializing)\"",
+		"trap 'rc=$?; echo \"[error] command failed (exit ${rc}): ${CURRENT_CMD}\" >&2' ERR",
+		"run() {",
+		"  CURRENT_CMD=\"$*\"",
+		"  echo \"[cmd] $CURRENT_CMD\"",
+		"  \"$@\"",
+		"}",
+		"cd /workspace/repo",
+		"CURRENT_BRANCH=\"$(git symbolic-ref --quiet --short HEAD || true)\"",
+		"run git fetch --all --tags --prune",
+		"if [ -n \"$CURRENT_BRANCH\" ]; then",
+		"  CURRENT_CMD=\"git pull --ff-only origin $CURRENT_BRANCH\"",
+		"  if ! git pull --ff-only origin \"$CURRENT_BRANCH\"; then",
+		"    echo \"[warn] command failed but ignored: $CURRENT_CMD\" >&2",
+		"  fi",
+		"fi",
+		`TARGET_REF='${escapeSingleQuotes(targetRef)}'`,
+		`TARGET_TAG='${escapeSingleQuotes(targetTag)}'`,
+		`REQUESTED_COMMIT='${escapeSingleQuotes(requestedCommit)}'`,
+		`REQUESTED_BASE='${escapeSingleQuotes(requestedBase)}'`,
+		`COMMIT_WINDOW='${commitWindow}'`,
+		`FORCE_LATEST_REF='${forceLatestRef ? "true" : "false"}'`,
+		`PREFER_LATEST_TAG='${preferLatestTag ? "true" : "false"}'`,
+		"RESOLVED_TARGET=\"\"",
+		"EFFECTIVE_TARGET_MODE=\"explicit\"",
+		"if [ \"$FORCE_LATEST_REF\" = \"true\" ]; then",
+		"  EFFECTIVE_TARGET_MODE=\"latest-ref\"",
+		"  if [ -n \"$CURRENT_BRANCH\" ]; then",
+		"    RESOLVED_TARGET=\"$(git rev-parse HEAD)\"",
+		"    TARGET_REF=\"$CURRENT_BRANCH\"",
+		"    TARGET_TAG=\"\"",
+		"    REQUESTED_COMMIT=\"\"",
+		"  else",
+		"    RESOLVED_TARGET=\"$(git rev-parse HEAD)\"",
+		"    TARGET_REF=\"HEAD\"",
+		"    TARGET_TAG=\"\"",
+		"    REQUESTED_COMMIT=\"\"",
+		"  fi",
+		"elif [ \"$PREFER_LATEST_TAG\" = \"true\" ] && [ -z \"$TARGET_TAG\" ]; then",
+		"  CURRENT_CMD=\"git for-each-ref --sort=-creatordate --count=1 --format=%(refname:short) refs/tags\"",
+		"  LATEST_TAG=\"$(git for-each-ref --sort=-creatordate --count=1 --format='%(refname:short)' refs/tags)\"",
+		"  if [ -n \"$LATEST_TAG\" ]; then",
+		"    EFFECTIVE_TARGET_MODE=\"latest-tag\"",
+		"    TARGET_TAG=\"$LATEST_TAG\"",
+		"    TARGET_REF=\"\"",
+		"    REQUESTED_COMMIT=\"\"",
+		"    CURRENT_CMD=\"git rev-parse --verify refs/tags/$TARGET_TAG^{commit}\"",
+		"    git rev-parse --verify \"refs/tags/$TARGET_TAG^{commit}\" >/dev/null",
+		"    run git checkout -f \"refs/tags/$TARGET_TAG\"",
+		"    RESOLVED_TARGET=\"$(git rev-parse HEAD)\"",
+		"  else",
+		"    EFFECTIVE_TARGET_MODE=\"latest-head-no-tag\"",
+		"    RESOLVED_TARGET=\"$(git rev-parse HEAD)\"",
+		"  fi",
+		"elif [ -n \"$TARGET_TAG\" ]; then",
+		"  CURRENT_CMD=\"git rev-parse --verify refs/tags/$TARGET_TAG^{commit}\"",
+		"  git rev-parse --verify \"refs/tags/$TARGET_TAG^{commit}\" >/dev/null",
+		"  run git checkout -f \"refs/tags/$TARGET_TAG\"",
+		"  RESOLVED_TARGET=\"$(git rev-parse HEAD)\"",
+		"elif [ -n \"$TARGET_REF\" ]; then",
+		"  CURRENT_CMD=\"git rev-parse --verify $TARGET_REF^{commit}\"",
+		"  if git rev-parse --verify \"$TARGET_REF^{commit}\" >/dev/null 2>&1; then",
+		"    run git checkout -f \"$TARGET_REF\"",
+		"  else",
+		"    CURRENT_CMD=\"git rev-parse --verify origin/$TARGET_REF^{commit}\"",
+		"    if git rev-parse --verify \"origin/$TARGET_REF^{commit}\" >/dev/null 2>&1; then",
+		"      run git checkout -f \"origin/$TARGET_REF\"",
+		"    else",
+		"      echo \"Unable to resolve targetRef: $TARGET_REF\" >&2",
+		"      exit 1",
+		"    fi",
+		"  fi",
+		"  RESOLVED_TARGET=\"$(git rev-parse HEAD)\"",
+		"elif [ -n \"$REQUESTED_COMMIT\" ]; then",
+		"  CURRENT_CMD=\"git rev-parse --verify $REQUESTED_COMMIT^{commit}\"",
+		"  if git rev-parse --verify \"$REQUESTED_COMMIT^{commit}\" >/dev/null 2>&1; then",
+		"    run git checkout -f \"$REQUESTED_COMMIT\"",
+		"    RESOLVED_TARGET=\"$(git rev-parse HEAD)\"",
+		"  else",
+		"    echo \"Unable to resolve commitSha: $REQUESTED_COMMIT\" >&2",
+		"    exit 1",
+		"  fi",
+		"else",
+		"  RESOLVED_TARGET=\"$(git rev-parse HEAD)\"",
+		"fi",
+		"TARGET_SUBJECT=\"$(git log -1 --format=%s \"$RESOLVED_TARGET\")\"",
+		"TARGET_SHORT=\"$(git rev-parse --short \"$RESOLVED_TARGET\")\"",
+		"CURRENT_EXACT_TAG=\"$(git describe --tags --exact-match HEAD 2>/dev/null || true)\"",
+		...(isDeltaScan
+			? [
+					"if [ -n \"$REQUESTED_BASE\" ] && git rev-parse --verify \"$REQUESTED_BASE^{commit}\" >/dev/null 2>&1; then",
+					"  RESOLVED_BASE=\"$REQUESTED_BASE\"",
+					"else",
+					"  RESOLVED_BASE=\"$(git rev-parse \"$RESOLVED_TARGET~$COMMIT_WINDOW\" 2>/dev/null || true)\"",
+					"fi",
+			  ]
+			: ["RESOLVED_BASE=\"\""]),
+		"{",
+		"  echo '# Repository State'",
+		"  echo",
+		"  echo \"- effective_target_mode: ${EFFECTIVE_TARGET_MODE}\"",
+		"  echo \"- target_tag: ${TARGET_TAG:-<none>}\"",
+		"  echo \"- target_ref: ${TARGET_REF:-<none>}\"",
+		"  echo \"- requested_commit_sha: ${REQUESTED_COMMIT:-<none>}\"",
+		"  echo \"- requested_base_sha: ${REQUESTED_BASE:-<none>}\"",
+		"  echo \"- resolved_target_sha: ${RESOLVED_TARGET}\"",
+		"  echo \"- resolved_target_short: ${TARGET_SHORT}\"",
+		"  echo \"- resolved_base_sha: ${RESOLVED_BASE:-<none>}\"",
+		"  echo \"- target_subject: ${TARGET_SUBJECT}\"",
+		...(isDeltaScan
+			? [
+					"  echo \"- commit_window: ${COMMIT_WINDOW}\"",
+					"  echo",
+					"  echo '## Recent Commits'",
+					"  CURRENT_CMD=\"git log --oneline -n $((COMMIT_WINDOW + 1)) $RESOLVED_TARGET\"",
+					"  git log --oneline -n \"$((COMMIT_WINDOW + 1))\" \"$RESOLVED_TARGET\" || true",
+			  ]
+			: []),
+		"} > \"$SCAN_ROOT/00_repository_state.md\"",
+		"jq -n \\",
+		"  --arg effectiveTargetMode \"$EFFECTIVE_TARGET_MODE\" \\",
+		"  --arg targetRef \"$TARGET_REF\" \\",
+		"  --arg targetTag \"$TARGET_TAG\" \\",
+		"  --arg requestedCommitSha \"$REQUESTED_COMMIT\" \\",
+		"  --arg requestedBaseSha \"$REQUESTED_BASE\" \\",
+		"  --arg resolvedTargetSha \"$RESOLVED_TARGET\" \\",
+		"  --arg resolvedBaseSha \"$RESOLVED_BASE\" \\",
+		"  --arg currentBranch \"$CURRENT_BRANCH\" \\",
+		"  --arg currentExactTag \"$CURRENT_EXACT_TAG\" \\",
+		"  --argjson commitWindow \"$COMMIT_WINDOW\" \\",
+		"  '{",
+		"    effectiveTargetMode: $effectiveTargetMode,",
+		"    targetRef: (if $targetRef == \"\" then null else $targetRef end),",
+		"    targetTag: (if $targetTag == \"\" then null else $targetTag end),",
+		"    requestedCommitSha: (if $requestedCommitSha == \"\" then null else $requestedCommitSha end),",
+		"    requestedBaseSha: (if $requestedBaseSha == \"\" then null else $requestedBaseSha end),",
+		"    commitWindow: $commitWindow,",
+		"    resolvedTargetSha: $resolvedTargetSha,",
+		"    resolvedBaseSha: (if $resolvedBaseSha == \"\" then null else $resolvedBaseSha end),",
+		"    currentBranch: (if $currentBranch == \"\" then null else $currentBranch end),",
+		"    currentExactTag: (if $currentExactTag == \"\" then null else $currentExactTag end)",
+		"  }' > \"$SCAN_ROOT/00_repository_state.json\"",
+	].join("\n");
+	const encoded = Buffer.from(shellScript, "utf-8").toString("base64");
+
+	await execAsync(
+		`docker exec ${input.containerName} bash -lc "echo '${encoded}' | base64 -d | bash"`,
+	).catch(async (error: unknown) => {
+		let prepareStdout = "";
+		let prepareStderr = "";
+		try {
+			const stdoutRead = await execAsync(
+				`docker exec ${input.containerName} bash -lc "cat '${input.scanRootDir}/00_repository_prepare.stdout.log' 2>/dev/null || true"`,
+			);
+			prepareStdout = stdoutRead.stdout.trim();
+		} catch {}
+		try {
+			const stderrRead = await execAsync(
+				`docker exec ${input.containerName} bash -lc "cat '${input.scanRootDir}/00_repository_prepare.stderr.log' 2>/dev/null || true"`,
+			);
+			prepareStderr = stderrRead.stdout.trim();
+		} catch {}
+
+		const message = error instanceof Error ? error.message : "Repository prepare failed";
+		const tail = (value: string) =>
+			value
+				.split("\n")
+				.slice(-40)
+				.join("\n")
+				.trim();
+		throw new Error(
+			[
+				message,
+				prepareStdout ? `prepare_stdout_tail:\n${tail(prepareStdout)}` : "",
+				prepareStderr ? `prepare_stderr_tail:\n${tail(prepareStderr)}` : "",
+			]
+				.filter(Boolean)
+				.join("\n\n"),
+		);
+	});
+
+	const repositoryState = await execAsync(
+		`docker exec ${input.containerName} bash -lc "cat '${input.scanRootDir}/00_repository_state.md'"`,
+	);
+	const repositoryStateJson = await execAsync(
+		`docker exec ${input.containerName} bash -lc "cat '${input.scanRootDir}/00_repository_state.json'"`,
+	);
+
+	const parsed = JSON.parse(
+		repositoryStateJson.stdout,
+	) as Omit<PreparedRepositoryState, "markdown">;
+
+	return {
+		...parsed,
+		markdown: repositoryState.stdout.trim(),
+	};
+};

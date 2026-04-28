@@ -54,9 +54,6 @@ export const scanJobs = pgTable("scan_jobs", {
 	scanType: scanTypeEnum("scanType").notNull(),
 	status: scanJobStatusEnum("status").notNull().default("queued"),
 	scanPhase: scanPhaseEnum("scanPhase").notNull().default("queued"),
-	repositoryTaskStatus: scanTaskStatusEnum("repositoryTaskStatus")
-		.notNull()
-		.default("queued"),
 	triggerSource: text("triggerSource").notNull().default("manual"),
 	commitSha: text("commitSha"),
 	baseSha: text("baseSha"),
@@ -87,6 +84,41 @@ export const scanJobs = pgTable("scan_jobs", {
 	scanningThreadId: text("scanningThreadId"),
 });
 
+export const scanRepositoryTasks = pgTable(
+	"scan_repository_tasks",
+	{
+		scanRepositoryTaskId: text("scanRepositoryTaskId")
+			.notNull()
+			.primaryKey()
+			.$defaultFn(() => nanoid()),
+		scanJobId: text("scanJobId")
+			.notNull()
+			.references(() => scanJobs.scanJobId, {
+				onDelete: "cascade",
+			}),
+		status: scanTaskStatusEnum("status").notNull().default("queued"),
+		attempt: integer("attempt").notNull().default(0),
+		containerName: text("containerName"),
+		threadId: text("threadId"),
+		result: text("result"),
+		repositoryScanMdPath: text("repositoryScanMdPath"),
+		repositoryScanJsonPath: text("repositoryScanJsonPath"),
+		modulePlanJsonPath: text("modulePlanJsonPath"),
+		errorMessage: text("errorMessage"),
+		startedAt: text("startedAt"),
+		completedAt: text("completedAt"),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		uniqueScanJobRepositoryTask: unique().on(table.scanJobId),
+	}),
+);
+
 export const scanModuleTasks = pgTable(
 	"scan_module_tasks",
 	{
@@ -106,6 +138,7 @@ export const scanModuleTasks = pgTable(
 		attempt: integer("attempt").notNull().default(0),
 		containerName: text("containerName"),
 		threadId: text("threadId"),
+		result: text("result"),
 		moduleScanMdPath: text("moduleScanMdPath"),
 		moduleScanJsonPath: text("moduleScanJsonPath"),
 		functionPlanJsonPath: text("functionPlanJsonPath"),
@@ -155,6 +188,7 @@ export const scanFunctionTasks = pgTable(
 		summary: text("summary"),
 		containerName: text("containerName"),
 		threadId: text("threadId"),
+		result: text("result"),
 		functionScanMdPath: text("functionScanMdPath"),
 		functionScanJsonPath: text("functionScanJsonPath"),
 		errorMessage: text("errorMessage"),
@@ -182,6 +216,12 @@ export const vulnerabilityCandidates = pgTable("vulnerability_candidates", {
 		.references(() => scanJobs.scanJobId, {
 			onDelete: "cascade",
 		}),
+	scanFunctionTaskId: text("scanFunctionTaskId").references(
+		() => scanFunctionTasks.scanFunctionTaskId,
+		{
+			onDelete: "set null",
+		},
+	),
 	title: text("title").notNull(),
 	description: text("description"),
 	filePath: text("filePath"),
@@ -202,71 +242,97 @@ export const vulnerabilityCandidates = pgTable("vulnerability_candidates", {
 		.$defaultFn(() => new Date().toISOString()),
 });
 
-export const analysisResults = pgTable("analysis_results", {
-	analysisResultId: text("analysisResultId")
-		.notNull()
-		.primaryKey()
-		.$defaultFn(() => nanoid()),
-	scanJobId: text("scanJobId")
-		.notNull()
-		.references(() => scanJobs.scanJobId, {
-			onDelete: "cascade",
-		}),
-	vulnerabilityCandidateId: text("vulnerabilityCandidateId")
-		.notNull()
-		.references(() => vulnerabilityCandidates.vulnerabilityCandidateId, {
-			onDelete: "cascade",
-		}),
-	result: text("result").notNull(),
-	confidence: real("confidence"),
-	score: real("score"),
-	reportPath: text("reportPath"),
-	runtimeSeconds: real("runtimeSeconds"),
-	threadId: text("threadId"),
-	summary: text("summary"),
-	createdAt: text("createdAt")
-		.notNull()
-		.$defaultFn(() => new Date().toISOString()),
-	updatedAt: text("updatedAt")
-		.notNull()
-		.$defaultFn(() => new Date().toISOString()),
-});
+export const candidateAnalysisTasks = pgTable(
+	"candidate_analysis_tasks",
+	{
+		candidateAnalysisTaskId: text("candidateAnalysisTaskId")
+			.notNull()
+			.primaryKey()
+			.$defaultFn(() => nanoid()),
+		scanJobId: text("scanJobId")
+			.notNull()
+			.references(() => scanJobs.scanJobId, {
+				onDelete: "cascade",
+			}),
+		vulnerabilityCandidateId: text("vulnerabilityCandidateId")
+			.notNull()
+			.references(() => vulnerabilityCandidates.vulnerabilityCandidateId, {
+				onDelete: "cascade",
+			}),
+		status: scanTaskStatusEnum("status").notNull().default("queued"),
+		attempt: integer("attempt").notNull().default(0),
+		containerName: text("containerName"),
+		threadId: text("threadId"),
+		result: text("result"),
+		confidence: real("confidence"),
+		score: real("score"),
+		reportPath: text("reportPath"),
+		runtimeSeconds: real("runtimeSeconds"),
+		summary: text("summary"),
+		errorMessage: text("errorMessage"),
+		startedAt: text("startedAt"),
+		completedAt: text("completedAt"),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		uniqueCandidateAnalysisTask: unique().on(table.vulnerabilityCandidateId),
+	}),
+);
 
-export const verificationResults = pgTable("verification_results", {
-	verificationResultId: text("verificationResultId")
-		.notNull()
-		.primaryKey()
-		.$defaultFn(() => nanoid()),
-	scanJobId: text("scanJobId")
-		.notNull()
-		.references(() => scanJobs.scanJobId, {
-			onDelete: "cascade",
-		}),
-	vulnerabilityCandidateId: text("vulnerabilityCandidateId")
-		.notNull()
-		.references(() => vulnerabilityCandidates.vulnerabilityCandidateId, {
-			onDelete: "cascade",
-		}),
-	result: text("result").notNull(),
-	isBug: boolean("isBug"),
-	isSecurity: boolean("isSecurity"),
-	confidence: real("confidence"),
-	score: real("score"),
-	reportPath: text("reportPath"),
-	issueDraftPath: text("issueDraftPath"),
-	pocPath: text("pocPath"),
-	dockerfilePath: text("dockerfilePath"),
-	runScriptPath: text("runScriptPath"),
-	runtimeSeconds: real("runtimeSeconds"),
-	threadId: text("threadId"),
-	summary: text("summary"),
-	createdAt: text("createdAt")
-		.notNull()
-		.$defaultFn(() => new Date().toISOString()),
-	updatedAt: text("updatedAt")
-		.notNull()
-		.$defaultFn(() => new Date().toISOString()),
-});
+export const candidateVerificationTasks = pgTable(
+	"candidate_verification_tasks",
+	{
+		candidateVerificationTaskId: text("candidateVerificationTaskId")
+			.notNull()
+			.primaryKey()
+			.$defaultFn(() => nanoid()),
+		scanJobId: text("scanJobId")
+			.notNull()
+			.references(() => scanJobs.scanJobId, {
+				onDelete: "cascade",
+			}),
+		vulnerabilityCandidateId: text("vulnerabilityCandidateId")
+			.notNull()
+			.references(() => vulnerabilityCandidates.vulnerabilityCandidateId, {
+				onDelete: "cascade",
+			}),
+		status: scanTaskStatusEnum("status").notNull().default("queued"),
+		attempt: integer("attempt").notNull().default(0),
+		containerName: text("containerName"),
+		threadId: text("threadId"),
+		result: text("result"),
+		isBug: boolean("isBug"),
+		isSecurity: boolean("isSecurity"),
+		confidence: real("confidence"),
+		score: real("score"),
+		reportPath: text("reportPath"),
+		issueDraftPath: text("issueDraftPath"),
+		pocPath: text("pocPath"),
+		dockerfilePath: text("dockerfilePath"),
+		runScriptPath: text("runScriptPath"),
+		runtimeSeconds: real("runtimeSeconds"),
+		summary: text("summary"),
+		errorMessage: text("errorMessage"),
+		startedAt: text("startedAt"),
+		completedAt: text("completedAt"),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		uniqueCandidateVerificationTask: unique().on(
+			table.vulnerabilityCandidateId,
+		),
+	}),
+);
 
 export const scanJobsRelations = relations(scanJobs, ({ one, many }) => ({
 	application: one(applications, {
@@ -277,12 +343,23 @@ export const scanJobsRelations = relations(scanJobs, ({ one, many }) => ({
 		fields: [scanJobs.composeId],
 		references: [compose.composeId],
 	}),
+	scanRepositoryTasks: many(scanRepositoryTasks),
 	vulnerabilityCandidates: many(vulnerabilityCandidates),
 	scanModuleTasks: many(scanModuleTasks),
 	scanFunctionTasks: many(scanFunctionTasks),
-	analysisResults: many(analysisResults),
-	verificationResults: many(verificationResults),
+	candidateAnalysisTasks: many(candidateAnalysisTasks),
+	candidateVerificationTasks: many(candidateVerificationTasks),
 }));
+
+export const scanRepositoryTasksRelations = relations(
+	scanRepositoryTasks,
+	({ one }) => ({
+		scanJob: one(scanJobs, {
+			fields: [scanRepositoryTasks.scanJobId],
+			references: [scanJobs.scanJobId],
+		}),
+	}),
+);
 
 export const scanModuleTasksRelations = relations(
 	scanModuleTasks,
@@ -316,31 +393,34 @@ export const vulnerabilityCandidatesRelations = relations(
 			fields: [vulnerabilityCandidates.scanJobId],
 			references: [scanJobs.scanJobId],
 		}),
-		analysisResults: many(analysisResults),
-		verificationResults: many(verificationResults),
+		candidateAnalysisTasks: many(candidateAnalysisTasks),
+		candidateVerificationTasks: many(candidateVerificationTasks),
 	}),
 );
 
-export const analysisResultsRelations = relations(analysisResults, ({ one }) => ({
-	scanJob: one(scanJobs, {
-		fields: [analysisResults.scanJobId],
-		references: [scanJobs.scanJobId],
-	}),
-	vulnerabilityCandidate: one(vulnerabilityCandidates, {
-		fields: [analysisResults.vulnerabilityCandidateId],
-		references: [vulnerabilityCandidates.vulnerabilityCandidateId],
-	}),
-}));
-
-export const verificationResultsRelations = relations(
-	verificationResults,
+export const candidateAnalysisTasksRelations = relations(
+	candidateAnalysisTasks,
 	({ one }) => ({
 		scanJob: one(scanJobs, {
-			fields: [verificationResults.scanJobId],
+			fields: [candidateAnalysisTasks.scanJobId],
 			references: [scanJobs.scanJobId],
 		}),
 		vulnerabilityCandidate: one(vulnerabilityCandidates, {
-			fields: [verificationResults.vulnerabilityCandidateId],
+			fields: [candidateAnalysisTasks.vulnerabilityCandidateId],
+			references: [vulnerabilityCandidates.vulnerabilityCandidateId],
+		}),
+	}),
+);
+
+export const candidateVerificationTasksRelations = relations(
+	candidateVerificationTasks,
+	({ one }) => ({
+		scanJob: one(scanJobs, {
+			fields: [candidateVerificationTasks.scanJobId],
+			references: [scanJobs.scanJobId],
+		}),
+		vulnerabilityCandidate: one(vulnerabilityCandidates, {
+			fields: [candidateVerificationTasks.vulnerabilityCandidateId],
 			references: [vulnerabilityCandidates.vulnerabilityCandidateId],
 		}),
 	}),

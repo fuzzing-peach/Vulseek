@@ -85,12 +85,17 @@ export const initializeStandaloneTraefik = async ({
 			},
 			Binds: [
 				`${MAIN_TRAEFIK_PATH}/traefik.yml:/etc/traefik/traefik.yml`,
-				`${DYNAMIC_TRAEFIK_PATH}:/etc/dokploy/traefik/dynamic`,
+				`${DYNAMIC_TRAEFIK_PATH}:/etc/traefik/dynamic`,
 				"/var/run/docker.sock:/var/run/docker.sock",
 			],
 			PortBindings: portBindings,
 		},
 		Env: env,
+		Cmd: [
+			"--configFile=/etc/traefik/traefik.yml",
+			"--providers.file.directory=/etc/traefik/dynamic",
+			"--providers.file.watch=true",
+		],
 	};
 
 	const docker = await getRemoteDocker(serverId);
@@ -132,6 +137,20 @@ export const initializeTraefikService = async ({
 			ContainerSpec: {
 				Image: imageName,
 				Env: env,
+				Args: [
+					"--api.insecure=true",
+					"--api.dashboard=true",
+					"--providers.swarm=true",
+					"--providers.swarm.endpoint=unix:///var/run/docker.sock",
+					"--providers.swarm.exposedbydefault=false",
+					"--providers.swarm.network=dokploy-network",
+					"--providers.file.directory=/etc/traefik/dynamic",
+					"--providers.file.watch=true",
+					"--entrypoints.web.address=:80",
+					"--entrypoints.websecure.address=:443",
+					"--log.level=DEBUG",
+					"--accesslog=true",
+				],
 				Mounts: [
 					{
 						Type: "bind",
@@ -141,7 +160,7 @@ export const initializeTraefikService = async ({
 					{
 						Type: "bind",
 						Source: DYNAMIC_TRAEFIK_PATH,
-						Target: "/etc/dokploy/traefik/dynamic",
+						Target: "/etc/traefik/dynamic",
 					},
 					{
 						Type: "bind",

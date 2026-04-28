@@ -15,13 +15,13 @@ import {
 	runPostgresBackup,
 	runVolumeBackup,
 } from "@dokploy/server";
-import { db } from "@dokploy/server/dist/db";
+import { db } from "@dokploy/server/db";
 import {
 	backups,
 	schedules,
 	server,
 	volumeBackups,
-} from "@dokploy/server/dist/db/schema";
+} from "@dokploy/server/db/schema";
 import { and, eq } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { scheduleJob } from "./queue.js";

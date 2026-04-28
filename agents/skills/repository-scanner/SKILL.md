@@ -240,6 +240,9 @@ Rules:
 - use arrays, not free-form joined strings
 - use `[]` when a field has no items
 - keep values concise and repository-level
+- do not wrap the object inside keys such as `data`, `result`, `output`, or `repositoryScan`
+- do not include markdown fences, comments, trailing explanatory text, or any non-JSON content
+- after writing the file, reopen it and verify it is valid JSON and still matches this exact top-level schema
 
 ## What `module_plan.json` Should Capture
 
@@ -282,6 +285,9 @@ Rules:
 - `pathListFile` must point to a concrete `file_list.txt`
 - `priority` should be an integer, higher means earlier scheduling
 - prefer fewer, meaningful runtime modules over many tiny fragments
+- do not wrap the `modules` array inside keys such as `modulePlan`, `plan`, `data`, `result`, or `output`
+- do not include markdown fences, comments, trailing explanatory text, or any non-JSON content
+- after writing the file, reopen it and verify the root object still has the exact shape `{ "modules": [...] }`
 
 ## Working Style
 

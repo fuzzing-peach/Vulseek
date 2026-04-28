@@ -162,7 +162,7 @@ export const getCustomGitCloneCommand = async (
 		});
 	}
 	try {
-		const command = [];
+		const command: string[] = [];
 		if (!isHttpOrHttps(customGitUrl)) {
 			if (!customGitSSHKeyId) {
 				command.push(
@@ -385,7 +385,7 @@ export const cloneRawGitRepositoryRemote = async (compose: Compose) => {
 		});
 	}
 	try {
-		const command = [];
+		const command: string[] = [];
 		if (!isHttpOrHttps(customGitUrl)) {
 			if (!customGitSSHKeyId) {
 				command.push(

@@ -6,6 +6,7 @@ import {
 	buildAppName,
 	cleanAppName,
 	compose,
+	renameAppNameBase,
 } from "@dokploy/server/db/schema";
 import {
 	buildCompose,
@@ -261,11 +262,32 @@ export const updateCompose = async (
 	composeId: string,
 	composeData: Partial<Compose>,
 ) => {
+	const currentCompose = await findComposeById(composeId);
 	const { appName, ...rest } = composeData;
+	const nextName = rest.name?.trim();
+	const shouldRenameAppName =
+		typeof nextName === "string" &&
+		nextName.length > 0 &&
+		nextName !== currentCompose.name;
+	const nextAppName = shouldRenameAppName
+		? renameAppNameBase(currentCompose.appName, nextName)
+		: currentCompose.appName;
+
+	if (nextAppName !== currentCompose.appName) {
+		const valid = await validUniqueServerAppName(nextAppName);
+		if (!valid) {
+			throw new TRPCError({
+				code: "CONFLICT",
+				message: "Service with this 'AppName' already exists",
+			});
+		}
+	}
+
 	const composeResult = await db
 		.update(compose)
 		.set({
 			...rest,
+			appName: nextAppName,
 		})
 		.where(eq(compose.composeId, composeId))
 		.returning();

@@ -13,21 +13,21 @@ export const getShell = () => {
 };
 
 export const getPublicIpWithFallback = async () => {
-	// @ts-ignore
-	let ip = null;
+	let ip: string | null = null;
 	try {
 		ip = await publicIpv4();
 	} catch (error) {
 		console.log(
 			"Error obtaining public IPv4 address, falling back to IPv6",
-			// @ts-ignore
-			error.message,
+			error instanceof Error ? error.message : String(error),
 		);
 		try {
 			ip = await publicIpv6();
 		} catch (error) {
-			// @ts-ignore
-			console.error("Error obtaining public IPv6 address", error.message);
+			console.error(
+				"Error obtaining public IPv6 address",
+				error instanceof Error ? error.message : String(error),
+			);
 			ip = null;
 		}
 	}

@@ -1,0 +1,1 @@
+export const DEFAULT_DELTA_COMMIT_WINDOW = 3;

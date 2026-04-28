@@ -4,6 +4,7 @@ import {
 	type apiCreateApplication,
 	applications,
 	buildAppName,
+	renameAppNameBase,
 } from "@dokploy/server/db/schema";
 import { getAdvancedStats } from "@dokploy/server/monitoring/utils";
 import {
@@ -187,11 +188,32 @@ export const updateApplication = async (
 	applicationId: string,
 	applicationData: Partial<Application>,
 ) => {
+	const currentApplication = await findApplicationById(applicationId);
 	const { appName, ...rest } = applicationData;
+	const nextName = rest.name?.trim();
+	const shouldRenameAppName =
+		typeof nextName === "string" &&
+		nextName.length > 0 &&
+		nextName !== currentApplication.name;
+	const nextAppName = shouldRenameAppName
+		? renameAppNameBase(currentApplication.appName, nextName)
+		: currentApplication.appName;
+
+	if (nextAppName !== currentApplication.appName) {
+		const valid = await validUniqueServerAppName(nextAppName);
+		if (!valid) {
+			throw new TRPCError({
+				code: "CONFLICT",
+				message: "Application with this 'AppName' already exists",
+			});
+		}
+	}
+
 	const application = await db
 		.update(applications)
 		.set({
 			...rest,
+			appName: nextAppName,
 		})
 		.where(eq(applications.applicationId, applicationId))
 		.returning();

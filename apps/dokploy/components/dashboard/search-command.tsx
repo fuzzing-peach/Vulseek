@@ -1,7 +1,7 @@
 "use client";
 
 import { BookIcon, CircuitBoard, GlobeIcon } from "lucide-react";
-import { useRouter } from "next/router";
+import { useRouter } from "next/compat/router";
 import React from "react";
 import {
 	extractServices,
@@ -99,6 +99,9 @@ export const SearchCommand = () => {
 									<CommandItem
 										key={project.projectId}
 										onSelect={() => {
+											if (!router) {
+												return;
+											}
 											router.push(
 												`/dashboard/project/${project.projectId}/environment/${productionEnvironment!.environmentId}`,
 											);
@@ -122,6 +125,9 @@ export const SearchCommand = () => {
 									<CommandItem
 										key={application.id}
 										onSelect={() => {
+											if (!router) {
+												return;
+											}
 											router.push(
 												`/dashboard/project/${project.projectId}/environment/${application.environmentId}/profiles/${application.type}/${application.id}`,
 											);
@@ -166,6 +172,9 @@ export const SearchCommand = () => {
 					<CommandGroup heading={"Application"} hidden={true}>
 						<CommandItem
 							onSelect={() => {
+								if (!router) {
+									return;
+								}
 								router.push("/dashboard/projects");
 								setOpen(false);
 							}}
@@ -176,6 +185,9 @@ export const SearchCommand = () => {
 							<>
 								<CommandItem
 									onSelect={() => {
+										if (!router) {
+											return;
+										}
 										router.push("/dashboard/monitoring");
 										setOpen(false);
 									}}
@@ -184,6 +196,9 @@ export const SearchCommand = () => {
 								</CommandItem>
 								<CommandItem
 									onSelect={() => {
+										if (!router) {
+											return;
+										}
 										router.push("/dashboard/traefik");
 										setOpen(false);
 									}}
@@ -192,6 +207,9 @@ export const SearchCommand = () => {
 								</CommandItem>
 								<CommandItem
 									onSelect={() => {
+										if (!router) {
+											return;
+										}
 										router.push("/dashboard/docker");
 										setOpen(false);
 									}}
@@ -200,6 +218,9 @@ export const SearchCommand = () => {
 								</CommandItem>
 								<CommandItem
 									onSelect={() => {
+										if (!router) {
+											return;
+										}
 										router.push("/dashboard/requests");
 										setOpen(false);
 									}}
@@ -210,6 +231,9 @@ export const SearchCommand = () => {
 						)}
 						<CommandItem
 							onSelect={() => {
+								if (!router) {
+									return;
+								}
 								router.push("/dashboard/settings/server");
 								setOpen(false);
 							}}

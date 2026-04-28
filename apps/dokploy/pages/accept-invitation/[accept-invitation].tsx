@@ -1,22 +1,20 @@
-import { useRouter } from "next/router";
+import type { GetServerSidePropsContext } from "next";
 import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth-client";
 
-export const AcceptInvitation = () => {
-	const { query } = useRouter();
+interface AcceptInvitationProps {
+	invitationId: string;
+}
 
-	const invitationId = query["accept-invitation"];
-
-	// const { data: organization } = api.organization.getById.useQuery({
-	//     id: id as string
-	// })
-
+export const AcceptInvitation = ({
+	invitationId,
+}: AcceptInvitationProps) => {
 	return (
 		<div>
 			<Button
 				onClick={async () => {
 					const result = await authClient.organization.acceptInvitation({
-						invitationId: invitationId as string,
+						invitationId,
 					});
 					console.log(result);
 				}}
@@ -28,3 +26,21 @@ export const AcceptInvitation = () => {
 };
 
 export default AcceptInvitation;
+
+export async function getServerSideProps(
+	ctx: GetServerSidePropsContext,
+): Promise<{ props: AcceptInvitationProps } | { notFound: true }> {
+	const invitationId = ctx.params?.["accept-invitation"];
+
+	if (typeof invitationId !== "string") {
+		return {
+			notFound: true,
+		};
+	}
+
+	return {
+		props: {
+			invitationId,
+		},
+	};
+}

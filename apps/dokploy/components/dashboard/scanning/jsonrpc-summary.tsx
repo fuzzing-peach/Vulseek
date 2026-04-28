@@ -13,6 +13,7 @@ type SummaryLine = {
 		| "system"
 		| "reasoning"
 		| "command"
+		| "command_subtitle"
 		| "command_output"
 		| "agent"
 		| "error";
@@ -254,17 +255,19 @@ export const extractJsonRpcSummaryLines = (
 									240,
 								)
 							: "tool";
+				const normalizedToolTitle =
+					title === "Terminal" ? "Command" : title;
 				const webDetail = extractWebToolDetail(update);
-				const normalizedTitle = title.toLowerCase();
+				const normalizedTitle = normalizedToolTitle.toLowerCase();
 				const normalizedWebDetail = webDetail.toLowerCase();
 				const text =
 					webDetail &&
-					(title === "Searching the Web" ||
-						title.startsWith("Searching for:") ||
-						title === "Open page") &&
+					(normalizedToolTitle === "Searching the Web" ||
+						normalizedToolTitle.startsWith("Searching for:") ||
+						normalizedToolTitle === "Open page") &&
 					!normalizedTitle.includes(normalizedWebDetail)
-						? `$ ${title}: ${webDetail}`
-						: `$ ${title}`;
+						? `${normalizedToolTitle}: '${webDetail}'`
+						: normalizedToolTitle;
 				lines.push({
 					id: toolCallId,
 					kind: "command",
@@ -506,12 +509,16 @@ const getSummaryLineClassName = (line: SummaryLine) => {
 		return "text-sm font-semibold text-destructive";
 	}
 
-	if (line.kind === "command" && line.text.startsWith("$ ")) {
+	if (line.kind === "command_output") {
+		return "text-sm font-normal text-emerald-700/95";
+	}
+
+	if (line.kind === "command") {
 		return "text-sm font-semibold tracking-tight text-sky-700";
 	}
 
-	if (line.kind === "command_output") {
-		return "text-sm font-normal text-emerald-700/95";
+	if (line.kind === "command_subtitle") {
+		return "text-xs font-medium text-slate-500";
 	}
 
 	if (line.kind === "agent") {
@@ -522,22 +529,19 @@ const getSummaryLineClassName = (line: SummaryLine) => {
 };
 
 const getSummaryLinePrefix = (line: SummaryLine) => {
-	if (line.kind === "command" && line.text.startsWith("$ ")) {
+	if (line.kind === "command") {
 		return "$";
 	}
 
-	if (line.kind === "command") {
-		return "";
+	if (line.kind === "command_subtitle") {
+		return ">";
 	}
 
 	return ">";
 };
 
 const renderSummaryLineContent = (line: SummaryLine) => {
-	const content =
-		line.kind === "command" && line.text.startsWith("$ ")
-			? line.text.slice(2)
-			: line.text;
+	const content = line.text;
 
 	return (
 		<div className="grid grid-cols-[20px_minmax(0,1fr)] gap-3">
@@ -545,7 +549,11 @@ const renderSummaryLineContent = (line: SummaryLine) => {
 				{getSummaryLinePrefix(line)}
 			</div>
 			<div
-				title={line.kind === "command" ? content : undefined}
+				title={
+					line.kind === "command" || line.kind === "command_subtitle"
+						? content
+						: undefined
+				}
 				style={
 					line.kind === "command"
 						? {

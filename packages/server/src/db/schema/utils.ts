@@ -28,3 +28,21 @@ export const buildAppName = (type: string, baseAppName?: string) => {
 	}
 	return generateAppName(type);
 };
+
+export const renameAppNameBase = (
+	currentAppName: string,
+	nextBaseAppName?: string | null,
+) => {
+	const cleanedBaseAppName = cleanAppName(nextBaseAppName ?? undefined);
+	if (!cleanedBaseAppName) {
+		return currentAppName;
+	}
+
+	const currentSegments = currentAppName.split("-");
+	const maybeSuffix = currentSegments.at(-1);
+	if (maybeSuffix && /^[a-z0-9]{6}$/.test(maybeSuffix)) {
+		return `${cleanedBaseAppName}-${maybeSuffix}`;
+	}
+
+	return `${cleanedBaseAppName}-${generatePassword(6)}`;
+};

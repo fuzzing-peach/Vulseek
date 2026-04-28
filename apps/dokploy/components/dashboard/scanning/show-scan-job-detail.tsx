@@ -28,7 +28,7 @@ import {
 	JsonRpcSummaryPanel,
 	type JsonRpcStreamMessage,
 } from "@/components/dashboard/scanning/jsonrpc-summary";
-import { useJsonRpcStream } from "@/components/dashboard/scanning/use-jsonrpc-stream";
+import { useSandboxAgentSession } from "@/components/dashboard/scanning/use-sandbox-agent-session";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
 import { DateTooltip } from "@/components/shared/date-tooltip";
@@ -258,11 +258,10 @@ const LiveCandidateAgentOutput = ({
 	initialMessages: JsonRpcStreamMessage[];
 }) => {
 	const requestedStage = stage === "verifying" ? "verifying" : "analyzing";
-	const { messages } = useJsonRpcStream({
-		url:
-			candidateId
-				? `/api/scan/candidates/${candidateId}/jsonrpc-stream?stage=${requestedStage}`
-				: null,
+	const { messages } = useSandboxAgentSession({
+		kind: "candidate",
+		vulnerabilityCandidateId: candidateId,
+		stage: requestedStage,
 		enabled: !!candidateId,
 		initialMessages,
 	});
@@ -283,19 +282,12 @@ const LiveScannerAgentOutput = ({
 	scanFunctionTaskId?: string;
 	initialMessages: JsonRpcStreamMessage[];
 }) => {
-	const query = new URLSearchParams({ stage });
-	if (scanModuleTaskId) {
-		query.set("scanModuleTaskId", scanModuleTaskId);
-	}
-	if (scanFunctionTaskId) {
-		query.set("scanFunctionTaskId", scanFunctionTaskId);
-	}
-
-	const { messages } = useJsonRpcStream({
-		url:
-			scanJobId
-				? `/api/scan/jobs/${scanJobId}/scanner-jsonrpc-stream?${query.toString()}`
-				: null,
+	const { messages } = useSandboxAgentSession({
+		kind: "scanner",
+		scanJobId,
+		stage,
+		scanModuleTaskId,
+		scanFunctionTaskId,
 		enabled: !!scanJobId,
 		initialMessages,
 	});

@@ -23,6 +23,8 @@ import {
 	readScanJobFileContent,
 	startCheckoutScanEnvironment,
 	updateScanJobNote,
+	findScanJobSandboxAgentSession,
+	findCandidateSandboxAgentSession,
 } from "@dokploy/server";
 import { TRPCError } from "@trpc/server";
 import {
@@ -760,6 +762,108 @@ export const scanRouter = createTRPCRouter({
 				candidateId: candidate.vulnerabilityCandidateId,
 				filePath: input.filePath,
 			});
+		}),
+
+	scannerSession: protectedProcedure
+		.input(
+			z.object({
+				scanJobId: z.string().min(1),
+				stage: z.enum([
+					"repository_scanning",
+					"module_scanning",
+					"function_scanning",
+				]),
+				scanModuleTaskId: z.string().min(1).optional(),
+				scanFunctionTaskId: z.string().min(1).optional(),
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			const scanJob = await findScanJobById(input.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to access this scan session",
+				});
+			}
+
+			const session = await findScanJobSandboxAgentSession(input);
+			if (!session) {
+				return null;
+			}
+
+			return {
+				sessionId: session.sessionId,
+				provider: session.provider,
+				containerName: session.containerName,
+				baseUrl: session.baseUrl,
+			};
+		}),
+
+	candidateSession: protectedProcedure
+		.input(
+			z.object({
+				vulnerabilityCandidateId: z.string().min(1),
+				stage: z.enum(["analyzing", "verifying"]),
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			const candidate = await findVulnerabilityCandidateById(
+				input.vulnerabilityCandidateId,
+			);
+			const scanJob = await findScanJobById(candidate.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to access this candidate session",
+				});
+			}
+
+			const session = await findCandidateSandboxAgentSession({
+				candidateId: input.vulnerabilityCandidateId,
+				stage: input.stage,
+			});
+			if (!session) {
+				return null;
+			}
+
+			return {
+				sessionId: session.sessionId,
+				provider: session.provider,
+				containerName: session.containerName,
+				baseUrl: session.baseUrl,
+			};
 		}),
 
 	statusView: protectedProcedure

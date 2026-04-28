@@ -279,6 +279,7 @@ start_dokploy() {
         --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
         --mount type=bind,source="${effective_scan_context_host_path}",target=/scan-context \
         --mount type=volume,source=dokploy_data,target=/etc/dokploy \
+        --mount type=volume,source=traefik_data,target=/etc/traefik \
         --mount type=volume,source=docker_config,target=/root/.docker \
         --constraint "'node.role==manager'" \
         "$IMAGE_NAME" 2>/dev/null || {

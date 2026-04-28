@@ -1,6 +1,5 @@
----
 name: tree-sitter
-description: Use the bundled tree-sitter function extraction tool to enumerate concrete function definitions from source files, currently optimized for C/C++. Use when module-level scanning needs a reliable function inventory before generating function scan tasks.
+description: Use tree-sitter-based parsing to enumerate concrete function definitions from source files, currently optimized for C/C++. Use when module-level scanning needs a reliable function inventory before generating function scan tasks.
 ---
 
 # Tree-Sitter
@@ -12,25 +11,17 @@ Current first-class support:
 - C
 - C++
 
-## Bundled Tool
+## Extraction Method
 
-Use the bundled extractor from the active Codex home, not a hard-coded `/root/.codex` path.
+Use tree-sitter directly through the tooling available in the environment.
 
-Preferred invocation:
+Do not rely on the deprecated `extract_functions.py` helper.
 
-```bash
-python3 "$CODEX_HOME/skills/tools/extract_functions.py" \
-  --file-list <file-list.txt> \
-  --out <output.json>
-```
+You may use:
 
-If `CODEX_HOME` is not exported, resolve the script relative to this skill directory:
-
-```bash
-python3 ../../tools/extract_functions.py \
-  --file-list <file-list.txt> \
-  --out <output.json>
-```
+- tree-sitter bindings already installed in the image
+- a small one-off parser script you write for the current run
+- an equivalent tree-sitter-capable tool already present in the environment
 
 Expected input:
 
@@ -65,8 +56,8 @@ Expected output:
 ## Typical Workflow
 
 1. obtain the module file list
-2. run `extract_functions.py`
-3. inspect the resulting JSON
+2. run tree-sitter-based extraction over the module file list
+3. inspect the resulting function inventory
 4. remove clearly irrelevant functions if needed
 5. write `function_plan.json`
 

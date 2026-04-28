@@ -310,7 +310,13 @@ export const getGitlabBranches = async (input: {
 
 	const gitlabProvider = await findGitlabById(input.gitlabId);
 
-	const allBranches = [];
+	const allBranches: Array<{
+		id: string;
+		name: string;
+		commit: {
+			id: string;
+		};
+	}> = [];
 	let page = 1;
 	const perPage = 100; // GitLab's max per page is 100
 
@@ -470,7 +476,7 @@ export const testGitlabConnection = async (
 
 export const validateGitlabProvider = async (gitlabProvider: Gitlab) => {
 	try {
-		const allProjects = [];
+		const allProjects: unknown[] = [];
 		let page = 1;
 		const perPage = 100; // GitLab's max per page is 100
 

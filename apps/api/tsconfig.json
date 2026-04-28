@@ -4,10 +4,12 @@
 		"module": "ESNext",
 		"moduleResolution": "Node",
 		"strict": true,
+		"noImplicitAny": false,
 		"skipLibCheck": true,
 		"outDir": "dist",
 		"jsx": "react-jsx",
-		"jsxImportSource": "hono/jsx",
+		"allowSyntheticDefaultImports": true,
+		"esModuleInterop": true,
 		"baseUrl": ".",
 		"paths": {
 			"@/*": ["./*"],

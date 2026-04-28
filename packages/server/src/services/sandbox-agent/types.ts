@@ -13,6 +13,7 @@ export type SandboxAgentRuntimeArtifacts = {
 
 export type SandboxAgentServerHandle = {
 	baseUrl: string;
+	publicBaseUrl: string;
 	host: string;
 	port: number;
 };

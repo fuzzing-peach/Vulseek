@@ -44,6 +44,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
+      args:
+        HTTP_PROXY: http://172.17.0.1:9870
+        HTTPS_PROXY: http://172.17.0.1:9870
+        http_proxy: http://172.17.0.1:9870
+        https_proxy: http://172.17.0.1:9870
     container_name: dokploy-dev
     restart: unless-stopped
     depends_on:
@@ -150,4 +155,3 @@ networks:
   dokploy-dev-network:
     driver: bridge
     name: dokploy-dev-network
-

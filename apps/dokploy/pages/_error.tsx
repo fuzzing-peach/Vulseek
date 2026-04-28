@@ -8,7 +8,7 @@ interface Props {
 	error?: Error;
 }
 
-export default function Custom404({ statusCode, error }: Props) {
+export default function CustomError({ statusCode, error }: Props) {
 	const displayStatusCode = statusCode || 400;
 	return (
 		<div className="h-screen">
@@ -96,7 +96,7 @@ export default function Custom404({ statusCode, error }: Props) {
 }
 
 // @ts-ignore
-Error.getInitialProps = ({ res, err }: NextPageContext) => {
+CustomError.getInitialProps = ({ res, err }: NextPageContext) => {
 	const statusCode = res ? res.statusCode : err ? err.statusCode : 404;
 	return { statusCode, error: err };
 };

@@ -167,7 +167,7 @@ export const getRailpackCommand = (
 	];
 
 	// Add secrets properly formatted
-	const exportEnvs = [];
+	const exportEnvs: string[] = [];
 	for (const pair of envVariables) {
 		const [key, value] = parseEnvironmentKeyValuePair(pair);
 		if (key && value) {

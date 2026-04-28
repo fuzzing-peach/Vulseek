@@ -5,6 +5,7 @@ import {
 	initializeSandboxAgentRuntimeFiles,
 	persistSandboxAgentRuntimeMetadata,
 } from "./persistence";
+import { configureSandboxAgentTraefikProxy } from "../scan/runtime/sandbox-agent-traefik";
 import type {
 	PrepareSandboxAgentRuntimeResult,
 	SandboxAgentProvider,
@@ -90,11 +91,17 @@ const startSandboxAgentServerInContainer = async (
 	const containerIp = await inspectContainerIpAddress(input.containerName);
 	const baseUrl = `http://${containerIp}:${DEFAULT_SANDBOX_AGENT_CONTAINER_PORT}`;
 	await waitForSandboxAgentHealth(baseUrl);
+	const traefikProxy = await configureSandboxAgentTraefikProxy({
+		routeId: input.containerName,
+		targetHost: containerIp,
+		targetPort: DEFAULT_SANDBOX_AGENT_CONTAINER_PORT,
+	});
 
 	return {
 		artifacts,
 		server: {
 			baseUrl,
+			publicBaseUrl: traefikProxy.baseUrl,
 			host: containerIp,
 			port: DEFAULT_SANDBOX_AGENT_CONTAINER_PORT,
 		},

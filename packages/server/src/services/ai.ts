@@ -182,8 +182,20 @@ export const suggestVariants = async ({
       `,
 		});
 
-		if (object?.suggestions?.length) {
-			const result = [];
+			if (object?.suggestions?.length) {
+				type Suggestion = (typeof object.suggestions)[number];
+				const result: Array<
+					Suggestion & {
+					dockerCompose: string;
+					envVariables: Array<{ name: string; value: string }>;
+					domains: Array<{
+						host: string;
+						port: number;
+						serviceName: string;
+					}>;
+					configFiles?: Array<{ filePath: string; content: string }>;
+				}
+			> = [];
 			for (const suggestion of object.suggestions) {
 				try {
 					const { object: docker } = await generateObject({

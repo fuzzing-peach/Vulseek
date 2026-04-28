@@ -3,7 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { BotIcon } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -72,19 +72,9 @@ export const ShowAgentProfile = ({ applicationId }: Props) => {
 
 	const enabledProfiles =
 		agentProfiles?.filter((profile) => profile.isEnabled) ?? [];
-	const defaultAgentProfile = useMemo(
-		() =>
-			enabledProfiles.find(
-				(profile) => profile.agentProfileId === data?.agentProfileId,
-			) ||
-			enabledProfiles[0] ||
-			null,
-		[enabledProfiles, data?.agentProfileId],
-	);
 	const resolveAgentProfileFieldValue = (
 		stageAgentProfileId?: string | null,
-	) =>
-		stageAgentProfileId || defaultAgentProfile?.agentProfileId || "";
+	) => stageAgentProfileId || data?.agentProfileId || "";
 
 	const scanForm = useForm<ScanSettingsSchema>({
 		defaultValues: {
@@ -141,7 +131,6 @@ export const ShowAgentProfile = ({ applicationId }: Props) => {
 		scanForm,
 		analysisForm,
 		verificationForm,
-		data?.agentProfileId,
 	]);
 
 	const saveSettings = async (

@@ -1,0 +1,99 @@
+FROM ubuntu:24.04 AS tools
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG CODEQL_VERSION="2.20.6"
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
+ENV HTTP_PROXY=$HTTP_PROXY \
+    HTTPS_PROXY=$HTTPS_PROXY \
+    NO_PROXY=$NO_PROXY \
+    http_proxy=$http_proxy \
+    https_proxy=$https_proxy \
+    no_proxy=$no_proxy
+
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.ustc.edu.cn/ubuntu/|g; s|http://security.ubuntu.com/ubuntu/|http://mirrors.ustc.edu.cn/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl wget git jq unzip zip tar xz-utils file gnupg \
+    openssh-client ripgrep vim nano less rsync tree \
+    build-essential cmake ninja-build make autoconf automake libtool pkg-config \
+    clang clangd lldb lld gdb \
+    python3 python3-pip python3-venv \
+    pipx \
+    software-properties-common \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN sed -i 's|http://mirrors.ustc.edu.cn/ubuntu/|https://mirrors.ustc.edu.cn/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
+
+# Node.js (LTS)
+RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Semgrep CLI
+RUN PIPX_BIN_DIR=/usr/local/bin pipx install semgrep \
+    && semgrep --version
+
+# Vulseek parsing helpers
+RUN python3 -m venv /opt/vulseek-venv \
+    && /opt/vulseek-venv/bin/pip install --upgrade pip \
+    && /opt/vulseek-venv/bin/pip install \
+      tree-sitter \
+      tree-sitter-c \
+      tree-sitter-cpp
+
+ENV PATH="/opt/vulseek-venv/bin:$PATH"
+
+# LLM Agent CLIs
+# Keep Claude non-fatal to avoid blocking build if registry/network fails.
+RUN npm install -g @anthropic-ai/claude-code || true
+RUN npm install -g @sandbox-agent/cli@0.4.x \
+    && sandbox-agent --help >/dev/null
+RUN npm install -g @openai/codex \
+    && codex --version
+
+# Serena
+ENV PATH="/root/.local/bin:$PATH" \
+    UV_TOOL_BIN_DIR="/usr/local/bin"
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh \
+    && uv --version \
+    && uv tool install -p 3.13 serena-agent@latest --prerelease=allow \
+    && mkdir -p /root/.serena \
+    && serena init -b LSP \
+    && serena setup codex \
+    && serena setup claude-code \
+    && sed -i 's#^ls_specific_settings: {}#ls_specific_settings:\n  cpp:\n    ls_path: "/usr/bin/clangd"#' /root/.serena/serena_config.yml \
+    && sed -i 's#^ignored_paths: \[\]#ignored_paths:\n- "/scan-context"\n- "/scan-context/**"#' /root/.serena/serena_config.yml \
+    && sed -i 's#^project_serena_folder_location:.*#project_serena_folder_location: "/scan-context/.serena"#' /root/.serena/serena_config.yml \
+    && serena --help >/dev/null
+
+# CodeQL CLI
+RUN mkdir -p /opt/codeql \
+    && curl -L "https://github.com/github/codeql-cli-binaries/releases/download/v${CODEQL_VERSION}/codeql-linux64.zip" -o /tmp/codeql.zip \
+    && unzip -q /tmp/codeql.zip -d /opt \
+    && rm -f /tmp/codeql.zip \
+    && ln -sf /opt/codeql/codeql /usr/local/bin/codeql
+RUN codeql pack download codeql/cpp-all
+
+FROM tools AS final
+
+ARG GIT_URL="<GIT_URL>"
+ARG GIT_BRANCH="<GIT_BRANCH>"
+ARG ENABLE_SUBMODULES="false"
+
+WORKDIR /workspace
+
+RUN if [ "${ENABLE_SUBMODULES}" = "true" ]; then \
+      git clone --progress --recursive --branch "${GIT_BRANCH}" "${GIT_URL}" repo; \
+    else \
+      git clone --progress --branch "${GIT_BRANCH}" "${GIT_URL}" repo; \
+    fi
+
+WORKDIR /workspace/repo
+
+CMD ["/bin/bash"]
