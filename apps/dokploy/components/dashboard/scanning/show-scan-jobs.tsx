@@ -19,12 +19,10 @@ interface Props {
 }
 
 const statusColorMap = {
-	queued: "bg-muted-foreground",
-	scanning: "bg-yellow-500",
-	analyzing: "bg-sky-500",
-	verifying: "bg-violet-500",
-	completed: "bg-green-500",
-	failed: "bg-destructive",
+	pending: "bg-muted-foreground",
+	running: "bg-yellow-500",
+	finished: "bg-green-500",
+	canceled: "bg-destructive",
 } as const;
 
 const formatJobTitle = (job: {

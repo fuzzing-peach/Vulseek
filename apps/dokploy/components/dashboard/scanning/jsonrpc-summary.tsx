@@ -164,6 +164,7 @@ export const extractJsonRpcSummaryLines = (
 	const commandOutputByItemId = new Map<string, string>();
 	const reasoningByItemId = new Map<string, string>();
 	const commandByItemId = new Map<string, string>();
+	const pendingTerminalToolCallIds = new Set<string>();
 	const reasoningLineIndexByItemId = new Map<string, number>();
 	const agentMessageByItemId = new Map<string, string>();
 	const agentLineIndexByItemId = new Map<string, number>();
@@ -283,49 +284,51 @@ export const extractJsonRpcSummaryLines = (
 					typeof update.toolCallId === "string"
 						? update.toolCallId
 						: `tool-${entry.line}`;
-				const title =
-					typeof update.title === "string"
-						? update.title
-						: typeof update.rawInput === "object" && update.rawInput
-							? trimSummary(
-									`${String((update.rawInput as Record<string, unknown>).server || "tool")}/${String((update.rawInput as Record<string, unknown>).tool || "call")}`,
-									240,
-								)
-							: "tool";
-				const normalizedToolTitle =
-					title === "Terminal" ? "Command" : title;
-				const webDetail = extractWebToolDetail(update);
-				const normalizedTitle = normalizedToolTitle.toLowerCase();
-				const normalizedWebDetail = webDetail.toLowerCase();
-				const text =
-					webDetail &&
-					(normalizedToolTitle === "Searching the Web" ||
-						normalizedToolTitle.startsWith("Searching for:") ||
-						normalizedToolTitle === "Open page") &&
-					!normalizedTitle.includes(normalizedWebDetail)
-						? `${normalizedToolTitle}: '${webDetail}'`
-						: normalizedToolTitle;
-				lines.push({
-					id: toolCallId,
-					kind: "command",
-					text,
-				});
+					const title =
+						typeof update.title === "string"
+							? update.title
+							: typeof update.rawInput === "object" && update.rawInput
+								? trimSummary(
+										`${String((update.rawInput as Record<string, unknown>).server || "tool")}/${String((update.rawInput as Record<string, unknown>).tool || "call")}`,
+										240,
+									)
+								: "tool";
+						const normalizedToolTitle =
+							title === "Terminal" ? "Command" : title;
+						if (title === "Terminal") {
+							pendingTerminalToolCallIds.add(toolCallId);
+							continue;
+						}
+						const normalizedTitle = normalizedToolTitle.toLowerCase();
+						const text = normalizedTitle.includes("skill")
+							? "Skill"
+							: normalizedToolTitle.startsWith("mcp_")
+								? "MCP"
+								: normalizedToolTitle;
+						lines.push({
+							id: toolCallId,
+							kind: "command",
+						text,
+					});
 				continue;
 			}
 
-			if (sessionUpdate === "tool_call_update") {
-				const toolCallId =
-					typeof update.toolCallId === "string" ? update.toolCallId : "";
-				const output = trimSummary(
-					getTextContent(update.content) ||
-						getTextContent(update.rawOutput),
-					240,
-				);
-				if (output) {
-					lines.push({
-						id: `${toolCallId || "tool"}-output-${entry.line}`,
-						kind: "command_output",
-						text: output,
+				if (sessionUpdate === "tool_call_update") {
+					const toolCallId =
+						typeof update.toolCallId === "string" ? update.toolCallId : "";
+					if (toolCallId && pendingTerminalToolCallIds.has(toolCallId)) {
+						continue;
+				}
+					const output = trimSummary(
+						getTextContent(update.content) ||
+								getTextContent(update.rawOutput),
+							240,
+						);
+						if (output) {
+							lines.push({
+								id: `${toolCallId || "tool"}-output-${entry.line}`,
+								kind: "command_output",
+							text: output,
 					});
 				}
 				continue;
@@ -399,23 +402,26 @@ export const extractJsonRpcSummaryLines = (
 			continue;
 		}
 
-		if (method === "item/started") {
-			const item = (params.item as Record<string, unknown> | undefined) || {};
-			const itemType = typeof item.type === "string" ? item.type : "";
-			const itemId = typeof item.id === "string" ? item.id : "";
-			if (itemType === "commandExecution") {
-				const command =
-					typeof item.command === "string" ? trimSummary(item.command) : "command";
-				if (itemId) {
-					commandByItemId.set(itemId, command);
+			if (method === "item/started") {
+				const item = (params.item as Record<string, unknown> | undefined) || {};
+				const itemType = typeof item.type === "string" ? item.type : "";
+				const itemId = typeof item.id === "string" ? item.id : "";
+				if (itemType === "commandExecution") {
+					const rawCommand =
+						typeof item.command === "string" ? trimSummary(item.command) : "";
+					if (itemId && rawCommand) {
+						commandByItemId.set(itemId, rawCommand);
+						pendingTerminalToolCallIds.delete(itemId);
+					}
+					if (rawCommand) {
+						lines.push({
+							id: `line-${entry.line}`,
+							kind: "command",
+							text: `$ ${rawCommand}`,
+						});
+					}
+					continue;
 				}
-				lines.push({
-					id: `line-${entry.line}`,
-					kind: "command",
-					text: `$ ${command}`,
-				});
-				continue;
-			}
 			if (itemType === "reasoning") {
 				const lineId = itemId || `line-${entry.line}`;
 				reasoningLineIndexByItemId.set(lineId, lines.length);
@@ -428,18 +434,29 @@ export const extractJsonRpcSummaryLines = (
 			}
 		}
 
-		if (method === "item/completed") {
-			const item = (params.item as Record<string, unknown> | undefined) || {};
-			const itemType = typeof item.type === "string" ? item.type : "";
-			const itemId = typeof item.id === "string" ? item.id : "";
+			if (method === "item/completed") {
+				const item = (params.item as Record<string, unknown> | undefined) || {};
+				const itemType = typeof item.type === "string" ? item.type : "";
+				const itemId = typeof item.id === "string" ? item.id : "";
 
-			if (itemType === "commandExecution") {
-				const aggregatedOutput =
-					typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : "";
-				const command = commandByItemId.get(itemId) || "command";
-				const output = summarizeCommandResult(
-					aggregatedOutput || commandOutputByItemId.get(itemId) || "",
-					command,
+				if (itemType === "commandExecution") {
+					const aggregatedOutput =
+						typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : "";
+					const hadConcreteCommand = commandByItemId.has(itemId);
+					const command = commandByItemId.get(itemId) || "Command";
+					if (!hadConcreteCommand) {
+						lines.push({
+							id: `${itemId || "command"}-fallback-${entry.line}`,
+							kind: "command",
+							text: "$ Command",
+						});
+					}
+					if (itemId) {
+						pendingTerminalToolCallIds.delete(itemId);
+					}
+					const output = summarizeCommandResult(
+						aggregatedOutput || commandOutputByItemId.get(itemId) || "",
+						command,
 				);
 				if (output) {
 					lines.push({
@@ -602,21 +619,12 @@ const renderSummaryLineContent = (line: SummaryLine) => {
 				{getSummaryLinePrefix(line)}
 			</div>
 			<div
+				className="line-clamp-3 whitespace-pre-wrap break-words"
 				title={
 					line.kind === "command" ||
 					line.kind === "command_subtitle" ||
 					line.kind === "prompt"
 						? content
-						: undefined
-				}
-				style={
-					line.kind === "command"
-						? {
-								display: "-webkit-box",
-								WebkitBoxOrient: "vertical",
-								WebkitLineClamp: 2,
-								overflow: "hidden",
-						  }
 						: undefined
 				}
 			>

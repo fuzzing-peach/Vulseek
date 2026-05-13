@@ -74,7 +74,7 @@ type DirectoryCacheEntry = {
 
 type ScanJobTab =
 	| "overview"
-	| "stream"
+	| "tasks"
 	| "analysis"
 	| "verify"
 	| "candidates"
@@ -99,17 +99,44 @@ const RESULT_SHORT_LABELS: Record<string, string> = {
 const formatResultLabel = (value: string) =>
 	value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 
+const formatTaskRuntime = (
+	startedAt: string | null | undefined,
+	nowMs: number,
+) => {
+	if (!startedAt) {
+		return "-";
+	}
+	const startedAtMs = new Date(startedAt).getTime();
+	if (!Number.isFinite(startedAtMs)) {
+		return "-";
+	}
+	const totalSeconds = Math.max(0, Math.floor((nowMs - startedAtMs) / 1000));
+	const hours = Math.floor(totalSeconds / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const seconds = totalSeconds % 60;
+	if (hours > 0) {
+		return `${hours}h ${minutes}m`;
+	}
+	if (minutes > 0) {
+		return `${minutes}m ${seconds}s`;
+	}
+	return `${seconds}s`;
+};
+
 const resolveRequestedTab = (value: string | string[] | undefined): ScanJobTab => {
 	const rawTab = typeof value === "string" ? value : Array.isArray(value) ? value[0] : "";
 	if (
 		rawTab === "overview" ||
-		rawTab === "stream" ||
+		rawTab === "tasks" ||
 		rawTab === "analysis" ||
 		rawTab === "verify" ||
 		rawTab === "candidates" ||
 		rawTab === "files"
 	) {
 		return rawTab;
+	}
+	if (rawTab === "stream") {
+		return "tasks";
 	}
 	if (rawTab === "status") {
 		return "analysis";
@@ -260,7 +287,7 @@ const LiveCandidateAgentOutput = ({
 	return <JsonRpcSummaryPanel messages={messages} />;
 };
 
-const LiveScannerAgentOutput = ({
+const LiveTaskAgentOutput = ({
 	taskId,
 }: {
 	taskId: string;
@@ -270,7 +297,7 @@ const LiveScannerAgentOutput = ({
 		enabled: !!taskId,
 	});
 
-	return <JsonRpcSummaryPanel messages={messages} />;
+	return <JsonRpcSummaryPanel messages={messages} maxHeightClassName="max-h-32" />;
 };
 
 const CandidateWorkflowSection = ({
@@ -384,51 +411,35 @@ const CandidateWorkflowSection = ({
 );
 
 const getScanJobStatusLabel = (status?: string) => {
-	if (status === "queued") {
-		return "Queued";
+	if (status === "pending") {
+		return "Pending";
 	}
 
-	if (status === "scanning") {
-		return "Scanning";
+	if (status === "running") {
+		return "Running";
 	}
 
-	if (status === "analyzing") {
-		return "Analyzing";
+	if (status === "finished") {
+		return "Finished";
 	}
 
-	if (status === "verifying") {
-		return "Verifying";
+	if (status === "canceled") {
+		return "Canceled";
 	}
 
-	if (status === "completed") {
-		return "Completed";
-	}
-
-	if (status === "failed") {
-		return "Failed";
-	}
-
-	return "Queued";
+	return "Pending";
 };
 
 const getScanJobStatusClassName = (status?: string) => {
-	if (status === "completed") {
+	if (status === "finished") {
 		return "text-green-600";
 	}
 
-	if (status === "failed") {
+	if (status === "canceled") {
 		return "text-destructive";
 	}
 
-	if (status === "analyzing") {
-		return "text-sky-600";
-	}
-
-	if (status === "verifying") {
-		return "text-violet-600";
-	}
-
-	if (status === "scanning") {
+	if (status === "running") {
 		return "text-amber-600";
 	}
 
@@ -482,7 +493,7 @@ const getVerificationTruthBadge = (
 	};
 };
 
-const getScannerStageLabel = (stage?: string) => {
+const getTaskStageLabel = (stage?: string) => {
 	if (stage === "repository_scanning") {
 		return "Repository";
 	}
@@ -492,7 +503,60 @@ const getScannerStageLabel = (stage?: string) => {
 	if (stage === "function_scanning") {
 		return "Function";
 	}
-	return "Scanner";
+	if (stage === "analyzing") {
+		return "Analysis";
+	}
+	if (stage === "verifying") {
+		return "Verification";
+	}
+	return "Task";
+};
+
+const getTaskStatusLabel = (status?: string) => {
+	if (!status) {
+		return "-";
+	}
+	return status.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const getTaskStatusBadgeClassName = (status?: string) => {
+	if (status === "completed") {
+		return "border-emerald-200 bg-emerald-100 text-emerald-700";
+	}
+	if (status === "failed") {
+		return "border-red-200 bg-red-100 text-red-700";
+	}
+	if (status === "canceled") {
+		return "border-amber-200 bg-amber-100 text-amber-700";
+	}
+	return "border-muted-foreground/20 bg-muted text-muted-foreground";
+};
+
+const RUNNING_TASK_STAGE_ORDER: Record<string, number> = {
+	repository_scanning: 0,
+	module_scanning: 1,
+	function_scanning: 2,
+	analyzing: 3,
+	verifying: 4,
+};
+
+const getQueueProgressClassName = (queueId: string) => {
+	if (queueId === "repository") {
+		return "h-3 bg-secondary/70 [&>div]:bg-sky-500";
+	}
+	if (queueId === "module") {
+		return "h-3 bg-secondary/70 [&>div]:bg-amber-500";
+	}
+	if (queueId === "function") {
+		return "h-3 bg-secondary/70 [&>div]:bg-zinc-500";
+	}
+	if (queueId === "analysis") {
+		return "h-3 bg-secondary/70 [&>div]:bg-emerald-500";
+	}
+	if (queueId === "verification") {
+		return "h-3 bg-secondary/70 [&>div]:bg-violet-500";
+	}
+	return "h-3 bg-secondary/70 [&>div]:bg-primary";
 };
 
 export const ShowScanJobDetail = ({
@@ -538,6 +602,7 @@ export const ShowScanJobDetail = ({
 	const [directoryCache, setDirectoryCache] = useState<
 		Record<string, DirectoryCacheEntry>
 	>({});
+	const [runtimeNowMs, setRuntimeNowMs] = useState(() => Date.now());
 	const restoredCandidateScrollKeyRef = useRef<string | null>(null);
 	const isApplyingQueryStateRef = useRef(false);
 
@@ -566,13 +631,9 @@ export const ShowScanJobDetail = ({
 			{ scanJobId, filePath: selectedFilePath || "" },
 			{ enabled: !!scanJobId && !!selectedFilePath },
 		);
-	const retryFailedScanningTasksMutation =
-		api.scan.retryFailedScanningTasks.useMutation();
+	const retryFailedTasksMutation = api.scan.retryFailedTasks.useMutation();
+	const cancelScanJobMutation = api.scan.cancel.useMutation();
 	const updateNoteMutation = api.scan.updateNote.useMutation();
-	const retryFailedAnalysisTasksMutation =
-		api.scan.retryFailedAnalysisTasks.useMutation();
-	const retryFailedVerificationTasksMutation =
-		api.scan.retryFailedVerificationTasks.useMutation();
 	const rootDirectoryQuery = api.scan.listDirectory.useQuery(
 		{ scanJobId },
 		{
@@ -597,6 +658,8 @@ export const ShowScanJobDetail = ({
 	);
 
 	const isNoteDirty = (scanJob?.note ?? "") !== noteDraft;
+	const canCancelScanJob =
+		scanJob?.status === "pending" || scanJob?.status === "running";
 
 	const candidateListQueryState = useMemo(
 		() => parseCandidateListQueryState(router.query),
@@ -712,7 +775,7 @@ export const ShowScanJobDetail = ({
 			completed,
 			total: 1,
 			percent: completed * 100,
-			status: statusView?.scan.repositoryTaskStatus || "queued",
+			status: statusView?.scan.repositoryTaskStatus || "pending",
 		};
 	}, [statusView?.scan.repositoryTaskStatus]);
 	const moduleScanningProgress = useMemo(() => {
@@ -730,7 +793,7 @@ export const ShowScanJobDetail = ({
 						? "failed"
 						: total > 0
 							? "running"
-							: "queued",
+							: "pending",
 		};
 	}, [
 		statusView?.summary.moduleTasksCompleted,
@@ -752,23 +815,27 @@ export const ShowScanJobDetail = ({
 						? "failed"
 						: total > 0
 							? "running"
-							: "queued",
+							: "pending",
 		};
 	}, [
 		statusView?.summary.functionTasksCompleted,
 		statusView?.summary.functionTasksFailed,
 		statusView?.summary.functionTasksTotal,
 	]);
-	const failedModuleTasksCount = statusView?.summary.moduleTasksFailed || 0;
-	const failedFunctionTasksCount = statusView?.summary.functionTasksFailed || 0;
-	const totalFailedScanningTasks =
-		failedModuleTasksCount + failedFunctionTasksCount;
-	const canRetryFailedScanningTasks =
+	const totalFailedTasks = useMemo(
+		() =>
+			(statusView?.queuePendingCounts || []).reduce(
+				(total, queue) => total + queue.failedCount,
+				0,
+			),
+		[statusView?.queuePendingCounts],
+	);
+	const canRetryFailedTasks =
 		scanJob?.scanType === "full" &&
-		totalFailedScanningTasks > 0 &&
-		(statusView?.inProgressScannerAgents.length || 0) === 0 &&
-		statusView?.scan.repositoryTaskStatus !== "running" &&
-		scanJob?.status === "failed";
+		totalFailedTasks > 0 &&
+		(statusView?.inProgressTasks.length || 0) === 0 &&
+		scanJob?.status === "finished";
+	const shouldShowRetryFailedTasks = totalFailedTasks > 0;
 	const analysisInProgressCandidates = useMemo(
 		() =>
 			(statusView?.inProgressCandidates || []).filter(
@@ -783,6 +850,45 @@ export const ShowScanJobDetail = ({
 			),
 		[statusView?.inProgressCandidates],
 	);
+	const sortedInProgressTasks = useMemo(() => {
+		return [...(statusView?.inProgressTasks || [])].sort((left, right) => {
+			const stageRankDiff =
+				(RUNNING_TASK_STAGE_ORDER[left.stage] ?? Number.MAX_SAFE_INTEGER) -
+				(RUNNING_TASK_STAGE_ORDER[right.stage] ?? Number.MAX_SAFE_INTEGER);
+			if (stageRankDiff !== 0) {
+				return stageRankDiff;
+			}
+			return right.updatedAt.localeCompare(left.updatedAt);
+		});
+	}, [statusView?.inProgressTasks]);
+	const sortedTerminalTasks = useMemo(() => {
+		return [...(statusView?.terminalTasks || [])].sort((left, right) => {
+			const rightCompletedAt = right.completedAt || right.updatedAt;
+			const leftCompletedAt = left.completedAt || left.updatedAt;
+			const completedAtDiff = rightCompletedAt.localeCompare(leftCompletedAt);
+			if (completedAtDiff !== 0) {
+				return completedAtDiff;
+			}
+			const stageRankDiff =
+				(RUNNING_TASK_STAGE_ORDER[left.stage] ?? Number.MAX_SAFE_INTEGER) -
+				(RUNNING_TASK_STAGE_ORDER[right.stage] ?? Number.MAX_SAFE_INTEGER);
+			if (stageRankDiff !== 0) {
+				return stageRankDiff;
+			}
+			return right.updatedAt.localeCompare(left.updatedAt);
+		});
+	}, [statusView?.terminalTasks]);
+
+	useEffect(() => {
+		if (sortedInProgressTasks.length === 0) {
+			return;
+		}
+		const timer = window.setInterval(() => {
+			setRuntimeNowMs(Date.now());
+		}, 1000);
+		return () => window.clearInterval(timer);
+	}, [sortedInProgressTasks.length]);
+
 	const analysisQueuedCount = useMemo(
 		() =>
 			(statusView?.queuedCandidates || []).filter(
@@ -835,6 +941,23 @@ export const ShowScanJobDetail = ({
 			).length,
 		[candidates],
 	);
+	const handleRetryFailedTasks = async () => {
+		try {
+			const result = await retryFailedTasksMutation.mutateAsync({
+				scanJobId,
+			});
+			toast.success(`Requeued ${result.retriedTaskCount} failed tasks`);
+			await Promise.all([
+				utils.scan.one.invalidate({ scanJobId }),
+				utils.scan.statusView.invalidate({ scanJobId }),
+				utils.scan.candidates.invalidate({ scanJobId }),
+			]);
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Failed to retry failed tasks",
+			);
+		}
+	};
 	const filteredCandidates = useMemo(() => {
 		if (!candidates) {
 			return [];
@@ -1039,7 +1162,7 @@ export const ShowScanJobDetail = ({
 
 	const buildCandidateDetailHref = (candidateId: string) =>
 		buildCandidateListStateHref(
-			`${candidateListPageBasePath}/candidates/${candidateId}`,
+			`${candidateListPageBasePath}/candidates/${encodeURIComponent(candidateId)}`,
 			currentCandidateListState,
 			"candidates",
 		);
@@ -1110,7 +1233,7 @@ export const ShowScanJobDetail = ({
 		}
 
 		const existing = directoryCache[directoryPath];
-		if (existing?.status === "loaded" || existing?.status === "loading") {
+		if (existing?.status === "loading") {
 			return;
 		}
 
@@ -1183,7 +1306,7 @@ export const ShowScanJobDetail = ({
 					>
 						<TabsList className="flex gap-4 justify-start">
 							<TabsTrigger value="overview">Overview</TabsTrigger>
-							<TabsTrigger value="stream">Scanning</TabsTrigger>
+							<TabsTrigger value="tasks">Tasks</TabsTrigger>
 							<TabsTrigger value="analysis">Analysis</TabsTrigger>
 							<TabsTrigger value="verify">Verify</TabsTrigger>
 							<TabsTrigger value="candidates">Candidates</TabsTrigger>
@@ -1202,6 +1325,60 @@ export const ShowScanJobDetail = ({
 									Job not found
 								</div>
 							) : (
+								<div className="flex flex-col gap-3">
+									{canCancelScanJob ? (
+										<div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3">
+											<div>
+												<div className="font-medium">Cancel Running Job</div>
+												<div className="text-sm text-muted-foreground">
+													Stop all running tasks and clear pending work for this job.
+												</div>
+											</div>
+											<Button
+												type="button"
+												variant="destructive"
+												disabled={cancelScanJobMutation.isLoading}
+												onClick={async () => {
+													try {
+														const result =
+															await cancelScanJobMutation.mutateAsync({
+																scanJobId,
+															});
+														toast.success(
+															`Cancelled job. Stopped ${result.stoppedContainers} containers.`,
+														);
+														await Promise.all([
+															utils.scan.one.invalidate({ scanJobId }),
+															utils.scan.statusView.invalidate({ scanJobId }),
+															utils.scan.candidates.invalidate({ scanJobId }),
+															serviceType === "application"
+																? utils.scan.allByApplication.invalidate({
+																		applicationId: serviceId,
+																	})
+																: utils.scan.allByCompose.invalidate({
+																		composeId: serviceId,
+																	}),
+														]);
+													} catch (error) {
+														toast.error(
+															error instanceof Error
+																? error.message
+																: "Failed to cancel scan job",
+														);
+													}
+												}}
+											>
+												{cancelScanJobMutation.isLoading ? (
+													<>
+														<Loader2 className="mr-2 size-4 animate-spin" />
+														Cancelling...
+													</>
+												) : (
+													"Cancel"
+												)}
+											</Button>
+										</div>
+									) : null}
 								<div className="grid grid-cols-1 md:grid-cols-2 gap-3">
 									<div className="border rounded-lg p-3">
 										<div className="text-sm text-muted-foreground">Status</div>
@@ -1313,6 +1490,7 @@ export const ShowScanJobDetail = ({
 										/>
 									</div>
 								</div>
+								</div>
 							)}
 						</TabsContent>
 
@@ -1335,42 +1513,22 @@ export const ShowScanJobDetail = ({
 													<div className="font-medium">Failed Analysis Tasks</div>
 													<div className="text-sm text-muted-foreground">
 														{failedAnalysisCandidatesCount} failed candidate analysis
-														tasks can be requeued from the analysis stage.
+														tasks were detected. Retry will requeue every failed task in
+														this job.
 													</div>
 												</div>
 												<Button
 													type="button"
-													disabled={retryFailedAnalysisTasksMutation.isLoading}
-													onClick={async () => {
-														try {
-															const result =
-																await retryFailedAnalysisTasksMutation.mutateAsync({
-																	scanJobId,
-																});
-															toast.success(
-																`Requeued ${result.retriedCandidates} failed analysis tasks`,
-															);
-															await Promise.all([
-																utils.scan.one.invalidate({ scanJobId }),
-																utils.scan.statusView.invalidate({ scanJobId }),
-																utils.scan.candidates.invalidate({ scanJobId }),
-															]);
-														} catch (error) {
-															toast.error(
-																error instanceof Error
-																	? error.message
-																	: "Failed to retry analysis tasks",
-															);
-														}
-													}}
+													disabled={retryFailedTasksMutation.isLoading}
+													onClick={handleRetryFailedTasks}
 												>
-													{retryFailedAnalysisTasksMutation.isLoading ? (
+													{retryFailedTasksMutation.isLoading ? (
 														<>
 															<Loader2 className="mr-2 size-4 animate-spin" />
 															Retrying...
 														</>
 													) : (
-														`Retry Failed Tasks (${failedAnalysisCandidatesCount})`
+														`Retry All Failed Tasks (${totalFailedTasks})`
 													)}
 												</Button>
 											</div>
@@ -1430,42 +1588,22 @@ export const ShowScanJobDetail = ({
 												<div className="font-medium">Failed Verification Tasks</div>
 												<div className="text-sm text-muted-foreground">
 													{failedVerificationCandidatesCount} failed candidate
-													verification tasks can be requeued from the verify stage.
+													verification tasks were detected. Retry will requeue every
+													failed task in this job.
 												</div>
 											</div>
 											<Button
 												type="button"
-												disabled={retryFailedVerificationTasksMutation.isLoading}
-												onClick={async () => {
-													try {
-														const result =
-															await retryFailedVerificationTasksMutation.mutateAsync({
-																scanJobId,
-															});
-														toast.success(
-															`Requeued ${result.retriedCandidates} failed verification tasks`,
-														);
-														await Promise.all([
-															utils.scan.one.invalidate({ scanJobId }),
-															utils.scan.statusView.invalidate({ scanJobId }),
-															utils.scan.candidates.invalidate({ scanJobId }),
-														]);
-													} catch (error) {
-														toast.error(
-															error instanceof Error
-																? error.message
-																: "Failed to retry verification tasks",
-														);
-													}
-												}}
+												disabled={retryFailedTasksMutation.isLoading}
+												onClick={handleRetryFailedTasks}
 											>
-												{retryFailedVerificationTasksMutation.isLoading ? (
+												{retryFailedTasksMutation.isLoading ? (
 													<>
 														<Loader2 className="mr-2 size-4 animate-spin" />
 														Retrying...
 													</>
 												) : (
-													`Retry Failed Tasks (${failedVerificationCandidatesCount})`
+													`Retry All Failed Tasks (${totalFailedTasks})`
 												)}
 											</Button>
 										</div>
@@ -1892,162 +2030,212 @@ export const ShowScanJobDetail = ({
 							</div>
 						</TabsContent>
 
-						<TabsContent value="stream" className="pt-4">
+						<TabsContent value="tasks" className="pt-4">
 							<div className="flex flex-col gap-4">
-								{canRetryFailedScanningTasks ? (
+								{shouldShowRetryFailedTasks ? (
 									<div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3">
 										<div>
-											<div className="font-medium">Failed Scanning Tasks</div>
+											<div className="font-medium">Failed Tasks</div>
 											<div className="text-sm text-muted-foreground">
-												{failedModuleTasksCount} failed module tasks and{" "}
-												{failedFunctionTasksCount} failed function tasks can be
-												retried without restarting completed scanning work.
+												{totalFailedTasks} failed tasks were found across repository,
+												module, function, analysis, and verification stages.
 											</div>
+											{!canRetryFailedTasks ? (
+												<div className="mt-1 text-xs text-muted-foreground">
+													Retry becomes available after the full scan job finishes and
+													all running tasks stop.
+												</div>
+											) : null}
 										</div>
 										<Button
 											type="button"
-											disabled={retryFailedScanningTasksMutation.isLoading}
-											onClick={async () => {
-												try {
-													const result =
-														await retryFailedScanningTasksMutation.mutateAsync({
-															scanJobId,
-														});
-													toast.success(
-														`Requeued ${result.retriedModuleTasks} module tasks and ${result.retriedFunctionTasks} function tasks`,
-													);
-													await Promise.all([
-														utils.scan.one.invalidate({ scanJobId }),
-														utils.scan.statusView.invalidate({ scanJobId }),
-														utils.scan.candidates.invalidate({ scanJobId }),
-													]);
-												} catch (error) {
-													toast.error(
-														error instanceof Error
-															? error.message
-															: "Failed to retry scanning tasks",
-													);
-												}
-											}}
+											disabled={
+												retryFailedTasksMutation.isLoading || !canRetryFailedTasks
+											}
+											onClick={handleRetryFailedTasks}
 										>
-											{retryFailedScanningTasksMutation.isLoading ? (
+											{retryFailedTasksMutation.isLoading ? (
 												<>
 													<Loader2 className="mr-2 size-4 animate-spin" />
 													Retrying...
 												</>
 											) : (
-												`Retry Failed Tasks (${totalFailedScanningTasks})`
+												`Retry All Failed Tasks (${totalFailedTasks})`
 											)}
 										</Button>
-									</div>
-								) : null}
-								{statusView ? (
-									<div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
-										{[
-											{
-												key: "repository",
-												title: "Repository Scanning",
-												description: `${repositoryScanningProgress.completed} / ${repositoryScanningProgress.total}`,
-												percent: repositoryScanningProgress.percent,
-												status: repositoryScanningProgress.status,
-												progressClassName:
-													"h-3 bg-secondary/70 [&>div]:bg-sky-500",
-											},
-											{
-												key: "module",
-												title: "Module Scanning",
-												description: `${moduleScanningProgress.completed} / ${moduleScanningProgress.total}`,
-												percent: moduleScanningProgress.percent,
-												status: moduleScanningProgress.status,
-												progressClassName:
-													"h-3 bg-secondary/70 [&>div]:bg-amber-500",
-											},
-											{
-												key: "function",
-												title: "Function Scanning",
-												description: `${functionScanningProgress.completed} / ${functionScanningProgress.total}`,
-												percent: functionScanningProgress.percent,
-												status: functionScanningProgress.status,
-												progressClassName:
-													"h-3 bg-secondary/70 [&>div]:bg-zinc-400",
-											},
-										].map((item, index) => (
-											<motion.div
-												key={item.key}
-												layout
-												initial={{ opacity: 0, y: 10 }}
-												animate={{ opacity: 1, y: 0 }}
-												whileHover={{ y: -2, scale: 1.01 }}
-												transition={{
-													duration: 0.18,
-													ease: "easeOut",
-													delay: index * 0.04,
-												}}
-												className="rounded-lg border p-4"
-											>
-												<div className="flex items-center justify-between gap-3">
-													<div>
-														<div className="text-sm text-muted-foreground">
-															{item.title}
-														</div>
-														<div className="mt-2 text-2xl font-semibold">
-															{item.description}
-														</div>
-													</div>
-													<div className="text-xs uppercase tracking-[0.14em] text-muted-foreground">
-														{item.status}
-													</div>
-												</div>
-												<div className="mt-4">
-													<Progress
-														value={item.percent}
-														className={item.progressClassName}
-													/>
-												</div>
-											</motion.div>
-										))}
 									</div>
 								) : null}
 
 								<div className="rounded-lg border">
 									<div className="border-b px-4 py-3">
-										<div className="font-medium">Running Scanner Agents</div>
+										<div className="font-medium">Task Queues</div>
 										<div className="text-sm text-muted-foreground">
-											Repository, module, and function scanners currently running.
+											Per-queue task progress for this job.
 										</div>
 									</div>
 									<div className="overflow-x-auto">
-										{!statusView || statusView.inProgressScannerAgents.length === 0 ? (
+										{!statusView ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
-												No running scanner agents
+												Loading queue status...
+											</div>
+										) : (
+												<table className="w-full text-sm">
+													<thead className="border-b bg-muted/30 text-left">
+														<tr>
+															<th className="w-[22%] px-4 py-3 font-medium">Queue</th>
+															<th className="w-[30%] px-4 py-3 font-medium">BullMQ Name</th>
+															<th className="w-[34%] px-4 py-3 font-medium">Progress</th>
+															<th className="w-[14%] px-4 py-3 font-medium">
+																Completed / Failed / Total
+															</th>
+														</tr>
+													</thead>
+													<tbody>
+														{statusView.queuePendingCounts.map((queue) => (
+															<tr key={queue.id} className="border-b last:border-b-0">
+																<td className="px-4 py-3 align-top font-medium">
+																	{queue.title}
+																</td>
+																<td className="px-4 py-3 align-top font-mono text-xs text-muted-foreground break-all">
+																	{queue.queueName}
+																</td>
+																<td className="px-4 py-3 align-top">
+																	<Progress
+																		value={
+																			queue.totalCount > 0
+																				? ((queue.completedCount + queue.failedCount) /
+																						queue.totalCount) *
+																					100
+																				: 0
+																		}
+																		className={getQueueProgressClassName(queue.id)}
+																	/>
+																</td>
+																<td className="px-4 py-3 align-top">
+																	{queue.completedCount} / {queue.failedCount} / {queue.totalCount}
+																</td>
+															</tr>
+														))}
+													</tbody>
+												</table>
+										)}
+									</div>
+								</div>
+
+								<div className="rounded-lg border">
+									<div className="border-b px-4 py-3">
+										<div className="font-medium">Running Tasks</div>
+										<div className="text-sm text-muted-foreground">
+											All running scanning, analysis, and verification agents for this job.
+										</div>
+									</div>
+									<div className="overflow-x-auto">
+										{!statusView || sortedInProgressTasks.length === 0 ? (
+											<div className="px-4 py-6 text-sm text-muted-foreground">
+												No running tasks
 											</div>
 										) : (
 											<table className="w-full text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
-														<th className="w-[24%] px-4 py-3 font-medium">Agent</th>
+														<th className="w-[24%] px-4 py-3 font-medium">Task</th>
 														<th className="w-[10%] px-4 py-3 font-medium">Stage</th>
-														<th className="w-[66%] px-4 py-3 font-medium">Agent Output</th>
+														<th className="w-[10%] px-4 py-3 font-medium">Runtime</th>
+														<th className="w-[56%] px-4 py-3 font-medium">Agent Output</th>
 													</tr>
 												</thead>
 												<tbody>
-													{statusView.inProgressScannerAgents.map((agent) => (
-														<tr key={agent.id} className="border-b last:border-b-0">
+													{sortedInProgressTasks.map((task) => (
+														<tr key={task.id} className="border-b last:border-b-0">
 															<td className="w-[24%] px-4 py-3 align-top">
 																<div className="line-clamp-2 font-medium">
-																	{agent.title}
+																	{task.title}
 																</div>
 																<div className="text-xs text-muted-foreground break-all">
-																	{agent.subtitle || "-"}
+																	{task.subtitle || "-"}
 																</div>
 															</td>
 															<td className="w-[10%] px-4 py-3 align-top capitalize">
-																{getScannerStageLabel(agent.stage)}
+																{getTaskStageLabel(task.stage)}
 															</td>
-															<td className="w-[66%] px-4 py-3 align-top">
-																<LiveScannerAgentOutput
-																	taskId={agent.taskId}
-																/>
+															<td className="w-[10%] whitespace-nowrap px-4 py-3 align-top tabular-nums">
+																{formatTaskRuntime(task.startedAt, runtimeNowMs)}
+															</td>
+															<td className="w-[56%] px-4 py-3 align-top">
+																<LiveTaskAgentOutput taskId={task.taskId} />
+															</td>
+														</tr>
+													))}
+												</tbody>
+											</table>
+										)}
+									</div>
+								</div>
+
+								<div className="rounded-lg border">
+									<div className="border-b px-4 py-3">
+										<div className="font-medium">Finished Tasks</div>
+										<div className="text-sm text-muted-foreground">
+											Completed, failed, and canceled tasks for this job.
+										</div>
+									</div>
+									<div className="overflow-x-auto">
+										{!statusView || sortedTerminalTasks.length === 0 ? (
+											<div className="px-4 py-6 text-sm text-muted-foreground">
+												No finished tasks
+											</div>
+										) : (
+											<table className="w-full text-sm">
+												<thead className="border-b bg-muted/30 text-left">
+													<tr>
+														<th className="w-[24%] px-4 py-3 font-medium">Task</th>
+														<th className="w-[10%] px-4 py-3 font-medium">Stage</th>
+														<th className="w-[10%] px-4 py-3 font-medium">Status</th>
+														<th className="w-[12%] px-4 py-3 font-medium">Started</th>
+														<th className="w-[12%] px-4 py-3 font-medium">Finished</th>
+														<th className="w-[32%] px-4 py-3 font-medium">Details</th>
+													</tr>
+												</thead>
+												<tbody>
+													{sortedTerminalTasks.map((task) => (
+														<tr key={task.id} className="border-b last:border-b-0">
+															<td className="w-[24%] px-4 py-3 align-top">
+																<div className="line-clamp-2 font-medium">
+																	{task.title}
+																</div>
+																<div className="text-xs text-muted-foreground break-all">
+																	{task.subtitle || "-"}
+																</div>
+															</td>
+															<td className="w-[10%] px-4 py-3 align-top capitalize">
+																{getTaskStageLabel(task.stage)}
+															</td>
+															<td className="w-[10%] px-4 py-3 align-top">
+																<Badge
+																	variant="outline"
+																	className={getTaskStatusBadgeClassName(task.status)}
+																>
+																	{getTaskStatusLabel(task.status)}
+																</Badge>
+															</td>
+															<td className="w-[12%] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
+																{task.startedAt ? (
+																	<DateTooltip date={task.startedAt} />
+																) : (
+																	"-"
+																)}
+															</td>
+															<td className="w-[12%] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
+																{task.completedAt ? (
+																	<DateTooltip date={task.completedAt} />
+																) : (
+																	"-"
+																)}
+															</td>
+															<td className="w-[32%] px-4 py-3 align-top text-xs text-muted-foreground">
+																<div className="line-clamp-3 break-words">
+																	{task.errorMessage || "-"}
+																</div>
 															</td>
 														</tr>
 													))}

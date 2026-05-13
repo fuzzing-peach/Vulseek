@@ -33,15 +33,50 @@ const isViewportNearBottom = (viewport: HTMLDivElement | null) => {
 		return true;
 	}
 
-	return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 16;
+	return (
+		viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 16
+	);
 };
 
 const waitForFrame = () =>
 	new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
 
-const writeLogsToTerminal = (term: XTermInstance, content: string) => {
+const resetLogsInTerminal = (
+	term: XTermInstance,
+	content: string,
+	callback?: () => void,
+) => {
 	term.reset();
-	term.write(content || "");
+	term.write(content || "", callback);
+};
+
+const writeLogUpdateToTerminal = (
+	term: XTermInstance,
+	previousContent: string,
+	nextContent: string,
+	callback?: () => void,
+) => {
+	if (nextContent.startsWith(previousContent)) {
+		const appendedContent = nextContent.slice(previousContent.length);
+		if (appendedContent) {
+			term.write(appendedContent, callback);
+			return;
+		}
+
+		callback?.();
+		return;
+	}
+
+	resetLogsInTerminal(term, nextContent, callback);
+};
+
+const hasRenderableSize = (element: HTMLElement | null) => {
+	if (!element?.isConnected) {
+		return false;
+	}
+
+	const rect = element.getBoundingClientRect();
+	return rect.width > 0 && rect.height > 0;
 };
 
 export const CheckoutLogModal = ({
@@ -56,8 +91,14 @@ export const CheckoutLogModal = ({
 	const xtermRef = useRef<XTermInstance | null>(null);
 	const fitAddonRef = useRef<FitAddonInstance | null>(null);
 	const autoScrollRef = useRef(true);
+	const userScrollLockedRef = useRef(false);
+	const ignoreScrollEventsRef = useRef(false);
 	const viewportCleanupRef = useRef<(() => void) | null>(null);
 	const resizeObserverRef = useRef<ResizeObserver | null>(null);
+	const frameRef = useRef<number | null>(null);
+	const restoreScrollFrameRef = useRef<number | null>(null);
+	const renderedLogsRef = useRef("");
+	const lastWrittenLogsRef = useRef("");
 	const [hostElement, setHostElement] = useState<HTMLDivElement | null>(null);
 	const { resolvedTheme } = useTheme();
 
@@ -65,11 +106,171 @@ export const CheckoutLogModal = ({
 		() => logs.replace(/\r\n/g, "\n").replace(/\r/g, "\n"),
 		[logs],
 	);
+	renderedLogsRef.current = renderedLogs;
 
 	const setHostNode = useCallback((node: HTMLDivElement | null) => {
 		hostRef.current = node;
 		setHostElement(node);
 	}, []);
+
+	const cancelPendingFrame = useCallback(() => {
+		if (frameRef.current !== null) {
+			window.cancelAnimationFrame(frameRef.current);
+			frameRef.current = null;
+		}
+		if (restoreScrollFrameRef.current !== null) {
+			window.cancelAnimationFrame(restoreScrollFrameRef.current);
+			restoreScrollFrameRef.current = null;
+		}
+	}, []);
+
+	const safeFit = useCallback(() => {
+		const term = xtermRef.current;
+		const fitAddon = fitAddonRef.current;
+		const host = hostRef.current;
+		if (!term || !fitAddon || !hasRenderableSize(host)) {
+			return;
+		}
+
+		try {
+			fitAddon.fit();
+		} catch {
+			// xterm can briefly lack renderer dimensions while a dialog is mounting.
+		}
+	}, []);
+
+	const safeScrollToBottom = useCallback(() => {
+		const term = xtermRef.current;
+		if (!term) {
+			return;
+		}
+
+		try {
+			term.scrollToBottom();
+		} catch {
+			// Ignore stale viewport work after close or during renderer startup.
+		}
+	}, []);
+
+	const beginIgnoringProgrammaticScroll = useCallback(() => {
+		ignoreScrollEventsRef.current = true;
+	}, []);
+
+	const stopIgnoringProgrammaticScrollAfterFrames = useCallback(() => {
+		window.requestAnimationFrame(() => {
+			window.requestAnimationFrame(() => {
+				ignoreScrollEventsRef.current = false;
+			});
+		});
+	}, []);
+
+	const lockAutoScrollForUser = useCallback(() => {
+		userScrollLockedRef.current = true;
+		autoScrollRef.current = false;
+	}, []);
+
+	const restoreViewportScrollTop = useCallback(
+		(viewport: HTMLDivElement, scrollTop: number) => {
+			if (restoreScrollFrameRef.current !== null) {
+				window.cancelAnimationFrame(restoreScrollFrameRef.current);
+			}
+
+			const restore = () => {
+				if (!viewport.isConnected || autoScrollRef.current) {
+					return;
+				}
+
+				viewport.scrollTop = Math.min(
+					scrollTop,
+					Math.max(0, viewport.scrollHeight - viewport.clientHeight),
+				);
+			};
+
+			restore();
+			restoreScrollFrameRef.current = window.requestAnimationFrame(() => {
+				restore();
+				restoreScrollFrameRef.current = window.requestAnimationFrame(() => {
+					restoreScrollFrameRef.current = null;
+					restore();
+				});
+			});
+		},
+		[],
+	);
+
+	const scheduleTerminalLayout = useCallback(() => {
+		cancelPendingFrame();
+		frameRef.current = window.requestAnimationFrame(() => {
+			frameRef.current = null;
+			safeFit();
+			if (autoScrollRef.current) {
+				safeScrollToBottom();
+			}
+		});
+	}, [cancelPendingFrame, safeFit, safeScrollToBottom]);
+
+	const flushPendingLogsToTerminal = useCallback(() => {
+		const term = xtermRef.current;
+		if (!term) {
+			return;
+		}
+
+		const previousLogs = lastWrittenLogsRef.current;
+		const nextLogs = renderedLogsRef.current;
+		if (previousLogs === nextLogs) {
+			scheduleTerminalLayout();
+			return;
+		}
+
+		beginIgnoringProgrammaticScroll();
+		lastWrittenLogsRef.current = nextLogs;
+		writeLogUpdateToTerminal(term, previousLogs, nextLogs, () => {
+			if (xtermRef.current !== term) {
+				return;
+			}
+
+			scheduleTerminalLayout();
+			stopIgnoringProgrammaticScrollAfterFrames();
+		});
+	}, [
+		beginIgnoringProgrammaticScroll,
+		scheduleTerminalLayout,
+		stopIgnoringProgrammaticScrollAfterFrames,
+	]);
+
+	const syncAutoScrollFromViewport = useCallback(
+		(viewport: HTMLDivElement | null) => {
+			if (ignoreScrollEventsRef.current) {
+				return;
+			}
+
+			const isNearBottom = isViewportNearBottom(viewport);
+			if (isNearBottom) {
+				userScrollLockedRef.current = false;
+				autoScrollRef.current = true;
+				flushPendingLogsToTerminal();
+				return;
+			}
+
+			userScrollLockedRef.current = true;
+			autoScrollRef.current = false;
+		},
+		[flushPendingLogsToTerminal],
+	);
+
+	const disposeTerminal = useCallback(() => {
+		cancelPendingFrame();
+		viewportCleanupRef.current?.();
+		viewportCleanupRef.current = null;
+		resizeObserverRef.current?.disconnect();
+		resizeObserverRef.current = null;
+
+		const term = xtermRef.current;
+		xtermRef.current = null;
+		fitAddonRef.current = null;
+		lastWrittenLogsRef.current = "";
+		term?.dispose();
+	}, [cancelPendingFrame]);
 
 	useEffect(() => {
 		if (!open || !hostElement) {
@@ -87,12 +288,8 @@ export const CheckoutLogModal = ({
 				return;
 			}
 
+			disposeTerminal();
 			hostElement.innerHTML = "";
-			viewportCleanupRef.current?.();
-			viewportCleanupRef.current = null;
-			xtermRef.current?.dispose();
-			xtermRef.current = null;
-			fitAddonRef.current = null;
 
 			const term = new Terminal({
 				cursorBlink: false,
@@ -115,16 +312,14 @@ export const CheckoutLogModal = ({
 				return;
 			}
 
-			fitAddon.fit();
-			writeLogsToTerminal(term, renderedLogs);
-			term.scrollToBottom();
+			const initialLogs = renderedLogsRef.current;
+			resetLogsInTerminal(term, initialLogs);
+			lastWrittenLogsRef.current = initialLogs;
+			scheduleTerminalLayout();
 
 			if (typeof ResizeObserver !== "undefined" && hostElement) {
 				const observer = new ResizeObserver(() => {
-					fitAddonRef.current?.fit();
-					if (autoScrollRef.current) {
-						xtermRef.current?.scrollToBottom();
-					}
+					scheduleTerminalLayout();
 				});
 				observer.observe(hostElement);
 				resizeObserverRef.current = observer;
@@ -135,13 +330,32 @@ export const CheckoutLogModal = ({
 			) as HTMLDivElement | null;
 			if (viewport) {
 				const handleScroll = (event: Event) => {
-					autoScrollRef.current = isViewportNearBottom(
-						event.currentTarget as HTMLDivElement,
-					);
+					syncAutoScrollFromViewport(event.currentTarget as HTMLDivElement);
+				};
+				const handleWheel = (event: WheelEvent) => {
+					if (event.deltaY < 0 || !isViewportNearBottom(viewport)) {
+						lockAutoScrollForUser();
+					}
+				};
+				const handleUserScrollStart = () => {
+					if (!isViewportNearBottom(viewport)) {
+						lockAutoScrollForUser();
+					}
 				};
 				viewport.addEventListener("scroll", handleScroll);
-				viewportCleanupRef.current = () =>
+				viewport.addEventListener("wheel", handleWheel, {
+					passive: true,
+				});
+				viewport.addEventListener("touchstart", handleUserScrollStart, {
+					passive: true,
+				});
+				viewport.addEventListener("pointerdown", handleUserScrollStart);
+				viewportCleanupRef.current = () => {
 					viewport.removeEventListener("scroll", handleScroll);
+					viewport.removeEventListener("wheel", handleWheel);
+					viewport.removeEventListener("touchstart", handleUserScrollStart);
+					viewport.removeEventListener("pointerdown", handleUserScrollStart);
+				};
 			}
 		};
 
@@ -150,7 +364,15 @@ export const CheckoutLogModal = ({
 		return () => {
 			cancelled = true;
 		};
-	}, [open, hostElement, renderedLogs, resolvedTheme]);
+	}, [
+		open,
+		hostElement,
+		resolvedTheme,
+		disposeTerminal,
+		scheduleTerminalLayout,
+		syncAutoScrollFromViewport,
+		lockAutoScrollForUser,
+	]);
 
 	useEffect(() => {
 		const term = xtermRef.current;
@@ -161,19 +383,16 @@ export const CheckoutLogModal = ({
 		const viewport = term.element?.querySelector(
 			".xterm-viewport",
 		) as HTMLDivElement | null;
-		const previousScrollTop = viewport?.scrollTop ?? 0;
 		const shouldStickToBottom = autoScrollRef.current;
 
 		term.options.theme = buildTerminalTheme(resolvedTheme);
-		writeLogsToTerminal(term, renderedLogs);
-		fitAddonRef.current?.fit();
 
-		if (shouldStickToBottom) {
-			term.scrollToBottom();
-		} else if (viewport) {
-			viewport.scrollTop = previousScrollTop;
+		if (!shouldStickToBottom) {
+			return;
 		}
-	}, [open, renderedLogs, resolvedTheme]);
+
+		flushPendingLogsToTerminal();
+	}, [open, renderedLogs, resolvedTheme, flushPendingLogsToTerminal]);
 
 	useEffect(() => {
 		if (!open) {
@@ -182,47 +401,36 @@ export const CheckoutLogModal = ({
 
 		const handleResize = async () => {
 			await waitForFrame();
-			fitAddonRef.current?.fit();
-			if (autoScrollRef.current) {
-				xtermRef.current?.scrollToBottom();
-			}
+			scheduleTerminalLayout();
 		};
 
 		window.addEventListener("resize", handleResize);
 		return () => window.removeEventListener("resize", handleResize);
-	}, [open]);
+	}, [open, scheduleTerminalLayout]);
 
 	useEffect(() => {
 		if (!open) {
 			autoScrollRef.current = true;
-			viewportCleanupRef.current?.();
-			viewportCleanupRef.current = null;
-			resizeObserverRef.current?.disconnect();
-			resizeObserverRef.current = null;
-			xtermRef.current?.dispose();
-			xtermRef.current = null;
-			fitAddonRef.current = null;
+			userScrollLockedRef.current = false;
+			lastWrittenLogsRef.current = "";
+			disposeTerminal();
 		}
-	}, [open]);
+	}, [open, disposeTerminal]);
 
 	useEffect(() => {
 		return () => {
-			viewportCleanupRef.current?.();
-			viewportCleanupRef.current = null;
-			resizeObserverRef.current?.disconnect();
-			resizeObserverRef.current = null;
-			xtermRef.current?.dispose();
-			xtermRef.current = null;
-			fitAddonRef.current = null;
+			disposeTerminal();
 		};
-	}, []);
+	}, [disposeTerminal]);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="max-w-5xl border-slate-200 bg-white">
 				<DialogHeader>
 					<DialogTitle>{title}</DialogTitle>
-					<DialogDescription>{description || "Docker build logs"}</DialogDescription>
+					<DialogDescription>
+						{description || "Docker build logs"}
+					</DialogDescription>
 				</DialogHeader>
 				<div className="relative h-[60vh] overflow-hidden rounded-lg border border-slate-200 bg-slate-50 p-4 font-mono text-xs leading-5 text-slate-700 shadow-sm">
 					{isLoading ? (

@@ -73,12 +73,16 @@ export default async function handler(
 	});
 	res.flushHeaders?.();
 
-	const buffer = getFileStreamBuffer(
-		getCandidateAnalysisAppServerTextPath(
-			scanJob.scanJobId,
-			candidate.vulnerabilityCandidateId,
-		),
+	const textPath = await getCandidateAnalysisAppServerTextPath(
+		scanJob.scanJobId,
+		candidate.vulnerabilityCandidateId,
 	);
+	if (!textPath) {
+		res.status(404).json({ message: "Candidate runtime log not found" });
+		return;
+	}
+
+	const buffer = getFileStreamBuffer(textPath);
 	let lastText = (await buffer.getSnapshot()).content;
 	sendEvent(res, "snapshot", { text: lastText, stage: activeStage });
 

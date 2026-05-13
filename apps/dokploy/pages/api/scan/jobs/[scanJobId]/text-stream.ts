@@ -101,8 +101,8 @@ export default async function handler(
 		try {
 			const latestScanJob = await findScanJobById(scanJobId);
 			if (
-				latestScanJob.status === "completed" ||
-				latestScanJob.status === "failed"
+				latestScanJob.status === "finished" ||
+				latestScanJob.status === "canceled"
 			) {
 				sendEvent(res, "done", {
 					status: latestScanJob.status,

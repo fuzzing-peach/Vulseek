@@ -20,8 +20,6 @@ type ParseState = {
 	pending: string;
 };
 
-const SNAPSHOT_MAX_MESSAGES = 400;
-
 const sendEvent = (
 	res: NextApiResponse,
 	event: string,
@@ -86,14 +84,10 @@ const buildSnapshotPayload = (
 	metadata: Record<string, unknown>,
 ) => {
 	const allMessages = parseJsonlLines(content, { nextLine: 0, pending: "" });
-	const truncated =
-		allMessages.length > SNAPSHOT_MAX_MESSAGES
-			? allMessages.slice(-SNAPSHOT_MAX_MESSAGES)
-			: allMessages;
 	return {
 		metadata,
-		messages: truncated,
-		truncated: truncated.length !== allMessages.length,
+		messages: allMessages,
+		truncated: false,
 	};
 };
 

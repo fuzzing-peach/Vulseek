@@ -17,11 +17,12 @@ export const DockerTerminal: React.FC<Props> = ({
 	containerId,
 	serverId,
 }) => {
-	const termRef = useRef(null);
+	const termRef = useRef<HTMLDivElement | null>(null);
 	const [activeWay, setActiveWay] = React.useState<string | undefined>("bash");
 	const { resolvedTheme } = useTheme();
 	useEffect(() => {
-		const container = document.getElementById(id);
+		let frameId: number | null = null;
+		const container = termRef.current ?? document.getElementById(id);
 		if (container) {
 			container.innerHTML = "";
 		}
@@ -43,16 +44,36 @@ export const DockerTerminal: React.FC<Props> = ({
 		const ws = new WebSocket(wsUrl);
 
 		const addonAttach = new AttachAddon(ws);
-		// @ts-ignore
-		term.open(termRef.current);
-		// @ts-ignore
 		term.loadAddon(addonFit);
 		term.loadAddon(addonAttach);
-		addonFit.fit();
+		if (container) {
+			term.open(container);
+			frameId = window.requestAnimationFrame(() => {
+				frameId = null;
+				if (!container.isConnected) {
+					return;
+				}
+
+				const rect = container.getBoundingClientRect();
+				if (rect.width <= 0 || rect.height <= 0) {
+					return;
+				}
+
+				try {
+					addonFit.fit();
+				} catch {
+					// xterm renderer dimensions may not be ready during mount.
+				}
+			});
+		}
 		return () => {
+			if (frameId !== null) {
+				window.cancelAnimationFrame(frameId);
+			}
 			ws.readyState === WebSocket.OPEN && ws.close();
+			term.dispose();
 		};
-	}, [containerId, activeWay, id]);
+	}, [containerId, activeWay, id, resolvedTheme, serverId]);
 
 	return (
 		<div className="flex flex-col gap-4">

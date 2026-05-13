@@ -1,9 +1,8 @@
 import {
 	findApplicationById,
 	findComposeById,
-	findScanFunctionTaskById,
 	findScanJobById,
-	findScanModuleTaskById,
+	findTaskById,
 	getFunctionScannerAppServerJsonlPath,
 	getModuleScannerAppServerJsonlPath,
 	getScanJobAppServerJsonlPath,
@@ -62,6 +61,14 @@ const resolveScannerStage = (
 		return value;
 	}
 	return null;
+};
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+	value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+
+const readString = (record: Record<string, unknown> | null, key: string) => {
+	const value = record?.[key];
+	return typeof value === "string" ? value : null;
 };
 
 export default async function handler(
@@ -123,15 +130,23 @@ export default async function handler(
 			res.status(400).json({ message: "Missing scanModuleTaskId" });
 			return;
 		}
-		const moduleTask = await findScanModuleTaskById(scanModuleTaskId);
-		if (!moduleTask || moduleTask.scanJobId !== scanJobId) {
+		const moduleTask = await findTaskById(scanModuleTaskId).catch(() => null);
+		if (
+			!moduleTask ||
+			moduleTask.scanJobId !== scanJobId ||
+			moduleTask.stageName !== "ModuleScanningStage"
+		) {
 			res.status(404).json({ message: "Module task not found" });
 			return;
 		}
-		moduleId = moduleTask.moduleId;
+		moduleId = readString(asRecord(asRecord(moduleTask.input)?.module), "moduleId");
+		if (!moduleId) {
+			res.status(404).json({ message: "Module task metadata not found" });
+			return;
+		}
 		filePath = await getModuleScannerAppServerJsonlPath(
 			scanJobId,
-			moduleTask.moduleId,
+			moduleId,
 		);
 	}
 
@@ -144,18 +159,29 @@ export default async function handler(
 			res.status(400).json({ message: "Missing scanFunctionTaskId" });
 			return;
 		}
-		const functionTask = await findScanFunctionTaskById(scanFunctionTaskId);
-		if (!functionTask || functionTask.scanJobId !== scanJobId) {
+		const functionTask = await findTaskById(scanFunctionTaskId).catch(() => null);
+		if (
+			!functionTask ||
+			functionTask.scanJobId !== scanJobId ||
+			functionTask.stageName !== "FunctionScanningStage"
+		) {
 			res.status(404).json({ message: "Function task not found" });
 			return;
 		}
-		scanModuleTaskId = functionTask.scanModuleTaskId;
-		moduleId = functionTask.moduleId;
-		functionId = functionTask.functionId;
+		const input = asRecord(functionTask.input);
+		const module = asRecord(input?.module);
+		const func = asRecord(input?.function);
+		scanModuleTaskId = functionTask.parentTaskId;
+		moduleId = readString(func, "moduleId") || readString(module, "moduleId");
+		functionId = readString(func, "functionId");
+		if (!moduleId || !functionId) {
+			res.status(404).json({ message: "Function task metadata not found" });
+			return;
+		}
 		filePath = await getFunctionScannerAppServerJsonlPath(
 			scanJobId,
-			functionTask.moduleId,
-			functionTask.functionId,
+			moduleId,
+			functionId,
 		);
 	}
 
@@ -243,7 +269,7 @@ export default async function handler(
 			}
 
 			if (requestedStage === "module_scanning" && scanModuleTaskId) {
-				const latestTask = await findScanModuleTaskById(scanModuleTaskId);
+				const latestTask = await findTaskById(scanModuleTaskId).catch(() => null);
 				if (!latestTask || latestTask.status !== "running") {
 					sendEvent(res, "done", {
 						status: latestTask?.status || "completed",
@@ -258,7 +284,7 @@ export default async function handler(
 			}
 
 			if (requestedStage === "function_scanning" && scanFunctionTaskId) {
-				const latestTask = await findScanFunctionTaskById(scanFunctionTaskId);
+				const latestTask = await findTaskById(scanFunctionTaskId).catch(() => null);
 				if (!latestTask || latestTask.status !== "running") {
 					sendEvent(res, "done", {
 						status: latestTask?.status || "completed",

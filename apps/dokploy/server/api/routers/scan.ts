@@ -9,9 +9,8 @@ import {
 	findComposeById,
 	findScanJobById,
 	findScanJobStatusView,
-	retryFailedAnalysisTasks,
-	retryFailedVerificationTasks,
-	retryFailedFullScanTasks,
+	cancelScanJob,
+	retryFailedScanJobTasks,
 	startCandidateVerification,
 	syncFullScanTasksFromArtifacts,
 	findVulnerabilityCandidateById,
@@ -305,6 +304,55 @@ export const scanRouter = createTRPCRouter({
 			return await updateScanJobNote(input.scanJobId, note);
 		}),
 
+	cancel: protectedProcedure
+		.input(apiFindOneScanJob)
+		.mutation(async ({ input, ctx }) => {
+			const scanJob = await findScanJobById(input.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to cancel this scan job",
+				});
+			}
+
+			await Promise.all([
+				scansQueue
+					.getJob(`scan:${input.scanJobId}`)
+					.then((job) => job?.remove())
+					.catch(() => {}),
+				scansQueue
+					.getJob(`scan:retry:${input.scanJobId}`)
+					.then((job) => job?.remove())
+					.catch(() => {}),
+				scansQueue
+					.getJob(`scan:retry-analysis:${input.scanJobId}`)
+					.then((job) => job?.remove())
+					.catch(() => {}),
+				scansQueue
+					.getJob(`scan:retry-verification:${input.scanJobId}`)
+					.then((job) => job?.remove())
+					.catch(() => {}),
+			]);
+
+			return await cancelScanJob(input.scanJobId);
+		}),
+
 	syncArtifacts: protectedProcedure
 		.input(apiFindOneScanJob)
 		.mutation(async ({ input, ctx }) => {
@@ -335,7 +383,7 @@ export const scanRouter = createTRPCRouter({
 			return await syncFullScanTasksFromArtifacts(input.scanJobId);
 		}),
 
-	retryFailedScanningTasks: protectedProcedure
+	retryFailedTasks: protectedProcedure
 		.input(apiFindOneScanJob)
 		.mutation(async ({ input, ctx }) => {
 			const scanJob = await findScanJobById(input.scanJobId);
@@ -362,97 +410,14 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 
-			const result = await retryFailedFullScanTasks(input.scanJobId);
+			const result = await retryFailedScanJobTasks(input.scanJobId);
 			const queueData: ScanQueueJob = {
 				scanJobId: scanJob.scanJobId,
+				mode: "retry-failed-tasks",
 			};
 
 			await scansQueue.add("scans", queueData, {
-				jobId: `scan:${scanJob.scanJobId}`,
-				removeOnComplete: true,
-				removeOnFail: true,
-			});
-
-			return result;
-		}),
-
-	retryFailedAnalysisTasks: protectedProcedure
-		.input(apiFindOneScanJob)
-		.mutation(async ({ input, ctx }) => {
-			const scanJob = await findScanJobById(input.scanJobId);
-			let organizationId: string | undefined;
-			if (scanJob.applicationId) {
-				const application = await findApplicationById(scanJob.applicationId);
-				organizationId = application.environment.project.organizationId;
-			}
-			if (scanJob.composeId) {
-				const compose = await findComposeById(scanJob.composeId);
-				organizationId = compose.environment.project.organizationId;
-			}
-			if (!organizationId) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Invalid scan job target",
-				});
-			}
-
-			if (organizationId !== ctx.session.activeOrganizationId) {
-				throw new TRPCError({
-					code: "UNAUTHORIZED",
-					message: "You are not authorized to retry this scan job",
-				});
-			}
-
-			const result = await retryFailedAnalysisTasks(input.scanJobId);
-			const queueData: ScanQueueJob = {
-				scanJobId: scanJob.scanJobId,
-				mode: "retry-analysis",
-			};
-
-			await scansQueue.add("scans", queueData, {
-				jobId: `scan:retry-analysis:${scanJob.scanJobId}`,
-				removeOnComplete: true,
-				removeOnFail: true,
-			});
-
-			return result;
-		}),
-
-	retryFailedVerificationTasks: protectedProcedure
-		.input(apiFindOneScanJob)
-		.mutation(async ({ input, ctx }) => {
-			const scanJob = await findScanJobById(input.scanJobId);
-			let organizationId: string | undefined;
-			if (scanJob.applicationId) {
-				const application = await findApplicationById(scanJob.applicationId);
-				organizationId = application.environment.project.organizationId;
-			}
-			if (scanJob.composeId) {
-				const compose = await findComposeById(scanJob.composeId);
-				organizationId = compose.environment.project.organizationId;
-			}
-			if (!organizationId) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Invalid scan job target",
-				});
-			}
-
-			if (organizationId !== ctx.session.activeOrganizationId) {
-				throw new TRPCError({
-					code: "UNAUTHORIZED",
-					message: "You are not authorized to retry this scan job",
-				});
-			}
-
-			const result = await retryFailedVerificationTasks(input.scanJobId);
-			const queueData: ScanQueueJob = {
-				scanJobId: scanJob.scanJobId,
-				mode: "retry-verification",
-			};
-
-			await scansQueue.add("scans", queueData, {
-				jobId: `scan:retry-verification:${scanJob.scanJobId}`,
+				jobId: `scan:retry:${scanJob.scanJobId}`,
 				removeOnComplete: true,
 				removeOnFail: true,
 			});

@@ -22,8 +22,6 @@ type StreamState = {
 	metadata: SandboxAgentSessionMetadata | null;
 };
 
-const MAX_MESSAGES = 500;
-
 export const useSandboxAgentSession = ({
 	taskId,
 	enabled,
@@ -43,17 +41,15 @@ export const useSandboxAgentSession = ({
 	});
 
 	useEffect(() => {
+		if (!enabled || !url || typeof window === "undefined") {
+			return;
+		}
+
 		setState({
 			messages: [],
 			isConnected: false,
 			metadata: null,
 		});
-	}, [url]);
-
-	useEffect(() => {
-		if (!enabled || !url || typeof window === "undefined") {
-			return;
-		}
 
 		const eventSource = new EventSource(url);
 		eventSource.onopen = () => {
@@ -73,18 +69,16 @@ export const useSandboxAgentSession = ({
 				metadata: payload.metadata || null,
 			});
 		});
-		eventSource.addEventListener("delta", (event) => {
-			const payload = JSON.parse((event as MessageEvent).data) as {
-				messages?: JsonRpcStreamMessage[];
-			};
-			setState((current) => ({
-				...current,
-				messages: [...current.messages, ...(payload.messages || [])].slice(
-					-MAX_MESSAGES,
-				),
-				isConnected: true,
-			}));
-		});
+			eventSource.addEventListener("delta", (event) => {
+				const payload = JSON.parse((event as MessageEvent).data) as {
+					messages?: JsonRpcStreamMessage[];
+				};
+				setState((current) => ({
+					...current,
+					messages: [...current.messages, ...(payload.messages || [])],
+					isConnected: true,
+				}));
+			});
 		eventSource.addEventListener("done", () => {
 			setState((current) => ({
 				...current,

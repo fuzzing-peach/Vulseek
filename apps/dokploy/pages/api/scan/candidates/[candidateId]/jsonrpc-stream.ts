@@ -108,6 +108,10 @@ export default async function handler(
 					scanJob.scanJobId,
 					candidate.vulnerabilityCandidateId,
 				);
+	if (!filePath) {
+		res.status(404).json({ message: "Candidate runtime log not found" });
+		return;
+	}
 	const buffer = getFileStreamBuffer(filePath);
 	const snapshot = await buffer.getSnapshot();
 	const parseState = { nextLine: 0, pending: "" };

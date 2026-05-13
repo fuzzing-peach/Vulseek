@@ -3,7 +3,6 @@ import {
 	Ban,
 	GitBranch,
 	PackageSearch,
-	RefreshCcw,
 	Shield,
 	Terminal,
 } from "lucide-react";
@@ -54,9 +53,6 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 		api.application.stop.useMutation();
 	const { mutateAsync: createScanJob, isLoading: isCreatingScanJob } =
 		api.scan.create.useMutation();
-
-	const { mutateAsync: reload, isLoading: isReloading } =
-		api.application.reload.useMutation();
 
 	const [checkoutModalOpen, setCheckoutModalOpen] = useState(false);
 	const [checkoutId, setCheckoutId] = useState<string | null>(null);
@@ -153,82 +149,6 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 				</CardHeader>
 				<CardContent className="flex flex-row gap-4 flex-wrap">
 					<TooltipProvider delayDuration={0} disableHoverableContent={false}>
-							<Button
-								variant="default"
-								isLoading={isCreatingScanJob}
-								onClick={async () => {
-									await createScanJob({
-										applicationId: applicationId,
-										scanType: "delta",
-										triggerSource: "manual",
-									})
-										.then(() => {
-											toast.success("Delta scan started successfully");
-											refetch();
-											router.push(
-												`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/profiles/application/${applicationId}?tab=deployments`,
-											);
-										})
-										.catch(() => {
-											toast.error("Error starting delta scan");
-										});
-								}}
-								className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
-							>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<div className="flex items-center">
-											<GitBranch className="size-4 mr-1" />
-											Delta Scan
-										</div>
-									</TooltipTrigger>
-									<TooltipPrimitive.Portal>
-										<TooltipContent sideOffset={5} className="z-[60]">
-											<p>
-												Scans recent code changes incrementally
-											</p>
-										</TooltipContent>
-									</TooltipPrimitive.Portal>
-								</Tooltip>
-							</Button>
-						<DialogAction
-							title="Reload Application"
-							description="Are you sure you want to reload this application?"
-							type="default"
-							onClick={async () => {
-								await reload({
-									applicationId: applicationId,
-									appName: data?.appName || "",
-								})
-									.then(() => {
-										toast.success("Application reloaded successfully");
-										refetch();
-									})
-									.catch(() => {
-										toast.error("Error reloading application");
-									});
-							}}
-						>
-							<Button
-								variant="secondary"
-								isLoading={isReloading}
-								className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
-							>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<div className="flex items-center">
-											<RefreshCcw className="size-4 mr-1" />
-											Reload
-										</div>
-									</TooltipTrigger>
-									<TooltipPrimitive.Portal>
-										<TooltipContent sideOffset={5} className="z-[60]">
-											<p>Reload the application without rebuilding it</p>
-										</TooltipContent>
-									</TooltipPrimitive.Portal>
-								</Tooltip>
-							</Button>
-						</DialogAction>
 						<CreateScanDialog
 							title="Full Scan"
 							description="Configure ref and tag for this full scan. If tag is empty, Dokploy will scan the most recent tag version."
@@ -243,9 +163,8 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 									scanJobsResult.data?.some(
 										(scanJob) =>
 											scanJob.scanType === "full" &&
-											(scanJob.status === "queued" ||
-												scanJob.status === "scanning" ||
-												scanJob.status === "analyzing"),
+											(scanJob.status === "pending" ||
+												scanJob.status === "running"),
 									),
 								);
 								if (hasPendingFullScan) {
@@ -273,9 +192,9 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 							}}
 							trigger={
 							<Button
-								variant="secondary"
+								variant="default"
 								isLoading={isCreatingScanJob}
-								className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
+								className="flex items-center gap-1.5 border border-black bg-black text-white hover:bg-black/90 focus-visible:ring-2 focus-visible:ring-offset-2 dark:border-black dark:bg-black dark:text-white dark:hover:bg-black/90"
 							>
 								<Tooltip>
 									<TooltipTrigger asChild>
@@ -295,6 +214,42 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 							</Button>
 							}
 						/>
+						<Button
+							variant="secondary"
+							isLoading={isCreatingScanJob}
+							onClick={async () => {
+								await createScanJob({
+									applicationId: applicationId,
+									scanType: "delta",
+									triggerSource: "manual",
+								})
+									.then(() => {
+										toast.success("Delta scan started successfully");
+										refetch();
+										router.push(
+											`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/profiles/application/${applicationId}?tab=deployments`,
+										);
+									})
+									.catch(() => {
+										toast.error("Error starting delta scan");
+									});
+							}}
+							className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
+						>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<div className="flex items-center">
+										<GitBranch className="size-4 mr-1" />
+										Delta Scan
+									</div>
+								</TooltipTrigger>
+								<TooltipPrimitive.Portal>
+									<TooltipContent sideOffset={5} className="z-[60]">
+										<p>Scans recent code changes incrementally</p>
+									</TooltipContent>
+								</TooltipPrimitive.Portal>
+							</Tooltip>
+						</Button>
 
 						{data?.applicationStatus === "idle" ? (
 							isCheckouting ? (

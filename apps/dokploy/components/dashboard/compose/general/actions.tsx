@@ -133,8 +133,69 @@ export const ComposeActions = ({ composeId }: Props) => {
 		<>
 			<div className="flex flex-row gap-4 w-full flex-wrap ">
 				<TooltipProvider delayDuration={0} disableHoverableContent={false}>
+				<CreateScanDialog
+					title="Full Scan"
+					description="Configure ref and tag for this full scan. If tag is empty, Dokploy will scan the most recent tag version."
+					isLoading={isCreatingScanJob}
+					showCommitWindow={false}
+					serviceData={data ? (data as unknown as Record<string, unknown>) : undefined}
+					onSubmit={async ({ targetRef, targetTag, commitWindow }) => {
+						const scanJobsResult = await refetchScanJobs();
+						const hasPendingFullScan = Boolean(
+							scanJobsResult.data?.some(
+								(scanJob) =>
+									scanJob.scanType === "full" &&
+									(scanJob.status === "pending" ||
+										scanJob.status === "running"),
+							),
+						);
+						if (hasPendingFullScan) {
+							toast.error("A full scan is already pending");
+							return;
+						}
+						await createScanJob({
+							composeId: composeId,
+							scanType: "full",
+							triggerSource: "manual",
+							targetRef,
+							targetTag,
+							commitWindow,
+						})
+							.then(() => {
+								toast.success("Full scan started successfully");
+								refetch();
+								router.push(
+									`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/profiles/compose/${composeId}?tab=deployments`,
+								);
+							})
+							.catch(() => {
+								toast.error("Error starting full scan");
+							});
+					}}
+					trigger={
 					<Button
 						variant="default"
+						isLoading={isCreatingScanJob}
+						className="flex items-center gap-1.5 border border-black bg-black text-white hover:bg-black/90 focus-visible:ring-2 focus-visible:ring-offset-2 dark:border-black dark:bg-black dark:text-white dark:hover:bg-black/90"
+					>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<div className="flex items-center">
+									<Shield className="size-4 mr-1" />
+									Full Scan
+								</div>
+							</TooltipTrigger>
+							<TooltipPrimitive.Portal>
+								<TooltipContent sideOffset={5} className="z-[60]">
+									<p>Scans the full codebase from the current source</p>
+								</TooltipContent>
+							</TooltipPrimitive.Portal>
+						</Tooltip>
+					</Button>
+					}
+				/>
+					<Button
+						variant="secondary"
 						isLoading={isCreatingScanJob}
 						onClick={async () => {
 							await createScanJob({
@@ -169,68 +230,6 @@ export const ComposeActions = ({ composeId }: Props) => {
 							</TooltipPrimitive.Portal>
 						</Tooltip>
 					</Button>
-				<CreateScanDialog
-					title="Full Scan"
-					description="Configure ref and tag for this full scan. If tag is empty, Dokploy will scan the most recent tag version."
-					isLoading={isCreatingScanJob}
-					showCommitWindow={false}
-					serviceData={data ? (data as unknown as Record<string, unknown>) : undefined}
-					onSubmit={async ({ targetRef, targetTag, commitWindow }) => {
-						const scanJobsResult = await refetchScanJobs();
-						const hasPendingFullScan = Boolean(
-							scanJobsResult.data?.some(
-								(scanJob) =>
-									scanJob.scanType === "full" &&
-									(scanJob.status === "queued" ||
-										scanJob.status === "scanning" ||
-										scanJob.status === "analyzing"),
-							),
-						);
-						if (hasPendingFullScan) {
-							toast.error("A full scan is already pending");
-							return;
-						}
-						await createScanJob({
-							composeId: composeId,
-							scanType: "full",
-							triggerSource: "manual",
-							targetRef,
-							targetTag,
-							commitWindow,
-						})
-							.then(() => {
-								toast.success("Full scan started successfully");
-								refetch();
-								router.push(
-									`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/profiles/compose/${composeId}?tab=deployments`,
-								);
-							})
-							.catch(() => {
-								toast.error("Error starting full scan");
-							});
-					}}
-					trigger={
-					<Button
-						variant="secondary"
-						isLoading={isCreatingScanJob}
-						className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
-					>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<div className="flex items-center">
-									<Shield className="size-4 mr-1" />
-									Full Scan
-								</div>
-							</TooltipTrigger>
-							<TooltipPrimitive.Portal>
-								<TooltipContent sideOffset={5} className="z-[60]">
-									<p>Scans the full codebase from the current source</p>
-								</TooltipContent>
-							</TooltipPrimitive.Portal>
-						</Tooltip>
-					</Button>
-					}
-				/>
 					{data?.composeType === "docker-compose" &&
 					data?.composeStatus === "idle" ? (
 						isCheckouting ? (

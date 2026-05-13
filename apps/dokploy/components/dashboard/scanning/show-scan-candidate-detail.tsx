@@ -177,8 +177,8 @@ export const ShowScanCandidateDetail = ({
 		candidate?.currentStage === "verifying" ? "verifying" : "analyzing";
 	const candidateTaskId =
 		candidateStreamStage === "verifying"
-			? candidate?.latestVerificationResult?.candidateVerificationTaskId || ""
-			: candidate?.latestAnalysisResult?.candidateAnalysisTaskId || "";
+			? candidate?.latestVerificationResult?.taskId || ""
+			: candidate?.latestAnalysisResult?.taskId || "";
 	const {
 		messages: liveJsonRpcMessages,
 	} = useSandboxAgentSession({
