@@ -2,9 +2,8 @@ export const buildModuleScannerPrompt = (input: {
 	scanJobId: string;
 	moduleId: string;
 	moduleName: string;
-	moduleRoot: string;
-	repositoryRoot: string;
-	pathListFileInContainer: string;
+	repositoryJson: string;
+	moduleJson: string;
 	thinkingLevel: string;
 }) => {
 	return [
@@ -16,12 +15,12 @@ export const buildModuleScannerPrompt = (input: {
 		`module_id: ${input.moduleId}`,
 		`module_name: ${input.moduleName}`,
 		`use_reasoning_effort: ${input.thinkingLevel}`,
-		`repository_scan_md: ${input.repositoryRoot}/repository_scan.md`,
-		`repository_scan_json: ${input.repositoryRoot}/repository_scan.json`,
-		`module_path_list: ${input.pathListFileInContainer}`,
-		`write_module_scan_md_to: ${input.moduleRoot}/module_scan.md`,
-		`write_module_scan_json_to: ${input.moduleRoot}/module_scan.json`,
-		"module_scan.json must contain a top-level functions array.",
-		"Each function entry in module_scan.json.functions must contain: functionId, functionName, filePath, line, priority, summary, riskType.",
+		`repository_json: ${input.repositoryJson}`,
+		`module_json: ${input.moduleJson}`,
+		"Use the provided module_json.files array as the source file set for this module scan.",
+		"Your final structured result must be the full canonical module object matching output.schema.json. Preserve the module metadata fields and populate the functions array.",
+		"Return exactly one top-level JSON object with no wrapper keys, no prose, and no markdown fences.",
+		"Before finishing, validate the final JSON against output.schema.json and follow the runtime output contract appended below.",
+		"Each function entry must match the full canonical function schema, including: id, moduleId, moduleName, functionId, functionName, filePath, line, priority, summary, vulnerabilityType, score.",
 	].join("\n");
 };

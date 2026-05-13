@@ -1,199 +1,274 @@
 import { TRPCError } from "@trpc/server";
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, eq, or } from "drizzle-orm";
 import { db } from "@dokploy/server/db";
-import { vulnerabilityCandidateStatusEnum, vulnerabilityCandidates } from "@dokploy/server/db/schema";
+import {
+	taskStatusEnum,
+	tasks,
+} from "@dokploy/server/db/schema";
+import {
+	analysisSchema,
+	candidateSchema,
+	verificationSchema,
+} from "../artifacts/contracts/domain-object.contract";
+import { listTasksByScanJobAndStageRepo } from "./task.repo";
 
-export const findVulnerabilityCandidatesByScanJobIdRepo = async (scanJobId: string) =>
-  await db.select().from(vulnerabilityCandidates).where(eq(vulnerabilityCandidates.scanJobId, scanJobId)).orderBy(desc(vulnerabilityCandidates.createdAt));
+type DerivedCandidateRecord = {
+	vulnerabilityCandidateId: string;
+	scanJobId: string;
+	scanFunctionTaskId: string | null;
+	title: string;
+	description: string | null;
+	filePath: string | null;
+	line: number | null;
+	vulnerabilityType: string | null;
+	status: (typeof taskStatusEnum.enumValues)[number];
+	currentStage: "analyzing" | "fuzzing" | "verifying";
+	confidence: number | null;
+	score: number | null;
+	createdAt: string;
+	updatedAt: string;
+};
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+	value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+
+const readString = (
+	record: Record<string, unknown> | null,
+	key: string,
+): string | null => {
+	const value = record?.[key];
+	return typeof value === "string" && value.length > 0 ? value : null;
+};
+
+const readNumber = (
+	record: Record<string, unknown> | null,
+	key: string,
+): number | null => {
+	const value = record?.[key];
+	return typeof value === "number" ? value : null;
+};
+
+const shouldVerifyFromAnalysisResult = (
+	result: string | null | undefined,
+) =>
+	result === "real_vulnerability" || result === "likely_vulnerability";
+
+const readCandidateIdFromTaskInput = (
+	task: typeof tasks.$inferSelect,
+): string | null => {
+	const input = asRecord(task.input);
+	const directCandidate = asRecord(input?.candidate);
+	if (directCandidate) {
+		return readString(directCandidate, "id");
+	}
+	const analysisResult = asRecord(input?.analysisResult);
+	const nestedCandidate = asRecord(analysisResult?.candidate);
+	return readString(nestedCandidate, "id");
+};
+
+const parseFunctionTaskCandidates = (task: typeof tasks.$inferSelect) => {
+	const output = asRecord(task.output);
+	const rawCandidates = output?.candidates;
+	if (!Array.isArray(rawCandidates)) {
+		return [];
+	}
+
+	const parsedCandidates: Array<(typeof candidateSchema)["_type"]> = [];
+	for (const rawCandidate of rawCandidates) {
+		const parsed = candidateSchema.safeParse(rawCandidate);
+		if (parsed.success) {
+			parsedCandidates.push(parsed.data);
+		}
+	}
+	return parsedCandidates;
+};
+
+const maxTimestamp = (...values: Array<string | null | undefined>) =>
+	values
+		.filter((value): value is string => typeof value === "string" && value.length > 0)
+		.sort()
+		.at(-1) || new Date(0).toISOString();
+
+const buildDerivedCandidatesFromTasks = (input: {
+	functionTasks: typeof tasks.$inferSelect[];
+	analysisTasks: typeof tasks.$inferSelect[];
+	verificationTasks: typeof tasks.$inferSelect[];
+}) => {
+	const latestAnalysisTaskByCandidateId = new Map<string, typeof tasks.$inferSelect>();
+	for (const task of input.analysisTasks) {
+		const candidateId = readCandidateIdFromTaskInput(task);
+		if (candidateId && !latestAnalysisTaskByCandidateId.has(candidateId)) {
+			latestAnalysisTaskByCandidateId.set(candidateId, task);
+		}
+	}
+
+	const latestVerificationTaskByCandidateId = new Map<
+		string,
+		typeof tasks.$inferSelect
+	>();
+	for (const task of input.verificationTasks) {
+		const candidateId = readCandidateIdFromTaskInput(task);
+		if (candidateId && !latestVerificationTaskByCandidateId.has(candidateId)) {
+			latestVerificationTaskByCandidateId.set(candidateId, task);
+		}
+	}
+
+	const candidates: DerivedCandidateRecord[] = [];
+	for (const functionTask of input.functionTasks) {
+		const functionCandidates = parseFunctionTaskCandidates(functionTask);
+		for (const candidate of functionCandidates) {
+			const analysisTask = latestAnalysisTaskByCandidateId.get(candidate.id);
+			const verificationTask = latestVerificationTaskByCandidateId.get(candidate.id);
+			const analysisOutput = analysisTask
+				? analysisSchema.safeParse(analysisTask.output)
+				: null;
+			const verificationOutput = verificationTask
+				? verificationSchema.safeParse(verificationTask.output)
+				: null;
+
+			let status: DerivedCandidateRecord["status"] =
+				candidate.status || "pending";
+			let currentStage: DerivedCandidateRecord["currentStage"] =
+				candidate.currentStage || "analyzing";
+
+			if (verificationTask) {
+				status = verificationTask.status;
+				currentStage = "verifying";
+			} else if (analysisTask) {
+				if (
+					analysisTask.status === "completed" &&
+					analysisOutput?.success &&
+					shouldVerifyFromAnalysisResult(analysisOutput.data.result)
+				) {
+					status = "pending";
+					currentStage = "verifying";
+				} else {
+					status = analysisTask.status;
+					currentStage = "analyzing";
+				}
+			}
+
+			candidates.push({
+				vulnerabilityCandidateId: candidate.id,
+				scanJobId: functionTask.scanJobId,
+				scanFunctionTaskId: functionTask.taskId,
+				title: candidate.title,
+				description: candidate.description || "",
+				filePath: candidate.filePath || null,
+				line: candidate.line ?? null,
+				vulnerabilityType: candidate.vulnerabilityType || null,
+				status,
+				currentStage,
+				confidence:
+					verificationOutput?.success &&
+					typeof verificationOutput.data.confidence === "number"
+						? verificationOutput.data.confidence
+						: analysisOutput?.success &&
+							  typeof analysisOutput.data.confidence === "number"
+							? analysisOutput.data.confidence
+							: candidate.confidence ?? null,
+				score:
+					verificationOutput?.success &&
+					typeof verificationOutput.data.score === "number"
+						? verificationOutput.data.score
+						: analysisOutput?.success &&
+							  typeof analysisOutput.data.score === "number"
+							? analysisOutput.data.score
+							: candidate.score ?? null,
+				createdAt: functionTask.createdAt,
+				updatedAt: maxTimestamp(
+					functionTask.updatedAt,
+					analysisTask?.updatedAt,
+					verificationTask?.updatedAt,
+				),
+			});
+		}
+	}
+
+	return candidates.sort((left, right) =>
+		right.createdAt.localeCompare(left.createdAt),
+	);
+};
+
+const listDerivedCandidatesByScanJobId = async (
+	scanJobId: string,
+): Promise<DerivedCandidateRecord[] | null> => {
+	const [functionTasks, analysisTasks, verificationTasks] = await Promise.all([
+		listTasksByScanJobAndStageRepo({
+			scanJobId,
+			stageName: "FunctionScanningStage",
+		}),
+		listTasksByScanJobAndStageRepo({
+			scanJobId,
+			stageName: "AnalysisStage",
+		}),
+		listTasksByScanJobAndStageRepo({
+			scanJobId,
+			stageName: "VerifyingStage",
+		}),
+	]);
+
+	const hasUnifiedTaskPipeline =
+		functionTasks.length > 0 || analysisTasks.length > 0 || verificationTasks.length > 0;
+	if (!hasUnifiedTaskPipeline) {
+		return null;
+	}
+
+	return buildDerivedCandidatesFromTasks({
+		functionTasks,
+		analysisTasks,
+		verificationTasks,
+	});
+};
+
+const findDerivedCandidateById = async (
+	vulnerabilityCandidateId: string,
+): Promise<DerivedCandidateRecord | null> => {
+	const stageTasks = await db
+		.select()
+		.from(tasks)
+		.where(
+			or(
+				eq(tasks.stageName, "FunctionScanningStage"),
+				eq(tasks.stageName, "AnalysisStage"),
+				eq(tasks.stageName, "VerifyingStage"),
+			),
+		)
+		.orderBy(desc(tasks.createdAt));
+
+	const functionTasks = stageTasks.filter(
+		(task) => task.stageName === "FunctionScanningStage",
+	);
+	const analysisTasks = stageTasks.filter((task) => task.stageName === "AnalysisStage");
+	const verificationTasks = stageTasks.filter(
+		(task) => task.stageName === "VerifyingStage",
+	);
+
+	return (
+		buildDerivedCandidatesFromTasks({
+			functionTasks,
+			analysisTasks,
+			verificationTasks,
+		}).find(
+			(candidate) =>
+				candidate.vulnerabilityCandidateId === vulnerabilityCandidateId,
+		) || null
+	);
+};
+
+export const findVulnerabilityCandidatesByScanJobIdRepo = async (scanJobId: string) => {
+	return (await listDerivedCandidatesByScanJobId(scanJobId)) || [];
+};
 
 export const findVulnerabilityCandidateByIdRepo = async (
-  vulnerabilityCandidateId: string,
+	vulnerabilityCandidateId: string,
 ) => {
-  const candidate = await db
-    .select()
-    .from(vulnerabilityCandidates)
-    .where(
-      eq(
-        vulnerabilityCandidates.vulnerabilityCandidateId,
-        vulnerabilityCandidateId,
-      ),
-    )
-    .limit(1)
-    .then((rows) => rows[0] || null);
-
-  if (!candidate) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: "Vulnerability candidate not found",
-    });
-  }
-
-  return candidate;
+	const derivedCandidate = await findDerivedCandidateById(vulnerabilityCandidateId);
+	if (derivedCandidate) {
+		return derivedCandidate;
+	}
+	throw new TRPCError({
+		code: "NOT_FOUND",
+		message: "Vulnerability candidate not found",
+	});
 };
-
-export const createVulnerabilityCandidateRepo = async (input: {
-  scanJobId: string;
-  scanFunctionTaskId?: string;
-  title: string;
-  description?: string;
-  filePath?: string;
-  line?: number;
-  confidence?: number;
-  score?: number;
-  status?: (typeof vulnerabilityCandidateStatusEnum.enumValues)[number];
-  currentStage?: "analyzing" | "fuzzing" | "verifying";
-}) => {
-  const existing = await db
-    .select()
-    .from(vulnerabilityCandidates)
-    .where(
-      sql`${vulnerabilityCandidates.scanJobId} = ${input.scanJobId}
-        and ${vulnerabilityCandidates.title} = ${input.title}
-        and ${vulnerabilityCandidates.filePath} is not distinct from ${input.filePath ?? null}
-        and ${vulnerabilityCandidates.line} is not distinct from ${input.line ?? null}`,
-    )
-    .limit(1)
-    .then((rows) => rows[0] || null);
-
-  if (existing) {
-    const patch: Partial<typeof vulnerabilityCandidates.$inferSelect> = {
-      updatedAt: new Date().toISOString(),
-    };
-    if (input.description && input.description !== existing.description) {
-      patch.description = input.description;
-    }
-    if (typeof input.confidence === "number") {
-      patch.confidence = input.confidence;
-    }
-    if (typeof input.score === "number") {
-      patch.score = input.score;
-    }
-    if (input.scanFunctionTaskId && input.scanFunctionTaskId !== existing.scanFunctionTaskId) {
-      patch.scanFunctionTaskId = input.scanFunctionTaskId;
-    }
-    if (Object.keys(patch).length > 1) {
-      await db
-        .update(vulnerabilityCandidates)
-        .set(patch)
-        .where(
-          eq(
-            vulnerabilityCandidates.vulnerabilityCandidateId,
-            existing.vulnerabilityCandidateId,
-          ),
-        );
-    }
-    return existing;
-  }
-
-  const created = await db
-    .insert(vulnerabilityCandidates)
-    .values({
-      scanJobId: input.scanJobId,
-      scanFunctionTaskId: input.scanFunctionTaskId,
-      title: input.title,
-      description: input.description || "",
-      filePath: input.filePath,
-      line: input.line,
-      confidence: input.confidence,
-      score: input.score,
-      status: input.status || "queued",
-      currentStage: input.currentStage || "analyzing",
-      updatedAt: new Date().toISOString(),
-    })
-    .returning();
-
-  if (!created[0]) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Error creating vulnerability candidate",
-    });
-  }
-
-  return created[0];
-};
-
-export const updateVulnerabilityCandidateRepo = async (
-  vulnerabilityCandidateId: string,
-  patch: Partial<typeof vulnerabilityCandidates.$inferSelect>,
-) => {
-  const updated = await db
-    .update(vulnerabilityCandidates)
-    .set({
-      ...patch,
-      updatedAt: new Date().toISOString(),
-    })
-    .where(
-      eq(
-        vulnerabilityCandidates.vulnerabilityCandidateId,
-        vulnerabilityCandidateId,
-      ),
-    )
-    .returning();
-
-  return updated[0] || null;
-};
-
-export const updateVulnerabilityCandidateStatusRepo = async (
-  vulnerabilityCandidateId: string,
-  status: (typeof vulnerabilityCandidateStatusEnum.enumValues)[number],
-) =>
-  await updateVulnerabilityCandidateRepo(vulnerabilityCandidateId, {
-    status,
-  });
-
-export const updateVulnerabilityCandidateCurrentStageRepo = async (
-  vulnerabilityCandidateId: string,
-  currentStage: "analyzing" | "fuzzing" | "verifying",
-) =>
-  await updateVulnerabilityCandidateRepo(vulnerabilityCandidateId, {
-    currentStage,
-  });
-
-export const updateVulnerabilityCandidateAnalysisThreadIdRepo = async (
-  vulnerabilityCandidateId: string,
-  analysisThreadId: string,
-) =>
-  await updateVulnerabilityCandidateRepo(vulnerabilityCandidateId, {
-    analysisThreadId,
-  });
-
-export const updateVulnerabilityCandidateVerifierThreadIdRepo = async (
-  vulnerabilityCandidateId: string,
-  verifierThreadId: string,
-) =>
-  await updateVulnerabilityCandidateRepo(vulnerabilityCandidateId, {
-    verifierThreadId,
-  });
-
-export const updateVulnerabilityCandidateRiskMetricsRepo = async (
-  vulnerabilityCandidateId: string,
-  input: {
-    confidence?: number;
-    score?: number;
-  },
-) => {
-  const patch: Partial<typeof vulnerabilityCandidates.$inferSelect> = {};
-  if (input.confidence !== undefined) {
-    patch.confidence = input.confidence;
-  }
-  if (input.score !== undefined) {
-    patch.score = input.score;
-  }
-  return await updateVulnerabilityCandidateRepo(vulnerabilityCandidateId, patch);
-};
-
-export const resetFailedAnalysisCandidateForRetryRepo = async (
-  vulnerabilityCandidateId: string,
-) =>
-  await updateVulnerabilityCandidateRepo(vulnerabilityCandidateId, {
-    status: "queued",
-    currentStage: "analyzing",
-  });
-
-export const resetFailedVerificationCandidateForRetryRepo = async (
-  vulnerabilityCandidateId: string,
-) =>
-  await updateVulnerabilityCandidateRepo(vulnerabilityCandidateId, {
-    status: "queued",
-    currentStage: "verifying",
-  });

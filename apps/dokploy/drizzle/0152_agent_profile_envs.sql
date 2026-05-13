@@ -1,0 +1,2 @@
+ALTER TABLE "agent_profiles"
+ADD COLUMN IF NOT EXISTS "envs" text NOT NULL DEFAULT '';

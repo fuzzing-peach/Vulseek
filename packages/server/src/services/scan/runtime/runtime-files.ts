@@ -6,11 +6,13 @@ export type CodexRuntimeArtifacts = {
   jsonlPath: string;
   textPath: string;
   stderrPath: string;
+  stdoutPath: string;
   cursorPath: string;
   statePath: string;
   jsonlFileName: string;
   textFileName: string;
   stderrFileName: string;
+  stdoutFileName: string;
   cursorFileName: string;
   stateFileName: string;
 };
@@ -32,17 +34,20 @@ export const createCodexRuntimeArtifacts = (input: {
   jsonlFileName: string;
   textFileName: string;
   stderrFileName: string;
+  stdoutFileName: string;
 }): CodexRuntimeArtifacts => {
   const runtimeBase = input.jsonlFileName.replace(/\.jsonl$/i, "");
   return {
     jsonlPath: path.join(input.runtimeDir, input.jsonlFileName),
     textPath: path.join(input.runtimeDir, input.textFileName),
     stderrPath: path.join(input.runtimeDir, input.stderrFileName),
+    stdoutPath: path.join(input.runtimeDir, input.stdoutFileName),
     cursorPath: path.join(input.runtimeDir, `.${runtimeBase}-cursor.json`),
     statePath: path.join(input.runtimeDir, `.${runtimeBase}-state.json`),
     jsonlFileName: input.jsonlFileName,
     textFileName: input.textFileName,
     stderrFileName: input.stderrFileName,
+    stdoutFileName: input.stdoutFileName,
     cursorFileName: `.${runtimeBase}-cursor.json`,
     stateFileName: `.${runtimeBase}-state.json`,
   };
@@ -53,12 +58,14 @@ export const initializeRuntimeFiles = async (input: {
   jsonlPath: string;
   textPath: string;
   stderrPath: string;
+  stdoutPath: string;
 }) => {
   await fs.mkdir(input.runtimeDir, { recursive: true });
   await Promise.all([
     fs.writeFile(input.jsonlPath, "", "utf-8"),
     fs.writeFile(input.textPath, "", "utf-8"),
     fs.writeFile(input.stderrPath, "", "utf-8"),
+    fs.writeFile(input.stdoutPath, "", "utf-8"),
   ]);
 };
 
@@ -82,9 +89,10 @@ export const initializeRuntimeFilesInContainer = async (input: {
   jsonlFileName: string;
   textFileName: string;
   stderrFileName: string;
+  stdoutFileName: string;
 }) => {
   await execAsync(
-    `docker exec ${input.containerName} bash -lc "mkdir -p '${input.runtimeDirInContainer}' && : > '${input.runtimeDirInContainer}/${input.jsonlFileName}' && : > '${input.runtimeDirInContainer}/${input.textFileName}' && : > '${input.runtimeDirInContainer}/${input.stderrFileName}'"`,
+    `docker exec ${input.containerName} bash -lc "mkdir -p '${input.runtimeDirInContainer}' && : > '${input.runtimeDirInContainer}/${input.jsonlFileName}' && : > '${input.runtimeDirInContainer}/${input.textFileName}' && : > '${input.runtimeDirInContainer}/${input.stderrFileName}' && : > '${input.runtimeDirInContainer}/${input.stdoutFileName}'"`,
   );
 };
 

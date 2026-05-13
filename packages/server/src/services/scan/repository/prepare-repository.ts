@@ -10,10 +10,11 @@ export type PreparedRepositoryState = {
 	requestedBaseSha: string | null;
 	commitWindow: number;
 	resolvedTargetSha: string;
+	resolvedTargetShort: string;
 	resolvedBaseSha: string | null;
+	targetSubject: string;
 	currentBranch: string | null;
 	currentExactTag: string | null;
-	markdown: string;
 };
 
 export const prepareRepositoryForScanInContainer = async (input: {
@@ -38,11 +39,13 @@ export const prepareRepositoryForScanInContainer = async (input: {
 	const shellScript = [
 		`SCAN_ROOT='${escapeSingleQuotes(input.scanRootDir)}'`,
 		"mkdir -p \"$SCAN_ROOT\"",
+		"TASK_STDOUT=\"$SCAN_ROOT/task-stdout.log\"",
 		"PREPARE_STDOUT=\"$SCAN_ROOT/00_repository_prepare.stdout.log\"",
 		"PREPARE_STDERR=\"$SCAN_ROOT/00_repository_prepare.stderr.log\"",
+		": > \"$TASK_STDOUT\"",
 		": > \"$PREPARE_STDOUT\"",
 		": > \"$PREPARE_STDERR\"",
-		"exec > >(tee -a \"$PREPARE_STDOUT\") 2> >(tee -a \"$PREPARE_STDERR\" >&2)",
+		"exec > >(tee -a \"$PREPARE_STDOUT\" \"$TASK_STDOUT\") 2> >(tee -a \"$PREPARE_STDERR\" >&2)",
 		"set -Eeuo pipefail",
 		"CURRENT_CMD=\"(initializing)\"",
 		"trap 'rc=$?; echo \"[error] command failed (exit ${rc}): ${CURRENT_CMD}\" >&2' ERR",
@@ -53,7 +56,7 @@ export const prepareRepositoryForScanInContainer = async (input: {
 		"}",
 		"cd /workspace/repo",
 		"CURRENT_BRANCH=\"$(git symbolic-ref --quiet --short HEAD || true)\"",
-		"run git fetch --all --tags --prune",
+		"run git fetch --progress --all --tags --prune",
 		"if [ -n \"$CURRENT_BRANCH\" ]; then",
 		"  CURRENT_CMD=\"git pull --ff-only origin $CURRENT_BRANCH\"",
 		"  if ! git pull --ff-only origin \"$CURRENT_BRANCH\"; then",
@@ -141,28 +144,6 @@ export const prepareRepositoryForScanInContainer = async (input: {
 					"fi",
 			  ]
 			: ["RESOLVED_BASE=\"\""]),
-		"{",
-		"  echo '# Repository State'",
-		"  echo",
-		"  echo \"- effective_target_mode: ${EFFECTIVE_TARGET_MODE}\"",
-		"  echo \"- target_tag: ${TARGET_TAG:-<none>}\"",
-		"  echo \"- target_ref: ${TARGET_REF:-<none>}\"",
-		"  echo \"- requested_commit_sha: ${REQUESTED_COMMIT:-<none>}\"",
-		"  echo \"- requested_base_sha: ${REQUESTED_BASE:-<none>}\"",
-		"  echo \"- resolved_target_sha: ${RESOLVED_TARGET}\"",
-		"  echo \"- resolved_target_short: ${TARGET_SHORT}\"",
-		"  echo \"- resolved_base_sha: ${RESOLVED_BASE:-<none>}\"",
-		"  echo \"- target_subject: ${TARGET_SUBJECT}\"",
-		...(isDeltaScan
-			? [
-					"  echo \"- commit_window: ${COMMIT_WINDOW}\"",
-					"  echo",
-					"  echo '## Recent Commits'",
-					"  CURRENT_CMD=\"git log --oneline -n $((COMMIT_WINDOW + 1)) $RESOLVED_TARGET\"",
-					"  git log --oneline -n \"$((COMMIT_WINDOW + 1))\" \"$RESOLVED_TARGET\" || true",
-			  ]
-			: []),
-		"} > \"$SCAN_ROOT/00_repository_state.md\"",
 		"jq -n \\",
 		"  --arg effectiveTargetMode \"$EFFECTIVE_TARGET_MODE\" \\",
 		"  --arg targetRef \"$TARGET_REF\" \\",
@@ -171,6 +152,8 @@ export const prepareRepositoryForScanInContainer = async (input: {
 		"  --arg requestedBaseSha \"$REQUESTED_BASE\" \\",
 		"  --arg resolvedTargetSha \"$RESOLVED_TARGET\" \\",
 		"  --arg resolvedBaseSha \"$RESOLVED_BASE\" \\",
+		"  --arg resolvedTargetShort \"$TARGET_SHORT\" \\",
+		"  --arg targetSubject \"$TARGET_SUBJECT\" \\",
 		"  --arg currentBranch \"$CURRENT_BRANCH\" \\",
 		"  --arg currentExactTag \"$CURRENT_EXACT_TAG\" \\",
 		"  --argjson commitWindow \"$COMMIT_WINDOW\" \\",
@@ -182,7 +165,9 @@ export const prepareRepositoryForScanInContainer = async (input: {
 		"    requestedBaseSha: (if $requestedBaseSha == \"\" then null else $requestedBaseSha end),",
 		"    commitWindow: $commitWindow,",
 		"    resolvedTargetSha: $resolvedTargetSha,",
+		"    resolvedTargetShort: $resolvedTargetShort,",
 		"    resolvedBaseSha: (if $resolvedBaseSha == \"\" then null else $resolvedBaseSha end),",
+		"    targetSubject: $targetSubject,",
 		"    currentBranch: (if $currentBranch == \"\" then null else $currentBranch end),",
 		"    currentExactTag: (if $currentExactTag == \"\" then null else $currentExactTag end)",
 		"  }' > \"$SCAN_ROOT/00_repository_state.json\"",
@@ -225,19 +210,9 @@ export const prepareRepositoryForScanInContainer = async (input: {
 		);
 	});
 
-	const repositoryState = await execAsync(
-		`docker exec ${input.containerName} bash -lc "cat '${input.scanRootDir}/00_repository_state.md'"`,
-	);
 	const repositoryStateJson = await execAsync(
 		`docker exec ${input.containerName} bash -lc "cat '${input.scanRootDir}/00_repository_state.json'"`,
 	);
 
-	const parsed = JSON.parse(
-		repositoryStateJson.stdout,
-	) as Omit<PreparedRepositoryState, "markdown">;
-
-	return {
-		...parsed,
-		markdown: repositoryState.stdout.trim(),
-	};
+	return JSON.parse(repositoryStateJson.stdout) as PreparedRepositoryState;
 };

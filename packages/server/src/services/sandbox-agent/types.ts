@@ -20,8 +20,8 @@ export type SandboxAgentServerHandle = {
 
 export type StartSandboxAgentServerInput = {
 	containerName: string;
-	runtimeDirHost: string;
-	runtimeDirInContainer: string;
+	stageDirPath: string;
+	stageDirInContainer: string;
 	envPairs?: string[];
 	homeDir?: string;
 };

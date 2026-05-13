@@ -75,17 +75,18 @@ const waitForSandboxAgentHealth = async (baseUrl: string) => {
 const startSandboxAgentServerInContainer = async (
 	input: StartSandboxAgentServerInput,
 ) => {
-	const artifacts = createSandboxAgentRuntimeArtifacts(input.runtimeDirHost);
+	const artifacts = createSandboxAgentRuntimeArtifacts(input.stageDirPath);
 
 	await initializeSandboxAgentRuntimeFiles(artifacts);
 
 	const exportLines = buildShellExports([
 		`HOME=${input.homeDir || "/root"}`,
+		"SANDBOX_AGENT_REQUIRE_PREINSTALL=1",
 		...(input.envPairs || []),
 	]);
 
 	await execAsync(
-		`docker exec ${input.containerName} bash -lc "mkdir -p '${input.runtimeDirInContainer}' && : > '${path.posix.join(input.runtimeDirInContainer, artifacts.serverLogFileName)}' && rm -f '${path.posix.join(input.runtimeDirInContainer, artifacts.pidFileName)}' && ${exportLines}${exportLines ? " && " : ""}nohup sandbox-agent server --no-token --host 0.0.0.0 --port ${DEFAULT_SANDBOX_AGENT_CONTAINER_PORT} > '${path.posix.join(input.runtimeDirInContainer, artifacts.serverLogFileName)}' 2>&1 < /dev/null & echo \\$! > '${path.posix.join(input.runtimeDirInContainer, artifacts.pidFileName)}'"`,
+		`docker exec ${input.containerName} bash -lc "mkdir -p '${input.stageDirInContainer}' && : > '${path.posix.join(input.stageDirInContainer, artifacts.serverLogFileName)}' && rm -f '${path.posix.join(input.stageDirInContainer, artifacts.pidFileName)}' && ${exportLines}${exportLines ? " && " : ""}nohup sandbox-agent server --no-token --host 0.0.0.0 --port ${DEFAULT_SANDBOX_AGENT_CONTAINER_PORT} > '${path.posix.join(input.stageDirInContainer, artifacts.serverLogFileName)}' 2>&1 < /dev/null & echo \\$! > '${path.posix.join(input.stageDirInContainer, artifacts.pidFileName)}'"`,
 	);
 
 	const containerIp = await inspectContainerIpAddress(input.containerName);
@@ -110,8 +111,8 @@ const startSandboxAgentServerInContainer = async (
 
 export const prepareSandboxAgentRuntime = async (input: {
 	containerName: string;
-	runtimeDirHost: string;
-	runtimeDirInContainer: string;
+	stageDirPath: string;
+	stageDirInContainer: string;
 	provider: string;
 	envPairs?: string[];
 	homeDir?: string;
@@ -123,8 +124,8 @@ export const prepareSandboxAgentRuntime = async (input: {
 
 	const result = await startSandboxAgentServerInContainer({
 		containerName: input.containerName,
-		runtimeDirHost: input.runtimeDirHost,
-		runtimeDirInContainer: input.runtimeDirInContainer,
+		stageDirPath: input.stageDirPath,
+		stageDirInContainer: input.stageDirInContainer,
 		envPairs: input.envPairs,
 		homeDir: input.homeDir,
 	});

@@ -1,7 +1,8 @@
 import { z } from "zod";
 
 export const scanTaskStatusSchema = z.enum([
-	"queued",
+	"pending",
+	"launching",
 	"running",
 	"completed",
 	"failed",
@@ -30,7 +31,6 @@ export const verificationResultEnumSchema = z.enum([
 
 export const repositorySchema = z.object({
 	id: z.string().min(1),
-	// scanJobId: z.string().min(1),
 	name: z.string().min(1),
 	summary: z.string(),
 	languages: z.array(z.string()),
@@ -48,29 +48,8 @@ export const repositorySchema = z.object({
 	commitWindow: z.number().int().nonnegative(),
 });
 
-export const moduleSchema = z.object({
-	id: z.string().min(1),
-	// scanJobId: z.string().min(1),
-	// repositoryId: z.string().min(1),
-	moduleId: z.string().min(1),
-	name: z.string().min(1),
-	summary: z.string(),
-	artifactDir: z.string(),
-	pathListFile: z.string(),
-	priority: z.number().int(),
-	importantFiles: z.array(z.string()),
-	entryPoints: z.array(z.string()),
-	trustBoundaries: z.array(z.string()),
-	attackSurfaces: z.array(z.string()),
-	vulnerabilityThemes: z.array(z.string()),
-	notes: z.array(z.string()),
-});
-
 export const functionSchema = z.object({
 	id: z.string().min(1),
-	// scanJobId: z.string().min(1),
-	// repositoryId: z.string().min(1),
-	// moduleTaskId: z.string().min(1),
 	moduleId: z.string().min(1),
 	moduleName: z.string().min(1),
 	functionId: z.string().min(1),
@@ -79,8 +58,23 @@ export const functionSchema = z.object({
 	line: z.number().int().nullable(),
 	priority: z.number().int(),
 	summary: z.string().nullable(),
-	riskType: z.string().nullable(),
+	vulnerabilityType: z.string().nullable(),
 	score: z.number().nullable(),
+});
+
+export const moduleSchema = z.object({
+	id: z.string().min(1),
+	moduleId: z.string().min(1),
+	name: z.string().min(1),
+	summary: z.string(),
+	priority: z.number().int(),
+	files: z.array(z.string()),
+	entryPoints: z.array(z.string()),
+	trustBoundaries: z.array(z.string()),
+	attackSurfaces: z.array(z.string()),
+	vulnerabilityThemes: z.array(z.string()),
+	notes: z.array(z.string()),
+	functions: z.array(functionSchema).optional(),
 });
 
 export const candidateSchema = z.object({
@@ -94,6 +88,7 @@ export const candidateSchema = z.object({
 	description: z.string(),
 	filePath: z.string().nullable(),
 	line: z.number().int().nullable(),
+	vulnerabilityType: z.string().nullable(),
 	confidence: z.number().nullable(),
 	score: z.number().nullable(),
 	status: scanTaskStatusSchema.optional(),

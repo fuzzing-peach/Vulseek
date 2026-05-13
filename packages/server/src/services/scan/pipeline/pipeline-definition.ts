@@ -1,37 +1,54 @@
 import type { StageDefinition } from "./stage-definition";
+import type {
+	PipelineContext,
+	StageContext,
+} from "../stages/full-scan-stage.runtime";
 
 export type PipelineStageName = string;
 
-export type AnyStageDefinition<TContext> = StageDefinition<TContext, any, any>;
+export type AnyStageDefinition<TPipelineContext extends PipelineContext> =
+	StageDefinition<TPipelineContext, any, any, any>;
 
 export type StageInputOf<TStage> =
-	TStage extends StageDefinition<any, infer TInput, any> ? TInput : never;
+	TStage extends StageDefinition<any, infer TInput, any, any> ? TInput : never;
 
 export type StageOutputOf<TStage> =
-	TStage extends StageDefinition<any, any, infer TOutput> ? TOutput : never;
+	TStage extends StageDefinition<any, any, infer TOutput, any> ? TOutput : never;
 
-export type WithTaskId<T> = T & { taskId: string };
-export type WithoutTaskId<T> = Omit<T, "taskId">;
+export type FirstStageOf<TStages extends readonly unknown[]> =
+	TStages extends readonly [infer TFirst, ...unknown[]] ? TFirst : never;
+
+export type FirstStageInputOf<TStages extends readonly unknown[]> =
+	StageInputOf<FirstStageOf<TStages>>;
 
 export type PipelineEdge<
-	TContext,
-	TFromStage extends AnyStageDefinition<TContext>,
+	TPipelineContext extends PipelineContext,
+	TFromStage extends AnyStageDefinition<TPipelineContext>,
 	TToStageInputObject,
 	TToStage extends StageDefinition<
-		TContext,
-		WithTaskId<TToStageInputObject>,
-		any
-	> = StageDefinition<TContext, WithTaskId<TToStageInputObject>, any>,
+		TPipelineContext,
+		TToStageInputObject,
+		any,
+		StageContext
+	> = StageDefinition<
+		TPipelineContext,
+		TToStageInputObject,
+		any,
+		StageContext
+	>,
 > = {
+	name: string;
 	from: TFromStage;
 	to: TToStage;
+	fork?: boolean;
 	transformOutput?: (input: {
-		ctx: TContext;
+		ctx: TPipelineContext;
 		stageInput: StageInputOf<TFromStage>;
 		stageOutput: StageOutputOf<TFromStage>;
 	}) => Promise<TToStageInputObject[]>;
 	createTasks?: (input: {
-		ctx: TContext;
+		ctx: TPipelineContext;
+		fromTaskId: string;
 		stageInput: StageInputOf<TFromStage>;
 		stageOutput: StageOutputOf<TFromStage>;
 		nextInputObjects: TToStageInputObject[];
@@ -39,7 +56,7 @@ export type PipelineEdge<
 };
 
 export type PipelineDefinition<
-	TPipelineContext,
+	TPipelineContext extends PipelineContext,
 	TStages extends readonly AnyStageDefinition<TPipelineContext>[] = readonly AnyStageDefinition<TPipelineContext>[],
 	TEdges extends readonly PipelineEdge<
 		TPipelineContext,
@@ -59,20 +76,31 @@ export type PipelineDefinition<
 };
 
 export const createPipelineEdge = <
-	TContext,
-	TFromStage extends AnyStageDefinition<TContext>,
+	TPipelineContext extends PipelineContext,
+	TFromStage extends AnyStageDefinition<TPipelineContext>,
 	TToStageInputObject,
 	TToStage extends StageDefinition<
-		TContext,
-		WithTaskId<TToStageInputObject>,
-		any
-	> = StageDefinition<TContext, WithTaskId<TToStageInputObject>, any>,
+		TPipelineContext,
+		TToStageInputObject,
+		any,
+		StageContext
+	> = StageDefinition<
+		TPipelineContext,
+		TToStageInputObject,
+		any,
+		StageContext
+	>,
 >(
-	edge: PipelineEdge<TContext, TFromStage, TToStageInputObject, TToStage>,
+	edge: PipelineEdge<
+		TPipelineContext,
+		TFromStage,
+		TToStageInputObject,
+		TToStage
+	>,
 ) => edge;
 
 export const createPipelineDefinition = <
-	TPipelineContext,
+	TPipelineContext extends PipelineContext,
 	TStages extends readonly AnyStageDefinition<TPipelineContext>[],
 	TEdges extends readonly PipelineEdge<
 		TPipelineContext,
@@ -88,13 +116,13 @@ export const createPipelineDefinition = <
 	},
 ): PipelineDefinition<TPipelineContext, TStages, TEdges> => pipeline;
 
-export const getPipelineStage = <TPipelineContext>(
+export const getPipelineStage = <TPipelineContext extends PipelineContext>(
 	pipeline: PipelineDefinition<TPipelineContext>,
 	stageName: PipelineStageName,
 ) => pipeline.stages.find((stage) => stage.name === stageName);
 
 export const getDownstreamEdges = <
-	TPipelineContext,
+	TPipelineContext extends PipelineContext,
 	TStages extends readonly AnyStageDefinition<TPipelineContext>[],
 	TEdges extends readonly PipelineEdge<
 		TPipelineContext,

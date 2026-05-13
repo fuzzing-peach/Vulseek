@@ -8,7 +8,6 @@ import {
 	recalculateScanTaskCountsRepo,
 	resetScanJobForRetryRepo,
 	updateScanJobNoteRepo,
-	updateScanJobPhaseRepo,
 	updateScanJobRepositoryTaskStatusRepo,
 	updateScanJobStatusRepo,
 } from "../persistence/scan-job.repo";
@@ -35,44 +34,22 @@ export const updateScanJobNote = async (
 
 export const updateScanJobStatus = async (
 	scanJobId: string,
-	status: "queued" | "scanning" | "analyzing" | "verifying" | "completed" | "failed",
+	status: "pending" | "running" | "finished" | "canceled",
 	errorMessage?: string,
 ) => await updateScanJobStatusRepo(scanJobId, status, errorMessage);
 
 export const resetScanJobForRetry = async (
 	scanJobId: string,
 	input?: {
-		status?: "queued" | "scanning" | "analyzing" | "verifying" | "completed" | "failed";
-		scanPhase?:
-			| "queued"
-			| "repository_scanning"
-			| "module_scanning"
-			| "function_scanning"
-			| "analyzing"
-			| "verifying"
-			| "completed"
-			| "failed";
+		status?: "pending" | "running" | "finished" | "canceled";
 		errorMessage?: string | null;
-		repositoryTaskStatus?: "queued" | "running" | "completed" | "failed";
+		repositoryTaskStatus?: "pending" | "launching" | "running" | "completed" | "failed";
 	},
 ) => await resetScanJobForRetryRepo(scanJobId, input);
 
-export const updateScanJobPhase = async (
-	scanJobId: string,
-	scanPhase:
-		| "queued"
-		| "repository_scanning"
-		| "module_scanning"
-		| "function_scanning"
-		| "analyzing"
-		| "verifying"
-		| "completed"
-		| "failed",
-) => await updateScanJobPhaseRepo(scanJobId, scanPhase);
-
 export const updateScanJobRepositoryTaskStatus = async (
 	scanJobId: string,
-	repositoryTaskStatus: "queued" | "running" | "completed" | "failed",
+	repositoryTaskStatus: "pending" | "launching" | "running" | "completed" | "failed",
 ) => await updateScanJobRepositoryTaskStatusRepo(scanJobId, repositoryTaskStatus);
 
 export const recalculateScanTaskCounts = async (scanJobId: string) =>

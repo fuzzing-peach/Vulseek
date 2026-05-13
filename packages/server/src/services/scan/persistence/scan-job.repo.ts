@@ -1,12 +1,11 @@
 import { TRPCError } from "@trpc/server";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@dokploy/server/db";
 import {
-	scanFunctionTasks,
 	scanJobs,
-	scanModuleTasks,
-	scanRepositoryTasks,
+	tasks,
 } from "@dokploy/server/db/schema";
+import { createTaskRepo } from "./task.repo";
 
 const selectScanJobWithRepositoryTaskStatus = {
 	scanJobId: scanJobs.scanJobId,
@@ -15,7 +14,6 @@ const selectScanJobWithRepositoryTaskStatus = {
 	note: scanJobs.note,
 	scanType: scanJobs.scanType,
 	status: scanJobs.status,
-	scanPhase: scanJobs.scanPhase,
 	triggerSource: scanJobs.triggerSource,
 	commitSha: scanJobs.commitSha,
 	baseSha: scanJobs.baseSha,
@@ -35,9 +33,9 @@ const selectScanJobWithRepositoryTaskStatus = {
 	finishedAt: scanJobs.finishedAt,
 	errorMessage: scanJobs.errorMessage,
 	scanningThreadId: scanJobs.scanningThreadId,
-	repositoryTaskId: scanRepositoryTasks.scanRepositoryTaskId,
+	repositoryTaskId: tasks.taskId,
 	repositoryTaskStatus:
-		sql<(typeof scanRepositoryTasks.$inferSelect.status)>`coalesce(${scanRepositoryTasks.status}, 'queued')`,
+		sql<(typeof tasks.$inferSelect.status)>`coalesce(${tasks.status}, 'pending')`,
 };
 
 export const findScanJobByIdRepo = async (scanJobId: string) => {
@@ -45,8 +43,11 @@ export const findScanJobByIdRepo = async (scanJobId: string) => {
     .select(selectScanJobWithRepositoryTaskStatus)
     .from(scanJobs)
     .leftJoin(
-      scanRepositoryTasks,
-      eq(scanRepositoryTasks.scanJobId, scanJobs.scanJobId),
+      tasks,
+      and(
+        eq(tasks.scanJobId, scanJobs.scanJobId),
+        eq(tasks.stageName, "RepositoryScanningStage"),
+      ),
     )
     .where(eq(scanJobs.scanJobId, scanJobId))
     .limit(1)
@@ -63,8 +64,11 @@ export const listScanJobsByApplicationIdRepo = async (applicationId: string) =>
     .select(selectScanJobWithRepositoryTaskStatus)
     .from(scanJobs)
     .leftJoin(
-      scanRepositoryTasks,
-      eq(scanRepositoryTasks.scanJobId, scanJobs.scanJobId),
+      tasks,
+      and(
+        eq(tasks.scanJobId, scanJobs.scanJobId),
+        eq(tasks.stageName, "RepositoryScanningStage"),
+      ),
     )
     .where(eq(scanJobs.applicationId, applicationId))
     .orderBy(desc(scanJobs.createdAt));
@@ -74,8 +78,11 @@ export const listScanJobsByComposeIdRepo = async (composeId: string) =>
     .select(selectScanJobWithRepositoryTaskStatus)
     .from(scanJobs)
     .leftJoin(
-      scanRepositoryTasks,
-      eq(scanRepositoryTasks.scanJobId, scanJobs.scanJobId),
+      tasks,
+      and(
+        eq(tasks.scanJobId, scanJobs.scanJobId),
+        eq(tasks.stageName, "RepositoryScanningStage"),
+      ),
     )
     .where(eq(scanJobs.composeId, composeId))
     .orderBy(desc(scanJobs.createdAt));
@@ -85,11 +92,14 @@ export const listUnfinishedScanJobsRepo = async () =>
     .select(selectScanJobWithRepositoryTaskStatus)
     .from(scanJobs)
     .leftJoin(
-      scanRepositoryTasks,
-      eq(scanRepositoryTasks.scanJobId, scanJobs.scanJobId),
+      tasks,
+      and(
+        eq(tasks.scanJobId, scanJobs.scanJobId),
+        eq(tasks.stageName, "RepositoryScanningStage"),
+      ),
     )
     .where(
-      sql`${scanJobs.status} <> 'completed' and ${scanJobs.status} <> 'failed'`,
+      sql`${scanJobs.status} = 'pending' or ${scanJobs.status} = 'running'`,
     );
 
 export const createScanJobRepo = async (input: {
@@ -122,8 +132,7 @@ export const createScanJobRepo = async (input: {
       targetRef: input.targetRef,
       targetTag: input.targetTag,
       commitWindow: input.commitWindow || input.defaultDeltaCommitWindow,
-      status: "queued",
-      scanPhase: "queued",
+      status: "pending",
     })
     .returning();
 
@@ -134,9 +143,11 @@ export const createScanJobRepo = async (input: {
     });
   }
 
-  await db.insert(scanRepositoryTasks).values({
+  await createTaskRepo({
     scanJobId: created[0].scanJobId,
-    status: "queued",
+    name: "repository-scanning",
+    stageName: "RepositoryScanningStage",
+    status: "pending",
   });
 
   return created[0];
@@ -168,21 +179,13 @@ export const updateScanJobStatusRepo = async (
     status,
   };
 
-  if (status === "analyzing") {
-    patch.scanPhase = "analyzing";
-  }
-
-  if (status === "verifying") {
-    patch.scanPhase = "verifying";
-  }
-
-  if (status === "scanning") {
+  if (status === "running") {
     patch.startedAt = new Date().toISOString();
+    patch.finishedAt = null;
   }
 
-  if (status === "completed" || status === "failed") {
+  if (status === "finished" || status === "canceled") {
     patch.finishedAt = new Date().toISOString();
-    patch.scanPhase = status;
   }
 
   if (errorMessage) {
@@ -206,16 +209,14 @@ export const resetScanJobForRetryRepo = async (
   scanJobId: string,
   input?: {
     status?: typeof scanJobs.$inferSelect.status;
-    scanPhase?: typeof scanJobs.$inferSelect.scanPhase;
     errorMessage?: string | null;
-    repositoryTaskStatus?: typeof scanRepositoryTasks.$inferSelect.status;
+    repositoryTaskStatus?: typeof tasks.$inferSelect.status;
   },
 ) => {
   const updated = await db
     .update(scanJobs)
     .set({
-      status: input?.status || "queued",
-      scanPhase: input?.scanPhase || "queued",
+      status: input?.status || "pending",
       errorMessage:
         input && "errorMessage" in input ? (input.errorMessage ?? null) : null,
       finishedAt: null,
@@ -230,7 +231,7 @@ export const resetScanJobForRetryRepo = async (
 
   if (input?.repositoryTaskStatus) {
     await db
-      .update(scanRepositoryTasks)
+      .update(tasks)
       .set({
         status: input.repositoryTaskStatus,
         errorMessage: null,
@@ -238,62 +239,31 @@ export const resetScanJobForRetryRepo = async (
         completedAt: null,
         updatedAt: new Date().toISOString(),
       })
-      .where(eq(scanRepositoryTasks.scanJobId, scanJobId));
+      .where(eq(tasks.taskId, scanJobId));
   }
 
-  return updated[0];
-};
-
-export const resetScanJobForCandidateRetryRepo = async (
-  scanJobId: string,
-  status: "analyzing" | "verifying",
-) => {
-  const updated = await db
-    .update(scanJobs)
-    .set({
-      status,
-      scanPhase: status,
-      errorMessage: null,
-      finishedAt: null,
-    })
-    .where(eq(scanJobs.scanJobId, scanJobId))
-    .returning();
-
-  if (!updated[0]) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Scan job not found" });
-  }
-
-  return updated[0];
-};
-
-export const updateScanJobPhaseRepo = async (scanJobId: string, scanPhase: typeof scanJobs.$inferSelect.scanPhase) => {
-  const updated = await db
-    .update(scanJobs)
-    .set({ scanPhase })
-    .where(eq(scanJobs.scanJobId, scanJobId))
-    .returning();
-  if (!updated[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Scan job not found" });
   return updated[0];
 };
 
 export const updateScanJobRepositoryTaskStatusRepo = async (
   scanJobId: string,
-  repositoryTaskStatus: typeof scanRepositoryTasks.$inferSelect.status,
+  repositoryTaskStatus: typeof tasks.$inferSelect.status,
 ) => {
-  const repositoryTaskPatch: Partial<typeof scanRepositoryTasks.$inferSelect> = {
+  const repositoryTaskPatch: Partial<typeof tasks.$inferSelect> = {
     status: repositoryTaskStatus,
     updatedAt: new Date().toISOString(),
   };
-  if (repositoryTaskStatus === "running") {
+  if (repositoryTaskStatus === "launching" || repositoryTaskStatus === "running") {
     repositoryTaskPatch.startedAt = new Date().toISOString();
+    repositoryTaskPatch.completedAt = null;
   }
   if (repositoryTaskStatus === "completed" || repositoryTaskStatus === "failed") {
     repositoryTaskPatch.completedAt = new Date().toISOString();
   }
   await db
-    .update(scanRepositoryTasks)
+    .update(tasks)
     .set(repositoryTaskPatch)
-    .where(eq(scanRepositoryTasks.scanJobId, scanJobId));
+    .where(eq(tasks.taskId, scanJobId));
   return await findScanJobByIdRepo(scanJobId);
 };
 
@@ -304,12 +274,12 @@ export const updateScanJobScanningThreadIdRepo = async (scanJobId: string, scann
     .where(eq(scanJobs.scanJobId, scanJobId))
     .returning();
   await db
-    .update(scanRepositoryTasks)
+    .update(tasks)
     .set({
       threadId: scanningThreadId,
       updatedAt: new Date().toISOString(),
     })
-    .where(eq(scanRepositoryTasks.scanJobId, scanJobId));
+    .where(eq(tasks.taskId, scanJobId));
   return updated[0] || null;
 };
 
@@ -338,34 +308,39 @@ export const updateScanJobTargetContextRepo = async (
 };
 
 export const recalculateScanTaskCountsRepo = async (scanJobId: string) => {
-  const moduleRows = await db
-    .select({ status: scanModuleTasks.status, count: sql<number>`count(*)::int` })
-    .from(scanModuleTasks)
-    .where(eq(scanModuleTasks.scanJobId, scanJobId))
-    .groupBy(scanModuleTasks.status);
-  const functionRows = await db
-    .select({ status: scanFunctionTasks.status, count: sql<number>`count(*)::int` })
-    .from(scanFunctionTasks)
-    .where(eq(scanFunctionTasks.scanJobId, scanJobId))
-    .groupBy(scanFunctionTasks.status);
+  const taskRows = await db
+    .select({
+      stageName: tasks.stageName,
+      status: tasks.status,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(tasks)
+    .where(eq(tasks.scanJobId, scanJobId))
+    .groupBy(tasks.stageName, tasks.status);
 
-  const countBy = (rows: Array<{ status: string; count: number }>, key: string) =>
-    rows.filter((row) => row.status === key).reduce((sum, row) => sum + row.count, 0);
+  const countBy = (
+    stageName: string,
+    status?: string,
+  ) =>
+    taskRows
+      .filter(
+        (row) =>
+          row.stageName === stageName &&
+          (status ? row.status === status : true),
+      )
+      .reduce((sum, row) => sum + row.count, 0);
 
   const updated = await db
     .update(scanJobs)
     .set({
-      moduleTasksTotal: moduleRows.reduce((sum, row) => sum + row.count, 0),
-      moduleTasksCompleted: countBy(moduleRows, "completed"),
-      moduleTasksFailed: countBy(moduleRows, "failed"),
-      functionTasksTotal: functionRows.reduce((sum, row) => sum + row.count, 0),
-      functionTasksCompleted: countBy(functionRows, "completed"),
-      functionTasksFailed: countBy(functionRows, "failed"),
+      moduleTasksTotal: countBy("ModuleScanningStage"),
+      moduleTasksCompleted: countBy("ModuleScanningStage", "completed"),
+      moduleTasksFailed: countBy("ModuleScanningStage", "failed"),
+      functionTasksTotal: countBy("FunctionScanningStage"),
+      functionTasksCompleted: countBy("FunctionScanningStage", "completed"),
+      functionTasksFailed: countBy("FunctionScanningStage", "failed"),
     })
     .where(eq(scanJobs.scanJobId, scanJobId))
     .returning();
   return updated[0] || null;
 };
-
-export const listScanModuleTasksByScanJobIdRepo = async (scanJobId: string) =>
-  await db.select().from(scanModuleTasks).where(eq(scanModuleTasks.scanJobId, scanJobId)).orderBy(desc(scanModuleTasks.createdAt));

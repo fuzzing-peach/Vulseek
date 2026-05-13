@@ -4,21 +4,12 @@ import { findApplicationById } from "../application";
 import { findComposeById } from "../compose";
 import { execAsync } from "../../utils/process/execAsync";
 import { findScanJobByIdRepo } from "./persistence/scan-job.repo";
-import {
-	findScanRepositoryTaskByIdRepo,
-	findScanRepositoryTaskByScanJobIdRepo,
-} from "./persistence/scan-repository-task.repo";
-import { findScanModuleTaskByIdRepo } from "./persistence/scan-module-task.repo";
-import { findScanFunctionTaskByIdRepo } from "./persistence/scan-function-task.repo";
 import { findVulnerabilityCandidateByIdRepo } from "./persistence/candidate.repo";
 import {
-	findCandidateAnalysisTaskByCandidateIdRepo,
-	findCandidateAnalysisTaskByIdRepo,
-} from "./persistence/analysis-result.repo";
-import {
-	findCandidateVerificationTaskByCandidateIdRepo,
-	findCandidateVerificationTaskByIdRepo,
-} from "./persistence/verification-result.repo";
+	findTaskByIdRepo,
+	listTasksByScanJobAndStageRepo,
+} from "./persistence/task.repo";
+import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "./runtime/sandbox-agent-shared";
 
 const sanitizePathPart = (value: string) =>
 	value
@@ -26,6 +17,24 @@ const sanitizePathPart = (value: string) =>
 		.replace(/[^a-zA-Z0-9._-]/g, "-")
 		.replace(/-+/g, "-")
 		.replace(/^-|-$/g, "") || "unknown";
+
+const resolveScanStageTaskRuntimeDir = (
+	baseDir: string,
+	stageName: string,
+	taskName: string,
+	taskId?: string,
+) =>
+	path.join(
+		baseDir,
+		"scanning",
+		"full_scan",
+		"stages",
+		sanitizePathPart(stageName),
+		"tasks",
+		taskId
+			? `${sanitizePathPart(taskName)}-${sanitizePathPart(taskId).slice(0, 6)}`
+			: sanitizePathPart(taskName),
+	);
 
 const resolveScanContextRoot = async () => {
 	const candidates = [
@@ -61,35 +70,71 @@ const resolveScanJobBaseDir = async (scanJobId: string) => {
 	);
 };
 
-type SandboxAgentRuntimeMetadata = {
-	runtime?: string;
-	provider?: "codex" | "claude";
-	server?: {
-		baseUrl?: string;
-		publicBaseUrl?: string;
-		host?: string;
-		port?: number;
-	};
-	updatedAt?: string;
+const toSandboxAgentProvider = (
+	provider?: string | null,
+): "codex" | "claude" => (provider === "claude_code" ? "claude" : "codex");
+
+const resolveTaskSandboxAgentProvider = (
+	agentProfile?: { provider?: string | null } | null,
+) => toSandboxAgentProvider(agentProfile?.provider);
+
+const getTaskInputRecord = (value: unknown): Record<string, unknown> | null =>
+	value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+
+const getNestedRecord = (
+	record: Record<string, unknown> | null,
+	key: string,
+): Record<string, unknown> | null => {
+	const value = record?.[key];
+	return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 };
 
-const readSandboxAgentRuntimeMetadata = async (runtimeDir: string) => {
-	const metadataPath = path.join(runtimeDir, "sandbox-agent-runtime.json");
-	try {
-		const raw = await fs.readFile(metadataPath, "utf-8");
-		const parsed = JSON.parse(raw) as SandboxAgentRuntimeMetadata;
-		const baseUrl = parsed.server?.publicBaseUrl || parsed.server?.baseUrl;
-		if (!baseUrl || !parsed.provider) {
-			return null;
+const getNestedString = (
+	record: Record<string, unknown> | null,
+	keys: string[],
+): string | null => {
+	for (const key of keys) {
+		const value = record?.[key];
+		if (typeof value === "string" && value.length > 0) {
+			return value;
 		}
-		return {
-			baseUrl,
-			provider: parsed.provider,
-			metadataPath,
-			updatedAt: parsed.updatedAt || null,
-		};
-	} catch {
-		return null;
+	}
+	return null;
+};
+
+const resolveTaskRuntimeName = (
+	stageName: string,
+	taskName: string,
+	taskInput: unknown,
+): string => {
+	const inputRecord = getTaskInputRecord(taskInput);
+	switch (stageName) {
+		case "RepositoryScanningStage":
+			return "repository-scanning";
+		case "ModuleScanningStage":
+			return getNestedString(getNestedRecord(inputRecord, "module"), ["name"]) || taskName;
+		case "FunctionScanningStage":
+			return (
+				getNestedString(getNestedRecord(inputRecord, "function"), ["functionName"]) ||
+				taskName
+			);
+		case "AnalysisStage":
+			return (
+				getNestedString(getNestedRecord(inputRecord, "candidate"), ["title"]) ||
+				taskName
+			);
+		case "VerifyingStage":
+			return (
+				getNestedString(
+					getNestedRecord(
+						getNestedRecord(inputRecord, "analysisResult"),
+						"candidate",
+					),
+					["title"],
+				) || taskName
+			);
+		default:
+			return taskName;
 	}
 };
 
@@ -139,23 +184,18 @@ const resolveScannerTaskSession = async (input: {
 	stage: "repository_scanning" | "module_scanning" | "function_scanning";
 	taskId: string;
 }) => {
-	if (input.stage === "repository_scanning") {
-		const task = await findScanRepositoryTaskByIdRepo(input.taskId).catch(() => null);
-		if (task) {
-			return {
-				scanJobId: task.scanJobId,
-				threadId: task.threadId,
-				containerName: task.containerName,
-			};
+	const task = await findTaskByIdRepo(input.taskId).catch(() => null);
+	if (!task) {
+		if (input.stage !== "repository_scanning") {
+			return null;
 		}
-
 		const scanJob = await findScanJobByIdRepo(input.taskId).catch(() => null);
 		if (!scanJob?.repositoryTaskId) {
 			return null;
 		}
-		const repositoryTask = await findScanRepositoryTaskByScanJobIdRepo(
-			scanJob.scanJobId,
-		).catch(() => null);
+		const repositoryTask = await findTaskByIdRepo(scanJob.repositoryTaskId).catch(
+			() => null,
+		);
 		if (!repositoryTask) {
 			return null;
 		}
@@ -163,29 +203,14 @@ const resolveScannerTaskSession = async (input: {
 			scanJobId: repositoryTask.scanJobId,
 			threadId: repositoryTask.threadId,
 			containerName: repositoryTask.containerName,
+			agentProfile: repositoryTask.agentProfile,
 		};
-	}
-
-	if (input.stage === "module_scanning") {
-		const task = await findScanModuleTaskByIdRepo(input.taskId).catch(() => null);
-		if (!task) {
-			return null;
-		}
-		return {
-			scanJobId: task.scanJobId,
-			threadId: task.threadId,
-			containerName: task.containerName,
-		};
-	}
-
-	const task = await findScanFunctionTaskByIdRepo(input.taskId).catch(() => null);
-	if (!task) {
-		return null;
 	}
 	return {
 		scanJobId: task.scanJobId,
 		threadId: task.threadId,
 		containerName: task.containerName,
+		agentProfile: task.agentProfile,
 	};
 };
 
@@ -210,7 +235,7 @@ export const findScanJobSandboxAgentSession = async (input: {
 	return {
 		scanJobId: task.scanJobId,
 		sessionId: task.threadId,
-		provider: "codex",
+		provider: resolveTaskSandboxAgentProvider(task.agentProfile),
 		baseUrl: publicBaseUrl,
 		containerName: task.containerName,
 		metadataPath: internalBaseUrl,
@@ -218,150 +243,103 @@ export const findScanJobSandboxAgentSession = async (input: {
 	};
 };
 
-const resolveCandidateSessionBaseUrl = async (containerName: string | null) => {
+const resolveCandidateSessionBaseUrl = (containerName: string | null) => {
 	if (!containerName) {
 		return null;
 	}
-	try {
-		await inspectContainerIpAddress(containerName);
-		return `/sandbox-agent/${containerName}`;
-	} catch {
-		return null;
-	}
+	return `/sandbox-agent/${containerName}`;
 };
 
 const buildSandboxAgentRuntimeFiles = (runtimeDir: string) => ({
-	jsonlPath: path.join(runtimeDir, "sandbox-agent-event.jsonl"),
-	textPath: path.join(runtimeDir, "sandbox-agent-text.txt"),
-	stderrPath: path.join(runtimeDir, "app-server-stderr.log"),
+	jsonlPath: path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl),
+	textPath: path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.text),
+	stderrPath: path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.stderr),
 	metadataPath: path.join(runtimeDir, "sandbox-agent-runtime.json"),
 });
 
 const toPublicBaseUrl = (containerName: string | null) =>
 	containerName ? `/sandbox-agent/${containerName}` : null;
 
-const readSandboxAgentProvider = async (runtimeDir: string) => {
-	const runtime = await readSandboxAgentRuntimeMetadata(runtimeDir);
-	return runtime?.provider || "codex";
-};
-
 export const findSandboxAgentTaskRuntimeByTaskId = async (
 	taskId: string,
 ): Promise<SandboxAgentTaskRuntime | null> => {
-	const repositoryTask = await findScanRepositoryTaskByIdRepo(taskId).catch(() => null);
-	if (repositoryTask) {
-		const baseDir = await resolveScanJobBaseDir(repositoryTask.scanJobId);
-		const runtimeDir = path.join(baseDir, "scanning");
-		return {
-			taskId,
-			scanJobId: repositoryTask.scanJobId,
-			taskKind: "repository_scanning",
-			status: repositoryTask.status,
-			containerName: repositoryTask.containerName,
-			sessionId: repositoryTask.threadId,
-			baseUrl: toPublicBaseUrl(repositoryTask.containerName),
-			provider: await readSandboxAgentProvider(runtimeDir),
-			...buildSandboxAgentRuntimeFiles(runtimeDir),
-			updatedAt: repositoryTask.updatedAt || null,
-		};
-	}
-
-	const moduleTask = await findScanModuleTaskByIdRepo(taskId).catch(() => null);
-	if (moduleTask) {
-		const baseDir = await resolveScanJobBaseDir(moduleTask.scanJobId);
-		const runtimeDir = path.join(
-			baseDir,
-			"scanning",
-			"full_scan",
-			"modules",
-			sanitizePathPart(moduleTask.moduleId),
+	const task = await findTaskByIdRepo(taskId).catch(() => null);
+	if (task) {
+		const inputRecord = getTaskInputRecord(task.input);
+		const candidateRecord =
+			getNestedRecord(inputRecord, "candidate") ||
+			getNestedRecord(getNestedRecord(inputRecord, "analysisResult"), "candidate");
+		const baseDir = await resolveScanJobBaseDir(task.scanJobId);
+		const runtimeTaskName = resolveTaskRuntimeName(
+			task.stageName,
+			task.name,
+			task.input,
 		);
+		let runtimeDir = path.join(baseDir, sanitizePathPart(runtimeTaskName));
+		let taskKind: SandboxAgentTaskRuntime["taskKind"] = "repository_scanning";
+
+		switch (task.stageName) {
+			case "RepositoryScanningStage":
+				taskKind = "repository_scanning";
+				runtimeDir = resolveScanStageTaskRuntimeDir(
+					baseDir,
+					task.stageName,
+					runtimeTaskName,
+					task.taskId,
+				);
+				break;
+			case "ModuleScanningStage":
+				taskKind = "module_scanning";
+				runtimeDir = resolveScanStageTaskRuntimeDir(
+					baseDir,
+					task.stageName,
+					runtimeTaskName,
+					task.taskId,
+				);
+				break;
+			case "FunctionScanningStage":
+				taskKind = "function_scanning";
+				runtimeDir = resolveScanStageTaskRuntimeDir(
+					baseDir,
+					task.stageName,
+					runtimeTaskName,
+					task.taskId,
+				);
+				break;
+			case "AnalysisStage":
+				taskKind = "analyzing";
+				runtimeDir = resolveScanStageTaskRuntimeDir(
+					baseDir,
+					task.stageName,
+					runtimeTaskName,
+					task.taskId,
+				);
+				break;
+			case "VerifyingStage":
+				taskKind = "verifying";
+				runtimeDir = resolveScanStageTaskRuntimeDir(
+					baseDir,
+					task.stageName,
+					runtimeTaskName,
+					task.taskId,
+				);
+				break;
+		}
+
 		return {
 			taskId,
-			scanJobId: moduleTask.scanJobId,
-			taskKind: "module_scanning",
-			status: moduleTask.status,
-			containerName: moduleTask.containerName,
-			sessionId: moduleTask.threadId,
-			baseUrl: toPublicBaseUrl(moduleTask.containerName),
-			provider: await readSandboxAgentProvider(runtimeDir),
+			scanJobId: task.scanJobId,
+			taskKind,
+			status: task.status,
+			containerName: task.containerName,
+			sessionId: task.threadId,
+			baseUrl: toPublicBaseUrl(task.containerName),
+			provider: resolveTaskSandboxAgentProvider(task.agentProfile),
 			...buildSandboxAgentRuntimeFiles(runtimeDir),
-			updatedAt: moduleTask.updatedAt || null,
+			updatedAt: task.updatedAt || null,
 		};
 	}
-
-	const functionTask = await findScanFunctionTaskByIdRepo(taskId).catch(() => null);
-	if (functionTask) {
-		const baseDir = await resolveScanJobBaseDir(functionTask.scanJobId);
-		const runtimeDir = path.join(
-			baseDir,
-			"scanning",
-			"full_scan",
-			"modules",
-			sanitizePathPart(functionTask.moduleId),
-			"functions",
-			sanitizePathPart(functionTask.functionId),
-		);
-		return {
-			taskId,
-			scanJobId: functionTask.scanJobId,
-			taskKind: "function_scanning",
-			status: functionTask.status,
-			containerName: functionTask.containerName,
-			sessionId: functionTask.threadId,
-			baseUrl: toPublicBaseUrl(functionTask.containerName),
-			provider: await readSandboxAgentProvider(runtimeDir),
-			...buildSandboxAgentRuntimeFiles(runtimeDir),
-			updatedAt: functionTask.updatedAt || null,
-		};
-	}
-
-	const analysisTask = await findCandidateAnalysisTaskByIdRepo(taskId).catch(() => null);
-	if (analysisTask) {
-		const baseDir = await resolveScanJobBaseDir(analysisTask.scanJobId);
-		const runtimeDir = path.join(
-			baseDir,
-			"candidates",
-			analysisTask.vulnerabilityCandidateId,
-		);
-		return {
-			taskId,
-			scanJobId: analysisTask.scanJobId,
-			taskKind: "analyzing",
-			status: analysisTask.status,
-			containerName: analysisTask.containerName,
-			sessionId: analysisTask.threadId,
-			baseUrl: toPublicBaseUrl(analysisTask.containerName),
-			provider: await readSandboxAgentProvider(runtimeDir),
-			...buildSandboxAgentRuntimeFiles(runtimeDir),
-			updatedAt: analysisTask.updatedAt || null,
-		};
-	}
-
-	const verificationTask = await findCandidateVerificationTaskByIdRepo(taskId).catch(
-		() => null,
-	);
-	if (!verificationTask) {
-		return null;
-	}
-	const baseDir = await resolveScanJobBaseDir(verificationTask.scanJobId);
-	const runtimeDir = path.join(
-		baseDir,
-		"candidates",
-		verificationTask.vulnerabilityCandidateId,
-	);
-	return {
-		taskId,
-		scanJobId: verificationTask.scanJobId,
-		taskKind: "verifying",
-		status: verificationTask.status,
-		containerName: verificationTask.containerName,
-		sessionId: verificationTask.threadId,
-		baseUrl: toPublicBaseUrl(verificationTask.containerName),
-		provider: await readSandboxAgentProvider(runtimeDir),
-		...buildSandboxAgentRuntimeFiles(runtimeDir),
-		updatedAt: verificationTask.updatedAt || null,
-	};
+	return null;
 };
 
 export const findCandidateSandboxAgentSession = async (input: {
@@ -369,30 +347,46 @@ export const findCandidateSandboxAgentSession = async (input: {
 	stage: "analyzing" | "verifying";
 }): Promise<SandboxAgentLiveSession | null> => {
 	const candidate = await findVulnerabilityCandidateByIdRepo(input.candidateId);
+	const stageName =
+		input.stage === "verifying" ? "VerifyingStage" : "AnalysisStage";
+	const task = (
+		await listTasksByScanJobAndStageRepo({
+			scanJobId: candidate.scanJobId,
+			stageName,
+		})
+	).find((item) => {
+		const inputRecord = getTaskInputRecord(item.input);
+		const candidateRecord =
+			getNestedRecord(inputRecord, "candidate") ||
+			getNestedRecord(getNestedRecord(inputRecord, "analysisResult"), "candidate");
+		return getNestedString(candidateRecord, ["id"]) === input.candidateId;
+	});
+	if (!task?.threadId || !task.containerName) {
+		return null;
+	}
 	const baseDir = await resolveScanJobBaseDir(candidate.scanJobId);
-	const runtime = await readSandboxAgentRuntimeMetadata(
-		path.join(baseDir, "candidates", candidate.vulnerabilityCandidateId),
+	const runtimeTaskName = resolveTaskRuntimeName(
+		stageName,
+		task.name,
+		task.input,
 	);
-	if (!runtime) {
+	const runtimeDir = resolveScanStageTaskRuntimeDir(
+		baseDir,
+		stageName,
+		runtimeTaskName,
+		task.taskId,
+	);
+	const liveBaseUrl = resolveCandidateSessionBaseUrl(task.containerName);
+	if (!liveBaseUrl) {
 		return null;
 	}
-	const task =
-		input.stage === "verifying"
-			? await findCandidateVerificationTaskByCandidateIdRepo(input.candidateId)
-			: await findCandidateAnalysisTaskByCandidateIdRepo(input.candidateId);
-	if (!task?.threadId) {
-		return null;
-	}
-	const liveBaseUrl =
-		(await resolveCandidateSessionBaseUrl(task.containerName || null)) ||
-		runtime.baseUrl;
 	return {
 		scanJobId: candidate.scanJobId,
 		sessionId: task.threadId,
-		provider: runtime.provider,
+		provider: resolveTaskSandboxAgentProvider(task.agentProfile),
 		baseUrl: liveBaseUrl,
 		containerName: task.containerName,
-		metadataPath: runtime.metadataPath,
-		updatedAt: runtime.updatedAt,
+		metadataPath: path.join(runtimeDir, "sandbox-agent-runtime.json"),
+		updatedAt: task.updatedAt || null,
 	};
 };

@@ -10,6 +10,7 @@ import type { ScanQueueJob } from "./queue-types";
 import { redisConfig } from "./redis-connection";
 
 const MAX_SCAN_JOB_WORKER_CONCURRENCY = 16;
+const SCAN_JOB_CANCELLED_ERROR_NAME = "ScanJobCancelledError";
 
 type ScanExecutionState = {
 	active: number;
@@ -53,19 +54,82 @@ export const scansWorker = new Worker(
 
 		try {
 			const scanJob = await findScanJobById(job.data.scanJobId);
-			const mode = job.data.mode || "full";
-
-			if (mode === "full") {
-				await updateScanJobStatus(scanJob.scanJobId, "scanning");
-				await runScanJobInContainer(scanJob.scanJobId);
+			if (scanJob.status === "canceled") {
+				return;
 			}
 
+			const mode = job.data.mode || "full";
+			console.log(
+				"[scans-worker]",
+				JSON.stringify({
+					event: "scan-job.start",
+					scanJobId: scanJob.scanJobId,
+					mode,
+				}),
+			);
+
+			if (mode === "full") {
+				const latestScanJob = await findScanJobById(job.data.scanJobId);
+				if (latestScanJob.status === "canceled") {
+					return;
+				}
+				if (latestScanJob.status === "running") {
+					console.log(
+						"[scans-worker]",
+						JSON.stringify({
+							event: "scan-job.resume_already_running",
+							scanJobId: latestScanJob.scanJobId,
+							mode,
+						}),
+					);
+					await runScanJobInContainer(scanJob.scanJobId, {
+						enqueueInitialRepositoryTask: false,
+					});
+					await reconcileScanJobCandidatePipelineStatus(scanJob.scanJobId);
+					return;
+				}
+			}
+			await updateScanJobStatus(scanJob.scanJobId, "running");
+			await runScanJobInContainer(scanJob.scanJobId, {
+				enqueueInitialRepositoryTask: mode === "full",
+			});
+
 			await reconcileScanJobCandidatePipelineStatus(scanJob.scanJobId);
+			console.log(
+				"[scans-worker]",
+				JSON.stringify({
+					event: "scan-job.completed",
+					scanJobId: scanJob.scanJobId,
+					mode,
+				}),
+			);
 		} catch (error) {
+			if (
+				error instanceof Error &&
+				error.name === SCAN_JOB_CANCELLED_ERROR_NAME
+			) {
+				return;
+			}
+
+			try {
+				const latestScanJob = await findScanJobById(job.data.scanJobId);
+				if (latestScanJob.status === "canceled") {
+					return;
+				}
+			} catch (_) {}
+
 			const message = error instanceof Error ? error.message : "Unknown error";
 			try {
-				await updateScanJobStatus(job.data.scanJobId, "failed", message);
+				await updateScanJobStatus(job.data.scanJobId, "finished", message);
 			} catch (_) {}
+			console.log(
+				"[scans-worker]",
+				JSON.stringify({
+					event: "scan-job.failed",
+					scanJobId: job.data.scanJobId,
+					errorMessage: message,
+				}),
+			);
 			console.log("Scan worker error", error);
 		} finally {
 			releaseScanExecutionSlot();

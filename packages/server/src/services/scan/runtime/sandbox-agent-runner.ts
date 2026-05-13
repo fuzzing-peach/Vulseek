@@ -3,9 +3,9 @@ import { SandboxAgent } from "sandbox-agent";
 import { Agent, type Dispatcher } from "undici";
 
 const ACP_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
-const SANDBOX_AGENT_PROMPT_TIMEOUT_MS = 10 * 60 * 1000;
-const VULSEEK_RET_OPEN = "<VULSEEK_RET>";
-const VULSEEK_RET_CLOSE = "<VULSEEK_RET/>";
+const SANDBOX_AGENT_PROMPT_TIMEOUT_MS = 30 * 60 * 1000;
+const VULSEEK_RET_MARKER = "<VULSEEK_RET>";
+const VULSEEK_RET_XML_CLOSE_MARKER = "</VULSEEK_RET>";
 
 type RequestInitWithDispatcher = RequestInit & {
   dispatcher?: Dispatcher;
@@ -56,6 +56,61 @@ const asString = (value: unknown) => (typeof value === "string" ? value : "");
 const appendScanRuntimeFile = async (filePath: string, content: string) => {
   if (!content) return;
   await appendFile(filePath, content, "utf-8");
+};
+
+const getPermissionRequestId = (request: Record<string, unknown>) =>
+  asString(request.id) ||
+  asString(request.permissionId) ||
+  asString(asRecord(request.permission)?.id) ||
+  asString(asRecord(request.rawRequest)?.id);
+
+const autoApprovePermissionRequest = async (
+  session: {
+    respondPermission: (permissionId: string, reply: "always" | "once") => Promise<void>;
+  },
+  stderrPath: string,
+  request: Record<string, unknown>,
+) => {
+  const permissionId = getPermissionRequestId(request);
+  if (!permissionId) {
+    await appendScanRuntimeFile(
+      stderrPath,
+      "[sandbox-agent-permission] unable to auto-approve permission without id\n",
+    );
+    return;
+  }
+
+  const availableReplies = Array.isArray(request.availableReplies)
+    ? request.availableReplies
+        .map((reply) => String(reply))
+        .filter((reply) => reply.length > 0)
+    : [];
+  const replies = [
+    ...availableReplies.filter((reply) => reply === "always"),
+    ...availableReplies.filter((reply) => reply === "once"),
+    "always",
+    "once",
+  ].filter((reply, index, values) => values.indexOf(reply) === index) as Array<
+    "always" | "once"
+  >;
+
+  for (const reply of replies) {
+    try {
+      await session.respondPermission(permissionId, reply);
+      await appendScanRuntimeFile(
+        stderrPath,
+        `[sandbox-agent-permission] auto-approved permission id=${permissionId} reply=${reply}\n`,
+      );
+      return;
+    } catch (error) {
+      await appendScanRuntimeFile(
+        stderrPath,
+        `[sandbox-agent-permission] auto-approve attempt failed id=${permissionId} reply=${reply} error=${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      );
+    }
+  }
 };
 
 const formatSandboxAgentSessionEvent = (event: SandboxAgentSessionEvent) =>
@@ -128,11 +183,49 @@ const renderSandboxAgentEvent = (event: SandboxAgentSessionEvent) => {
 };
 
 const extractVulseekRetValue = (content: string): string | null => {
-  const start = content.lastIndexOf(VULSEEK_RET_OPEN);
+  const acceptPairedPayload = (payload: string) => {
+    const trimmed = payload.trim();
+    return trimmed || null;
+  };
+
+  const acceptTrailingStructuredPayload = (payload: string) => {
+    const trimmed = payload.trim();
+    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+      return null;
+    }
+    try {
+      JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+    return trimmed;
+  };
+
+  const xmlEnd = content.lastIndexOf(VULSEEK_RET_XML_CLOSE_MARKER);
+  if (xmlEnd > 0) {
+    const xmlStart = content.lastIndexOf(VULSEEK_RET_MARKER, xmlEnd - 1);
+    if (xmlStart >= 0) {
+      return acceptPairedPayload(
+        content.slice(xmlStart + VULSEEK_RET_MARKER.length, xmlEnd),
+      );
+    }
+  }
+
+  const end = content.lastIndexOf(VULSEEK_RET_MARKER);
+  if (end >= 0) {
+    const trailingPayload = acceptTrailingStructuredPayload(
+      content.slice(end + VULSEEK_RET_MARKER.length),
+    );
+    if (trailingPayload !== null) {
+      return trailingPayload;
+    }
+  }
+  if (end <= 0) return null;
+  const start = content.lastIndexOf(VULSEEK_RET_MARKER, end - 1);
   if (start < 0) return null;
-  const end = content.indexOf(VULSEEK_RET_CLOSE, start + VULSEEK_RET_OPEN.length);
-  if (end < 0) return null;
-  return content.slice(start + VULSEEK_RET_OPEN.length, end).trim();
+  return acceptPairedPayload(
+    content.slice(start + VULSEEK_RET_MARKER.length, end),
+  );
 };
 
 const withTimeout = async <T>(
@@ -174,7 +267,7 @@ export const runSandboxAgentHeadlessTurnInContainer = async (input: {
     agent: input.provider,
     cwd: input.cwd,
     model: input.model || undefined,
-    effort: input.thinkingLevel || undefined,
+    thoughtLevel: input.thinkingLevel || undefined,
     mode: input.provider === "codex" ? "full-access" : undefined,
   } as never);
 
@@ -208,6 +301,17 @@ export const runSandboxAgentHeadlessTurnInContainer = async (input: {
   session.onEvent((event: SandboxAgentSessionEvent) => {
     eventWriteChain = eventWriteChain
       .then(() => appendSessionEvent(event))
+      .then(async () => {
+        const payload = getEventPayloadRecord(event);
+        if (asString(payload?.method) !== "session/request_permission") {
+          return;
+        }
+        const params = getEventParamsRecord(event) || {};
+        await autoApprovePermissionRequest(session, input.stderrPath, {
+          ...params,
+          id: asString(payload?.id) || asString(params.id) || undefined,
+        });
+      })
       .catch(async (error) => {
         await appendScanRuntimeFile(
           input.stderrPath,
@@ -217,28 +321,7 @@ export const runSandboxAgentHeadlessTurnInContainer = async (input: {
   });
 
   session.onPermissionRequest((request: Record<string, unknown>) => {
-    const permissionId =
-      asString(request.id) ||
-      asString(request.permissionId) ||
-      asString(asRecord(request.permission)?.id);
-    if (!permissionId) {
-      return;
-    }
-
-    void (async () => {
-      try {
-        await session.respondPermission(permissionId, "always");
-      } catch {
-        try {
-          await session.respondPermission(permissionId, "once");
-        } catch (error) {
-          await appendScanRuntimeFile(
-            input.stderrPath,
-            `[sandbox-agent-permission] ${error instanceof Error ? error.message : "failed to auto-approve permission"}\n`,
-          );
-        }
-      }
-    })();
+    void autoApprovePermissionRequest(session, input.stderrPath, request);
   });
 
   try {

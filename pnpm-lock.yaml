@@ -313,6 +313,9 @@ importers:
       fancy-ansi:
         specifier: ^0.1.3
         version: 0.1.3
+      framer-motion:
+        specifier: ^12.38.0
+        version: 12.38.0(@emotion/is-prop-valid@0.7.3)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       hi-base32:
         specifier: ^0.5.1
         version: 0.5.1
@@ -406,6 +409,9 @@ importers:
       rotating-file-stream:
         specifier: 3.2.3
         version: 3.2.3
+      sandbox-agent:
+        specifier: 0.4.x
+        version: 0.4.2(dockerode@4.0.2)(zod@3.25.32)
       slugify:
         specifier: ^1.6.6
         version: 1.6.6
@@ -657,6 +663,9 @@ importers:
       boxen:
         specifier: ^7.1.1
         version: 7.1.1
+      bullmq:
+        specifier: 5.4.2
+        version: 5.4.2
       date-fns:
         specifier: 3.6.0
         version: 3.6.0
@@ -729,6 +738,9 @@ importers:
       rotating-file-stream:
         specifier: 3.2.3
         version: 3.2.3
+      sandbox-agent:
+        specifier: 0.4.x
+        version: 0.4.2(dockerode@4.0.2)(zod@3.25.32)
       slugify:
         specifier: ^1.6.6
         version: 1.6.6
@@ -738,6 +750,9 @@ importers:
       toml:
         specifier: 3.0.0
         version: 3.0.0
+      undici:
+        specifier: ^6.21.3
+        version: 6.21.3
       ws:
         specifier: 8.16.0
         version: 8.16.0
@@ -747,6 +762,9 @@ importers:
       zod:
         specifier: ^3.25.32
         version: 3.25.32
+      zod-to-json-schema:
+        specifier: 3.24.5
+        version: 3.24.5(zod@3.25.32)
     devDependencies:
       '@types/adm-zip':
         specifier: ^0.5.7
@@ -816,6 +834,11 @@ importers:
         version: 5.8.3
 
 packages:
+
+  '@agentclientprotocol/sdk@0.16.1':
+    resolution: {integrity: sha512-1ad+Sc/0sCtZGHthxxvgEUo5Wsbw16I+aF+YwdiLnPwkZG8KAGUEAPK6LM6Pf69lCyJPt1Aomk1d+8oE3C4ZEw==}
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
 
   '@ai-sdk/anthropic@2.0.5':
     resolution: {integrity: sha512-f0+mD3c5D+ImCWqxFxkT3buGeBg9vFOd2aTaLd1jjIJmWO8O4INLxBC2ETif7z0BfegTIw528B6acBRIeg3jIw==}
@@ -3687,6 +3710,38 @@ packages:
   '@rvf/set-get@7.0.1':
     resolution: {integrity: sha512-GkTSn9K1GrTYoTUqlUs36k6nJnzjQaFBTTEIqUYmzBcsGsoJM8xG7EAx2WLHWAA4QzFjcwWUSHQ3vM3Fbw50Tg==}
 
+  '@sandbox-agent/cli-darwin-arm64@0.4.2':
+    resolution: {integrity: sha512-+L1O8SI7k/LLhyB4dG0ghmz1cJHa0WtVjuRTrEE2gw/5EbGLWopPBsCVCmQ7snrQ4fPwtaiZDhfExcEj1VI7aw==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@sandbox-agent/cli-darwin-x64@0.4.2':
+    resolution: {integrity: sha512-dDg/EwWsdgVVbJiiCX1scSNRRA48u77SsC7Tuqrfzx4fIJMLuLiIcmEtXQyCBWysSyQNV2Cr+PYXXQfCb3xg8g==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@sandbox-agent/cli-linux-arm64@0.4.2':
+    resolution: {integrity: sha512-TGmTUexMoubmWQyTeaOJu0rDVl2h0Ifh1pZ0ceZy7u/6Eoqs2n46CbfQtasUxZJf10uxPgRyzEDhcdDrTYVQUA==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@sandbox-agent/cli-linux-x64@0.4.2':
+    resolution: {integrity: sha512-H9Rbqq0DRkCHvakzefJUDrDa2y+vJjlYd5/tefzKbQ34locE13TGNygRLxdEVXpBECjK9wVdBwTVEphQNsOcjw==}
+    cpu: [x64]
+    os: [linux]
+
+  '@sandbox-agent/cli-shared@0.4.2':
+    resolution: {integrity: sha512-sjZXRkKeFXCSKR6hHzF2Af8CCRO3F3WFwVQJ22+sLTXJ2xskV8lkUE4egknQU9B5BC1Zumts/YiNCFQWG85awQ==}
+
+  '@sandbox-agent/cli-win32-x64@0.4.2':
+    resolution: {integrity: sha512-lZNfHWPwQe/VH51Yvrl/ATCUvBZ3a+c8mwovojhQcmZlv4QuUQPkuvxhPqHRh9AyBx78L5J/ha46es2doa34nQ==}
+    cpu: [x64]
+    os: [win32]
+
+  '@sandbox-agent/cli@0.4.2':
+    resolution: {integrity: sha512-trO//ypJBSt5xkewuol9LOykvDgHwUXq8R+yQVS+0CmpN3lYUtewHkb+At9RVGRhDMmJZY2oasaXDnhfurQ33w==}
+    hasBin: true
+
   '@scarf/scarf@1.4.0':
     resolution: {integrity: sha512-xxeapPiUXdZAE3che6f3xogoJPeZgig6omHEy1rIY5WVsB3H2BHNnZH+gHG6x91SCWyQCzWGsuL2Hh3ClO5/qQ==}
 
@@ -4168,6 +4223,9 @@ packages:
     resolution: {integrity: sha512-OvQ/2pUDKmgfCg++xsTX1wGxfTaszcHVcTctW4UJB4hibJx2HXxxO5UmVgyjMa+ZDsiaf5wWLXYpRWMmBI0QHg==}
     engines: {node: '>=0.4.0'}
     hasBin: true
+
+  acp-http-client@0.4.2:
+    resolution: {integrity: sha512-3wtPieF08YIU4vNXaoL5up/1D0if4i9IX3Ye5q/bwbcwg1BKsazIK/VNNfvN4ldbPjWul69IqIOpGRS3I0qo3Q==}
 
   adm-zip@0.5.16:
     resolution: {integrity: sha512-TGw5yVi4saajsSEgz25grObGHEUaDrniwvA2qwSC060KfqGPdglhvPMA2lPIoxs3PQIItj2iag35fONcQqgUaQ==}
@@ -5213,6 +5271,20 @@ packages:
   fraction.js@4.3.7:
     resolution: {integrity: sha512-ZsDfxO51wGAXREY55a7la9LScWpwv9RxIrYABrlvOFBlH/ShPnrtsXeuUIfXKKOVicNxQ+o8JTbJvjS4M89yew==}
 
+  framer-motion@12.38.0:
+    resolution: {integrity: sha512-rFYkY/pigbcswl1XQSb7q424kSTQ8q6eAC+YUsSKooHQYuLdzdHjrt6uxUC+PRAO++q5IS7+TamgIw1AphxR+g==}
+    peerDependencies:
+      '@emotion/is-prop-valid': '*'
+      react: ^18.0.0 || ^19.0.0
+      react-dom: ^18.0.0 || ^19.0.0
+    peerDependenciesMeta:
+      '@emotion/is-prop-valid':
+        optional: true
+      react:
+        optional: true
+      react-dom:
+        optional: true
+
   fresh@0.5.2:
     resolution: {integrity: sha512-zJ2mQYM18rEFOudeV4GShTGIQ7RbzA7ozbU9I/XBpm7kqgMywgmylMwXHxZJmkVoYkna9d2pVXVXPdYTP9ej8Q==}
     engines: {node: '>= 0.6'}
@@ -6187,6 +6259,12 @@ packages:
   module-details-from-path@1.0.4:
     resolution: {integrity: sha512-EGWKgxALGMgzvxYF1UyGTy0HXX/2vHLkw6+NvDKW2jypWbHpjQuj4UMcqQWXHERJhVGKikolT06G3bcKe4fi7w==}
 
+  motion-dom@12.38.0:
+    resolution: {integrity: sha512-pdkHLD8QYRp8VfiNLb8xIBJis1byQ9gPT3Jnh2jqfFtAsWUA3dEepDlsWe/xMpO8McV+VdpKVcp+E+TGJEtOoA==}
+
+  motion-utils@12.36.0:
+    resolution: {integrity: sha512-eHWisygbiwVvf6PZ1vhaHCLamvkSbPIeAYxWUuL3a2PD/TROgE7FvfHWTIH4vMl798QLfMw15nRqIaRDXTlYRg==}
+
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
@@ -7056,6 +7134,38 @@ packages:
   safer-buffer@2.1.2:
     resolution: {integrity: sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==}
 
+  sandbox-agent@0.4.2:
+    resolution: {integrity: sha512-fH6WDQEaIrgiu93LxZcy+4Dx+t+/cslu+hzXImDyUlsaL6jV2jIv4fdxELkALlo7uzyEDVK9lmqs9qy65RHwBQ==}
+    peerDependencies:
+      '@cloudflare/sandbox': '>=0.1.0'
+      '@daytonaio/sdk': '>=0.12.0'
+      '@e2b/code-interpreter': '>=1.0.0'
+      '@fly/sprites': '>=0.0.1'
+      '@vercel/sandbox': '>=0.1.0'
+      computesdk: '>=0.1.0'
+      dockerode: '>=4.0.0'
+      get-port: '>=7.0.0'
+      modal: '>=0.1.0'
+    peerDependenciesMeta:
+      '@cloudflare/sandbox':
+        optional: true
+      '@daytonaio/sdk':
+        optional: true
+      '@e2b/code-interpreter':
+        optional: true
+      '@fly/sprites':
+        optional: true
+      '@vercel/sandbox':
+        optional: true
+      computesdk:
+        optional: true
+      dockerode:
+        optional: true
+      get-port:
+        optional: true
+      modal:
+        optional: true
+
   scheduler@0.23.2:
     resolution: {integrity: sha512-UOShsPwz7NrMUqhR6t0hWjFduvOzbtv7toDH1/hIrfRNIDBnnBWd0CwJTGvTpngVlmwGCdP9/Zl/tVrDqcuYzQ==}
 
@@ -7610,6 +7720,7 @@ packages:
 
   uuid@9.0.1:
     resolution: {integrity: sha512-b+1eJOlsR9K8HJpow9Ok3fiWOWSIcIzXodvv0rQjVoOVNpWMpxf1wZNpt4y9h10odCNrqnYp1OBzRktckBe3sA==}
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   vfile-message@4.0.2:
@@ -7852,6 +7963,10 @@ packages:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
+
+  '@agentclientprotocol/sdk@0.16.1(zod@3.25.32)':
+    dependencies:
+      zod: 3.25.32
 
   '@ai-sdk/anthropic@2.0.5(zod@3.25.32)':
     dependencies:
@@ -10764,6 +10879,34 @@ snapshots:
 
   '@rvf/set-get@7.0.1': {}
 
+  '@sandbox-agent/cli-darwin-arm64@0.4.2':
+    optional: true
+
+  '@sandbox-agent/cli-darwin-x64@0.4.2':
+    optional: true
+
+  '@sandbox-agent/cli-linux-arm64@0.4.2':
+    optional: true
+
+  '@sandbox-agent/cli-linux-x64@0.4.2':
+    optional: true
+
+  '@sandbox-agent/cli-shared@0.4.2': {}
+
+  '@sandbox-agent/cli-win32-x64@0.4.2':
+    optional: true
+
+  '@sandbox-agent/cli@0.4.2':
+    dependencies:
+      '@sandbox-agent/cli-shared': 0.4.2
+    optionalDependencies:
+      '@sandbox-agent/cli-darwin-arm64': 0.4.2
+      '@sandbox-agent/cli-darwin-x64': 0.4.2
+      '@sandbox-agent/cli-linux-arm64': 0.4.2
+      '@sandbox-agent/cli-linux-x64': 0.4.2
+      '@sandbox-agent/cli-win32-x64': 0.4.2
+    optional: true
+
   '@scarf/scarf@1.4.0': {}
 
   '@selderee/plugin-htmlparser2@0.11.0':
@@ -11532,6 +11675,12 @@ snapshots:
       acorn: 8.14.1
 
   acorn@8.14.1: {}
+
+  acp-http-client@0.4.2(zod@3.25.32):
+    dependencies:
+      '@agentclientprotocol/sdk': 0.16.1(zod@3.25.32)
+    transitivePeerDependencies:
+      - zod
 
   adm-zip@0.5.16: {}
 
@@ -12580,6 +12729,16 @@ snapshots:
   forwarded-parse@2.1.2: {}
 
   fraction.js@4.3.7: {}
+
+  framer-motion@12.38.0(@emotion/is-prop-valid@0.7.3)(react-dom@18.2.0(react@18.2.0))(react@18.2.0):
+    dependencies:
+      motion-dom: 12.38.0
+      motion-utils: 12.36.0
+      tslib: 2.8.1
+    optionalDependencies:
+      '@emotion/is-prop-valid': 0.7.3
+      react: 18.2.0
+      react-dom: 18.2.0(react@18.2.0)
 
   fresh@0.5.2: {}
 
@@ -13729,6 +13888,12 @@ snapshots:
 
   module-details-from-path@1.0.4: {}
 
+  motion-dom@12.38.0:
+    dependencies:
+      motion-utils: 12.36.0
+
+  motion-utils@12.36.0: {}
+
   ms@2.1.3: {}
 
   msgpackr-extract@3.0.3:
@@ -14641,6 +14806,16 @@ snapshots:
   safe-stable-stringify@2.5.0: {}
 
   safer-buffer@2.1.2: {}
+
+  sandbox-agent@0.4.2(dockerode@4.0.2)(zod@3.25.32):
+    dependencies:
+      '@sandbox-agent/cli-shared': 0.4.2
+      acp-http-client: 0.4.2(zod@3.25.32)
+    optionalDependencies:
+      '@sandbox-agent/cli': 0.4.2
+      dockerode: 4.0.2
+    transitivePeerDependencies:
+      - zod
 
   scheduler@0.23.2:
     dependencies:

@@ -1,24 +1,12 @@
 export type ScanPipelineJobStatus =
-	| "queued"
-	| "scanning"
-	| "analyzing"
-	| "verifying"
-	| "completed"
-	| "failed";
-
-export type ScanPipelinePhase =
-	| "queued"
-	| "repository_scanning"
-	| "module_scanning"
-	| "function_scanning"
-	| "analyzing"
-	| "verifying"
-	| "completed"
-	| "failed";
+	| "pending"
+	| "running"
+	| "finished"
+	| "canceled";
 
 export type ResolveScanPipelineStateInput = {
 	scanJobStatus: ScanPipelineJobStatus;
-	repositoryTaskStatus: "queued" | "running" | "completed" | "failed";
+	repositoryTaskStatus: "pending" | "launching" | "running" | "completed" | "failed";
 	modulePendingCount: number;
 	functionPendingCount: number;
 	moduleFailed: number;
@@ -31,7 +19,6 @@ export type ResolveScanPipelineStateInput = {
 
 export type ResolvedScanPipelineState = {
 	status: ScanPipelineJobStatus;
-	scanPhase: ScanPipelinePhase;
 	errorMessage?: string;
 };
 
@@ -42,75 +29,26 @@ export const resolveNextScanPipelineState = (
 		input.repositoryTaskStatus !== "completed" &&
 		input.repositoryTaskStatus !== "failed";
 
-	if (repositoryPending) {
+	if (
+		repositoryPending ||
+		input.functionPendingCount > 0 ||
+		input.modulePendingCount > 0 ||
+		input.analysisPendingCount > 0 ||
+		input.verificationPendingCount > 0
+	) {
 		return {
-			status: "scanning",
-			scanPhase: "repository_scanning",
-		};
-	}
-
-	if (input.functionPendingCount > 0) {
-		return {
-			status: "scanning",
-			scanPhase: "function_scanning",
-		};
-	}
-
-	if (input.modulePendingCount > 0) {
-		return {
-			status: "scanning",
-			scanPhase: "module_scanning",
+			status: "running",
 		};
 	}
 
 	if (input.repositoryTaskStatus === "failed") {
 		return {
-			status: "failed",
-			scanPhase: "repository_scanning",
+			status: "finished",
 			errorMessage: "Repository scanning failed",
 		};
 	}
 
-	if (input.moduleFailed > 0 || input.functionFailed > 0) {
-		return {
-			status: "failed",
-			scanPhase: "function_scanning",
-			errorMessage: `${input.moduleFailed} module tasks failed, ${input.functionFailed} function tasks failed`,
-		};
-	}
-
-	if (input.analysisPendingCount > 0) {
-		return {
-			status: "analyzing",
-			scanPhase: "analyzing",
-		};
-	}
-
-	if (input.verificationPendingCount > 0) {
-		return {
-			status: "verifying",
-			scanPhase: "verifying",
-		};
-	}
-
-	if (input.analysisFailed > 0) {
-		return {
-			status: "failed",
-			scanPhase: "analyzing",
-			errorMessage: `${input.analysisFailed} candidate analyses failed`,
-		};
-	}
-
-	if (input.verificationFailed > 0) {
-		return {
-			status: "failed",
-			scanPhase: "verifying",
-			errorMessage: `${input.verificationFailed} candidate verifications failed`,
-		};
-	}
-
 	return {
-		status: "completed",
-		scanPhase: "completed",
+		status: "finished",
 	};
 };

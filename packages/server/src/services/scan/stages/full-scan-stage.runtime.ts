@@ -1,19 +1,109 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { db } from "@dokploy/server/db";
+import {
+	applications,
+	compose,
+	scanJobs,
+} from "@dokploy/server/db/schema";
+import { eq } from "drizzle-orm";
 import { findApplicationById } from "../../application";
 import { findComposeById } from "../../compose";
+import type { StageOutputTextChannel } from "../pipeline/stage-definition";
 import type { AgentProfileLike, ScanJob } from "../types";
 
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
 
-export type StageRuntimeTarget = {
+export type PipelineContext = {
 	projectName: string;
 	serviceName: string;
+	scanJobId: string;
+};
+
+export type ScanProfileConcurrencySettings = {
+	analysisConcurrency: number | null;
+	verifyConcurrency: number | null;
+	fullScanModuleConcurrency: number | null;
+	fullScanFunctionConcurrency: number | null;
 };
 
 export type StageAgentKind = "scan" | "analysis" | "verification";
+type ScanJobRef = Pick<ScanJob, "scanJobId" | "applicationId" | "composeId">;
 
-const resolveScanContextMount = async (input: StageRuntimeTarget) => {
+const sanitizeContainerNamePart = (value: string) =>
+	value
+		.toLowerCase()
+		.replace(/[^a-z0-9_.-]/g, "-")
+		.replace(/-+/g, "-")
+		.replace(/^-|-$/g, "") || "x";
+
+const resolveStageAgentKindFromStageName = (stageName: string): StageAgentKind => {
+	switch (stageName) {
+		case "AnalysisStage":
+			return "analysis";
+		case "VerifyingStage":
+			return "verification";
+		default:
+			return "scan";
+	}
+};
+
+const resolveStageContainerPrefix = (stageName: string) => {
+	switch (stageName) {
+		case "RepositoryScanningStage":
+			return "repository-scan";
+		case "ModuleScanningStage":
+			return "module-scan";
+		case "FunctionScanningStage":
+			return "function-scan";
+		case "AnalysisStage":
+			return "analysis";
+		case "VerifyingStage":
+			return "verify";
+		default:
+			return sanitizeContainerNamePart(stageName);
+	}
+};
+
+const sanitizePathPart = (value: string) =>
+	value
+		.replace(/[\\/]+/g, "-")
+		.replace(/[^a-zA-Z0-9._-]/g, "-")
+		.replace(/-+/g, "-")
+		.replace(/^-|-$/g, "") || "unknown";
+
+const resolveMountedProfileDir = (
+	input: Pick<PipelineContext, "projectName" | "serviceName">,
+) =>
+	path.join(
+		CONTAINER_SCAN_CONTEXT_ROOT,
+		"projects",
+		sanitizePathPart(input.projectName),
+		"profiles",
+		sanitizePathPart(input.serviceName),
+	);
+
+const resolveTaskRootSegment = (
+	stageName: string,
+	taskName: string,
+	taskId?: string,
+) => {
+	const taskPathPart = taskId
+		? `${sanitizePathPart(taskName)}-${sanitizePathPart(taskId).slice(0, 6)}`
+		: sanitizePathPart(taskName);
+	return path.join(
+		"scanning",
+		"full_scan",
+		"stages",
+		sanitizePathPart(stageName),
+		"tasks",
+		taskPathPart,
+	);
+};
+
+const resolveScanContextMount = async (
+	input: Pick<PipelineContext, "projectName" | "serviceName">,
+) => {
 	const configuredHostRoot =
 		process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH?.trim() || "";
 	if (!configuredHostRoot) {
@@ -25,17 +115,9 @@ const resolveScanContextMount = async (input: StageRuntimeTarget) => {
 	const hostProfileDir = path.join(
 		configuredHostRoot,
 		"projects",
-		input.projectName
-			.replace(/[\\/]+/g, "-")
-			.replace(/[^a-zA-Z0-9._-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "unknown",
+		sanitizePathPart(input.projectName),
 		"profiles",
-		input.serviceName
-			.replace(/[\\/]+/g, "-")
-			.replace(/[^a-zA-Z0-9._-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "unknown",
+		sanitizePathPart(input.serviceName),
 	);
 	await fs.mkdir(hostProfileDir, { recursive: true });
 	return {
@@ -46,7 +128,7 @@ const resolveScanContextMount = async (input: StageRuntimeTarget) => {
 };
 
 export const resolveStageAgentProfile = async (
-	scanJob: ScanJob,
+	scanJob: ScanJobRef,
 	kind: StageAgentKind,
 ): Promise<AgentProfileLike | null> => {
 	const target = scanJob.applicationId
@@ -77,30 +159,81 @@ export const resolveStageAgentProfile = async (
 	}
 };
 
+export const resolveScanProfileConcurrencySettings = async (
+	scanJobId: string,
+): Promise<ScanProfileConcurrencySettings> => {
+	const [scanJob] = await db
+		.select({
+			applicationId: scanJobs.applicationId,
+			composeId: scanJobs.composeId,
+		})
+		.from(scanJobs)
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.limit(1);
+
+	if (scanJob?.applicationId) {
+		const [row] = await db
+			.select({
+				analysisConcurrency: applications.analysisConcurrency,
+				verifyConcurrency: applications.verifyConcurrency,
+				fullScanModuleConcurrency: applications.fullScanModuleConcurrency,
+				fullScanFunctionConcurrency:
+					applications.fullScanFunctionConcurrency,
+			})
+			.from(applications)
+			.where(eq(applications.applicationId, scanJob.applicationId))
+			.limit(1);
+		return {
+			analysisConcurrency: row?.analysisConcurrency ?? null,
+			verifyConcurrency: row?.verifyConcurrency ?? null,
+			fullScanModuleConcurrency: row?.fullScanModuleConcurrency ?? null,
+			fullScanFunctionConcurrency:
+				row?.fullScanFunctionConcurrency ?? null,
+		};
+	}
+
+	if (scanJob?.composeId) {
+		const [row] = await db
+			.select({
+				analysisConcurrency: compose.analysisConcurrency,
+				verifyConcurrency: compose.verifyConcurrency,
+				fullScanModuleConcurrency: compose.fullScanModuleConcurrency,
+				fullScanFunctionConcurrency: compose.fullScanFunctionConcurrency,
+			})
+			.from(compose)
+			.where(eq(compose.composeId, scanJob.composeId))
+			.limit(1);
+		return {
+			analysisConcurrency: row?.analysisConcurrency ?? null,
+			verifyConcurrency: row?.verifyConcurrency ?? null,
+			fullScanModuleConcurrency: row?.fullScanModuleConcurrency ?? null,
+			fullScanFunctionConcurrency:
+				row?.fullScanFunctionConcurrency ?? null,
+		};
+	}
+
+	return {
+		analysisConcurrency: null,
+		verifyConcurrency: null,
+		fullScanModuleConcurrency: null,
+		fullScanFunctionConcurrency: null,
+	};
+};
+
 export const resolveRepositoryArtifactsDir = async (input: {
 	scanJobId: string;
 	projectName: string;
 	serviceName: string;
 }) =>
 	path.join(
-		CONTAINER_SCAN_CONTEXT_ROOT,
-		"projects",
-		input.projectName
-			.replace(/[\\/]+/g, "-")
-			.replace(/[^a-zA-Z0-9._-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "unknown",
-		"profiles",
-		input.serviceName
-			.replace(/[\\/]+/g, "-")
-			.replace(/[^a-zA-Z0-9._-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "unknown",
+		resolveMountedProfileDir(input),
 		"jobs",
 		input.scanJobId,
-		"scanning",
-		"full_scan",
-		"repository",
+		resolveTaskRootSegment(
+			"RepositoryScanningStage",
+			"repository-scanning",
+			input.scanJobId,
+		),
 	);
 
 export const resolveRepositoryStageRuntime = async (input: {
@@ -113,112 +246,130 @@ export const resolveRepositoryStageRuntime = async (input: {
 		serviceName: input.serviceName,
 	});
 
-	const runtimeDirHost = path.join(
-		CONTAINER_SCAN_CONTEXT_ROOT,
-		"projects",
-		input.projectName
-			.replace(/[\\/]+/g, "-")
-			.replace(/[^a-zA-Z0-9._-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "unknown",
-		"profiles",
-		input.serviceName
-			.replace(/[\\/]+/g, "-")
-			.replace(/[^a-zA-Z0-9._-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "unknown",
+	const stageDirPath = path.join(
+		resolveMountedProfileDir(input),
 		"jobs",
 		input.scanJobId,
-		"scanning",
+		resolveTaskRootSegment(
+			"RepositoryScanningStage",
+			"repository-scanning",
+			input.scanJobId,
+		),
 	);
-	await fs.mkdir(runtimeDirHost, { recursive: true });
+	await fs.mkdir(stageDirPath, { recursive: true });
 
 	return {
-		runtimeDirHost,
-		runtimeRootInContainer: path.posix.join(
+		stageDirPath,
+		stageRootInContainer: path.posix.join(
 			CONTAINER_SCAN_CONTEXT_ROOT,
 			"jobs",
 			input.scanJobId,
-			"scanning",
-		),
-		setupMarkdownPathInContainer: path.posix.join(
-			CONTAINER_SCAN_CONTEXT_ROOT,
-			"jobs",
-			input.scanJobId,
-			"scanning",
-			"full_scan",
-			"repository",
-			"00_setup.md",
+			resolveTaskRootSegment(
+				"RepositoryScanningStage",
+				"repository-scanning",
+				input.scanJobId,
+			)
+				.split(path.sep)
+				.join("/"),
 		),
 	};
 };
 
-export const resolveModuleStageRuntime = async (input: {
-	scanJobId: string;
-	moduleId: string;
-	artifactDir: string;
-}) => {
-	await fs.mkdir(input.artifactDir, { recursive: true });
-	const sanitizedModuleId =
-		input.moduleId
-			.replace(/[\\/]+/g, "-")
-			.replace(/[^a-zA-Z0-9._-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "unknown";
-	const runtimeRootInContainer = path.posix.join(
-		CONTAINER_SCAN_CONTEXT_ROOT,
-		"jobs",
-		input.scanJobId,
-		"scanning",
-		"full_scan",
-		"modules",
-		sanitizedModuleId,
-	);
-	return {
-		runtimeDirHost: input.artifactDir,
-		runtimeRootInContainer,
-		setupMarkdownPathInContainer: `${runtimeRootInContainer}/00_setup.md`,
-	};
+export type StageContext = PipelineContext & {
+	stageName: string;
+	taskId: string;
+	taskName: string;
+	outputTextChannel: StageOutputTextChannel;
+	sessionMode: "new" | "fork";
+	parentSessionId: string | null;
+	agentProfile: () => Promise<AgentProfileLike | null>;
+	containerName: (...parts: Array<string | null | undefined>) => string;
+	taskDir: (input?:
+		| string
+		| {
+		moduleId?: string;
+		functionId?: string;
+		candidateId?: string;
+		taskName?: string;
+		stageName?: string;
+	}) => Promise<string>;
+	taskDirContainer: () => Promise<string>;
+	repositoryArtifactsDir: () => Promise<string>;
+	repositoryStageRuntime: () => Promise<{
+		stageDirPath: string;
+		stageRootInContainer: string;
+	}>;
 };
 
-export const resolveFunctionStageRuntime = async (input: {
-	scanJobId: string;
-	moduleId: string;
-	functionId: string;
-	moduleArtifactDir: string;
-}) => {
-	const sanitizedModuleId =
-		input.moduleId
-			.replace(/[\\/]+/g, "-")
-			.replace(/[^a-zA-Z0-9._-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "unknown";
-	const sanitizedFunctionId =
-		input.functionId
-			.replace(/[\\/]+/g, "-")
-			.replace(/[^a-zA-Z0-9._-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "unknown";
-	const runtimeDirHost = path.join(
-		input.moduleArtifactDir,
-		"functions",
-		sanitizedFunctionId,
-	);
-	await fs.mkdir(runtimeDirHost, { recursive: true });
-	const runtimeRootInContainer = path.posix.join(
-		CONTAINER_SCAN_CONTEXT_ROOT,
-		"jobs",
-		input.scanJobId,
-		"scanning",
-		"full_scan",
-		"modules",
-		sanitizedModuleId,
-		"functions",
-		sanitizedFunctionId,
-	);
-	return {
-		runtimeDirHost,
-		runtimeRootInContainer,
-		setupMarkdownPathInContainer: `${runtimeRootInContainer}/00_setup.md`,
-	};
-};
+export const createStageContext = <TBase extends PipelineContext>(input: {
+	base: TBase;
+	stageName: string;
+	scanJob: ScanJobRef;
+	taskId: string;
+	taskName: string;
+	outputTextChannel?: StageOutputTextChannel;
+	sessionMode?: "new" | "fork";
+	parentSessionId?: string | null;
+}): TBase & StageContext => ({
+	...input.base,
+	stageName: input.stageName,
+	taskId: input.taskId,
+	taskName: input.taskName,
+	outputTextChannel: input.outputTextChannel || "file",
+	sessionMode: input.sessionMode || "new",
+	parentSessionId: input.parentSessionId ?? null,
+	agentProfile: async () =>
+		await resolveStageAgentProfile(
+			input.scanJob,
+			resolveStageAgentKindFromStageName(input.stageName),
+		),
+	containerName: (...parts) =>
+		[
+			sanitizeContainerNamePart(input.base.projectName),
+			sanitizeContainerNamePart(input.base.serviceName),
+			resolveStageContainerPrefix(input.stageName),
+			sanitizeContainerNamePart(input.scanJob.scanJobId),
+			...parts
+				.filter((value): value is string => Boolean(value && value.trim()))
+				.map((value) => sanitizeContainerNamePart(value)),
+			sanitizeContainerNamePart(input.taskId),
+		].join("-"),
+	taskDir: async (runtimeInput) => {
+		const normalizedRuntimeInput =
+			typeof runtimeInput === "string"
+				? { taskName: runtimeInput, stageName: input.stageName }
+				: runtimeInput;
+		const targetStageName = normalizedRuntimeInput?.stageName || input.stageName;
+		const targetTaskName = normalizedRuntimeInput?.taskName || input.taskName;
+		await resolveScanContextMount(input.base);
+		const defaultStageDirPath = path.join(
+			resolveMountedProfileDir(input.base),
+			"jobs",
+			input.scanJob.scanJobId,
+			resolveTaskRootSegment(targetStageName, targetTaskName, input.taskId),
+		);
+		await fs.mkdir(defaultStageDirPath, { recursive: true });
+		return defaultStageDirPath;
+	},
+	taskDirContainer: async () =>
+		path.posix.join(
+			CONTAINER_SCAN_CONTEXT_ROOT,
+			"jobs",
+			input.scanJob.scanJobId,
+			resolveTaskRootSegment(input.stageName, input.taskName, input.taskId)
+				.split(path.sep)
+				.join("/"),
+		),
+	repositoryArtifactsDir: async () =>
+		await resolveRepositoryArtifactsDir({
+			scanJobId: input.scanJob.scanJobId,
+			projectName: input.base.projectName,
+			serviceName: input.base.serviceName,
+		}),
+	repositoryStageRuntime: async () =>
+		await resolveRepositoryStageRuntime({
+			scanJobId: input.scanJob.scanJobId,
+			projectName: input.base.projectName,
+			serviceName: input.base.serviceName,
+		}),
+});

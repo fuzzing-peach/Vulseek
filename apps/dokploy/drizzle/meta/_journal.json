@@ -1065,6 +1065,111 @@
       "when": 1777297732777,
       "tag": "0151_blue_doomsday",
       "breakpoints": true
+    },
+    {
+      "idx": 152,
+      "version": "7",
+      "when": 1777420800000,
+      "tag": "0152_agent_profile_envs",
+      "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "7",
+      "when": 1777424400000,
+      "tag": "0153_scan_task_agent_profile_json",
+      "breakpoints": true
+    },
+    {
+      "idx": 154,
+      "version": "7",
+      "when": 1777500000000,
+      "tag": "0154_scan_task_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 155,
+      "version": "7",
+      "when": 1777516800000,
+      "tag": "0155_unified_tasks_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 156,
+      "version": "7",
+      "when": 1777517100000,
+      "tag": "0156_tasks_input_output_jsonb",
+      "breakpoints": true
+    },
+    {
+      "idx": 157,
+      "version": "7",
+      "when": 1777517400000,
+      "tag": "0157_candidate_function_task_fk_to_tasks",
+      "breakpoints": true
+    },
+    {
+      "idx": 158,
+      "version": "7",
+      "when": 1777517700000,
+      "tag": "0158_drop_legacy_scan_path_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 159,
+      "version": "7",
+      "when": 1777680000000,
+      "tag": "0159_candidate_vulnerability_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 160,
+      "version": "7",
+      "when": 1777766400000,
+      "tag": "0160_drop_legacy_candidate_task_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 161,
+      "version": "7",
+      "when": 1777766700000,
+      "tag": "0161_drop_legacy_scan_task_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 162,
+      "version": "7",
+      "when": 1777767000000,
+      "tag": "0162_drop_vulnerability_candidates",
+      "breakpoints": true
+    },
+    {
+      "idx": 163,
+      "version": "7",
+      "when": 1777767300000,
+      "tag": "0163_scan_job_status_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 164,
+      "version": "7",
+      "when": 1778037459009,
+      "tag": "0164_dizzy_ironclad",
+      "breakpoints": true
+    },
+    {
+      "idx": 165,
+      "version": "7",
+      "when": 1778037460000,
+      "tag": "0165_task_status_pending_launching",
+      "breakpoints": true
+    },
+    {
+      "idx": 166,
+      "version": "7",
+      "when": 1778037461000,
+      "tag": "0166_task_fork_session_metadata",
+      "breakpoints": true
     }
   ]
 }

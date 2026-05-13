@@ -1,47 +1,42 @@
 import { relations } from "drizzle-orm";
 import {
-	boolean,
+	AnyPgColumn,
+	index,
 	integer,
+	jsonb,
 	pgEnum,
 	pgTable,
-	real,
 	text,
-	unique,
 } from "drizzle-orm/pg-core";
+import { randomUUID } from "node:crypto";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { applications } from "./application";
 import { compose } from "./compose";
 
+type TaskAgentProfileSnapshot = {
+	agentProfileId: string | null;
+	name: string | null;
+	provider: "codex" | "claude_code" | null;
+	baseUrl: string | null;
+	model: string | null;
+	thinkingLevel: string | null;
+};
+
 export const scanTypeEnum = pgEnum("scanType", ["delta", "full"]);
 export const scanJobStatusEnum = pgEnum("scanJobStatus", [
-	"queued",
-	"scanning",
-	"analyzing",
-	"verifying",
-	"completed",
-	"failed",
+	"pending",
+	"running",
+	"finished",
+	"canceled",
 ]);
-export const scanPhaseEnum = pgEnum("scanPhase", [
-	"queued",
-	"repository_scanning",
-	"module_scanning",
-	"function_scanning",
-	"analyzing",
-	"verifying",
-	"completed",
-	"failed",
-]);
-export const scanTaskStatusEnum = pgEnum("scanTaskStatus", [
-	"queued",
+export const taskStatusEnum = pgEnum("taskStatus", [
+	"pending",
+	"launching",
 	"running",
 	"completed",
 	"failed",
 ]);
-export const vulnerabilityCandidateStatusEnum = pgEnum(
-	"vulnerabilityCandidateStatus",
-	["queued", "running", "completed", "failed"],
-);
 
 export const scanJobs = pgTable("scan_jobs", {
 	scanJobId: text("scanJobId")
@@ -52,8 +47,7 @@ export const scanJobs = pgTable("scan_jobs", {
 	description: text("description"),
 	note: text("note"),
 	scanType: scanTypeEnum("scanType").notNull(),
-	status: scanJobStatusEnum("status").notNull().default("queued"),
-	scanPhase: scanPhaseEnum("scanPhase").notNull().default("queued"),
+	status: scanJobStatusEnum("status").notNull().default("pending"),
 	triggerSource: text("triggerSource").notNull().default("manual"),
 	commitSha: text("commitSha"),
 	baseSha: text("baseSha"),
@@ -84,253 +78,78 @@ export const scanJobs = pgTable("scan_jobs", {
 	scanningThreadId: text("scanningThreadId"),
 });
 
-export const scanRepositoryTasks = pgTable(
-	"scan_repository_tasks",
+export const tasks = pgTable(
+	"tasks",
 	{
-		scanRepositoryTaskId: text("scanRepositoryTaskId")
+		taskId: text("taskId")
 			.notNull()
 			.primaryKey()
-			.$defaultFn(() => nanoid()),
+			.$defaultFn(() => randomUUID().replace(/-/g, "").slice(0, 8)),
 		scanJobId: text("scanJobId")
 			.notNull()
 			.references(() => scanJobs.scanJobId, {
 				onDelete: "cascade",
 			}),
-		status: scanTaskStatusEnum("status").notNull().default("queued"),
-		attempt: integer("attempt").notNull().default(0),
-		containerName: text("containerName"),
-		threadId: text("threadId"),
-		result: text("result"),
-		repositoryScanMdPath: text("repositoryScanMdPath"),
-		repositoryScanJsonPath: text("repositoryScanJsonPath"),
-		modulePlanJsonPath: text("modulePlanJsonPath"),
-		errorMessage: text("errorMessage"),
-		startedAt: text("startedAt"),
-		completedAt: text("completedAt"),
-		createdAt: text("createdAt")
-			.notNull()
-			.$defaultFn(() => new Date().toISOString()),
-		updatedAt: text("updatedAt")
-			.notNull()
-			.$defaultFn(() => new Date().toISOString()),
-	},
-	(table) => ({
-		uniqueScanJobRepositoryTask: unique().on(table.scanJobId),
-	}),
-);
-
-export const scanModuleTasks = pgTable(
-	"scan_module_tasks",
-	{
-		scanModuleTaskId: text("scanModuleTaskId")
-			.notNull()
-			.primaryKey()
-			.$defaultFn(() => nanoid()),
-		scanJobId: text("scanJobId")
-			.notNull()
-			.references(() => scanJobs.scanJobId, {
-				onDelete: "cascade",
-			}),
-		moduleId: text("moduleId").notNull(),
-		moduleName: text("moduleName").notNull(),
-		status: scanTaskStatusEnum("status").notNull().default("queued"),
-		priority: integer("priority").notNull().default(0),
-		attempt: integer("attempt").notNull().default(0),
-		containerName: text("containerName"),
-		threadId: text("threadId"),
-		result: text("result"),
-		moduleScanMdPath: text("moduleScanMdPath"),
-		moduleScanJsonPath: text("moduleScanJsonPath"),
-		functionPlanJsonPath: text("functionPlanJsonPath"),
-		errorMessage: text("errorMessage"),
-		startedAt: text("startedAt"),
-		completedAt: text("completedAt"),
-		createdAt: text("createdAt")
-			.notNull()
-			.$defaultFn(() => new Date().toISOString()),
-		updatedAt: text("updatedAt")
-			.notNull()
-			.$defaultFn(() => new Date().toISOString()),
-	},
-	(table) => ({
-		uniqueScanJobModule: unique().on(table.scanJobId, table.moduleId),
-	}),
-);
-
-export const scanFunctionTasks = pgTable(
-	"scan_function_tasks",
-	{
-		scanFunctionTaskId: text("scanFunctionTaskId")
-			.notNull()
-			.primaryKey()
-			.$defaultFn(() => nanoid()),
-		scanJobId: text("scanJobId")
-			.notNull()
-			.references(() => scanJobs.scanJobId, {
-				onDelete: "cascade",
-			}),
-		scanModuleTaskId: text("scanModuleTaskId")
-			.notNull()
-			.references(() => scanModuleTasks.scanModuleTaskId, {
-				onDelete: "cascade",
-			}),
-		moduleId: text("moduleId").notNull(),
-		moduleName: text("moduleName").notNull(),
-		functionId: text("functionId").notNull(),
-		functionName: text("functionName").notNull(),
-		filePath: text("filePath"),
-		line: integer("line"),
-		status: scanTaskStatusEnum("status").notNull().default("queued"),
-		priority: integer("priority").notNull().default(0),
-		attempt: integer("attempt").notNull().default(0),
-		score: real("score"),
-		riskType: text("riskType"),
-		summary: text("summary"),
-		containerName: text("containerName"),
-		threadId: text("threadId"),
-		result: text("result"),
-		functionScanMdPath: text("functionScanMdPath"),
-		functionScanJsonPath: text("functionScanJsonPath"),
-		errorMessage: text("errorMessage"),
-		startedAt: text("startedAt"),
-		completedAt: text("completedAt"),
-		createdAt: text("createdAt")
-			.notNull()
-			.$defaultFn(() => new Date().toISOString()),
-		updatedAt: text("updatedAt")
-			.notNull()
-			.$defaultFn(() => new Date().toISOString()),
-	},
-	(table) => ({
-		uniqueScanJobFunction: unique().on(table.scanJobId, table.functionId),
-	}),
-);
-
-export const vulnerabilityCandidates = pgTable("vulnerability_candidates", {
-	vulnerabilityCandidateId: text("vulnerabilityCandidateId")
-		.notNull()
-		.primaryKey()
-		.$defaultFn(() => nanoid()),
-	scanJobId: text("scanJobId")
-		.notNull()
-		.references(() => scanJobs.scanJobId, {
-			onDelete: "cascade",
-		}),
-	scanFunctionTaskId: text("scanFunctionTaskId").references(
-		() => scanFunctionTasks.scanFunctionTaskId,
-		{
-			onDelete: "set null",
-		},
-	),
-	title: text("title").notNull(),
-	description: text("description"),
-	filePath: text("filePath"),
-	line: integer("line"),
-	status: vulnerabilityCandidateStatusEnum("status")
-		.notNull()
-		.default("queued"),
-	currentStage: text("currentStage").default("analyzing").notNull(),
-	analysisThreadId: text("analysisThreadId"),
-	verifierThreadId: text("verifierThreadId"),
-	confidence: real("confidence"),
-	score: real("score"),
-	createdAt: text("createdAt")
-		.notNull()
-		.$defaultFn(() => new Date().toISOString()),
-	updatedAt: text("updatedAt")
-		.notNull()
-		.$defaultFn(() => new Date().toISOString()),
-});
-
-export const candidateAnalysisTasks = pgTable(
-	"candidate_analysis_tasks",
-	{
-		candidateAnalysisTaskId: text("candidateAnalysisTaskId")
-			.notNull()
-			.primaryKey()
-			.$defaultFn(() => nanoid()),
-		scanJobId: text("scanJobId")
-			.notNull()
-			.references(() => scanJobs.scanJobId, {
-				onDelete: "cascade",
-			}),
-		vulnerabilityCandidateId: text("vulnerabilityCandidateId")
-			.notNull()
-			.references(() => vulnerabilityCandidates.vulnerabilityCandidateId, {
-				onDelete: "cascade",
-			}),
-		status: scanTaskStatusEnum("status").notNull().default("queued"),
-		attempt: integer("attempt").notNull().default(0),
-		containerName: text("containerName"),
-		threadId: text("threadId"),
-		result: text("result"),
-		confidence: real("confidence"),
-		score: real("score"),
-		reportPath: text("reportPath"),
-		runtimeSeconds: real("runtimeSeconds"),
-		summary: text("summary"),
-		errorMessage: text("errorMessage"),
-		startedAt: text("startedAt"),
-		completedAt: text("completedAt"),
-		createdAt: text("createdAt")
-			.notNull()
-			.$defaultFn(() => new Date().toISOString()),
-		updatedAt: text("updatedAt")
-			.notNull()
-			.$defaultFn(() => new Date().toISOString()),
-	},
-	(table) => ({
-		uniqueCandidateAnalysisTask: unique().on(table.vulnerabilityCandidateId),
-	}),
-);
-
-export const candidateVerificationTasks = pgTable(
-	"candidate_verification_tasks",
-	{
-		candidateVerificationTaskId: text("candidateVerificationTaskId")
-			.notNull()
-			.primaryKey()
-			.$defaultFn(() => nanoid()),
-		scanJobId: text("scanJobId")
-			.notNull()
-			.references(() => scanJobs.scanJobId, {
-				onDelete: "cascade",
-			}),
-		vulnerabilityCandidateId: text("vulnerabilityCandidateId")
-			.notNull()
-			.references(() => vulnerabilityCandidates.vulnerabilityCandidateId, {
-				onDelete: "cascade",
-			}),
-		status: scanTaskStatusEnum("status").notNull().default("queued"),
-		attempt: integer("attempt").notNull().default(0),
-		containerName: text("containerName"),
-		threadId: text("threadId"),
-		result: text("result"),
-		isBug: boolean("isBug"),
-		isSecurity: boolean("isSecurity"),
-		confidence: real("confidence"),
-		score: real("score"),
-		reportPath: text("reportPath"),
-		issueDraftPath: text("issueDraftPath"),
-		pocPath: text("pocPath"),
-		dockerfilePath: text("dockerfilePath"),
-		runScriptPath: text("runScriptPath"),
-		runtimeSeconds: real("runtimeSeconds"),
-		summary: text("summary"),
-		errorMessage: text("errorMessage"),
-		startedAt: text("startedAt"),
-		completedAt: text("completedAt"),
-		createdAt: text("createdAt")
-			.notNull()
-			.$defaultFn(() => new Date().toISOString()),
-		updatedAt: text("updatedAt")
-			.notNull()
-			.$defaultFn(() => new Date().toISOString()),
-	},
-	(table) => ({
-		uniqueCandidateVerificationTask: unique().on(
-			table.vulnerabilityCandidateId,
+		parentTaskId: text("parentTaskId").references(
+			(): AnyPgColumn => tasks.taskId,
+			{
+				onDelete: "set null",
+			},
 		),
+		name: text("name").notNull(),
+		stageName: text("stageName").notNull(),
+		status: taskStatusEnum("status").notNull().default("pending"),
+		priority: integer("priority"),
+		attempt: integer("attempt").notNull().default(0),
+		agentProfile: jsonb("agentProfile").$type<TaskAgentProfileSnapshot | null>(),
+		containerName: text("containerName"),
+		threadId: text("threadId"),
+		runtimeMode: text("runtimeMode").$type<
+			"new_session" | "fork_session" | null
+		>(),
+		forkedFromTaskId: text("forkedFromTaskId").references(
+			(): AnyPgColumn => tasks.taskId,
+			{
+				onDelete: "set null",
+			},
+		),
+		forkedFromThreadId: text("forkedFromThreadId"),
+		input: jsonb("input").$type<unknown | null>(),
+		output: jsonb("output").$type<unknown | null>(),
+		rawOutput: text("rawOutput"),
+		errorMessage: text("errorMessage"),
+		startedAt: text("startedAt"),
+		completedAt: text("completedAt"),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		scanJobIdx: index("tasks_scan_job_idx").on(table.scanJobId),
+		parentTaskIdx: index("tasks_parent_task_idx").on(table.parentTaskId),
+		forkedFromTaskIdx: index("tasks_forked_from_task_idx").on(
+			table.forkedFromTaskId,
+		),
+		forkedFromThreadIdx: index("tasks_forked_from_thread_idx").on(
+			table.forkedFromThreadId,
+		),
+		scanJobStatusIdx: index("tasks_scan_job_status_idx").on(
+			table.scanJobId,
+			table.status,
+		),
+		scanJobCreatedAtIdx: index("tasks_scan_job_created_at_idx").on(
+			table.scanJobId,
+			table.createdAt,
+		),
+		stageStatusIdx: index("tasks_stage_status_idx").on(
+			table.stageName,
+			table.status,
+		),
+		threadIdx: index("tasks_thread_idx").on(table.threadId),
+		containerIdx: index("tasks_container_idx").on(table.containerName),
 	}),
 );
 
@@ -343,88 +162,23 @@ export const scanJobsRelations = relations(scanJobs, ({ one, many }) => ({
 		fields: [scanJobs.composeId],
 		references: [compose.composeId],
 	}),
-	scanRepositoryTasks: many(scanRepositoryTasks),
-	vulnerabilityCandidates: many(vulnerabilityCandidates),
-	scanModuleTasks: many(scanModuleTasks),
-	scanFunctionTasks: many(scanFunctionTasks),
-	candidateAnalysisTasks: many(candidateAnalysisTasks),
-	candidateVerificationTasks: many(candidateVerificationTasks),
+	tasks: many(tasks),
 }));
 
-export const scanRepositoryTasksRelations = relations(
-	scanRepositoryTasks,
-	({ one }) => ({
-		scanJob: one(scanJobs, {
-			fields: [scanRepositoryTasks.scanJobId],
-			references: [scanJobs.scanJobId],
-		}),
+export const tasksRelations = relations(tasks, ({ one, many }) => ({
+	scanJob: one(scanJobs, {
+		fields: [tasks.scanJobId],
+		references: [scanJobs.scanJobId],
 	}),
-);
-
-export const scanModuleTasksRelations = relations(
-	scanModuleTasks,
-	({ one, many }) => ({
-		scanJob: one(scanJobs, {
-			fields: [scanModuleTasks.scanJobId],
-			references: [scanJobs.scanJobId],
-		}),
-		scanFunctionTasks: many(scanFunctionTasks),
+	parentTask: one(tasks, {
+		fields: [tasks.parentTaskId],
+		references: [tasks.taskId],
+		relationName: "task_parent",
 	}),
-);
-
-export const scanFunctionTasksRelations = relations(
-	scanFunctionTasks,
-	({ one }) => ({
-		scanJob: one(scanJobs, {
-			fields: [scanFunctionTasks.scanJobId],
-			references: [scanJobs.scanJobId],
-		}),
-		scanModuleTask: one(scanModuleTasks, {
-			fields: [scanFunctionTasks.scanModuleTaskId],
-			references: [scanModuleTasks.scanModuleTaskId],
-		}),
+	childTasks: many(tasks, {
+		relationName: "task_parent",
 	}),
-);
-
-export const vulnerabilityCandidatesRelations = relations(
-	vulnerabilityCandidates,
-	({ one, many }) => ({
-		scanJob: one(scanJobs, {
-			fields: [vulnerabilityCandidates.scanJobId],
-			references: [scanJobs.scanJobId],
-		}),
-		candidateAnalysisTasks: many(candidateAnalysisTasks),
-		candidateVerificationTasks: many(candidateVerificationTasks),
-	}),
-);
-
-export const candidateAnalysisTasksRelations = relations(
-	candidateAnalysisTasks,
-	({ one }) => ({
-		scanJob: one(scanJobs, {
-			fields: [candidateAnalysisTasks.scanJobId],
-			references: [scanJobs.scanJobId],
-		}),
-		vulnerabilityCandidate: one(vulnerabilityCandidates, {
-			fields: [candidateAnalysisTasks.vulnerabilityCandidateId],
-			references: [vulnerabilityCandidates.vulnerabilityCandidateId],
-		}),
-	}),
-);
-
-export const candidateVerificationTasksRelations = relations(
-	candidateVerificationTasks,
-	({ one }) => ({
-		scanJob: one(scanJobs, {
-			fields: [candidateVerificationTasks.scanJobId],
-			references: [scanJobs.scanJobId],
-		}),
-		vulnerabilityCandidate: one(vulnerabilityCandidates, {
-			fields: [candidateVerificationTasks.vulnerabilityCandidateId],
-			references: [vulnerabilityCandidates.vulnerabilityCandidateId],
-		}),
-	}),
-);
+}));
 
 export const apiCreateScanJob = z
 	.object({

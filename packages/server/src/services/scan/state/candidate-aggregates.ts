@@ -6,10 +6,10 @@ export const buildCandidatesWithLatestResults = <
 		score?: number | null;
 	},
 	AnalysisResult extends {
-		analysisResultId: string;
-		candidateAnalysisTaskId?: string;
+		taskId: string;
 		vulnerabilityCandidateId: string;
 		result: string;
+		reportPath?: string | null;
 		confidence?: number | null;
 		score?: number | null;
 		runtimeSeconds?: number | null;
@@ -19,10 +19,14 @@ export const buildCandidatesWithLatestResults = <
 		updatedAt: string;
 	},
 	VerificationResult extends {
-		verificationResultId: string;
-		candidateVerificationTaskId?: string;
+		taskId: string;
 		vulnerabilityCandidateId: string;
 		result: string;
+		reportPath?: string | null;
+		issueDraftPath?: string | null;
+		pocPath?: string | null;
+		dockerfilePath?: string | null;
+		runScriptPath?: string | null;
 		isBug?: boolean | null;
 		isSecurity?: boolean | null;
 		confidence?: number | null;
@@ -40,16 +44,16 @@ export const buildCandidatesWithLatestResults = <
 	buildAnalysisReportPath: (
 		scanJobId: string,
 		vulnerabilityCandidateId: string,
-	) => string;
+	) => string | null;
 	buildVerificationArtifactPaths: (
 		scanJobId: string,
 		vulnerabilityCandidateId: string,
 	) => {
-		reportPath: string;
-		issueDraftPath: string;
-		pocPath: string;
-		dockerfilePath: string;
-		runScriptPath: string;
+		reportPath: string | null;
+		issueDraftPath: string | null;
+		pocPath: string | null;
+		dockerfilePath: string | null;
+		runScriptPath: string | null;
 	};
 }) => {
 	const latestAnalysisResultByCandidateId = new Map<string, AnalysisResult>();
@@ -90,14 +94,29 @@ export const buildCandidatesWithLatestResults = <
 		const latestVerificationResult = latestVerificationResultByCandidateId.get(
 			candidate.vulnerabilityCandidateId,
 		);
-		const analysisReportPath = input.buildAnalysisReportPath(
-			candidate.scanJobId,
-			candidate.vulnerabilityCandidateId,
-		);
-		const verificationArtifactPaths = input.buildVerificationArtifactPaths(
-			candidate.scanJobId,
-			candidate.vulnerabilityCandidateId,
-		);
+		const analysisReportPath =
+			latestAnalysisResult?.reportPath ||
+			input.buildAnalysisReportPath(
+				candidate.scanJobId,
+				candidate.vulnerabilityCandidateId,
+			);
+		const verificationArtifactPaths =
+			latestVerificationResult?.reportPath &&
+			latestVerificationResult.issueDraftPath &&
+			latestVerificationResult.pocPath &&
+			latestVerificationResult.dockerfilePath &&
+			latestVerificationResult.runScriptPath
+				? {
+						reportPath: latestVerificationResult.reportPath,
+						issueDraftPath: latestVerificationResult.issueDraftPath,
+						pocPath: latestVerificationResult.pocPath,
+						dockerfilePath: latestVerificationResult.dockerfilePath,
+						runScriptPath: latestVerificationResult.runScriptPath,
+					}
+				: input.buildVerificationArtifactPaths(
+						candidate.scanJobId,
+						candidate.vulnerabilityCandidateId,
+					);
 		const resolvedConfidence =
 			typeof latestVerificationResult?.confidence === "number"
 				? latestVerificationResult.confidence
@@ -117,9 +136,7 @@ export const buildCandidatesWithLatestResults = <
 			score: resolvedScore,
 			latestAnalysisResult: latestAnalysisResult
 				? {
-						analysisResultId: latestAnalysisResult.analysisResultId,
-						candidateAnalysisTaskId:
-							latestAnalysisResult.candidateAnalysisTaskId,
+						taskId: latestAnalysisResult.taskId,
 						result: latestAnalysisResult.result,
 						confidence: latestAnalysisResult.confidence,
 						score: latestAnalysisResult.score,
@@ -133,9 +150,7 @@ export const buildCandidatesWithLatestResults = <
 				: null,
 			latestVerificationResult: latestVerificationResult
 				? {
-						verificationResultId: latestVerificationResult.verificationResultId,
-						candidateVerificationTaskId:
-							latestVerificationResult.candidateVerificationTaskId,
+						taskId: latestVerificationResult.taskId,
 						result: latestVerificationResult.result,
 						isBug: latestVerificationResult.isBug,
 						isSecurity: latestVerificationResult.isSecurity,

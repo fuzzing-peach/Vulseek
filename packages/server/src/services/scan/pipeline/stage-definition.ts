@@ -1,110 +1,185 @@
-import type { Queue } from "bullmq";
+import type { Job, Queue } from "bullmq";
+import type {
+	PipelineContext,
+	StageContext,
+} from "../stages/full-scan-stage.runtime";
 
 export type StageRunMode = "serial" | "fanout";
+export type StageOutputTextChannel = "response" | "file";
+
+export type StageExecution<TInput> = {
+	taskId: string;
+	input: TInput;
+};
+
+export type StageRunResult =
+	| {
+			completion: "immediate";
+			rawOutput: string;
+	  }
+	| {
+			completion: "deferred";
+			threadId?: string | null;
+	  };
 
 export type StageQueueBinding<
-	TContext,
-	TInput extends { taskId: string },
+	TPipelineContext extends PipelineContext,
+	TInput,
 > = {
 	queue: Queue<string>;
-	getInputId?: (jobData: string, jobId: string) => string | null;
-	loadInput: (ctx: TContext, inputId: string) => Promise<TInput | null>;
-	poll: (ctx: TContext) => Promise<TInput | null>;
+	poll: (ctx: TPipelineContext) => Promise<StageExecution<TInput> | undefined>;
 	enqueue: (taskId: string) => Promise<void>;
 };
 
+type StageQueueBindingOptions<
+	TPipelineContext extends PipelineContext,
+	TInput,
+> = {
+	queue: Queue<string>;
+	getInputId?: (jobData: string, jobId: string) => string | null;
+	ownsInputId?: (
+		ctx: TPipelineContext,
+		inputId: string,
+		jobData: string,
+		jobId: string,
+	) => Promise<boolean>;
+	loadInput: (ctx: TPipelineContext, inputId: string) => Promise<TInput | undefined>;
+};
+
 export type StageDefinition<
-	TContext,
-	TInput extends { taskId: string },
+	TPipelineContext extends PipelineContext,
+	TInput,
 	TOutput = void,
+	TStageContext extends StageContext = StageContext,
 > = {
 	name: string;
 	mode: StageRunMode;
-	queue?: StageQueueBinding<TContext, TInput>;
-	validateInput?: (ctx: TContext, input: TInput) => Promise<boolean>;
+	outputTextChannel?: StageOutputTextChannel;
+	queue?: StageQueueBinding<TPipelineContext, TInput>;
+	validateInput?: (ctx: TStageContext, input: TInput) => Promise<boolean>;
 	run: (
-		ctx: TContext,
+		ctx: TStageContext,
 		input: TInput,
-	) => Promise<string>;
+	) => Promise<StageRunResult>;
 	validateOutput?: (
-		ctx: TContext,
+		ctx: TStageContext,
 		input: TInput,
 		rawOutput: string,
 	) => Promise<TOutput>;
-	getDesiredConcurrency?: (ctx: TContext) => Promise<number>;
-	recoverQueue?: (ctx: TContext) => Promise<number>;
+	getDesiredConcurrency?: (ctx: TPipelineContext) => Promise<number>;
+	recoverQueue?: (ctx: TPipelineContext) => Promise<number>;
 	onSuccess?: (
-		ctx: TContext,
+		ctx: TStageContext,
 		input: TInput,
 		output: TOutput,
 	) => Promise<void>;
 	onFailure?: (
-		ctx: TContext,
+		ctx: TStageContext,
 		input: TInput,
 		error: unknown,
 	) => Promise<void>;
 };
 
-export const isFanoutStage = <
-	TContext,
-	TInput extends { taskId: string },
-	TOutput,
+export const createStageDefinition = <
+	TPipelineContext extends PipelineContext,
+	TInput,
+	TOutput = void,
+	TStageContext extends StageContext = StageContext,
 >(
-	stage: StageDefinition<TContext, TInput, TOutput>,
+	stage: StageDefinition<TPipelineContext, TInput, TOutput, TStageContext>,
+): StageDefinition<TPipelineContext, TInput, TOutput, TStageContext> => ({
+	...stage,
+	outputTextChannel: stage.outputTextChannel || "file",
+});
+
+export const isFanoutStage = <
+	TPipelineContext extends PipelineContext,
+	TInput,
+	TOutput,
+	TStageContext extends StageContext,
+>(
+	stage: StageDefinition<TPipelineContext, TInput, TOutput, TStageContext>,
 ) => stage.mode === "fanout";
 
-const defaultPollStageQueueBinding = async <
-	TContext,
-	TInput extends { taskId: string },
+const resolveJobInputId = <TPipelineContext extends PipelineContext, TInput>(
+	binding: Pick<
+		StageQueueBindingOptions<TPipelineContext, TInput>,
+		"getInputId" | "queue"
+	>,
+	job: Job<string>,
+) => {
+	const rawJobData = typeof job.data === "string" ? job.data : "";
+	return (
+		binding.getInputId?.(rawJobData, String(job.id ?? "")) ??
+		(typeof job.data === "string" ? job.data : null)
+	);
+};
+
+const pollStageQueue = async <
+	TPipelineContext extends PipelineContext,
+	TInput,
 >(
-	queueBinding: Omit<StageQueueBinding<TContext, TInput>, "poll" | "enqueue">,
-	ctx: TContext,
-): Promise<TInput | null> => {
-	const jobs = await queueBinding.queue.getJobs(["waiting"], 0, 9, true);
-	if (jobs.length === 0) {
-		return null;
-	}
-
-	const client = await queueBinding.queue.client;
+	binding: StageQueueBindingOptions<TPipelineContext, TInput>,
+	ctx: TPipelineContext,
+): Promise<StageExecution<TInput> | undefined> => {
+	const jobs = await binding.queue.getJobs(["prioritized", "waiting"], 0, 25, true);
 	for (const job of jobs) {
-		const claimed = await client.set(
-			`scan:pipeline:claim:${queueBinding.queue.name}:${job.id}`,
-			"1",
-			"EX",
-			60,
-			"NX",
-		);
-		if (claimed !== "OK") {
-			continue;
-		}
-
 		const rawJobData = typeof job.data === "string" ? job.data : "";
-		const inputId =
-			queueBinding.getInputId?.(rawJobData, String(job.id ?? "")) ??
-			(typeof job.data === "string" ? job.data : null);
+		const jobId = String(job.id ?? "");
+		const inputId = resolveJobInputId(binding, job);
 		if (!inputId) {
 			await job.remove().catch(() => {});
+			console.log(
+				"[scan-queue]",
+				JSON.stringify({
+					event: "poll.skipped_missing_input_id",
+					scanJobId: ctx.scanJobId,
+					queueName: binding.queue.name,
+					jobId,
+				}),
+			);
 			continue;
 		}
 
-		const input = await queueBinding.loadInput(ctx, inputId);
-		await job.remove().catch(() => {});
-		if (input) {
-			return input;
+		if (
+			binding.ownsInputId &&
+			!(await binding.ownsInputId(ctx, inputId, rawJobData, jobId))
+		) {
+			continue;
 		}
+
+		const input = await binding.loadInput(ctx, inputId);
+		console.log(
+			"[scan-queue]",
+			JSON.stringify({
+				event: input !== undefined ? "poll.loaded_input" : "poll.input_missing",
+				scanJobId: ctx.scanJobId,
+				queueName: binding.queue.name,
+				jobId,
+				inputId,
+			}),
+		);
+		await job.remove().catch(() => {});
+		if (input === undefined) {
+			continue;
+		}
+		return {
+			taskId: inputId,
+			input,
+		};
 	}
 
-	return null;
+	return undefined;
 };
 
 export const createStageQueueBinding = <
-	TContext,
-	TInput extends { taskId: string },
+	TPipelineContext extends PipelineContext,
+	TInput,
 >(
-	binding: Omit<StageQueueBinding<TContext, TInput>, "poll" | "enqueue">,
-): StageQueueBinding<TContext, TInput> => ({
-	...binding,
-	poll: async (ctx) => await defaultPollStageQueueBinding(binding, ctx),
+	binding: StageQueueBindingOptions<TPipelineContext, TInput>,
+): StageQueueBinding<TPipelineContext, TInput> => ({
+	queue: binding.queue,
+	poll: (ctx) => pollStageQueue(binding, ctx),
 	enqueue: async (taskId) => {
 		await binding.queue.add(binding.queue.name, taskId, {
 			jobId: `${binding.queue.name}:${taskId}`,

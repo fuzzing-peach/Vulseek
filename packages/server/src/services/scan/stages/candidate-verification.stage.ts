@@ -1,43 +1,36 @@
-import path from "node:path";
 import {
-	validateVerificationResultFile,
-} from "../artifacts/contracts/verification-result.contract";
+	verificationSchema,
+} from "../artifacts/contracts/domain-object.contract";
 import {
+	createStageDefinition,
 	type StageQueueBinding,
 	type StageDefinition,
+	type StageOutputTextChannel,
 } from "../pipeline/stage-definition";
 import {
-	createVerificationResultRepo,
-	deleteVerificationResultsByCandidateIdRepo,
-	updateCandidateVerificationTaskRepo,
-} from "../persistence/verification-result.repo";
+	buildTaskAgentProfileSnapshot,
+} from "../agent-profile-snapshot";
+import { bindTaskRuntimeRepo } from "../persistence/task.repo";
 import {
-	updateVulnerabilityCandidateCurrentStageRepo,
-	updateVulnerabilityCandidateRiskMetricsRepo,
-} from "../persistence/candidate.repo";
-import {
-	removeContainer,
 	runSingleTurnAgentInContainer,
 	startContainer,
 } from "../runtime/run-single-turn-agent";
-import {
-	syncResolvedCandidateRiskMetrics,
-} from "../state/candidate-risk-metrics";
+import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "../runtime/sandbox-agent-shared";
 import type {
 	Analysis,
 	Candidate,
 	Function,
 	Module,
-	Verification,
 	ScanJob,
+	Verification,
 } from "../types";
 import {
-	resolveStageAgentProfile,
-	type StageRuntimeTarget,
+	type PipelineContext,
+	resolveScanProfileConcurrencySettings,
+	type StageContext,
 } from "./full-scan-stage.runtime";
 
 export type CandidateVerificationStageInput = {
-	taskId: string;
 	analysisResult: Analysis & {
 		scanJob: ScanJob;
 		module: Module & { scanJob: ScanJob };
@@ -56,34 +49,26 @@ export type CandidateVerificationStageInput = {
 	};
 };
 
-export type CandidateVerificationStageOutput = {
-	taskId: string;
-	verification: Verification;
-};
+export type CandidateVerificationStageOutput = Verification;
 
-type VerificationStageContext = StageRuntimeTarget & {
+type VerificationStageContext = StageContext & {
 	executionContext?: { verifyConcurrency?: number };
 };
 
 const buildCandidateVerificationPrompt = (
 	stageInput: CandidateVerificationStageInput,
+	input: {
+		taskDirContainer: string;
+		reportPath: string;
+		issueDraftPath: string;
+		pocPath: string;
+		dockerfilePath: string;
+		runScriptPath: string;
+		taskId: string;
+	},
 ) => {
 	const { analysisResult } = stageInput;
 	const candidate = analysisResult.candidate;
-	const verifyRoot = path.posix.join(
-		"/scan-context",
-		"jobs",
-		analysisResult.scanJob.scanJobId,
-		"candidates",
-		candidate.id,
-		"verify",
-	);
-	const reportPath = `${verifyRoot}/01_verify_report.md`;
-	const issueDraftPath = `${verifyRoot}/02_issue_draft.md`;
-	const pocPath = `${verifyRoot}/03_poc/poc.txt`;
-	const dockerfilePath = `${verifyRoot}/04_repro/Dockerfile`;
-	const runScriptPath = `${verifyRoot}/04_repro/run.sh`;
-	const resultPath = `${verifyRoot}/verification_result.json`;
 
 	return [
 		"You are the verifier agent for one vulnerability candidate.",
@@ -97,256 +82,124 @@ const buildCandidateVerificationPrompt = (
 		`analysis_result: ${analysisResult.result}`,
 		`analysis_summary: ${analysisResult.summary || "-"}`,
 		`analysis_report_path: ${analysisResult.reportPath || "-"}`,
-		`write_verify_report_to: ${reportPath}`,
-		`write_issue_draft_to: ${issueDraftPath}`,
-		`write_poc_to: ${pocPath}`,
-		`write_repro_dockerfile_to: ${dockerfilePath}`,
-		`write_repro_run_script_to: ${runScriptPath}`,
-		`write_result_json_to: ${resultPath}`,
+		`task_dir: ${input.taskDirContainer}`,
+		`write_verify_report_to: ${input.reportPath}`,
+		`write_issue_draft_to: ${input.issueDraftPath}`,
+		`write_poc_to: ${input.pocPath}`,
+		`write_repro_dockerfile_to: ${input.dockerfilePath}`,
+		`write_repro_run_script_to: ${input.runScriptPath}`,
 		"",
 		"Use the installed skill named verify as your working method.",
 		"Strictly follow the skill workflow and produce the required markdown artifacts.",
-		"After finishing verification, write verification_result.json as a top-level object.",
-		"Required JSON fields for this run: result, score, summary, isBug, isSecurity.",
-		"Optional JSON field: confidence.",
+		"Write every task artifact only under task_dir.",
+		"Your final structured result must be exactly one top-level JSON object matching output.schema.json with no wrapper keys, no prose, and no markdown fences.",
+		"Before finishing, validate the final JSON against output.schema.json and follow the runtime output contract appended below.",
+		`Set id to ${input.taskId}.`,
+		`Set reportPath to ${input.reportPath}.`,
+		`Set issueDraftPath to ${input.issueDraftPath}.`,
+		`Set pocPath to ${input.pocPath}.`,
+		`Set dockerfilePath to ${input.dockerfilePath}.`,
+		`Set runScriptPath to ${input.runScriptPath}.`,
+		"Set runtimeSeconds to null if unknown.",
+		"Set status to completed when the run succeeds.",
 		"Keep result aligned with the verification conclusion, not the prior analysis guess.",
 	].join("\n");
 };
 
 const executeCandidateVerificationStage = async (
-	ctx: StageRuntimeTarget,
+	ctx: StageContext,
 	stageInput: CandidateVerificationStageInput,
 ) => {
 	const candidateId = stageInput.analysisResult.candidate.id;
 	const scanJob = stageInput.analysisResult.scanJob;
-	const verifierAgentProfile = await resolveStageAgentProfile(scanJob, "verification");
-	const runtimeDirHost = path.join(
-		"/scan-context",
-		"projects",
-		ctx.projectName
-			.replace(/[\\/]+/g, "-")
-			.replace(/[^a-zA-Z0-9._-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "unknown",
-		"profiles",
-		ctx.serviceName
-			.replace(/[\\/]+/g, "-")
-			.replace(/[^a-zA-Z0-9._-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "unknown",
-		"jobs",
-		scanJob.scanJobId,
-		"candidates",
-		candidateId,
+	const verifierAgentProfile = await ctx.agentProfile();
+	const stageDirPath = await ctx.taskDir();
+	const stageRootInContainer = await ctx.taskDirContainer();
+	const reportPath = `${stageRootInContainer}/01_verify_report.md`;
+	const issueDraftPath = `${stageRootInContainer}/02_issue_draft.md`;
+	const pocPath = `${stageRootInContainer}/03_poc/poc.txt`;
+	const dockerfilePath = `${stageRootInContainer}/04_repro/Dockerfile`;
+	const runScriptPath = `${stageRootInContainer}/04_repro/run.sh`;
+	const containerName = ctx.containerName(
+		candidateId.slice(0, 8),
 	);
-	const runtimeRootInContainer = path.posix.join(
-		"/scan-context",
-		"jobs",
-		scanJob.scanJobId,
-		"candidates",
-		candidateId,
-	);
-	const containerName = [
-		ctx.projectName
-			.toLowerCase()
-			.replace(/[^a-z0-9_.-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "x",
-		ctx.serviceName
-			.toLowerCase()
-			.replace(/[^a-z0-9_.-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "x",
-		(candidateId.slice(0, 8)
-			.toLowerCase()
-			.replace(/[^a-z0-9_.-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "x"),
-		"verify",
-		stageInput.taskId.slice(0, 6),
-	].join("-");
-	await updateVulnerabilityCandidateCurrentStageRepo(candidateId, "verifying");
-	await updateCandidateVerificationTaskRepo(stageInput.taskId, { containerName });
+	await bindTaskRuntimeRepo({
+		taskId: ctx.taskId,
+		containerName,
+		agentProfile: buildTaskAgentProfileSnapshot(verifierAgentProfile).agentProfile,
+	});
 	await startContainer({
 		scanJob,
 		agentProfile: verifierAgentProfile,
 		containerName,
-		codexHome: `${runtimeRootInContainer}/.codex-verify`,
-		runtimeDirHost,
-		runtimeRootInContainer,
-		runtimeFileNames: {
-			jsonl: "verify-app-server-messages.jsonl",
-			text: "verify-app-server-text.log",
-			stderr: "verify-app-server-stderr.log",
-		},
+		codexHome: `${stageRootInContainer}/.codex-verify`,
+		stageDirPath,
+		stageRootInContainer,
+		runtimeFileNames: SANDBOX_AGENT_RUNTIME_FILE_NAMES,
 	});
 
-	try {
-		return await runSingleTurnAgentInContainer({
+	return await runSingleTurnAgentInContainer({
 		scanJob,
 		agentProfile: verifierAgentProfile,
 		containerName,
-		codexHome: `${runtimeRootInContainer}/.codex-verify`,
-		runtimeDirHost,
-		runtimeRootInContainer,
-		runtimeFileNames: {
-			jsonl: "verify-app-server-messages.jsonl",
-			text: "verify-app-server-text.log",
-			stderr: "verify-app-server-stderr.log",
-		},
+		codexHome: `${stageRootInContainer}/.codex-verify`,
+		stageDirPath,
+		stageRootInContainer,
+		runtimeFileNames: SANDBOX_AGENT_RUNTIME_FILE_NAMES,
 		cwd: "/workspace/repo",
-		prompt: buildCandidateVerificationPrompt(stageInput),
-		setupMarkdownPathInContainer: `${runtimeRootInContainer}/verify/00_setup.md`,
-		setupMarkdown: [
-			"# Candidate Verification Setup",
-			"",
-			`- scan_job_id: ${scanJob.scanJobId}`,
-			`- candidate_id: ${candidateId}`,
-			`- task_id: ${stageInput.taskId}`,
-			`- agent_profile: ${verifierAgentProfile?.name || verifierAgentProfile?.agentProfileId || "default"}`,
-			`- agent_provider: ${verifierAgentProfile?.provider || "codex"}`,
-			`- agent_model: ${verifierAgentProfile?.model || "gpt-5.4"}`,
-		].join("\n"),
+		sessionMode: ctx.sessionMode,
+		parentSessionId: ctx.parentSessionId,
+		prompt: buildCandidateVerificationPrompt(stageInput, {
+			taskDirContainer: stageRootInContainer,
+			reportPath,
+			issueDraftPath,
+			pocPath,
+			dockerfilePath,
+			runScriptPath,
+			taskId: ctx.taskId,
+		}),
+		outputSchema: verificationSchema,
+		outputTextChannel: ctx.outputTextChannel,
 		onThreadId: async (threadId) => {
-			await updateCandidateVerificationTaskRepo(stageInput.taskId, { threadId });
+			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
-		});
-	} finally {
-		await removeContainer(containerName);
-	}
+	});
 };
 
-const validateCandidateVerificationOutput = async (
-	ctx: StageRuntimeTarget,
-	stageInput: CandidateVerificationStageInput,
-	_rawOutput: string,
-): Promise<CandidateVerificationStageOutput> => {
-	const candidateId = stageInput.analysisResult.candidate.id;
-	const runtimeDirHost = path.join(
-		"/scan-context",
-		"projects",
-		ctx.projectName
-			.replace(/[\\/]+/g, "-")
-			.replace(/[^a-zA-Z0-9._-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "unknown",
-		"profiles",
-		ctx.serviceName
-			.replace(/[\\/]+/g, "-")
-			.replace(/[^a-zA-Z0-9._-]/g, "-")
-			.replace(/-+/g, "-")
-			.replace(/^-|-$/g, "") || "unknown",
-		"jobs",
-		stageInput.analysisResult.scanJob.scanJobId,
-		"candidates",
-		candidateId,
-	);
-	const payload = await validateVerificationResultFile(
-		path.join(
-			runtimeDirHost,
-			"verify",
-			"verification_result.json",
-		),
-	);
-	const result = String(payload.result);
-	const verifyRoot = path.posix.join(
-		"/scan-context",
-		"jobs",
-		stageInput.analysisResult.scanJob.scanJobId,
-		"candidates",
-		candidateId,
-		"verify",
-	);
-	await updateVulnerabilityCandidateCurrentStageRepo(candidateId, "verifying");
-	await deleteVerificationResultsByCandidateIdRepo(candidateId);
-	await createVerificationResultRepo({
-		scanJobId: stageInput.analysisResult.scanJob.scanJobId,
-		vulnerabilityCandidateId: candidateId,
-		result,
-		isBug: payload.isBug ?? undefined,
-		isSecurity: payload.isSecurity ?? undefined,
-		confidence: payload.confidence ?? undefined,
-		score: payload.score ?? undefined,
-		reportPath: `${verifyRoot}/01_verify_report.md`,
-		issueDraftPath: `${verifyRoot}/02_issue_draft.md`,
-		pocPath: `${verifyRoot}/03_poc/poc.txt`,
-		dockerfilePath: `${verifyRoot}/04_repro/Dockerfile`,
-		runScriptPath: `${verifyRoot}/04_repro/run.sh`,
-		summary:
-			payload.summary ||
-			(result === "real_vulnerability"
-				? `Verified vulnerability: ${stageInput.analysisResult.candidate.title}`
-				: result === "likely_vulnerability"
-					? `Likely vulnerability after verification: ${stageInput.analysisResult.candidate.title}`
-					: result === "api_misuse"
-						? `API misuse: ${stageInput.analysisResult.candidate.title}`
-						: result === "false_positive"
-							? `False positive: ${stageInput.analysisResult.candidate.title}`
-						: `Plausible but unproven after verification: ${stageInput.analysisResult.candidate.title}`),
-	});
-	await syncResolvedCandidateRiskMetrics({
-		vulnerabilityCandidateId: candidateId,
-		candidate: stageInput.analysisResult.candidate,
-		latestAnalysisResult: stageInput.analysisResult,
-		latestVerificationResult: payload,
-		updateRiskMetrics: updateVulnerabilityCandidateRiskMetricsRepo,
-	});
-	return {
-		taskId: stageInput.taskId,
-		verification: {
-			id: stageInput.taskId,
-			result:
-				result === "real_vulnerability" ||
-				result === "likely_vulnerability" ||
-				result === "plausible_but_unproven" ||
-				result === "false_positive" ||
-				result === "api_misuse"
-					? result
-					: "plausible_but_unproven",
-			isBug: payload.isBug ?? null,
-			isSecurity: payload.isSecurity ?? null,
-			summary:
-				payload.summary ||
-				(result === "real_vulnerability"
-					? `Verified vulnerability: ${stageInput.analysisResult.candidate.title}`
-					: result === "likely_vulnerability"
-						? `Likely vulnerability after verification: ${stageInput.analysisResult.candidate.title}`
-						: result === "api_misuse"
-							? `API misuse: ${stageInput.analysisResult.candidate.title}`
-							: result === "false_positive"
-								? `False positive: ${stageInput.analysisResult.candidate.title}`
-								: `Plausible but unproven after verification: ${stageInput.analysisResult.candidate.title}`),
-			confidence: payload.confidence ?? null,
-			score: payload.score ?? null,
-			reportPath: `${verifyRoot}/01_verify_report.md`,
-			issueDraftPath: `${verifyRoot}/02_issue_draft.md`,
-			pocPath: `${verifyRoot}/03_poc/poc.txt`,
-			dockerfilePath: `${verifyRoot}/04_repro/Dockerfile`,
-			runScriptPath: `${verifyRoot}/04_repro/run.sh`,
-			runtimeSeconds: null,
-			status: "completed",
-		},
-	};
-};
-
-export const createVerifyingStageDefinition = <TContext extends VerificationStageContext>(input: {
+export const createVerifyingStageDefinition = <
+	TPipelineContext extends PipelineContext & {
+		executionContext?: { verifyConcurrency?: number };
+	},
+>(input: {
 	name?: string;
 	mode?: "serial" | "fanout";
-	queue?: StageQueueBinding<TContext, CandidateVerificationStageInput>;
-	getDesiredConcurrency?: (ctx: TContext) => Promise<number>;
+	outputTextChannel?: StageOutputTextChannel;
+	queue?: StageQueueBinding<TPipelineContext, CandidateVerificationStageInput>;
 }): StageDefinition<
-	TContext,
+	TPipelineContext,
 	CandidateVerificationStageInput,
-	CandidateVerificationStageOutput
-> => ({
-	name: input.name || "VerifyingStage",
-	mode: input.mode || "fanout",
-	queue: input.queue,
-	run: async (ctx, stageInput) =>
-		(await executeCandidateVerificationStage(ctx, stageInput)).rawOutput,
-	validateOutput: async (ctx, stageInput, rawOutput) =>
-		await validateCandidateVerificationOutput(ctx, stageInput, rawOutput),
-	getDesiredConcurrency:
-		input.getDesiredConcurrency ||
-		(async (ctx) => Math.max(1, ctx.executionContext?.verifyConcurrency || 1)),
-});
+	CandidateVerificationStageOutput,
+	VerificationStageContext
+> =>
+	createStageDefinition({
+		name: input.name || "VerifyingStage",
+		mode: input.mode || "fanout",
+		outputTextChannel: input.outputTextChannel,
+		queue: input.queue,
+		getDesiredConcurrency: async (ctx) =>
+			Math.max(
+				1,
+				(await resolveScanProfileConcurrencySettings(ctx.scanJobId))
+					.verifyConcurrency || 1,
+			),
+		run: async (ctx, stageInput) =>
+			({
+				completion: "deferred",
+				threadId: (
+					await executeCandidateVerificationStage(
+						ctx as unknown as StageContext,
+						stageInput,
+					)
+				).threadId,
+			}),
+	});

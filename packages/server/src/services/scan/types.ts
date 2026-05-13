@@ -1,12 +1,15 @@
 import {
-	candidateAnalysisTasks,
-	candidateVerificationTasks,
-	scanRepositoryTasks,
-	scanFunctionTasks,
 	scanJobs,
-	scanModuleTasks,
-	vulnerabilityCandidates,
+	tasks,
 } from "@dokploy/server/db/schema";
+import type {
+	Analysis,
+	Candidate,
+	Function,
+	Module,
+	Repository,
+	Verification,
+} from "./artifacts/contracts/domain-object.contract";
 export type {
 	Analysis,
 	Candidate,
@@ -18,20 +21,30 @@ export type {
 
 export type ScanJob = typeof scanJobs.$inferSelect & {
 	repositoryTaskId: string | null;
-	repositoryTaskStatus: typeof scanRepositoryTasks.$inferSelect.status;
+	repositoryTaskStatus: typeof tasks.$inferSelect.status;
 };
-export type ScanRepositoryTask = typeof scanRepositoryTasks.$inferSelect;
-export type ScanModuleTask = typeof scanModuleTasks.$inferSelect;
-export type ScanFunctionTask = typeof scanFunctionTasks.$inferSelect;
-export type CandidateAnalysisTask = typeof candidateAnalysisTasks.$inferSelect;
-export type CandidateVerificationTask =
-	typeof candidateVerificationTasks.$inferSelect;
-export type VulnerabilityCandidate = typeof vulnerabilityCandidates.$inferSelect;
+export type Task = typeof tasks.$inferSelect;
+export type VulnerabilityCandidate = {
+	vulnerabilityCandidateId: string;
+	scanJobId: string;
+	scanFunctionTaskId: string | null;
+	title: string;
+	description: string | null;
+	filePath: string | null;
+	line: number | null;
+	vulnerabilityType: string | null;
+	status: "pending" | "launching" | "running" | "completed" | "failed";
+	currentStage: "analyzing" | "fuzzing" | "verifying";
+	confidence: number | null;
+	score: number | null;
+	createdAt: string;
+	updatedAt: string;
+};
 export type AnalysisResult = {
-	analysisResultId: string;
+	taskId: string;
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
-	result: string;
+	result: Analysis["result"];
 	confidence: number | null;
 	score: number | null;
 	reportPath: string | null;
@@ -40,14 +53,13 @@ export type AnalysisResult = {
 	summary: string | null;
 	createdAt: string;
 	updatedAt: string;
-	candidateAnalysisTaskId?: string;
-	status?: typeof candidateAnalysisTasks.$inferSelect.status;
+	status?: typeof tasks.$inferSelect.status;
 };
 export type VerificationResult = {
-	verificationResultId: string;
+	taskId: string;
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
-	result: string;
+	result: Verification["result"];
 	isBug: boolean | null;
 	isSecurity: boolean | null;
 	confidence: number | null;
@@ -62,24 +74,13 @@ export type VerificationResult = {
 	summary: string | null;
 	createdAt: string;
 	updatedAt: string;
-	candidateVerificationTaskId?: string;
-	status?: typeof candidateVerificationTasks.$inferSelect.status;
+	status?: typeof tasks.$inferSelect.status;
 };
 
 export type VulnerabilityCandidateStage =
 	| "analyzing"
 	| "fuzzing"
 	| "verifying";
-
-export type ScanModuleQueueJob = {
-	scanJobId: string;
-	scanModuleTaskId: string;
-};
-
-export type ScanFunctionQueueJob = {
-	scanJobId: string;
-	scanFunctionTaskId: string;
-};
 
 export type ScanCandidateQueueJob = {
 	scanJobId: string;
@@ -94,5 +95,6 @@ export type AgentProfileLike = {
 	apiKey: string;
 	model: string;
 	thinkingLevel: string;
+	envs: string;
 	isEnabled: boolean;
 };
