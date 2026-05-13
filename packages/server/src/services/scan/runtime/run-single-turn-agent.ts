@@ -706,6 +706,8 @@ const SANDBOX_AGENT_DRIVER_INPUT_FILE_NAME = "sandbox-agent-driver-input.json";
 const SANDBOX_AGENT_DRIVER_STDOUT_FILE_NAME = "sandbox-agent-driver-stdout.log";
 const SANDBOX_AGENT_DRIVER_LAUNCH_FILE_NAME = "sandbox-agent-driver-launch.sh";
 const SANDBOX_AGENT_FORK_DEBUG_FILE_NAME = "sandbox-agent-fork-debug.json";
+const SANDBOX_AGENT_PARENT_CONTEXT_DEBUG_FILE_NAME =
+	"sandbox-agent-parent-context.compact.txt";
 
 const buildSandboxAgentDriverScript = () => String.raw`import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -721,6 +723,11 @@ const SANDBOX_AGENT_POST_PROMPT_EVENT_IDLE_MS = 30 * 1000;
 const SANDBOX_AGENT_POST_PROMPT_EVENT_POLL_MS = 100;
 const VULSEEK_RET_MARKER = "<VULSEEK_RET>";
 const VULSEEK_RET_XML_CLOSE_MARKER = "</VULSEEK_RET>";
+const MANUAL_REPLAY_PARENT_PROMPT_CHAR_LIMIT = 8000;
+const MANUAL_REPLAY_ASSISTANT_MARKER_CHAR_LIMIT = 50000;
+const MANUAL_REPLAY_ASSISTANT_TAIL_CHAR_LIMIT = 30000;
+const MANUAL_REPLAY_TOOL_OUTPUT_CHAR_LIMIT = 2000;
+const MANUAL_REPLAY_CHAR_LIMIT = 80000;
 
 const acpFetch = async (input, init = {}) => {
   const request = new Request(input, init);
@@ -892,6 +899,250 @@ const extractVulseekRetValue = (content) => {
 	const start = content.lastIndexOf(VULSEEK_RET_MARKER, end - 1);
 	if (start < 0) return null;
 	return acceptPairedPayload(content.slice(start + VULSEEK_RET_MARKER.length, end));
+};
+
+const byteLength = (value) => Buffer.byteLength(value, "utf-8");
+
+const clipHead = (value, limit) =>
+  value.length > limit ? value.slice(0, limit) : value;
+
+const clipTail = (value, limit) =>
+  value.length > limit ? value.slice(value.length - limit) : value;
+
+const truncateWithNote = (value, limit) => {
+  if (value.length <= limit) return value;
+  if (limit <= 32) return value.slice(0, Math.max(0, limit));
+  return value.slice(0, limit - 32) + "\n...[truncated]";
+};
+
+const extractPromptTextForManualReplay = (event) => {
+  const payload = getEventPayloadRecord(event);
+  if (asString(payload?.method) !== "session/prompt") {
+    return "";
+  }
+  const prompt = asRecord(payload?.params)?.prompt;
+  if (!Array.isArray(prompt)) {
+    return "";
+  }
+  return prompt.map((item) => extractTextValue(asRecord(item)?.text)).join("");
+};
+
+const extractVulseekRetBlocks = (content) => {
+  const blocks = [];
+  let cursor = 0;
+  while (cursor < content.length) {
+    const start = content.indexOf(VULSEEK_RET_MARKER, cursor);
+    if (start < 0) break;
+    const payloadStart = start + VULSEEK_RET_MARKER.length;
+    const xmlEnd = content.indexOf(VULSEEK_RET_XML_CLOSE_MARKER, payloadStart);
+    const markerEnd = content.indexOf(VULSEEK_RET_MARKER, payloadStart);
+    const end =
+      xmlEnd >= 0 && (markerEnd < 0 || xmlEnd <= markerEnd) ? xmlEnd : markerEnd;
+    if (end < 0) break;
+    const closeMarker =
+      end === xmlEnd ? VULSEEK_RET_XML_CLOSE_MARKER : VULSEEK_RET_MARKER;
+    blocks.push(content.slice(start, end + closeMarker.length));
+    cursor = end + closeMarker.length;
+  }
+  return blocks;
+};
+
+const extractPathValue = (record, keys) => {
+  for (const key of keys) {
+    const parts = key.split(".");
+    let current = record;
+    for (const part of parts) {
+      current = asRecord(current)?.[part];
+    }
+    const value = extractTextValue(current);
+    if (value) return value;
+  }
+  return "";
+};
+
+const simplifyManualReplayToolCall = (update) => {
+  const lines = [];
+  const title =
+    asString(update.title) ||
+    asString(update.name) ||
+    asString(update.tool) ||
+    "tool";
+  const kind = asString(update.kind) || asString(update.type);
+  const status = asString(update.status);
+  lines.push(
+    [
+      "tool: " + title,
+      kind ? "kind=" + kind : "",
+      status ? "status=" + status : "",
+    ].filter(Boolean).join(" "),
+  );
+
+  const command = extractPathValue(update, [
+    "command",
+    "cmd",
+    "rawInput.command",
+    "rawInput.cmd",
+    "input.command",
+    "action.command",
+  ]);
+  const cwd = extractPathValue(update, [
+    "cwd",
+    "rawInput.cwd",
+    "input.cwd",
+    "action.cwd",
+  ]);
+  const filePath = extractPathValue(update, [
+    "path",
+    "filePath",
+    "rawInput.path",
+    "input.path",
+  ]);
+  if (command) lines.push("command: " + truncateWithNote(command, 500));
+  if (cwd) lines.push("cwd: " + truncateWithNote(cwd, 300));
+  if (filePath) lines.push("path: " + truncateWithNote(filePath, 300));
+  return lines.join("\n");
+};
+
+const summarizeManualReplayRawOutput = (rawOutput, limit) => {
+  const record = asRecord(rawOutput);
+  if (!record) {
+    return truncateWithNote(extractTextValue(rawOutput), limit);
+  }
+  const lines = [];
+  const exitCode = record.exit_code ?? record.exitCode ?? record.code;
+  const status = asString(record.status);
+  if (exitCode !== undefined) lines.push("exit_code: " + String(exitCode));
+  if (status) lines.push("status: " + status);
+  const stderr = extractTextValue(record.stderr);
+  if (stderr) lines.push("stderr:\n" + truncateWithNote(stderr, 600));
+  const stdout =
+    extractTextValue(record.stdout) ||
+    extractTextValue(record.aggregated_output) ||
+    extractTextValue(record.aggregatedOutput) ||
+    extractTextValue(record.output);
+  if (stdout) lines.push("output:\n" + truncateWithNote(stdout, limit));
+  return truncateWithNote(lines.join("\n"), limit);
+};
+
+const buildManualReplayToolText = (events) => {
+  const entries = [];
+  let toolOutputCharsKept = 0;
+  for (const event of events) {
+    const update = getEventUpdate(event);
+    const record = asRecord(update);
+    const updateType = asString(record?.sessionUpdate);
+    if (!record || (updateType !== "tool_call" && updateType !== "tool_call_update")) {
+      continue;
+    }
+    const lines = [simplifyManualReplayToolCall(record)];
+    if (updateType === "tool_call_update") {
+      const rawOutput =
+        record.rawOutput ?? record.output ?? record.content ?? record.result;
+      const outputText = summarizeManualReplayRawOutput(
+        rawOutput,
+        MANUAL_REPLAY_TOOL_OUTPUT_CHAR_LIMIT,
+      );
+      if (outputText) {
+        toolOutputCharsKept += outputText.length;
+        lines.push("output summary:\n" + outputText);
+      }
+    }
+    entries.push(lines.filter(Boolean).join("\n"));
+  }
+  return { text: entries.join("\n\n"), toolOutputCharsKept };
+};
+
+const fitManualReplayText = (input) => {
+  let parentPromptText = input.parentPromptText;
+  let assistantText = input.assistantText;
+  let toolText = input.toolText;
+
+  const render = () =>
+    [
+      "Previous parent task context follows. Treat it as read-only context. The current task below is authoritative.",
+      "<parent_context>",
+      parentPromptText ? "Parent task prompt:\n" + parentPromptText : "",
+      assistantText ? "Assistant result/context:\n" + assistantText : "",
+      toolText ? "Tool activity summary:\n" + toolText : "",
+      "</parent_context>",
+    ].filter(Boolean).join("\n\n");
+
+  let text = render();
+  const initialBytes = byteLength(text);
+  if (text.length <= MANUAL_REPLAY_CHAR_LIMIT) {
+    return { text, truncatedBytes: 0 };
+  }
+
+  let excess = text.length - MANUAL_REPLAY_CHAR_LIMIT;
+  if (toolText && excess > 0) {
+    toolText = truncateWithNote(toolText, Math.max(0, toolText.length - excess));
+    text = render();
+    excess = text.length - MANUAL_REPLAY_CHAR_LIMIT;
+  }
+  if (parentPromptText && excess > 0) {
+    parentPromptText = truncateWithNote(
+      parentPromptText,
+      Math.max(0, parentPromptText.length - excess),
+    );
+    text = render();
+    excess = text.length - MANUAL_REPLAY_CHAR_LIMIT;
+  }
+  if (assistantText && !input.assistantHasMarkers && excess > 0) {
+    assistantText = clipTail(
+      assistantText,
+      Math.max(0, assistantText.length - excess),
+    );
+    text = render();
+  }
+  if (text.length > MANUAL_REPLAY_CHAR_LIMIT) {
+    text = truncateWithNote(text, MANUAL_REPLAY_CHAR_LIMIT);
+  }
+
+  return {
+    text,
+    truncatedBytes: Math.max(0, initialBytes - byteLength(text)),
+  };
+};
+
+const buildSandboxAgentManualReplayText = (parentEvents) => {
+  const parentPromptText = clipHead(
+    parentEvents
+      .map(extractPromptTextForManualReplay)
+      .filter(Boolean)
+      .join("\n\n---\n\n"),
+    MANUAL_REPLAY_PARENT_PROMPT_CHAR_LIMIT,
+  );
+  const assistantFullText = parentEvents
+    .map((event) => {
+      const update = getEventUpdate(event);
+      const record = asRecord(update);
+      return asString(record?.sessionUpdate) === "agent_message_chunk"
+        ? extractPayloadText(update)
+        : "";
+    })
+    .join("");
+  const markerBlocks = extractVulseekRetBlocks(assistantFullText);
+  const assistantHasMarkers = markerBlocks.length > 0;
+  const assistantText = assistantHasMarkers
+    ? clipHead(markerBlocks.join("\n\n"), MANUAL_REPLAY_ASSISTANT_MARKER_CHAR_LIMIT)
+    : clipTail(assistantFullText, MANUAL_REPLAY_ASSISTANT_TAIL_CHAR_LIMIT);
+  const toolSummary = buildManualReplayToolText(parentEvents);
+  const fitted = fitManualReplayText({
+    parentPromptText,
+    assistantText,
+    assistantHasMarkers,
+    toolText: toolSummary.text,
+  });
+  return {
+    text: fitted.text,
+    stats: {
+      parentEventCount: parentEvents.length,
+      manualReplayTextBytes: byteLength(fitted.text),
+      manualReplayTruncatedBytes: fitted.truncatedBytes,
+      toolOutputCharsKept: toolSummary.toolOutputCharsKept,
+      promptContainsJsonRpcReplay: false,
+    },
+  };
 };
 
 const withTimeout = async (promise, timeoutMs, errorFactory) => {
@@ -1236,6 +1487,9 @@ const writeForkDebugFile = async (input, childPersist, details = {}) => {
   }
   const parentSessionId = asString(input.parentSessionId);
   const childSessionId = asString(details.childSessionId);
+  const resumeMethod = asString(details.resumeMethod);
+  const parentReplayStats = asRecord(details.parentReplayStats);
+  const isManualReplay = resumeMethod === "manual_plain_prompt_replay";
   let parentEventCount = null;
   let childEventCount = null;
   let childHasParentPrefix = null;
@@ -1244,7 +1498,10 @@ const writeForkDebugFile = async (input, childPersist, details = {}) => {
   let childFirstPromptTextPrefix = null;
 
   const parentPersist = details.parentPersist || null;
-  if (childPersist && parentPersist && parentSessionId && childSessionId) {
+  if (parentReplayStats && typeof parentReplayStats.parentEventCount === "number") {
+    parentEventCount = parentReplayStats.parentEventCount;
+  }
+  if (!isManualReplay && childPersist && parentPersist && parentSessionId && childSessionId) {
     const parentData = await parentPersist.readData();
     const childData = await childPersist.readData();
     const parentEvents = Array.isArray(parentData.eventsBySession[parentSessionId])
@@ -1277,25 +1534,67 @@ const writeForkDebugFile = async (input, childPersist, details = {}) => {
     writtenAt: new Date().toISOString(),
     sessionMode: String(input.sessionMode || "new"),
     provider: String(input.provider || ""),
+    resumeMethod: resumeMethod || null,
     parentSessionId: parentSessionId || null,
     childSessionId: childSessionId || null,
     resumedSessionId: asString(details.resumedSessionId) || null,
     persistPath: input.sessionPersistPath || null,
     parentPersistPath: input.parentSessionPersistPath || null,
+    parentReplayDebugPath: input.parentReplayDebugPath || null,
     parentEventCount,
     childEventCount,
     childHasParentPrefix,
     parentFirstEventMethod,
     childFirstEventMethod,
     childFirstPromptTextPrefix,
+    manualReplayTextBytes:
+      typeof parentReplayStats?.manualReplayTextBytes === "number"
+        ? parentReplayStats.manualReplayTextBytes
+        : null,
+    manualReplayTruncatedBytes:
+      typeof parentReplayStats?.manualReplayTruncatedBytes === "number"
+        ? parentReplayStats.manualReplayTruncatedBytes
+        : null,
+    toolOutputCharsKept:
+      typeof parentReplayStats?.toolOutputCharsKept === "number"
+        ? parentReplayStats.toolOutputCharsKept
+        : null,
+    promptContainsJsonRpcReplay:
+      typeof parentReplayStats?.promptContainsJsonRpcReplay === "boolean"
+        ? parentReplayStats.promptContainsJsonRpcReplay
+        : null,
     stageCwd: input.cwd || null,
     note:
-      childHasParentPrefix === true
+      isManualReplay
+        ? "manual plain prompt replay used; child persist intentionally does not include parent event prefix"
+        : childHasParentPrefix === true
         ? "child persist begins with normalized parent events"
         : "prefix check unavailable or failed",
   };
   await fs.mkdir(path.dirname(input.forkDebugPath), { recursive: true });
   await fs.writeFile(input.forkDebugPath, JSON.stringify(debug, null, 2), "utf-8");
+};
+
+const writeManualReplayDebugFile = async (input, parentReplay) => {
+  if (!input.parentReplayDebugPath || !parentReplay) {
+    return;
+  }
+  const content = [
+    "Manual compact parent session for sandbox-agent fork resume.",
+    "This file is debug-only. The exact compact context below is what Dokploy prepends before the current task prompt.",
+    "",
+    "parentSessionId: " + String(input.parentSessionId || ""),
+    "parentPersistPath: " + String(input.parentSessionPersistPath || ""),
+    "",
+    "stats:",
+    JSON.stringify(parentReplay.stats || {}, null, 2),
+    "",
+    "compactParentContext:",
+    parentReplay.text || "",
+    "",
+  ].join("\n");
+  await fs.mkdir(path.dirname(input.parentReplayDebugPath), { recursive: true });
+  await fs.writeFile(input.parentReplayDebugPath, content, "utf-8");
 };
 
 const mergeForkDebugFile = async (input, patch) => {
@@ -1512,31 +1811,62 @@ const forkFromResumedSession = async (client, parentSession, input) => {
   throw new Error("sandbox-agent client does not support session fork");
 };
 
+const buildManualReplayFromParentPersist = async (parentPersist, input) => {
+  const parentSessionId = asString(input.parentSessionId);
+  if (!parentSessionId) {
+    throw new Error("fork session requested but parentSessionId is missing");
+  }
+  if (!parentPersist) {
+    throw new Error("fork session requested but parentSessionPersistPath is missing");
+  }
+  const parentData = await parentPersist.readData();
+  const parentEvents = Array.isArray(parentData.eventsBySession[parentSessionId])
+    ? parentData.eventsBySession[parentSessionId]
+    : [];
+  return buildSandboxAgentManualReplayText(parentEvents);
+};
+
 const createDriverSession = async (client, input, persist, parentPersist = null) => {
   if (input.sessionMode !== "fork") {
     await appendDriverLog(input.stderrPath, "creating session");
-    return await createNewSession(client, input);
+    return {
+      session: await createNewSession(client, input),
+      manualReplayText: "",
+      parentReplayStats: null,
+    };
   }
 
   await appendDriverLog(
     input.stderrPath,
-    "resuming parent session " + String(input.parentSessionId || ""),
+    "preparing manual parent replay " + String(input.parentSessionId || ""),
   );
   if (persist) {
-    const childSessionId = await forkPersistedSession(persist, parentPersist, input);
-    process.stdout.write("THREAD_ID:" + childSessionId + "\n");
+    const parentReplay = await buildManualReplayFromParentPersist(parentPersist, input);
+    await writeManualReplayDebugFile(input, parentReplay);
     await appendDriverLog(
       input.stderrPath,
-      "reported forked child session " + childSessionId,
+      "manual replay built parent_events=" +
+        String(parentReplay.stats.parentEventCount) +
+        " bytes=" +
+        String(parentReplay.stats.manualReplayTextBytes) +
+        " truncated_bytes=" +
+        String(parentReplay.stats.manualReplayTruncatedBytes),
     );
-    await appendDriverLog(input.stderrPath, "resuming forked child session");
-    const childSession = await client.resumeSession(childSessionId);
+    await appendDriverLog(input.stderrPath, "creating fresh child session for fork");
+    const childSession = await createNewSession(client, input);
+    const childSessionId = getSessionId(childSession);
     await writeForkDebugFile(input, persist, {
       parentPersist,
       childSessionId,
       resumedSessionId: getSessionId(childSession),
+      resumeMethod: "manual_plain_prompt_replay",
+      parentReplayStats: parentReplay.stats,
     });
-    return childSession;
+    return {
+      session: childSession,
+      manualReplayText: parentReplay.text,
+      parentReplayStats: parentReplay.stats,
+    };
   }
 
   const parentSession = await resumeParentSession(client, input);
@@ -1550,8 +1880,13 @@ const createDriverSession = async (client, input, persist, parentPersist = null)
   await writeForkDebugFile(input, persist, {
     childSessionId: getSessionId(childSession),
     resumedSessionId: getSessionId(childSession),
+    resumeMethod: "native_fork_session",
   });
-  return childSession;
+  return {
+    session: childSession,
+    manualReplayText: "",
+    parentReplayStats: null,
+  };
 };
 
 const main = async () => {
@@ -1593,7 +1928,7 @@ const main = async () => {
   });
   await appendDriverLog(input.stderrPath, "sandbox-agent connected");
 
-  const session = await withHeartbeat(
+  const driverSession = await withHeartbeat(
     createDriverSession(client, input, persist, parentPersist),
     30000,
     async () => {
@@ -1606,6 +1941,8 @@ const main = async () => {
       );
     },
   );
+  const session = driverSession.session || driverSession;
+  const manualReplayText = asString(driverSession.manualReplayText);
   const sessionRecord = asRecord(session);
   await appendDriverLog(
     input.stderrPath,
@@ -1669,8 +2006,11 @@ const main = async () => {
   });
 
   await appendDriverLog(input.stderrPath, "starting prompt");
+  const promptText = manualReplayText
+    ? manualReplayText + "\n\nCurrent task:\n" + input.prompt
+    : input.prompt;
   await withTimeout(
-    session.prompt([{ type: "text", text: input.prompt }]),
+    session.prompt([{ type: "text", text: promptText }]),
     SANDBOX_AGENT_PROMPT_TIMEOUT_MS,
     () =>
       new Error(
@@ -1907,6 +2247,10 @@ export const runSingleTurnAgentInContainer = async (
 				forkDebugPath: path.posix.join(
 					input.stageRootInContainer,
 					SANDBOX_AGENT_FORK_DEBUG_FILE_NAME,
+				),
+				parentReplayDebugPath: path.posix.join(
+					input.stageRootInContainer,
+					SANDBOX_AGENT_PARENT_CONTEXT_DEBUG_FILE_NAME,
 				),
 			},
 			null,
