@@ -262,6 +262,44 @@ export const auth = {
 };
 
 export const validateRequest = async (request: IncomingMessage) => {
+	if (
+		process.env.NODE_ENV === "development" &&
+		process.env.DOKPLOY_DEV_AUTH_BYPASS === "1"
+	) {
+		const member = await db.query.member.findFirst({
+			where: eq(schema.member.role, "owner"),
+			orderBy: [
+				desc(schema.member.isDefault),
+				desc(schema.member.createdAt),
+			],
+			with: {
+				user: true,
+				organization: true,
+			},
+		});
+
+		if (member?.user && member.organization) {
+			return {
+				session: {
+					userId: member.user.id,
+					activeOrganizationId: member.organization.id,
+				},
+				user: {
+					id: member.user.id,
+					name: member.user.name,
+					email: member.user.email,
+					emailVerified: member.user.emailVerified,
+					image: member.user.image,
+					createdAt: member.user.createdAt,
+					updatedAt: member.user.updatedAt,
+					twoFactorEnabled: member.user.twoFactorEnabled,
+					role: member.role,
+					ownerId: member.organization.ownerId,
+				},
+			};
+		}
+	}
+
 	const apiKey = request.headers["x-api-key"] as string;
 	if (apiKey) {
 		try {

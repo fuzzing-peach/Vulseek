@@ -17,10 +17,10 @@ Use the installed skill named `tree-sitter`.
 
 You should be given:
 
-- repository-level scan artifacts
+- repository-level scan JSON
 - one module definition
 - the checked out repository
-- output paths for module artifacts
+- the runtime-provided `output.schema.json`
 
 ## External Code And Nested Repository Exclusion
 
@@ -39,13 +39,13 @@ You must explicitly avoid scanning or extracting functions from:
 Exception rule:
 
 - if the module definition or repository-level artifacts explicitly say that a vendored or external tree is part of the runtime attack surface, you may keep it in scope
-- if you do so, state the reason clearly in `module_scan.md` and `module_scan.json`
+- if you do so, state the reason clearly in `notes`
 
 Practical rule:
 
-- when building `function_plan.json`, do not let imported or vendored trees flood the function list
+- when building the final function list, do not let imported or vendored trees flood the function list
 - prefer first-party module files even if external trees are physically adjacent in the filesystem
-- if tree-sitter returns functions from excluded paths, filter them out before producing the final plan
+- if tree-sitter returns functions from excluded paths, filter them out before producing the final result
 
 ## Non-Goals
 
@@ -55,17 +55,9 @@ Do not:
 - fully verify vulnerabilities
 - do heavy CodeQL or fuzzing work
 
-## Required Outputs
-
-Write these files when the runtime provides their paths:
-
-- `module_scan.md`
-- `module_scan.json`
-- `function_plan.json`
-
 ## Function Extraction Requirement
 
-Use `tree-sitter` to extract concrete function definitions from the module file list, then transform the extracted functions into `function_plan.json`.
+Use `tree-sitter` to extract concrete function definitions from the module file list, then transform the extracted functions into the final structured result.
 
 Rules:
 
@@ -102,7 +94,20 @@ Do not default to raw grep when Serena can answer the question more precisely.
 4. enumerate functions worth deeper scanning
 5. create a function task plan
 
-## What `module_scan.json` Should Capture
+## Final Structured Result
+
+Return exactly one top-level JSON object matching the runtime-provided `output.schema.json`.
+
+Use `output.schema.json` as the source of truth.
+
+Rules:
+
+- validate the final JSON against `output.schema.json` before returning
+- return the validated JSON only inside `<VULSEEK_RET>...<VULSEEK_RET>`
+- do not write `module_scan.md`, `module_scan.json`, or `function_plan.json`
+- keep `functions` tool-derived and scoped to the provided `module_json.files`
+
+## What The Final Result Should Capture
 
 - module summary
 - important files
@@ -113,7 +118,7 @@ Do not default to raw grep when Serena can answer the question more precisely.
 - notes about skipped areas
 - notes about excluded external paths when relevant
 
-### Fixed `module_scan.json` Template
+### Fixed Result Template
 
 Use this fixed top-level structure:
 
@@ -159,7 +164,7 @@ Rules:
 - use arrays for list-like fields, never comma-joined strings
 - use `[]` if a list is empty
 
-## What `function_plan.json` Should Capture
+## What The `functions` Array Should Capture
 
 For each function task:
 
@@ -183,38 +188,33 @@ Include functions that are:
 - wrappers around dangerous sinks
 - suspiciously inconsistent with sibling functions
 
-### Fixed `function_plan.json` Template
+### Fixed `functions` Example
 
 Use this fixed top-level structure:
 
 ```json
-{
-  "module": {
-    "moduleId": "tls-runtime",
-    "name": "TLS Runtime"
-  },
-  "functions": [
-    {
-      "functionId": "fn-2f6e4d4d8a9a6f12",
-      "functionName": "DoTls13Handshake",
-      "filePath": "src/tls13.c",
-      "line": 412,
-      "priority": 93,
-      "summary": "Processes TLS 1.3 handshake state transitions from untrusted peer messages.",
-      "riskType": "state_machine"
-    }
-  ]
-}
+[
+  {
+    "functionId": "fn-2f6e4d4d8a9a6f12",
+    "functionName": "DoTls13Handshake",
+    "filePath": "src/tls13.c",
+    "line": 412,
+    "priority": 93,
+    "summary": "Processes TLS 1.3 handshake state transitions from untrusted peer messages.",
+    "riskType": "state_machine",
+    "score": 8.4
+  }
+]
 ```
 
 Rules:
 
-- output exactly one top-level object with `module` and `functions`
-- every function entry must include all seven fields above
+- every function entry must include all fields above
 - `priority` must be an integer
+- `score` may be null when you cannot support a numeric score
 - `filePath` should be repository-relative when possible
 - `functionId` should come from tree-sitter extraction first, not be invented manually
-- do not output an empty object; use `"functions": []` if none survive filtering
+- do not omit the `functions` array; use `[]` if none survive filtering
 
 ## Working Style
 

@@ -8,7 +8,7 @@ Use this skill when Vulseek asks an analysis agent to investigate one specific `
 
 ## Required Result JSON
 
-After the analysis report is written, you must write a JSON file such as `analysis_result.json`.
+After the analysis report is written, you must return one top-level JSON object through the runtime channel requested by the prompt.
 
 The result JSON must be one top-level object. Required fields:
 
@@ -34,11 +34,7 @@ The `score` is an estimated prioritization score on a 0-10 scale. It should comb
 
 The score is an estimated prioritization score, not a precise CVSS base score. Keep it internally consistent and explain the rationale in the markdown report.
 
-If the runtime provides a specific `write_result_json_to` path, write the JSON there.
-
-When possible, write atomically: write a temporary file first, then rename it into place.
-
-Do not emit any structured stdout protocol.
+Do not write a separate machine-readable result file unless the prompt explicitly requires it.
 
 The goal is not to restate why the candidate was reported. The goal is to determine whether the candidate corresponds to a real vulnerability, what reachable execution paths lead to it, what untrusted inputs can influence it, and what concrete trigger conditions must hold along those paths.
 
@@ -420,9 +416,9 @@ If a section is unknown, write `Unknown`, `None`, or `Not observed` explicitly i
 
 If the runtime gives you a target output path, write the report there.
 
-If no output path is explicitly provided, write the report into a reasonable analysis artifact location under the current working tree and state the path clearly in your final answer.
+If no output path is explicitly provided, write the report under the current task artifact directory and state the path clearly in your final answer.
 
-After the report is written, persist the final classification only through `analysis_result.json`.
+Persist the final classification only through the structured runtime return requested by the prompt.
 
 Do not write extra machine-readable result files for this stage.
 

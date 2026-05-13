@@ -1,24 +1,23 @@
 ---
 name: function-scanner
-description: Scan one function using repository-level and module-level context. Identify concrete candidate sites inside or immediately around the function, score them, and write them to a local JSON result file.
+description: Scan one function using repository-level and module-level context. Identify concrete candidate sites inside or immediately around the function, score them, and return them as structured JSON.
 ---
 
 # Function Scanner
 
 Use this skill when Dokploy starts a function-level scanner for one function task inside a full-scan job.
 
-This is the only full-scan layer that writes final candidates.
+This is the only full-scan layer that returns final candidates.
 
 ## Inputs
 
 You should be given:
 
-- repository-level scan artifacts
-- module-level scan artifacts
+- repository-level scan JSON
+- module-level scan JSON
 - one function task
 - the checked out repository
-- the required output path for `function_result.json`
-- an optional output path for a local markdown note
+- the runtime-provided `output.schema.json`
 
 ## High-Level Objective
 
@@ -59,7 +58,7 @@ If you identify a plausible candidate:
 - name the exact file and line
 - explain the local reason briefly
 - assign a confidence score
-- write it into the required result JSON file
+- return it in the final structured result
 
 Do not collapse everything into vague module-level prose.
 
@@ -74,9 +73,11 @@ Each candidate should include:
 - `confidence`
 - `score`
 
-## Required Result JSON
+## Required Structured Result
 
-If the runtime asks you to write a result JSON file such as `function_result.json`, use this fixed structure:
+Return exactly one top-level JSON object matching the runtime-provided `output.schema.json`.
+
+Use this fixed structure:
 
 ```json
 {
@@ -99,8 +100,8 @@ Rules:
 - always include `candidates`
 - use `[]` when there are no candidates
 - each candidate may contain only `title`, `description`, `filePath`, `line`, `confidence`, and `score`
-- write the file atomically when possible: write a temp file first, then rename it into place
-- do not emit any structured stdout protocol
+- validate the final JSON against `output.schema.json` before returning
+- return the validated JSON only inside `<VULSEEK_RET>...<VULSEEK_RET>`
 
 ## Working Style
 

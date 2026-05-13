@@ -24,21 +24,6 @@ Do not:
 - do per-function scanning
 - do final prioritization across candidate sites
 
-## Required Outputs
-
-Write these files when the runtime provides their paths:
-
-- `repository_scan.md`
-- `repository_scan.json`
-- `module_plan.json`
-
-When useful, also write supporting notes in the repository artifact directory, for example:
-
-- `recent_cve.json`
-- `recent_prs.json`
-- `recent_issues.json`
-- `serena_setup.md`
-
 ## High-Level Tasks
 
 1. pull recent CVE, PR, and issue intelligence for this repository or product
@@ -103,7 +88,6 @@ Required output of this phase:
 
 - summarize the main recurring bug and vulnerability themes
 - record whether results came from cache, refresh, or fresh fetch
-- save the raw or summarized results to repository-level artifacts when paths are available
 
 At minimum, capture:
 
@@ -123,6 +107,14 @@ You must:
 4. identify trust boundaries and likely attack surfaces
 5. identify vulnerability classes worth prioritizing for this codebase
 6. partition the repository into meaningful functional modules for module scanners
+
+Module count rule:
+
+- by default, produce at least 10 functional modules
+- only produce fewer than 10 modules when the repository is genuinely too small or too tightly coupled to support a defensible split
+- if you produce fewer than 10 modules, explicitly explain why in `notes`
+- do not collapse unrelated runtime subsystems into one broad catch-all module just to stay conservative
+- prefer narrower subsystem modules when a codebase contains distinct parser, protocol, validation, crypto, storage, API, daemon, CLI, or compatibility layers
 
 Module boundaries should follow real subsystem boundaries such as:
 
@@ -164,130 +156,22 @@ Minimum expected actions:
 - run Serena indexing
 - confirm the index is usable
 
-Record in `serena_setup.md`:
+Also record Serena initialization status inside the final structured result notes when relevant.
 
-- whether initialization was newly created or reused
-- whether indexing succeeded
-- any indexing gaps, unsupported languages, or backend limitations
+## Final Structured Result
 
-## What `repository_scan.json` Should Capture
-
-- repository summary
-- languages
-- build systems
-- runtime directories
-- skipped or down-ranked directories
-- attack surfaces
-- major public APIs
-- vulnerability themes
-- notes about submodules or external stacks
-
-### Fixed `repository_scan.json` Template
-
-Use this fixed top-level structure:
-
-```json
-{
-  "repository": {
-    "name": "openssl",
-    "summary": "TLS/crypto library with protocol, X.509, provider, and command-line tooling components."
-  },
-  "languages": [
-    "c",
-    "perl"
-  ],
-  "buildSystems": [
-    "Configure",
-    "make"
-  ],
-  "runtimeDirectories": [
-    "ssl",
-    "crypto",
-    "providers"
-  ],
-  "downrankedDirectories": [
-    "test",
-    "demos",
-    "doc"
-  ],
-  "attackSurfaces": [
-    "network_protocol_parsing",
-    "public_library_api",
-    "certificate_parsing",
-    "configuration_input"
-  ],
-  "publicApis": [
-    "SSL_*",
-    "EVP_*",
-    "X509_*"
-  ],
-  "vulnerabilityThemes": [
-    "parser_state_handling",
-    "length_and_bounds_checks",
-    "ownership_and_resource_lifecycle",
-    "policy_and_verification_logic"
-  ],
-  "notes": [
-    "Third-party or generated code was down-ranked unless used directly in runtime paths."
-  ]
-}
-```
+Generate the final structured result in the correct JSON format for this run and make sure it satisfies the runtime-provided `output.schema.json`.
 
 Rules:
 
-- output exactly one top-level JSON object
-- always include all top-level fields shown above
-- use arrays, not free-form joined strings
-- use `[]` when a field has no items
+- use the runtime-provided `output.schema.json` as the source of truth
+- validate the final JSON against `output.schema.json` before returning
+- do not write extra structured result files such as `repository_scan.json`, `module_plan.json`, `recent_cve.json`, `recent_prs.json`, or `recent_issues.json`
+- return the validated JSON inside `<VULSEEK_RET>...<VULSEEK_RET>`
+- the `<VULSEEK_RET>...<VULSEEK_RET>` payload must contain only the validated JSON object and no extra prose
 - keep values concise and repository-level
-- do not wrap the object inside keys such as `data`, `result`, `output`, or `repositoryScan`
+- record the repository overview, runtime-relevant structure, attack surfaces, vulnerability themes, and notes about excluded or down-ranked trees
 - do not include markdown fences, comments, trailing explanatory text, or any non-JSON content
-- after writing the file, reopen it and verify it is valid JSON and still matches this exact top-level schema
-
-## What `module_plan.json` Should Capture
-
-For each module:
-
-- `moduleId`
-- `name`
-- `summary`
-- `artifactDir`
-- `pathListFile` when available
-- `priority`
-
-Keep modules meaningful but not too large. Prefer real runtime boundaries over arbitrary directory slicing.
-
-### Fixed `module_plan.json` Template
-
-Use this fixed top-level structure:
-
-```json
-{
-  "modules": [
-    {
-      "moduleId": "tls-runtime",
-      "name": "TLS Runtime",
-      "summary": "Implements handshake, record, session, and protocol state transitions.",
-      "artifactDir": "/scan-context/jobs/<scanJobId>/scanning/full_scan/modules/tls-runtime",
-      "pathListFile": "/scan-context/jobs/<scanJobId>/scanning/full_scan/modules/tls-runtime/file_list.txt",
-      "priority": 95
-    }
-  ]
-}
-```
-
-Rules:
-
-- output exactly one top-level object with a `modules` array
-- every module object must include all six fields above
-- `moduleId` must be stable and filesystem-safe
-- `artifactDir` must point to that module's artifact directory
-- `pathListFile` must point to a concrete `file_list.txt`
-- `priority` should be an integer, higher means earlier scheduling
-- prefer fewer, meaningful runtime modules over many tiny fragments
-- do not wrap the `modules` array inside keys such as `modulePlan`, `plan`, `data`, `result`, or `output`
-- do not include markdown fences, comments, trailing explanatory text, or any non-JSON content
-- after writing the file, reopen it and verify the root object still has the exact shape `{ "modules": [...] }`
 
 ## Working Style
 
@@ -300,18 +184,6 @@ Rules:
 - down-rank docs, examples, tests, generated code, and packaging unless they are part of the runtime threat surface
 - cross-check repository structure conclusions against recent CVEs, PRs, and issues
 - if historical signals repeatedly mention a subsystem, increase its module priority
-
-## What Must Appear In `repository_scan.md`
-
-Include short sections for:
-
-- repository purpose
-- languages and build systems
-- runtime directories and down-ranked directories
-- attack surfaces and trust boundaries
-- recent CVE / PR / issue themes
-- Serena initialization and indexing status
-- prioritized module plan rationale
 
 ## Final Rule
 

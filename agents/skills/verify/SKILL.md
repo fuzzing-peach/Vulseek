@@ -52,7 +52,7 @@ You should also identify and preserve the current affected version context:
 
 ## Required Result JSON
 
-After the verification artifacts are written, you must write a JSON file such as `verification_result.json`.
+After the verification artifacts are written, you must return one top-level JSON object through the runtime channel requested by the prompt.
 
 The result JSON must be one top-level object. Required fields:
 
@@ -66,11 +66,7 @@ Optional field:
 
 - `confidence`
 
-If the runtime provides a specific `write_result_json_to` path, write the JSON there.
-
-When possible, write atomically: write a temporary file first, then rename it into place.
-
-Do not emit any structured stdout protocol.
+Do not write a separate machine-readable result file unless the prompt explicitly requires it.
 
 ## High-Level Objective
 
@@ -436,12 +432,12 @@ Your report should explicitly include:
 
 ## Step 9 - Produce Required Output Artifacts
 
-You must generate all of the following under the candidate verification directory.
+You must generate all of the following under the current verification task artifact directory.
 
 Suggested layout:
 
 ```text
-/scan-context/jobs/<scanJobId>/candidates/<candidateId>/verify/
+<task_dir>/
   01_verify_report.md
   02_issue_draft.md
   03_poc/
@@ -604,4 +600,4 @@ Before finishing:
 2. ensure the verification report states the final conclusion clearly
 3. ensure the issue draft is shorter than the full report
 4. ensure the Dockerfile and run script are coherent with the selected revision
-5. ensure `verification_result.json` matches the final report and written artifacts
+5. ensure the structured runtime return matches the final report and written artifacts

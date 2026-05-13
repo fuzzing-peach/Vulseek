@@ -14,12 +14,15 @@ ENV HTTP_PROXY=$HTTP_PROXY \
     NO_PROXY=$NO_PROXY \
     http_proxy=$http_proxy \
     https_proxy=$https_proxy \
-    no_proxy=$no_proxy
+    no_proxy=$no_proxy \
+    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 
 RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.ustc.edu.cn/ubuntu/|g; s|http://security.ubuntu.com/ubuntu/|http://mirrors.ustc.edu.cn/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl wget git jq unzip zip tar xz-utils file gnupg \
+    openssl libssl3t64 \
     openssh-client ripgrep vim nano less rsync tree \
     build-essential cmake ninja-build make autoconf automake libtool pkg-config \
     clang clangd lldb lld gdb \
@@ -36,6 +39,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 # Semgrep CLI
+RUN python3 -m pip config set global.index-url "$PIP_INDEX_URL" \
+    && python3 -m pip config set global.trusted-host "$PIP_TRUSTED_HOST"
 RUN PIPX_BIN_DIR=/usr/local/bin pipx install semgrep \
     && semgrep --version
 
@@ -43,6 +48,7 @@ RUN PIPX_BIN_DIR=/usr/local/bin pipx install semgrep \
 RUN python3 -m venv /opt/vulseek-venv \
     && /opt/vulseek-venv/bin/pip install --upgrade pip \
     && /opt/vulseek-venv/bin/pip install \
+      jsonschema \
       tree-sitter \
       tree-sitter-c \
       tree-sitter-cpp
@@ -51,11 +57,19 @@ ENV PATH="/opt/vulseek-venv/bin:$PATH"
 
 # LLM Agent CLIs
 # Keep Claude non-fatal to avoid blocking build if registry/network fails.
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm config get registry
 RUN npm install -g @anthropic-ai/claude-code || true
+RUN npm install -g sandbox-agent@0.4.x
 RUN npm install -g @sandbox-agent/cli@0.4.x \
     && sandbox-agent --help >/dev/null
 RUN npm install -g @openai/codex \
     && codex --version
+RUN npm config set registry https://registry.npmjs.org \
+    && npm config get registry \
+    && sandbox-agent install-agent codex \
+    && sandbox-agent install-agent claude
+ENV SANDBOX_AGENT_REQUIRE_PREINSTALL=1
 
 # Serena
 ENV PATH="/root/.local/bin:$PATH" \

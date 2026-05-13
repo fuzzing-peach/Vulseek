@@ -1,7 +1,7 @@
 "use client";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { PenBoxIcon, PlusIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -33,6 +33,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/utils/api";
 
 const Schema = z.object({
@@ -42,6 +43,7 @@ const Schema = z.object({
 	apiKey: z.string(),
 	model: z.string().min(1, { message: "Model is required" }),
 	thinkingLevel: z.string().min(1, { message: "Thinking level is required" }),
+	envs: z.string(),
 	isEnabled: z.boolean(),
 });
 
@@ -51,10 +53,40 @@ interface Props {
 	agentProfileId?: string;
 }
 
+const renderEnvHighlight = (value: string) => {
+	const lines = value.length > 0 ? value.split("\n") : [""];
+
+	return lines.map((line, index) => {
+		const separatorIndex = line.indexOf("=");
+		const hasSeparator = separatorIndex >= 0;
+		const key = hasSeparator ? line.slice(0, separatorIndex) : line;
+		const envValue = hasSeparator ? line.slice(separatorIndex + 1) : "";
+
+		return (
+			<Fragment key={`${index}-${line}`}>
+				<span className="font-semibold text-blue-700 dark:text-blue-300">
+					{key || " "}
+				</span>
+				{hasSeparator ? (
+					<span className="font-semibold text-foreground">=</span>
+				) : null}
+				{hasSeparator ? (
+					<span className="font-semibold text-rose-700 dark:text-rose-300">
+						{envValue || " "}
+					</span>
+				) : null}
+				{index < lines.length - 1 ? "\n" : null}
+			</Fragment>
+		);
+	});
+};
+
 export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 	const utils = api.useUtils();
 	const [error, setError] = useState<string | null>(null);
 	const [open, setOpen] = useState(false);
+	const envTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+	const envHighlightRef = useRef<HTMLPreElement | null>(null);
 	const { data, refetch } = api.ai.agentProfileOne.useQuery(
 		{
 			agentProfileId: agentProfileId || "",
@@ -77,6 +109,7 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 			apiKey: "",
 			model: "gpt-5.4",
 			thinkingLevel: "medium",
+			envs: "",
 			isEnabled: true,
 		},
 	});
@@ -85,6 +118,15 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 		control: form.control,
 		name: "provider",
 	});
+	const envsValue = useWatch({
+		control: form.control,
+		name: "envs",
+	});
+	const envHighlight = useMemo(
+		() => renderEnvHighlight(envsValue || ""),
+		[envsValue],
+	);
+	const showEnvPlaceholder = !envsValue;
 
 	useEffect(() => {
 		form.reset({
@@ -94,6 +136,7 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 			apiKey: data?.apiKey ?? "",
 			model: data?.model ?? "gpt-5.4",
 			thinkingLevel: data?.thinkingLevel ?? "medium",
+			envs: data?.envs ?? "",
 			isEnabled: data?.isEnabled ?? true,
 		});
 	}, [data, form]);
@@ -108,6 +151,21 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 			form.setValue("model", "gpt-5.4");
 		}
 	}, [agentProfileId, data?.baseUrl, form, provider]);
+
+	useEffect(() => {
+		const textarea = envTextareaRef.current;
+		const highlight = envHighlightRef.current;
+		if (!textarea || !highlight) return;
+
+		const syncScroll = () => {
+			highlight.scrollTop = textarea.scrollTop;
+			highlight.scrollLeft = textarea.scrollLeft;
+		};
+
+		syncScroll();
+		textarea.addEventListener("scroll", syncScroll);
+		return () => textarea.removeEventListener("scroll", syncScroll);
+	}, [open]);
 
 	const onSubmit = async (values: Schema) => {
 		try {
@@ -260,6 +318,47 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 									</FormControl>
 									<FormDescription>
 										Examples: low, medium, high
+									</FormDescription>
+									<FormMessage />
+								</FormItem>
+							)}
+						/>
+
+						<FormField
+							control={form.control}
+							name="envs"
+							render={({ field }) => (
+								<FormItem>
+									<FormLabel>Environment Variables</FormLabel>
+									<FormControl>
+										<div className="relative">
+											<pre
+												ref={envHighlightRef}
+												aria-hidden="true"
+												className="pointer-events-none min-h-[120px] overflow-auto whitespace-pre-wrap break-all rounded-md border border-input bg-input px-3 py-2 font-mono text-xs leading-5"
+											>
+												{showEnvPlaceholder ? (
+													<span className="text-muted-foreground">
+														{"FOO=bar\nHTTP_PROXY=http://host:port"}
+													</span>
+												) : (
+													envHighlight
+												)}
+											</pre>
+											<Textarea
+												placeholder={"FOO=bar\nHTTP_PROXY=http://host:port"}
+												className="absolute inset-0 min-h-[120px] resize-y overflow-auto border-transparent bg-transparent font-mono text-xs leading-5 text-transparent caret-foreground selection:bg-primary/30 focus-visible:ring-2 focus-visible:ring-border"
+												{...field}
+												ref={(element) => {
+													field.ref(element);
+													envTextareaRef.current = element;
+												}}
+												spellCheck={false}
+											/>
+										</div>
+									</FormControl>
+									<FormDescription>
+										One <code>KEY=VALUE</code> per line. These env vars are injected into the agent runtime container.
 									</FormDescription>
 									<FormMessage />
 								</FormItem>
