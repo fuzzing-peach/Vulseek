@@ -18,6 +18,8 @@ import {
 import { installRuntimeSkillsInContainer } from "./runtime-skills";
 import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "./sandbox-agent-shared";
 import type { StageOutputTextChannel } from "../pipeline/stage-definition";
+import { findTaskByIdRepo } from "../persistence/task.repo";
+import { resolveTaskRootSegment } from "../stages/full-scan-stage.runtime";
 
 const RUNTIME_CUSTOM_SKILLS = [
 	"codeql",
@@ -42,9 +44,10 @@ const DEFAULT_FULL_SCAN_FUNCTION_CONCURRENCY = 4;
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
 const STRUCTURED_OUTPUT_SCHEMA_FILE_NAME = "output.schema.json";
 const STRUCTURED_OUTPUT_RESULT_FILE_NAME = "structured-output.json";
-const SHARED_AGENT_HOME_CONTAINER_ROOT = "/scan-context/agent-home";
 const CODEX_HOME_IN_CONTAINER = "/root/.codex";
 const CLAUDE_HOME_IN_CONTAINER = "/root/.claude";
+const SANDBOX_AGENT_SESSION_STORE_DIR_NAME = "session-store";
+const SANDBOX_AGENT_SESSION_PERSIST_FILE_NAME = "persist.json";
 
 const sanitizeForImageTag = (value: string) =>
 	value.toLowerCase().replace(/[^a-z0-9_.-]/g, "-").replace(/-+/g, "-");
@@ -520,6 +523,7 @@ export type RunSingleTurnAgentInput = StageContainerInput & {
 	onThreadId?: (threadId: string) => Promise<void>;
 	sessionMode?: "new" | "fork";
 	parentSessionId?: string | null;
+	parentTaskId?: string | null;
 };
 
 export type RunSingleTurnAgentResult = {
@@ -588,26 +592,6 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		projectName,
 		profileName: serviceName,
 	});
-	const sharedAgentHomeHostRoot = path.join(
-		scanContextMount.mountSource,
-		"jobs",
-		input.scanJob.scanJobId,
-		"agent-home",
-	);
-	const sharedAgentHomeLocalRoot = path.join(
-		CONTAINER_SCAN_CONTEXT_ROOT,
-		"projects",
-		sanitizeContextPathPart(projectName),
-		"profiles",
-		sanitizeContextPathPart(serviceName),
-		"jobs",
-		input.scanJob.scanJobId,
-		"agent-home",
-	);
-	const codexHostDir = path.join(sharedAgentHomeHostRoot, ".codex");
-	const claudeHostDir = path.join(sharedAgentHomeHostRoot, ".claude");
-	const codexLocalDir = path.join(sharedAgentHomeLocalRoot, ".codex");
-	const claudeLocalDir = path.join(sharedAgentHomeLocalRoot, ".claude");
 	const containerEnvPairs = [
 		...getGlobalContainerEnvironmentPairs(),
 		`VULSEEK_PROJECT_PROFILE_DIR=${projectProfileContextRoot}`,
@@ -640,23 +624,9 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		imageTag,
 		agentsDir,
 		scanContextMount,
-		sharedAgentHome: {
-			hostRoot: sharedAgentHomeHostRoot,
-			codexHostDir,
-			claudeHostDir,
-			localRoot: sharedAgentHomeLocalRoot,
-			codexLocalDir,
-			claudeLocalDir,
-			containerRoot: path.posix.join(
-				SHARED_AGENT_HOME_CONTAINER_ROOT,
-				input.scanJob.scanJobId,
-			),
+		agentHome: {
 			codexContainerDir: CODEX_HOME_IN_CONTAINER,
 			claudeContainerDir: CLAUDE_HOME_IN_CONTAINER,
-			dockerMountArgs: [
-				`-v '${escapeSingleQuotes(codexHostDir)}':'${CODEX_HOME_IN_CONTAINER}'`,
-				`-v '${escapeSingleQuotes(claudeHostDir)}':'${CLAUDE_HOME_IN_CONTAINER}'`,
-			].join(" "),
 		},
 		containerNetworkArg,
 		containerEnvArgs,
@@ -686,28 +656,9 @@ export const startContainer = async (input: StageContainerInput) => {
 		cursorPath: runtime.runtimeArtifacts.cursorPath,
 		statePath: runtime.runtimeArtifacts.statePath,
 	});
-	await fs.mkdir(runtime.sharedAgentHome.codexLocalDir, { recursive: true });
-	await fs.mkdir(runtime.sharedAgentHome.claudeLocalDir, { recursive: true });
-	await fs.writeFile(
-		path.join(runtime.sharedAgentHome.claudeLocalDir, "settings.json"),
-		`${JSON.stringify({}, null, 2)}\n`,
-		{ flag: "wx" },
-	).catch((error: unknown) => {
-		if (
-			!(
-				error &&
-				typeof error === "object" &&
-				"code" in error &&
-				error.code === "EEXIST"
-			)
-		) {
-			throw error;
-		}
-	});
-
 	await execDockerRunWithRetry({
 		containerName: input.containerName,
-		command: `docker run -d --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.scanContextMount.dockerMountArg} ${runtime.sharedAgentHome.dockerMountArgs} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.sharedAgentHome.codexContainerDir}/skills' '${runtime.sharedAgentHome.claudeContainerDir}' && sleep infinity"`,
+		command: `docker run -d --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.scanContextMount.dockerMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
 	});
 
 	await initializeRuntimeFilesInContainer({
@@ -727,13 +678,13 @@ export const startContainer = async (input: StageContainerInput) => {
 	});
 	await copyCodexAssetsToContainerHome(
 		input.containerName,
-		runtime.sharedAgentHome.codexContainerDir,
+		runtime.agentHome.codexContainerDir,
 		runtime.agentsDir,
 		input.agentProfile,
 	);
 	await initializeClaudeHomeInContainer(
 		input.containerName,
-		runtime.sharedAgentHome.claudeContainerDir,
+		runtime.agentHome.claudeContainerDir,
 	);
 	await installRuntimeSkillsInContainer({
 		containerName: input.containerName,
@@ -1154,6 +1105,7 @@ class FileSessionPersistDriver {
     const deadline = Date.now() + 30000;
     while (true) {
       try {
+        await fs.mkdir(path.dirname(this.filePath), { recursive: true });
         await fs.mkdir(this.lockPath, { recursive: false });
         await fs.writeFile(
           path.join(this.lockPath, "owner.json"),
@@ -1240,16 +1192,17 @@ class FileSessionPersistDriver {
     });
   }
 
-  async forkSession(parentSessionId, childSessionId) {
-    return await this.withLock(async () => {
+  async writeForkedSessionFrom(parentPersist, parentSessionId, childSessionId) {
+    const parentData = await parentPersist.readData();
+    const parentRecord = parentData.sessions[parentSessionId];
+    if (!parentRecord) {
+      throw new Error("parent session '" + parentSessionId + "' not found in parent persist");
+    }
+    const parentEvents = Array.isArray(parentData.eventsBySession[parentSessionId])
+      ? parentData.eventsBySession[parentSessionId]
+      : [];
+    await this.withLock(async () => {
       const data = await this.readData();
-      const parentRecord = data.sessions[parentSessionId];
-      if (!parentRecord) {
-        throw new Error("parent session '" + parentSessionId + "' not found in shared persist");
-      }
-      const parentEvents = Array.isArray(data.eventsBySession[parentSessionId])
-        ? data.eventsBySession[parentSessionId]
-        : [];
       data.sessions[childSessionId] = {
         ...parentRecord,
         id: childSessionId,
@@ -1264,8 +1217,8 @@ class FileSessionPersistDriver {
         sessionId: childSessionId,
       }));
       await this.writeData(data);
-      return parentEvents.length;
     });
+    return parentEvents.length;
   }
 }
 
@@ -1277,7 +1230,7 @@ const normalizePersistEventForForkCompare = (event) => {
   return normalized;
 };
 
-const writeForkDebugFile = async (input, persist, details = {}) => {
+const writeForkDebugFile = async (input, childPersist, details = {}) => {
   if (!input.forkDebugPath) {
     return;
   }
@@ -1290,13 +1243,15 @@ const writeForkDebugFile = async (input, persist, details = {}) => {
   let childFirstEventMethod = null;
   let childFirstPromptTextPrefix = null;
 
-  if (persist && parentSessionId && childSessionId) {
-    const data = await persist.readData();
-    const parentEvents = Array.isArray(data.eventsBySession[parentSessionId])
-      ? data.eventsBySession[parentSessionId]
+  const parentPersist = details.parentPersist || null;
+  if (childPersist && parentPersist && parentSessionId && childSessionId) {
+    const parentData = await parentPersist.readData();
+    const childData = await childPersist.readData();
+    const parentEvents = Array.isArray(parentData.eventsBySession[parentSessionId])
+      ? parentData.eventsBySession[parentSessionId]
       : [];
-    const childEvents = Array.isArray(data.eventsBySession[childSessionId])
-      ? data.eventsBySession[childSessionId]
+    const childEvents = Array.isArray(childData.eventsBySession[childSessionId])
+      ? childData.eventsBySession[childSessionId]
       : [];
     const parentNormalized = parentEvents.map(normalizePersistEventForForkCompare);
     const childNormalizedPrefix = childEvents
@@ -1326,6 +1281,7 @@ const writeForkDebugFile = async (input, persist, details = {}) => {
     childSessionId: childSessionId || null,
     resumedSessionId: asString(details.resumedSessionId) || null,
     persistPath: input.sessionPersistPath || null,
+    parentPersistPath: input.parentSessionPersistPath || null,
     parentEventCount,
     childEventCount,
     childHasParentPrefix,
@@ -1375,6 +1331,16 @@ const readUsageUsed = (usage) => {
   return null;
 };
 
+const attachUsageUsed = (usage) => {
+  if (!usage) {
+    return null;
+  }
+  return {
+    ...usage,
+    used: readUsageUsed(usage.update),
+  };
+};
+
 const extractUsageUpdateFromEvent = (event) => {
   const update = asRecord(getEventUpdate(event));
   if (asString(update?.sessionUpdate) !== "usage_update") {
@@ -1396,21 +1362,22 @@ const getLastPersistUsageUpdate = (events) => {
   return null;
 };
 
-const buildUsageForkCheck = async (input, persist, state, sessionId) => {
-  if (!persist || String(input.sessionMode || "new") !== "fork") {
+const buildUsageForkCheck = async (input, childPersist, state, sessionId, parentPersist = null) => {
+  if (String(input.sessionMode || "new") !== "fork") {
     return null;
   }
   const parentSessionId = asString(input.parentSessionId);
-  if (!parentSessionId) {
-    return null;
-  }
-  const data = await persist.readData();
-  const parentEvents = Array.isArray(data.eventsBySession[parentSessionId])
-    ? data.eventsBySession[parentSessionId]
-    : [];
-  const childEvents = Array.isArray(data.eventsBySession[sessionId])
-    ? data.eventsBySession[sessionId]
-    : [];
+  const parentData =
+    parentPersist && parentSessionId ? await parentPersist.readData() : null;
+  const childData = childPersist && sessionId ? await childPersist.readData() : null;
+  const parentEvents =
+    parentData && Array.isArray(parentData.eventsBySession[parentSessionId])
+      ? parentData.eventsBySession[parentSessionId]
+      : [];
+  const childEvents =
+    childData && Array.isArray(childData.eventsBySession[sessionId])
+      ? childData.eventsBySession[sessionId]
+      : [];
   const parentLastUsage = getLastPersistUsageUpdate(parentEvents);
   const childPersistLastUsage = getLastPersistUsageUpdate(childEvents);
   const childFirstObservedUsage = state.usageUpdates[0] || null;
@@ -1420,32 +1387,36 @@ const buildUsageForkCheck = async (input, persist, state, sessionId) => {
       : null;
   const stagePromptEstimatedTokens = Math.ceil(asString(input.prompt).length / 4);
   const childFirstUsed = readUsageUsed(childFirstObservedUsage?.update);
+  const childCurrentUsed = readUsageUsed(childLastObservedUsage?.update);
   const parentLastUsed = readUsageUsed(parentLastUsage?.update);
-  const usageExceedsStagePromptEstimate =
+  const childFirstUsageExceedsPromptEstimate =
     typeof childFirstUsed === "number"
-      ? childFirstUsed > stagePromptEstimatedTokens + 1000
+      ? childFirstUsed > stagePromptEstimatedTokens
       : null;
-  const childUsageAtLeastParentUsage =
+  const childFirstUsageExceedsParentUsage =
     typeof childFirstUsed === "number" && typeof parentLastUsed === "number"
-      ? childFirstUsed >= Math.floor(parentLastUsed * 0.8)
+      ? childFirstUsed > parentLastUsed
       : null;
   return {
     enabled: true,
-    method: "usage_update_heuristic",
+    method: "usage_update_initial_context_size_heuristic",
     stagePromptCharCount: asString(input.prompt).length,
     stagePromptEstimatedTokens,
     observedUsageUpdateCount: state.usageUpdates.length,
-    parentLastUsage,
-    childFirstObservedUsage,
-    childLastObservedUsage,
-    childPersistLastUsage,
-    usageExceedsStagePromptEstimate,
-    childUsageAtLeastParentUsage,
+    parentLastUsed,
+    childFirstUsed,
+    childCurrentUsed,
+    parentLastUsage: attachUsageUsed(parentLastUsage),
+    childFirstObservedUsage: attachUsageUsed(childFirstObservedUsage),
+    childLastObservedUsage: attachUsageUsed(childLastObservedUsage),
+    childPersistLastUsage: attachUsageUsed(childPersistLastUsage),
+    childFirstUsageExceedsPromptEstimate,
+    childFirstUsageExceedsParentUsage,
     likelyForkContextLoadedFromUsage:
-      usageExceedsStagePromptEstimate === true ||
-      childUsageAtLeastParentUsage === true,
+      childFirstUsageExceedsParentUsage === true ||
+      childFirstUsageExceedsPromptEstimate === true,
     note:
-      "usage_update is a heuristic signal: it can indicate inherited context pressure, but it is not a strict proof that the model semantically used parent context.",
+      "usage_update is a runtime heuristic: if the first observed child session context token count exceeds the parent's last usage or the current prompt estimate, the agent runtime likely loaded forked context. It does not identify which parent supplied the context.",
   };
 };
 
@@ -1472,13 +1443,17 @@ const resumeParentSession = async (client, input) => {
   return await client.resumeSession(parentSessionId);
 };
 
-const forkPersistedSession = async (persist, input) => {
+const forkPersistedSession = async (childPersist, parentPersist, input) => {
   const parentSessionId = asString(input.parentSessionId);
   if (!parentSessionId) {
     throw new Error("fork session requested but parentSessionId is missing");
   }
+  if (!parentPersist) {
+    throw new Error("fork session requested but parentSessionPersistPath is missing");
+  }
   const childSessionId = crypto.randomUUID();
-  const parentEventCount = await persist.forkSession(
+  const parentEventCount = await childPersist.writeForkedSessionFrom(
+    parentPersist,
     parentSessionId,
     childSessionId,
   );
@@ -1537,7 +1512,7 @@ const forkFromResumedSession = async (client, parentSession, input) => {
   throw new Error("sandbox-agent client does not support session fork");
 };
 
-const createDriverSession = async (client, input, persist) => {
+const createDriverSession = async (client, input, persist, parentPersist = null) => {
   if (input.sessionMode !== "fork") {
     await appendDriverLog(input.stderrPath, "creating session");
     return await createNewSession(client, input);
@@ -1548,7 +1523,7 @@ const createDriverSession = async (client, input, persist) => {
     "resuming parent session " + String(input.parentSessionId || ""),
   );
   if (persist) {
-    const childSessionId = await forkPersistedSession(persist, input);
+    const childSessionId = await forkPersistedSession(persist, parentPersist, input);
     process.stdout.write("THREAD_ID:" + childSessionId + "\n");
     await appendDriverLog(
       input.stderrPath,
@@ -1557,6 +1532,7 @@ const createDriverSession = async (client, input, persist) => {
     await appendDriverLog(input.stderrPath, "resuming forked child session");
     const childSession = await client.resumeSession(childSessionId);
     await writeForkDebugFile(input, persist, {
+      parentPersist,
       childSessionId,
       resumedSessionId: getSessionId(childSession),
     });
@@ -1607,6 +1583,9 @@ const main = async () => {
   const persist = input.sessionPersistPath
     ? new FileSessionPersistDriver(input.sessionPersistPath)
     : null;
+  const parentPersist = input.parentSessionPersistPath
+    ? new FileSessionPersistDriver(input.parentSessionPersistPath)
+    : null;
   const client = await SandboxAgent.connect({
     baseUrl: input.baseUrl,
     fetch: acpFetch,
@@ -1615,7 +1594,7 @@ const main = async () => {
   await appendDriverLog(input.stderrPath, "sandbox-agent connected");
 
   const session = await withHeartbeat(
-    createDriverSession(client, input, persist),
+    createDriverSession(client, input, persist, parentPersist),
     30000,
     async () => {
       await appendDriverLog(
@@ -1708,9 +1687,10 @@ const main = async () => {
       persist,
       state,
       sessionId,
+      parentPersist,
     ).catch((error) => ({
       enabled: true,
-      method: "usage_update_heuristic",
+      method: "usage_update_initial_context_size_heuristic",
       error: error instanceof Error ? error.message : String(error),
       likelyForkContextLoadedFromUsage: null,
     }));
@@ -1765,6 +1745,44 @@ const launchDriver = async (input: {
 	driverLaunchPath: string;
 }) => {
 	await execAsync(`docker exec ${input.containerName} bash '${input.driverLaunchPath}'`);
+};
+
+const buildTaskSessionPersistPathInContainer = (taskRootInContainer: string) =>
+	path.posix.join(
+		taskRootInContainer,
+		SANDBOX_AGENT_SESSION_STORE_DIR_NAME,
+		SANDBOX_AGENT_SESSION_PERSIST_FILE_NAME,
+	);
+
+const resolveParentSessionPersistPathInContainer = async (
+	input: RunSingleTurnAgentInput,
+) => {
+	if (input.sessionMode !== "fork") {
+		return null;
+	}
+	if (!input.parentTaskId) {
+		return null;
+	}
+	const parentTask = await findTaskByIdRepo(input.parentTaskId).catch(() => null);
+	if (!parentTask) {
+		throw new Error(
+			`Fork session requested but parent task '${input.parentTaskId}' was not found`,
+		);
+	}
+	return buildTaskSessionPersistPathInContainer(
+		path.posix.join(
+			CONTAINER_SCAN_CONTEXT_ROOT,
+			"jobs",
+			input.scanJob.scanJobId,
+			resolveTaskRootSegment(
+				parentTask.stageName,
+				parentTask.name,
+				parentTask.taskId,
+			)
+				.split(path.sep)
+				.join("/"),
+		),
+	);
 };
 
 export const runSingleTurnAgentInContainer = async (
@@ -1845,6 +1863,11 @@ export const runSingleTurnAgentInContainer = async (
 							: []),
 					],
 	});
+	const sessionPersistPathInContainer = buildTaskSessionPersistPathInContainer(
+		input.stageRootInContainer,
+	);
+	const parentSessionPersistPathInContainer =
+		await resolveParentSessionPersistPathInContainer(input);
 
 	await writeContainerFile(
 		input.containerName,
@@ -1867,10 +1890,8 @@ export const runSingleTurnAgentInContainer = async (
 				thinkingLevel: input.agentProfile?.thinkingLevel || null,
 				sessionMode: input.sessionMode || "new",
 				parentSessionId: input.parentSessionId || null,
-				sessionPersistPath: path.posix.join(
-					CODEX_HOME_IN_CONTAINER,
-					"sandbox-agent-persist.json",
-				),
+				parentSessionPersistPath: parentSessionPersistPathInContainer,
+				sessionPersistPath: sessionPersistPathInContainer,
 				jsonlPath: path.posix.join(
 					input.stageRootInContainer,
 					runtimeFileNames.jsonl,

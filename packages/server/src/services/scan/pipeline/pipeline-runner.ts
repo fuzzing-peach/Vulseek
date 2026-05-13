@@ -301,6 +301,7 @@ const createStageContextForTask = <TPipelineContext extends PipelineContext>(
 		name: string;
 		input?: unknown;
 		runtimeMode?: "new_session" | "fork_session" | null;
+		forkedFromTaskId?: string | null;
 		forkedFromThreadId?: string | null;
 	},
 ) => {
@@ -322,6 +323,7 @@ const createStageContextForTask = <TPipelineContext extends PipelineContext>(
 				"file",
 			sessionMode: task.runtimeMode === "fork_session" ? "fork" : "new",
 			parentSessionId: task.forkedFromThreadId ?? null,
+			parentTaskId: task.forkedFromTaskId ?? null,
 		});
 };
 
@@ -555,6 +557,7 @@ const createTaskStageContext = <
 	taskIdOverride?: string,
 	taskRuntime?: {
 		runtimeMode?: "new_session" | "fork_session" | null;
+		forkedFromTaskId?: string | null;
 		forkedFromThreadId?: string | null;
 	} | null,
 ) => {
@@ -573,6 +576,7 @@ const createTaskStageContext = <
 		outputTextChannel: stage.outputTextChannel || "file",
 		sessionMode: taskRuntime?.runtimeMode === "fork_session" ? "fork" : "new",
 		parentSessionId: taskRuntime?.forkedFromThreadId ?? null,
+		parentTaskId: taskRuntime?.forkedFromTaskId ?? null,
 	}) as unknown as TStageContext;
 	return {
 		taskId,

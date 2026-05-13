@@ -69,6 +69,7 @@ const executeModuleScanStage = async (
 		cwd: "/workspace/repo",
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
+		parentTaskId: ctx.parentTaskId,
 		prompt: buildModuleScannerPrompt({
 			scanJobId: stageInput.scanJob.scanJobId,
 			moduleId: stageInput.module.moduleId,

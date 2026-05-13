@@ -83,7 +83,7 @@ const resolveMountedProfileDir = (
 		sanitizePathPart(input.serviceName),
 	);
 
-const resolveTaskRootSegment = (
+export const resolveTaskRootSegment = (
 	stageName: string,
 	taskName: string,
 	taskId?: string,
@@ -282,6 +282,7 @@ export type StageContext = PipelineContext & {
 	outputTextChannel: StageOutputTextChannel;
 	sessionMode: "new" | "fork";
 	parentSessionId: string | null;
+	parentTaskId: string | null;
 	agentProfile: () => Promise<AgentProfileLike | null>;
 	containerName: (...parts: Array<string | null | undefined>) => string;
 	taskDir: (input?:
@@ -310,6 +311,7 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 	outputTextChannel?: StageOutputTextChannel;
 	sessionMode?: "new" | "fork";
 	parentSessionId?: string | null;
+	parentTaskId?: string | null;
 }): TBase & StageContext => ({
 	...input.base,
 	stageName: input.stageName,
@@ -318,6 +320,7 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 	outputTextChannel: input.outputTextChannel || "file",
 	sessionMode: input.sessionMode || "new",
 	parentSessionId: input.parentSessionId ?? null,
+	parentTaskId: input.parentTaskId ?? null,
 	agentProfile: async () =>
 		await resolveStageAgentProfile(
 			input.scanJob,

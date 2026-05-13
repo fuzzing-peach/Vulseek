@@ -123,6 +123,7 @@ const executeCandidateAnalysisStage = async (
 		cwd: "/workspace/repo",
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
+		parentTaskId: ctx.parentTaskId,
 		prompt: buildCandidateAnalysisPrompt(stageInput, {
 			reportPath,
 			taskDirContainer: stageRootInContainer,
