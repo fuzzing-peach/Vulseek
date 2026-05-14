@@ -1,3 +1,4 @@
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import { execAsync } from "../../utils/process/execAsync";
 import {
@@ -116,10 +117,27 @@ export const prepareSandboxAgentRuntime = async (input: {
 	provider: string;
 	envPairs?: string[];
 	homeDir?: string;
+	reuseExisting?: boolean;
 }): Promise<PrepareSandboxAgentRuntimeResult> => {
 	const normalizedProvider = coerceProvider(input.provider);
 	if (!normalizedProvider) {
 		throw new Error(`sandbox-agent does not support provider '${input.provider}'`);
+	}
+
+	if (input.reuseExisting) {
+		const artifacts = createSandboxAgentRuntimeArtifacts(input.stageDirPath);
+		try {
+			const metadata = JSON.parse(
+				await fs.readFile(artifacts.metadataPath, "utf-8"),
+			) as PrepareSandboxAgentRuntimeResult & { runtime?: string };
+			if (metadata.server?.baseUrl) {
+				await waitForSandboxAgentHealth(metadata.server.baseUrl);
+				return {
+					artifacts,
+					server: metadata.server,
+				};
+			}
+		} catch {}
 	}
 
 	const result = await startSandboxAgentServerInContainer({

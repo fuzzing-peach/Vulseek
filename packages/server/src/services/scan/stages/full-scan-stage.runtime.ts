@@ -101,6 +101,19 @@ export const resolveTaskRootSegment = (
 	);
 };
 
+export const resolveStageLaneRootSegment = (
+	stageName: string,
+	laneIndex: number,
+) =>
+	path.join(
+		"scanning",
+		"full_scan",
+		"stages",
+		sanitizePathPart(stageName),
+		"lanes",
+		`lane-${laneIndex}`,
+	);
+
 const resolveScanContextMount = async (
 	input: Pick<PipelineContext, "projectName" | "serviceName">,
 ) => {
@@ -279,6 +292,9 @@ export type StageContext = PipelineContext & {
 	stageName: string;
 	taskId: string;
 	taskName: string;
+	persistent: boolean;
+	laneIndex: number | null;
+	laneThreadId: string | null;
 	outputTextChannel: StageOutputTextChannel;
 	sessionMode: "new" | "fork";
 	parentSessionId: string | null;
@@ -295,6 +311,8 @@ export type StageContext = PipelineContext & {
 		stageName?: string;
 	}) => Promise<string>;
 	taskDirContainer: () => Promise<string>;
+	laneDir: () => Promise<string>;
+	laneDirContainer: () => Promise<string>;
 	repositoryArtifactsDir: () => Promise<string>;
 	repositoryStageRuntime: () => Promise<{
 		stageDirPath: string;
@@ -309,6 +327,9 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 	taskId: string;
 	taskName: string;
 	outputTextChannel?: StageOutputTextChannel;
+	persistent?: boolean;
+	laneIndex?: number | null;
+	laneThreadId?: string | null;
 	sessionMode?: "new" | "fork";
 	parentSessionId?: string | null;
 	parentTaskId?: string | null;
@@ -317,6 +338,9 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 	stageName: input.stageName,
 	taskId: input.taskId,
 	taskName: input.taskName,
+	persistent: input.persistent ?? false,
+	laneIndex: input.laneIndex ?? null,
+	laneThreadId: input.laneThreadId ?? null,
 	outputTextChannel: input.outputTextChannel || "file",
 	sessionMode: input.sessionMode || "new",
 	parentSessionId: input.parentSessionId ?? null,
@@ -332,11 +356,18 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 			sanitizeContainerNamePart(input.base.serviceName),
 			resolveStageContainerPrefix(input.stageName),
 			sanitizeContainerNamePart(input.scanJob.scanJobId),
-			...parts
-				.filter((value): value is string => Boolean(value && value.trim()))
-				.map((value) => sanitizeContainerNamePart(value)),
-			sanitizeContainerNamePart(input.taskId),
-		].join("-"),
+			input.persistent && input.laneIndex !== undefined && input.laneIndex !== null
+				? `lane-${input.laneIndex}`
+				: null,
+			...(input.persistent
+				? []
+				: parts
+						.filter((value): value is string => Boolean(value && value.trim()))
+						.map((value) => sanitizeContainerNamePart(value))),
+			input.persistent ? null : sanitizeContainerNamePart(input.taskId),
+		]
+			.filter((value): value is string => Boolean(value))
+			.join("-"),
 	taskDir: async (runtimeInput) => {
 		const normalizedRuntimeInput =
 			typeof runtimeInput === "string"
@@ -363,6 +394,41 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 				.split(path.sep)
 				.join("/"),
 		),
+	laneDir: async () => {
+		if (input.laneIndex === undefined || input.laneIndex === null) {
+			return await (createStageContext({
+				...input,
+				persistent: false,
+			}) as TBase & StageContext).taskDir();
+		}
+		await resolveScanContextMount(input.base);
+		const laneDirPath = path.join(
+			resolveMountedProfileDir(input.base),
+			"jobs",
+			input.scanJob.scanJobId,
+			resolveStageLaneRootSegment(input.stageName, input.laneIndex),
+		);
+		await fs.mkdir(laneDirPath, { recursive: true });
+		return laneDirPath;
+	},
+	laneDirContainer: async () =>
+		input.laneIndex === undefined || input.laneIndex === null
+			? path.posix.join(
+					CONTAINER_SCAN_CONTEXT_ROOT,
+					"jobs",
+					input.scanJob.scanJobId,
+					resolveTaskRootSegment(input.stageName, input.taskName, input.taskId)
+						.split(path.sep)
+						.join("/"),
+				)
+			: path.posix.join(
+					CONTAINER_SCAN_CONTEXT_ROOT,
+					"jobs",
+					input.scanJob.scanJobId,
+					resolveStageLaneRootSegment(input.stageName, input.laneIndex)
+						.split(path.sep)
+						.join("/"),
+				),
 	repositoryArtifactsDir: async () =>
 		await resolveRepositoryArtifactsDir({
 			scanJobId: input.scanJob.scanJobId,

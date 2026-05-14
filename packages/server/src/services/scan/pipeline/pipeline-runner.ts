@@ -12,6 +12,15 @@ import {
 	transitionTaskStatusRepo,
 	updateTaskRepo,
 } from "../persistence/task.repo";
+import {
+	bindStageLaneRuntimeRepo,
+	claimIdleStageLaneRuntimeRepo,
+	findStageLaneRuntimeByActiveTaskIdRepo,
+	releaseStageLaneRuntimeRepo,
+	resetClaimedStageLaneRuntimeForFreshStartRepo,
+	resetStageLaneRuntimeForExitRepo,
+	type StageLaneRuntime,
+} from "../persistence/stage-lane-runtime.repo";
 import { execAsync } from "../../../utils/process/execAsync";
 import {
 	type FirstStageInputOf,
@@ -31,6 +40,7 @@ import {
 import { removeContainer } from "../runtime/run-single-turn-agent";
 import {
 	extractRetFromJsonlContent,
+	hasExitSignalInJsonlContent,
 	SANDBOX_AGENT_RUNTIME_FILE_NAMES,
 } from "../runtime/sandbox-agent-shared";
 import { buildKnownQueueJobIdsForTask } from "../queue-job-ids";
@@ -276,6 +286,21 @@ const cleanupTaskContainer = async (taskId: string) => {
 	await removeContainer(task.containerName).catch(() => {});
 };
 
+const cleanupPersistentLaneForTask = async (taskId: string) => {
+	const lane = await findStageLaneRuntimeByActiveTaskIdRepo(taskId);
+	if (!lane) {
+		return;
+	}
+	if (lane.containerName) {
+		await removeContainer(lane.containerName).catch(() => {});
+	}
+	await resetStageLaneRuntimeForExitRepo({ taskId }).catch(() => {});
+};
+
+const releasePersistentLaneForTask = async (taskId: string) => {
+	await releaseStageLaneRuntimeRepo(taskId).catch(() => {});
+};
+
 const isContainerAlive = async (
 	containerName: string | null | undefined,
 ): Promise<boolean> => {
@@ -315,16 +340,17 @@ const createStageContextForTask = <TPipelineContext extends PipelineContext>(
 			scanJobId: runtime.ctx.scanJobId,
 			applicationId: null,
 			composeId: null,
-			},
-			taskId: task.taskId,
-			taskName: resolveStageTaskName(task.stageName, task.input) || task.name,
-			outputTextChannel:
-				runtime.stageStates.get(task.stageName)?.stage.outputTextChannel ||
-				"file",
-			sessionMode: task.runtimeMode === "fork_session" ? "fork" : "new",
-			parentSessionId: task.forkedFromThreadId ?? null,
-			parentTaskId: task.forkedFromTaskId ?? null,
-		});
+		},
+		taskId: task.taskId,
+		taskName: resolveStageTaskName(task.stageName, task.input) || task.name,
+		outputTextChannel:
+			runtime.stageStates.get(task.stageName)?.stage.outputTextChannel ||
+			"file",
+		persistent: false,
+		sessionMode: task.runtimeMode === "fork_session" ? "fork" : "new",
+		parentSessionId: task.forkedFromThreadId ?? null,
+		parentTaskId: task.forkedFromTaskId ?? null,
+	});
 };
 
 const inspectHalfStartedRunningTask = async <
@@ -559,6 +585,7 @@ const createTaskStageContext = <
 		runtimeMode?: "new_session" | "fork_session" | null;
 		forkedFromTaskId?: string | null;
 		forkedFromThreadId?: string | null;
+		laneRuntime?: StageLaneRuntime | null;
 	} | null,
 ) => {
 	const taskId = resolveStageTaskId(stage.name, ctx, input, taskIdOverride);
@@ -574,7 +601,15 @@ const createTaskStageContext = <
 		taskId,
 		taskName,
 		outputTextChannel: stage.outputTextChannel || "file",
-		sessionMode: taskRuntime?.runtimeMode === "fork_session" ? "fork" : "new",
+		persistent: stage.persistent ?? true,
+		laneIndex: taskRuntime?.laneRuntime?.laneIndex ?? null,
+		laneThreadId: taskRuntime?.laneRuntime?.threadId ?? null,
+		sessionMode:
+			taskRuntime?.laneRuntime?.threadId
+				? "new"
+				: taskRuntime?.runtimeMode === "fork_session"
+					? "fork"
+					: "new",
 		parentSessionId: taskRuntime?.forkedFromThreadId ?? null,
 		parentTaskId: taskRuntime?.forkedFromTaskId ?? null,
 	}) as unknown as TStageContext;
@@ -604,6 +639,9 @@ const resolveStageRawOutput = async (
 	);
 	const hasAgentOutput =
 		jsonlContent.trim().length > 0 || textContent.trim().length > 0;
+	const hasExitSignal = jsonlContent
+		? hasExitSignalInJsonlContent(jsonlContent)
+		: textContent.includes("<VULSEEK_EXIT>");
 
 	const jsonlRet = jsonlContent
 		? extractRetFromJsonlContent(jsonlContent)
@@ -618,6 +656,7 @@ const resolveStageRawOutput = async (
 			stderrContent,
 			progressSignature,
 			hasAgentOutput,
+			hasExitSignal,
 		};
 	}
 
@@ -626,6 +665,7 @@ const resolveStageRawOutput = async (
 		stderrContent,
 		progressSignature,
 		hasAgentOutput,
+		hasExitSignal,
 	};
 };
 
@@ -687,6 +727,7 @@ const persistTerminalSuccess = async <
 	ctx: TPipelineContext,
 	stageCtx: TStageContext,
 	rawOutput: string,
+	options?: { exitLane?: boolean },
 ) => {
 	const currentTask = await findTaskByIdRepo(stageCtx.taskId).catch(() => null);
 	if (
@@ -712,7 +753,15 @@ const persistTerminalSuccess = async <
 		return false;
 	}
 	await refreshPipelineState(ctx);
-	await cleanupTaskContainer(stageCtx.taskId);
+	if (stage.persistent ?? true) {
+		if (options?.exitLane) {
+			await cleanupPersistentLaneForTask(stageCtx.taskId);
+		} else {
+			await releasePersistentLaneForTask(stageCtx.taskId);
+		}
+	} else {
+		await cleanupTaskContainer(stageCtx.taskId);
+	}
 	logPipelineEvent("loop.task_completed", {
 		scanJobId: stageCtx.scanJobId,
 		stageName: stage.name,
@@ -734,6 +783,7 @@ const persistTerminalFailure = async <
 	stageCtx: TStageContext,
 	input: TInput,
 	error: unknown,
+	options?: { exitLane?: boolean },
 ) => {
 	const currentTask = await findTaskByIdRepo(stageCtx.taskId).catch(() => null);
 	if (
@@ -761,7 +811,15 @@ const persistTerminalFailure = async <
 		return false;
 	}
 	await refreshPipelineState(ctx).catch(() => {});
-	await cleanupTaskContainer(stageCtx.taskId).catch(() => {});
+	if (stage.persistent ?? true) {
+		if (options?.exitLane) {
+			await cleanupPersistentLaneForTask(stageCtx.taskId).catch(() => {});
+		} else {
+			await releasePersistentLaneForTask(stageCtx.taskId).catch(() => {});
+		}
+	} else {
+		await cleanupTaskContainer(stageCtx.taskId).catch(() => {});
+	}
 	await stage.onFailure?.(stageCtx, input, error);
 	logPipelineEvent("stage.failed", {
 		scanJobId: stageCtx.scanJobId,
@@ -1044,13 +1102,62 @@ const launchStageExecution = async <
 	execution: StageExecution<TInput>,
 	options?: { logEvent?: string },
 ) => {
+	const limit = await getStageConcurrencyLimit(stageState.stage, runtime.ctx);
+	const pendingTask = await findTaskByIdRepo(execution.taskId).catch(() => null);
+	let laneRuntime =
+		stageState.stage.persistent ?? true
+			? await claimIdleStageLaneRuntimeRepo({
+					scanJobId: runtime.ctx.scanJobId,
+					stageName: stageState.stageName,
+					laneCount: limit,
+					taskId: execution.taskId,
+					forkedFromTaskId: pendingTask?.forkedFromTaskId ?? null,
+					forkedFromThreadId: pendingTask?.forkedFromThreadId ?? null,
+				})
+			: null;
+	if ((stageState.stage.persistent ?? true) && !laneRuntime) {
+		await stageState.stage.queue?.enqueue(execution.taskId).catch(() => {});
+		return;
+	}
 	const launched = await transitionTaskStatusRepo({
 		taskId: execution.taskId,
 		from: ["pending"],
 		to: "launching",
 	});
 	if (!launched) {
+		if (laneRuntime) {
+			await releaseStageLaneRuntimeRepo(execution.taskId).catch(() => {});
+		}
 		return;
+	}
+
+	if (
+		laneRuntime &&
+		laneRuntime.threadId &&
+		((laneRuntime.forkedFromTaskId ?? null) !==
+			(launched.forkedFromTaskId ?? null) ||
+			(laneRuntime.forkedFromThreadId ?? null) !==
+				(launched.forkedFromThreadId ?? null))
+	) {
+		const staleLaneRuntime = laneRuntime;
+		if (staleLaneRuntime.containerName) {
+			await removeContainer(staleLaneRuntime.containerName).catch(() => {});
+		}
+		laneRuntime =
+			(await resetClaimedStageLaneRuntimeForFreshStartRepo({
+				scanJobId: staleLaneRuntime.scanJobId,
+				stageName: staleLaneRuntime.stageName,
+				laneIndex: staleLaneRuntime.laneIndex,
+				forkedFromTaskId: launched.forkedFromTaskId ?? null,
+				forkedFromThreadId: launched.forkedFromThreadId ?? null,
+			})) ?? staleLaneRuntime;
+		logPipelineEvent("stage.persistent_lane_parent_changed", {
+			scanJobId: runtime.ctx.scanJobId,
+			pipelineName: runtime.pipeline.name,
+			stageName: stageState.stageName,
+			taskId: execution.taskId,
+			laneIndex: laneRuntime.laneIndex,
+		});
 	}
 
 	const stageCtx = createTaskStageContext(
@@ -1058,7 +1165,7 @@ const launchStageExecution = async <
 		runtime.ctx,
 		execution.input,
 		execution.taskId,
-		launched,
+		{ ...launched, laneRuntime },
 	).stageCtx;
 	try {
 		await ensureTaskRuntimeDirectory(stageCtx);
@@ -1135,6 +1242,16 @@ const inspectActiveStageTask = async <
 	if (task.status === "launching") {
 		const threadId = extractThreadIdFromStdout(stdoutContent);
 		if (threadId) {
+			const lane = await findStageLaneRuntimeByActiveTaskIdRepo(task.taskId);
+			if (lane) {
+				await bindStageLaneRuntimeRepo({
+					scanJobId: lane.scanJobId,
+					stageName: lane.stageName,
+					laneIndex: lane.laneIndex,
+					containerName: task.containerName,
+					threadId,
+				});
+			}
 			await transitionTaskStatusRepo({
 				taskId: task.taskId,
 				from: ["launching"],
@@ -1201,7 +1318,7 @@ const inspectActiveStageTask = async <
 		return false;
 	}
 
-	const { rawOutput, stderrContent: rawStderrContent } =
+	const { rawOutput, stderrContent: rawStderrContent, hasExitSignal } =
 		await resolveStageRawOutput(
 			stageCtx,
 			stageState.stage.outputTextChannel || "file",
@@ -1220,6 +1337,7 @@ const inspectActiveStageTask = async <
 				runtime.ctx,
 				stageCtx,
 				rawOutput,
+				{ exitLane: hasExitSignal },
 			);
 			if (terminalUpdated) {
 				await backfillStageFromQueue(runtime, stageState);
@@ -1238,6 +1356,7 @@ const inspectActiveStageTask = async <
 				stageCtx,
 				input,
 				error,
+				{ exitLane: hasExitSignal },
 			);
 			await backfillStageFromQueue(runtime, stageState);
 		}
@@ -1254,6 +1373,7 @@ const inspectActiveStageTask = async <
 			exitCode === 0
 				? new Error("Sandbox agent driver exited without returning <VULSEEK_RET>")
 				: new Error(`Sandbox agent driver exited with code ${exitCode}`),
+			{ exitLane: hasExitSignal },
 		);
 		await backfillStageFromQueue(runtime, stageState);
 		return true;
@@ -1266,6 +1386,7 @@ const inspectActiveStageTask = async <
 			stageCtx,
 			input,
 			new Error("Sandbox agent prompt completed without returning <VULSEEK_RET>"),
+			{ exitLane: hasExitSignal },
 		);
 		await backfillStageFromQueue(runtime, stageState);
 		return true;

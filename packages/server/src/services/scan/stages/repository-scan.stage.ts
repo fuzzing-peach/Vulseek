@@ -94,9 +94,13 @@ const executeRepositoryScanStage = async (
 		commitWindow: scanJob.commitWindow || DEFAULT_DELTA_COMMIT_WINDOW,
 	};
 	const scanAgentProfile = await ctx.agentProfile();
-	const stageDirPath = await ctx.taskDir();
-	const stageRootInContainer = await ctx.taskDirContainer();
-	const repositoryRoot = stageRootInContainer;
+	const taskStageDirPath = await ctx.taskDir();
+	const taskStageRootInContainer = await ctx.taskDirContainer();
+	const stageDirPath = ctx.persistent ? await ctx.laneDir() : taskStageDirPath;
+	const stageRootInContainer = ctx.persistent
+		? await ctx.laneDirContainer()
+		: taskStageRootInContainer;
+	const repositoryRoot = taskStageRootInContainer;
 	const containerName = ctx.containerName();
 
 	await bindTaskRuntimeRepo({
@@ -111,6 +115,7 @@ const executeRepositoryScanStage = async (
 		codexHome: `${stageRootInContainer}/.codex`,
 		stageDirPath,
 		stageRootInContainer,
+		persistent: ctx.persistent,
 	});
 
 	const repositoryState = await prepareRepositoryForScanInContainer({
@@ -122,7 +127,7 @@ const executeRepositoryScanStage = async (
 		baseSha: scanJob.baseSha,
 		commitWindow:
 			scanJob.commitWindow || DEFAULT_DELTA_COMMIT_WINDOW,
-		scanRootDir: stageRootInContainer,
+		scanRootDir: taskStageRootInContainer,
 	});
 
 	await updateScanJobTargetContextRepo(scanJob.scanJobId, {
@@ -140,6 +145,11 @@ const executeRepositoryScanStage = async (
 		codexHome: `${stageRootInContainer}/.codex`,
 		stageDirPath,
 		stageRootInContainer,
+		taskId: ctx.taskId,
+		taskStageDirPath,
+		taskStageRootInContainer,
+		persistent: ctx.persistent,
+		laneThreadId: ctx.laneThreadId,
 		cwd: "/workspace/repo",
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
@@ -165,6 +175,7 @@ export const createRepositoryScanningStageDefinition = <
 >(input: {
 	name?: string;
 	mode?: "serial" | "fanout";
+	persistent?: boolean;
 	outputTextChannel?: StageOutputTextChannel;
 	queue?: StageQueueBinding<TPipelineContext, RepositoryScanningStageInput>;
 }): StageDefinition<
@@ -176,6 +187,7 @@ export const createRepositoryScanningStageDefinition = <
 	createStageDefinition({
 		name: input.name || "RepositoryScanningStage",
 		mode: input.mode || "serial",
+		persistent: input.persistent,
 		outputTextChannel: input.outputTextChannel,
 		queue: input.queue,
 		getDesiredConcurrency: async (_ctx) => 1,

@@ -93,9 +93,13 @@ const executeCandidateAnalysisStage = async (
 	const candidateId = stageInput.candidate.id;
 	const scanJob = stageInput.candidate.scanJob;
 	const analysisAgentProfile = await ctx.agentProfile();
-	const stageDirPath = await ctx.taskDir();
-	const stageRootInContainer = await ctx.taskDirContainer();
-	const reportPath = `${stageRootInContainer}/01_report.md`;
+	const taskStageDirPath = await ctx.taskDir();
+	const taskStageRootInContainer = await ctx.taskDirContainer();
+	const stageDirPath = ctx.persistent ? await ctx.laneDir() : taskStageDirPath;
+	const stageRootInContainer = ctx.persistent
+		? await ctx.laneDirContainer()
+		: taskStageRootInContainer;
+	const reportPath = `${taskStageRootInContainer}/01_report.md`;
 	const containerName = ctx.containerName(
 		candidateId.slice(0, 8),
 	);
@@ -111,6 +115,7 @@ const executeCandidateAnalysisStage = async (
 		codexHome: `${stageRootInContainer}/.codex`,
 		stageDirPath,
 		stageRootInContainer,
+		persistent: ctx.persistent,
 	});
 
 	return await runSingleTurnAgentInContainer({
@@ -120,13 +125,18 @@ const executeCandidateAnalysisStage = async (
 		codexHome: `${stageRootInContainer}/.codex`,
 		stageDirPath,
 		stageRootInContainer,
+		taskId: ctx.taskId,
+		taskStageDirPath,
+		taskStageRootInContainer,
+		persistent: ctx.persistent,
+		laneThreadId: ctx.laneThreadId,
 		cwd: "/workspace/repo",
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
 		prompt: buildCandidateAnalysisPrompt(stageInput, {
 			reportPath,
-			taskDirContainer: stageRootInContainer,
+			taskDirContainer: taskStageRootInContainer,
 			taskId: ctx.taskId,
 		}),
 		outputSchema: analysisSchema,
@@ -144,6 +154,7 @@ export const createAnalysisStageDefinition = <
 >(input: {
 	name?: string;
 	mode?: "serial" | "fanout";
+	persistent?: boolean;
 	outputTextChannel?: StageOutputTextChannel;
 	queue?: StageQueueBinding<TPipelineContext, CandidateAnalysisStageInput>;
 }): StageDefinition<
@@ -155,6 +166,7 @@ export const createAnalysisStageDefinition = <
 	createStageDefinition({
 		name: input.name || "AnalysisStage",
 		mode: input.mode || "fanout",
+		persistent: input.persistent,
 		outputTextChannel: input.outputTextChannel,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>

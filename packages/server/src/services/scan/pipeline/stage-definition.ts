@@ -54,6 +54,7 @@ export type StageDefinition<
 > = {
 	name: string;
 	mode: StageRunMode;
+	persistent?: boolean;
 	outputTextChannel?: StageOutputTextChannel;
 	queue?: StageQueueBinding<TPipelineContext, TInput>;
 	validateInput?: (ctx: TStageContext, input: TInput) => Promise<boolean>;
@@ -89,6 +90,7 @@ export const createStageDefinition = <
 	stage: StageDefinition<TPipelineContext, TInput, TOutput, TStageContext>,
 ): StageDefinition<TPipelineContext, TInput, TOutput, TStageContext> => ({
 	...stage,
+	persistent: stage.persistent ?? true,
 	outputTextChannel: stage.outputTextChannel || "file",
 });
 

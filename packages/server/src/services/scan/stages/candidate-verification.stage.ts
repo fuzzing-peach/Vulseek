@@ -113,13 +113,17 @@ const executeCandidateVerificationStage = async (
 	const candidateId = stageInput.analysisResult.candidate.id;
 	const scanJob = stageInput.analysisResult.scanJob;
 	const verifierAgentProfile = await ctx.agentProfile();
-	const stageDirPath = await ctx.taskDir();
-	const stageRootInContainer = await ctx.taskDirContainer();
-	const reportPath = `${stageRootInContainer}/01_verify_report.md`;
-	const issueDraftPath = `${stageRootInContainer}/02_issue_draft.md`;
-	const pocPath = `${stageRootInContainer}/03_poc/poc.txt`;
-	const dockerfilePath = `${stageRootInContainer}/04_repro/Dockerfile`;
-	const runScriptPath = `${stageRootInContainer}/04_repro/run.sh`;
+	const taskStageDirPath = await ctx.taskDir();
+	const taskStageRootInContainer = await ctx.taskDirContainer();
+	const stageDirPath = ctx.persistent ? await ctx.laneDir() : taskStageDirPath;
+	const stageRootInContainer = ctx.persistent
+		? await ctx.laneDirContainer()
+		: taskStageRootInContainer;
+	const reportPath = `${taskStageRootInContainer}/01_verify_report.md`;
+	const issueDraftPath = `${taskStageRootInContainer}/02_issue_draft.md`;
+	const pocPath = `${taskStageRootInContainer}/03_poc/poc.txt`;
+	const dockerfilePath = `${taskStageRootInContainer}/04_repro/Dockerfile`;
+	const runScriptPath = `${taskStageRootInContainer}/04_repro/run.sh`;
 	const containerName = ctx.containerName(
 		candidateId.slice(0, 8),
 	);
@@ -135,6 +139,7 @@ const executeCandidateVerificationStage = async (
 		codexHome: `${stageRootInContainer}/.codex-verify`,
 		stageDirPath,
 		stageRootInContainer,
+		persistent: ctx.persistent,
 		runtimeFileNames: SANDBOX_AGENT_RUNTIME_FILE_NAMES,
 	});
 
@@ -145,13 +150,18 @@ const executeCandidateVerificationStage = async (
 		codexHome: `${stageRootInContainer}/.codex-verify`,
 		stageDirPath,
 		stageRootInContainer,
+		taskId: ctx.taskId,
+		taskStageDirPath,
+		taskStageRootInContainer,
+		persistent: ctx.persistent,
+		laneThreadId: ctx.laneThreadId,
 		runtimeFileNames: SANDBOX_AGENT_RUNTIME_FILE_NAMES,
 		cwd: "/workspace/repo",
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
 		prompt: buildCandidateVerificationPrompt(stageInput, {
-			taskDirContainer: stageRootInContainer,
+			taskDirContainer: taskStageRootInContainer,
 			reportPath,
 			issueDraftPath,
 			pocPath,
@@ -174,6 +184,7 @@ export const createVerifyingStageDefinition = <
 >(input: {
 	name?: string;
 	mode?: "serial" | "fanout";
+	persistent?: boolean;
 	outputTextChannel?: StageOutputTextChannel;
 	queue?: StageQueueBinding<TPipelineContext, CandidateVerificationStageInput>;
 }): StageDefinition<
@@ -185,6 +196,7 @@ export const createVerifyingStageDefinition = <
 	createStageDefinition({
 		name: input.name || "VerifyingStage",
 		mode: input.mode || "fanout",
+		persistent: input.persistent,
 		outputTextChannel: input.outputTextChannel,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>

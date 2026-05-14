@@ -46,8 +46,12 @@ const executeFunctionScanStage = async (
 	stageInput: FunctionScanningStageInput,
 ) => {
 	const scanAgentProfile = await ctx.agentProfile();
-	const stageDirPath = await ctx.taskDir();
-	const stageRootInContainer = await ctx.taskDirContainer();
+	const taskStageDirPath = await ctx.taskDir();
+	const taskStageRootInContainer = await ctx.taskDirContainer();
+	const stageDirPath = ctx.persistent ? await ctx.laneDir() : taskStageDirPath;
+	const stageRootInContainer = ctx.persistent
+		? await ctx.laneDirContainer()
+		: taskStageRootInContainer;
 	const containerName = ctx.containerName(
 		stageInput.function.functionId.slice(0, 24),
 	);
@@ -64,6 +68,7 @@ const executeFunctionScanStage = async (
 		codexHome: `${stageRootInContainer}/.codex`,
 		stageDirPath,
 		stageRootInContainer,
+		persistent: ctx.persistent,
 	});
 	return await runSingleTurnAgentInContainer({
 		scanJob: stageInput.scanJob,
@@ -72,6 +77,11 @@ const executeFunctionScanStage = async (
 		codexHome: `${stageRootInContainer}/.codex`,
 		stageDirPath,
 		stageRootInContainer,
+		taskId: ctx.taskId,
+		taskStageDirPath,
+		taskStageRootInContainer,
+		persistent: ctx.persistent,
+		laneThreadId: ctx.laneThreadId,
 		cwd: "/workspace/repo",
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
@@ -106,6 +116,7 @@ export const createFunctionScanningStageDefinition = <
 >(input: {
 	name?: string;
 	mode?: "serial" | "fanout";
+	persistent?: boolean;
 	outputTextChannel?: StageOutputTextChannel;
 	queue?: StageQueueBinding<TPipelineContext, FunctionScanningStageInput>;
 }): StageDefinition<
@@ -117,6 +128,7 @@ export const createFunctionScanningStageDefinition = <
 	createStageDefinition({
 		name: input.name || "FunctionScanningStage",
 		mode: input.mode || "fanout",
+		persistent: input.persistent,
 		outputTextChannel: input.outputTextChannel,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>

@@ -7,6 +7,7 @@ export const SANDBOX_AGENT_RUNTIME_FILE_NAMES = {
 
 const VULSEEK_RET_MARKER = "<VULSEEK_RET>";
 const VULSEEK_RET_XML_CLOSE_MARKER = "</VULSEEK_RET>";
+const VULSEEK_EXIT_MARKER = "<VULSEEK_EXIT>";
 
 type SandboxAgentSessionUpdate =
 	| {
@@ -179,4 +180,25 @@ export const extractRetFromJsonlContent = (content: string): string | null => {
 		} catch {}
 	}
 	return null;
+};
+
+export const hasExitSignalInJsonlContent = (content: string): boolean => {
+	let agentMessageText = "";
+	for (const rawLine of content.split("\n")) {
+		const trimmed = rawLine.trim();
+		if (!trimmed) {
+			continue;
+		}
+		try {
+			const parsed = JSON.parse(trimmed) as SandboxAgentSessionEvent;
+			if (!isAgentMessageChunkEvent(parsed)) {
+				continue;
+			}
+			agentMessageText += extractPayloadText(getEventUpdate(parsed));
+			if (agentMessageText.includes(VULSEEK_EXIT_MARKER)) {
+				return true;
+			}
+		} catch {}
+	}
+	return false;
 };

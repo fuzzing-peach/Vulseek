@@ -35,5 +35,6 @@ export const buildRepositoryScannerPrompt = (input: {
 		"Your final structured result must be exactly one top-level JSON object matching output.schema.json with no wrapper keys, no prose, and no markdown fences.",
 		"Populate each module's files array with repository-relative source file paths that belong to that module.",
 		"Before finishing, validate the final JSON against output.schema.json and follow the runtime output contract appended below.",
+		"After returning the structured result as required by that contract, also include <VULSEEK_EXIT> in the same final visible response so Dokploy can discard this repository-scanner lane.",
 	].join("\n");
 };

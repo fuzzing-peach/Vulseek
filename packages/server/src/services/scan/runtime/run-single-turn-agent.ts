@@ -507,6 +507,7 @@ export type StageContainerInput = {
 	codexHome: string;
 	stageDirPath: string;
 	stageRootInContainer: string;
+	persistent?: boolean;
 	runtimeFileNames?: {
 		jsonl: string;
 		text: string;
@@ -516,8 +517,12 @@ export type StageContainerInput = {
 };
 
 export type RunSingleTurnAgentInput = StageContainerInput & {
+	taskId?: string;
 	cwd: string;
 	prompt: string | ((containerName: string) => Promise<string>);
+	taskStageDirPath?: string;
+	taskStageRootInContainer?: string;
+	laneThreadId?: string | null;
 	outputSchema?: ZodTypeAny;
 	outputTextChannel?: StageOutputTextChannel;
 	onThreadId?: (threadId: string) => Promise<void>;
@@ -569,6 +574,7 @@ const buildStructuredOutputPromptSuffix = (
 		"- Do not add extra fields outside the schema.",
 		"- Use null for nullable fields instead of omitting them unless the schema explicitly allows omission.",
 		"- Ensure the top-level value is a JSON object.",
+		"- If you have completed all useful work for this lane and want Dokploy to discard this long-lived runtime before the next task, include <VULSEEK_EXIT> in the same final visible response. This is optional and does not replace <VULSEEK_RET>.",
 		...returnInstructions,
 		"",
 		"```json",
@@ -641,9 +647,24 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 export const startContainer = async (input: StageContainerInput) => {
 	const runtime = await resolveStageContainerRuntime(input);
 
-	// Recovery/retry may encounter leftover containers with the same deterministic
-	// name. Remove them first so restart logic can safely recreate the runtime.
-	await execAsync(`docker rm -f ${input.containerName}`).catch(() => {});
+	if (input.persistent) {
+		const running = await execAsync(
+			`docker inspect -f '{{.State.Running}}' ${input.containerName}`,
+		)
+			.then(({ stdout }) => stdout.trim() === "true")
+			.catch(() => false);
+		if (running) {
+			await execAsync(
+				`docker exec ${input.containerName} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}'"`,
+			);
+			return;
+		}
+		await execAsync(`docker rm -f ${input.containerName}`).catch(() => {});
+	} else {
+		// Recovery/retry may encounter leftover containers with the same deterministic
+		// name. Remove them first so restart logic can safely recreate the runtime.
+		await execAsync(`docker rm -f ${input.containerName}`).catch(() => {});
+	}
 
 	await initializeRuntimeFiles({
 		runtimeDir: input.stageDirPath,
@@ -705,6 +726,8 @@ const SANDBOX_AGENT_DRIVER_FILE_NAME = "sandbox-agent-driver.mjs";
 const SANDBOX_AGENT_DRIVER_INPUT_FILE_NAME = "sandbox-agent-driver-input.json";
 const SANDBOX_AGENT_DRIVER_STDOUT_FILE_NAME = "sandbox-agent-driver-stdout.log";
 const SANDBOX_AGENT_DRIVER_LAUNCH_FILE_NAME = "sandbox-agent-driver-launch.sh";
+const SANDBOX_AGENT_DRIVER_PID_FILE_NAME = "sandbox-agent-driver.pid";
+const SANDBOX_AGENT_DRIVER_TASK_DIR_NAME = "sandbox-agent-driver-tasks";
 const SANDBOX_AGENT_FORK_DEBUG_FILE_NAME = "sandbox-agent-fork-debug.json";
 const SANDBOX_AGENT_PARENT_CONTEXT_DEBUG_FILE_NAME =
 	"sandbox-agent-parent-context.compact.txt";
@@ -723,6 +746,7 @@ const SANDBOX_AGENT_POST_PROMPT_EVENT_IDLE_MS = 30 * 1000;
 const SANDBOX_AGENT_POST_PROMPT_EVENT_POLL_MS = 100;
 const VULSEEK_RET_MARKER = "<VULSEEK_RET>";
 const VULSEEK_RET_XML_CLOSE_MARKER = "</VULSEEK_RET>";
+const VULSEEK_EXIT_MARKER = "<VULSEEK_EXIT>";
 const MANUAL_REPLAY_PARENT_PROMPT_CHAR_LIMIT = 8000;
 const MANUAL_REPLAY_ASSISTANT_MARKER_CHAR_LIMIT = 50000;
 const MANUAL_REPLAY_ASSISTANT_TAIL_CHAR_LIMIT = 30000;
@@ -1190,6 +1214,9 @@ const appendSessionEvent = async (paths, state, event) => {
   if (asString(payloadRecord?.sessionUpdate) === "agent_message_chunk") {
     const chunkText = extractPayloadText(update);
     state.agentMessageText += chunkText;
+    if (state.agentMessageText.includes(VULSEEK_EXIT_MARKER)) {
+      state.exitRequested = true;
+    }
     const nextReturnValue = extractVulseekRetValue(state.agentMessageText);
     if (nextReturnValue !== null) {
       state.returnValue = nextReturnValue;
@@ -1214,6 +1241,40 @@ const sleep = async (ms) =>
   await new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+
+const createTaskState = () => ({
+  agentMessageText: "",
+  usageUpdates: [],
+  returnValue: "",
+  exitRequested: false,
+  endTurnReceived: false,
+  endTurnEventIndex: null,
+  eventCount: 0,
+  lastEventAt: 0,
+});
+
+const readNextPersistentTaskInput = async (taskQueueDir) => {
+  await fs.mkdir(taskQueueDir, { recursive: true });
+  const entries = (await fs.readdir(taskQueueDir))
+    .filter(
+      (entry) =>
+        entry.endsWith(".json") &&
+        !entry.endsWith(".running.json") &&
+        !entry.endsWith(".done.json"),
+    )
+    .sort();
+  for (const entry of entries) {
+    const taskPath = path.join(taskQueueDir, entry);
+    const runningPath = taskPath.replace(/\.json$/, ".running.json");
+    try {
+      await fs.rename(taskPath, runningPath);
+      const taskInput = JSON.parse(await fs.readFile(runningPath, "utf-8"));
+      await fs.rename(runningPath, runningPath.replace(/\.running\.json$/, ".done.json")).catch(() => {});
+      return taskInput;
+    } catch {}
+  }
+  return null;
+};
 
 const waitForPostPromptEventDrain = async (input, state, getEventWriteChain) => {
   const startedAt = Date.now();
@@ -1903,6 +1964,7 @@ const main = async () => {
     pathToFileURL(path.join(sandboxAgentModulePath, "dist/index.js")).href
   );
   const input = JSON.parse(await fs.readFile(inputPath, "utf-8"));
+  let activeInput = input;
   await appendDriverLog(
     input.stderrPath,
     "loaded input provider=" +
@@ -1966,27 +2028,19 @@ const main = async () => {
     );
   }
 
-  const state = {
-    agentMessageText: "",
-    usageUpdates: [],
-    returnValue: "",
-    endTurnReceived: false,
-    endTurnEventIndex: null,
-    eventCount: 0,
-    lastEventAt: 0,
-  };
+  let state = createTaskState();
   let eventWriteChain = Promise.resolve();
 
   session.onEvent((event) => {
     eventWriteChain = eventWriteChain
-      .then(() => appendSessionEvent(input, state, event))
+      .then(() => appendSessionEvent(activeInput, state, event))
       .then(async () => {
         const payload = getEventPayloadRecord(event);
         if (asString(payload?.method) !== "session/request_permission") {
           return;
         }
         const params = asRecord(payload?.params) || {};
-        await autoApprovePermissionRequest(session, input, {
+        await autoApprovePermissionRequest(session, activeInput, {
           ...params,
           id: asString(payload?.id) || asString(params.id) || undefined,
         });
@@ -2002,47 +2056,69 @@ const main = async () => {
   });
 
   session.onPermissionRequest((request) => {
-    void autoApprovePermissionRequest(session, input, request);
+    void autoApprovePermissionRequest(session, activeInput, request);
   });
 
-  await appendDriverLog(input.stderrPath, "starting prompt");
-  const promptText = manualReplayText
-    ? manualReplayText + "\n\nCurrent task:\n" + input.prompt
-    : input.prompt;
-  await withTimeout(
-    session.prompt([{ type: "text", text: promptText }]),
-    SANDBOX_AGENT_PROMPT_TIMEOUT_MS,
-    () =>
-      new Error(
-        "sandbox-agent session.prompt timed out after " +
-          SANDBOX_AGENT_PROMPT_TIMEOUT_MS / 1000 +
-          "s",
-      ),
-  );
-  await appendDriverLog(input.stderrPath, "prompt finished");
-  await waitForPostPromptEventDrain(input, state, () => eventWriteChain);
-  if (String(input.sessionMode || "new") === "fork") {
-    const usageForkCheck = await buildUsageForkCheck(
-      input,
-      persist,
-      state,
-      sessionId,
-      parentPersist,
-    ).catch((error) => ({
-      enabled: true,
-      method: "usage_update_initial_context_size_heuristic",
-      error: error instanceof Error ? error.message : String(error),
-      likelyForkContextLoadedFromUsage: null,
-    }));
-    if (usageForkCheck) {
-      await mergeForkDebugFile(input, { usageForkCheck });
+  const runPromptTask = async (taskInput, replayText) => {
+    activeInput = taskInput;
+    state = createTaskState();
+    if (sessionId) {
+      await appendScanRuntimeFile(taskInput.stdoutPath || "", "THREAD_ID:" + sessionId + "\n").catch(() => {});
+      process.stdout.write("THREAD_ID:" + sessionId + "\n");
     }
-  }
-  if (!state.returnValue) {
-    await appendScanRuntimeFile(
-      input.stderrPath,
-      "[sandbox-agent-driver] prompt completed without <VULSEEK_RET>\n",
+    await appendDriverLog(taskInput.stderrPath, "starting prompt task_id=" + String(taskInput.taskId || ""));
+    const promptText = replayText
+      ? replayText + "\n\nCurrent task:\n" + taskInput.prompt
+      : taskInput.prompt;
+    await withTimeout(
+      session.prompt([{ type: "text", text: promptText }]),
+      SANDBOX_AGENT_PROMPT_TIMEOUT_MS,
+      () =>
+        new Error(
+          "sandbox-agent session.prompt timed out after " +
+            SANDBOX_AGENT_PROMPT_TIMEOUT_MS / 1000 +
+            "s",
+        ),
     );
+    await appendDriverLog(taskInput.stderrPath, "prompt finished");
+    await waitForPostPromptEventDrain(taskInput, state, () => eventWriteChain);
+    if (String(taskInput.sessionMode || "new") === "fork") {
+      const usageForkCheck = await buildUsageForkCheck(
+        taskInput,
+        persist,
+        state,
+        sessionId,
+        parentPersist,
+      ).catch((error) => ({
+        enabled: true,
+        method: "usage_update_initial_context_size_heuristic",
+        error: error instanceof Error ? error.message : String(error),
+        likelyForkContextLoadedFromUsage: null,
+      }));
+      if (usageForkCheck) {
+        await mergeForkDebugFile(taskInput, { usageForkCheck });
+      }
+    }
+    if (!state.returnValue) {
+      await appendScanRuntimeFile(
+        taskInput.stderrPath,
+        "[sandbox-agent-driver] prompt completed without <VULSEEK_RET>\n",
+      );
+    }
+    if (state.exitRequested) {
+      await appendDriverLog(taskInput.stderrPath, "received <VULSEEK_EXIT>");
+    }
+    return state;
+  };
+
+  await runPromptTask(input, manualReplayText);
+  while (input.persistent && !state.exitRequested) {
+    const nextTaskInput = await readNextPersistentTaskInput(input.taskQueueDir);
+    if (!nextTaskInput) {
+      await sleep(500);
+      continue;
+    }
+    await runPromptTask(nextTaskInput, "");
   }
 };
 
@@ -2067,6 +2143,7 @@ const buildSandboxAgentDriverLaunchScript = (input: {
 	driverScriptPath: string;
 	driverInputPath: string;
 	driverStdoutPath: string;
+	driverPidPath: string;
 	taskStdoutPath: string;
 	stderrPath: string;
 }) => `#!/usr/bin/env bash
@@ -2078,6 +2155,7 @@ mkdir -p '${escapeSingleQuotes(path.posix.dirname(input.driverScriptPath))}'
 nohup bash -lc 'export SANDBOX_AGENT_MODULE_PATH="$(npm root -g)/sandbox-agent" && node "${input.driverScriptPath}" "${input.driverInputPath}" > >(tee -a "${input.driverStdoutPath}" "${input.taskStdoutPath}" >/dev/null) 2>> "${input.stderrPath}"; status=$?; echo "[sandbox-agent-driver] exit_code=$status" >> "${input.stderrPath}"' >/dev/null 2>&1 &
 driver_pid=$!
 echo "[sandbox-agent-driver] pid=$driver_pid" >> '${escapeSingleQuotes(input.stderrPath)}'
+echo "$driver_pid" > '${escapeSingleQuotes(input.driverPidPath)}'
 `;
 
 const launchDriver = async (input: {
@@ -2086,6 +2164,16 @@ const launchDriver = async (input: {
 }) => {
 	await execAsync(`docker exec ${input.containerName} bash '${input.driverLaunchPath}'`);
 };
+
+const isDriverAlive = async (input: {
+	containerName: string;
+	driverPidPath: string;
+}) =>
+	await execAsync(
+		`docker exec ${input.containerName} bash -lc "test -f '${input.driverPidPath}' && kill -0 \\$(cat '${input.driverPidPath}')"`,
+	)
+		.then(() => true)
+		.catch(() => false);
 
 const buildTaskSessionPersistPathInContainer = (taskRootInContainer: string) =>
 	path.posix.join(
@@ -2128,16 +2216,19 @@ const resolveParentSessionPersistPathInContainer = async (
 export const runSingleTurnAgentInContainer = async (
 	input: RunSingleTurnAgentInput,
 ): Promise<RunSingleTurnAgentResult> => {
+	const taskStageDirPath = input.taskStageDirPath || input.stageDirPath;
+	const taskStageRootInContainer =
+		input.taskStageRootInContainer || input.stageRootInContainer;
 	const structuredOutputSchemaPathInContainer = path.posix.join(
-		input.stageRootInContainer,
+		taskStageRootInContainer,
 		STRUCTURED_OUTPUT_SCHEMA_FILE_NAME,
 	);
 	const structuredOutputSchemaPathOnHost = path.join(
-		input.stageDirPath,
+		taskStageDirPath,
 		STRUCTURED_OUTPUT_SCHEMA_FILE_NAME,
 	);
 	const structuredOutputResultPathInContainer = path.posix.join(
-		input.stageRootInContainer,
+		taskStageRootInContainer,
 		STRUCTURED_OUTPUT_RESULT_FILE_NAME,
 	);
 	const outputTextChannel = input.outputTextChannel || "file";
@@ -2146,7 +2237,7 @@ export const runSingleTurnAgentInContainer = async (
 			target: "jsonSchema7",
 			$refStrategy: "none",
 		});
-		await fs.mkdir(input.stageDirPath, { recursive: true });
+		await fs.mkdir(taskStageDirPath, { recursive: true });
 		await fs.writeFile(
 			structuredOutputSchemaPathOnHost,
 			`${JSON.stringify(jsonSchema, null, 2)}\n`,
@@ -2169,6 +2260,39 @@ export const runSingleTurnAgentInContainer = async (
 	const runtimeFileNames = input.runtimeFileNames || {
 		...SANDBOX_AGENT_RUNTIME_FILE_NAMES,
 	};
+	const taskRuntimeArtifacts = createCodexRuntimeArtifacts({
+		runtimeDir: taskStageDirPath,
+		jsonlFileName: runtimeFileNames.jsonl,
+		textFileName: runtimeFileNames.text,
+		stderrFileName: runtimeFileNames.stderr,
+		stdoutFileName: runtimeFileNames.stdout,
+	});
+	await initializeRuntimeFiles({
+		runtimeDir: taskStageDirPath,
+		jsonlPath: path.join(taskStageDirPath, runtimeFileNames.jsonl),
+		textPath: path.join(taskStageDirPath, runtimeFileNames.text),
+		stderrPath: path.join(taskStageDirPath, runtimeFileNames.stderr),
+		stdoutPath: path.join(taskStageDirPath, runtimeFileNames.stdout),
+	});
+	await initializeCodexRuntimeMetadataFiles({
+		cursorPath: taskRuntimeArtifacts.cursorPath,
+		statePath: taskRuntimeArtifacts.statePath,
+	});
+	await initializeRuntimeFilesInContainer({
+		containerName: input.containerName,
+		runtimeDirInContainer: taskStageRootInContainer,
+		jsonlFileName: runtimeFileNames.jsonl,
+		textFileName: runtimeFileNames.text,
+		stderrFileName: runtimeFileNames.stderr,
+		stdoutFileName: runtimeFileNames.stdout,
+	});
+	await initializeCodexRuntimeMetadataFilesInContainer({
+		containerName: input.containerName,
+		runtimeDirInContainer: taskStageRootInContainer,
+		cursorFileName: taskRuntimeArtifacts.cursorFileName,
+		stateFileName: taskRuntimeArtifacts.stateFileName,
+		writeContainerFile,
+	});
 	const agentProvider = input.agentProfile?.provider || "codex";
 	const driverScriptPath = path.posix.join(
 		input.stageRootInContainer,
@@ -2186,6 +2310,14 @@ export const runSingleTurnAgentInContainer = async (
 		input.stageRootInContainer,
 		SANDBOX_AGENT_DRIVER_LAUNCH_FILE_NAME,
 	);
+	const driverPidPath = path.posix.join(
+		input.stageRootInContainer,
+		SANDBOX_AGENT_DRIVER_PID_FILE_NAME,
+	);
+	const taskQueueDir = path.posix.join(
+		input.stageRootInContainer,
+		SANDBOX_AGENT_DRIVER_TASK_DIR_NAME,
+	);
 
 	const sandboxRuntime = await prepareSandboxAgentRuntime({
 		containerName: input.containerName,
@@ -2202,12 +2334,71 @@ export const runSingleTurnAgentInContainer = async (
 							? parseAgentProfileEnvPairs(input.agentProfile)
 							: []),
 					],
+		reuseExisting: input.persistent,
 	});
 	const sessionPersistPathInContainer = buildTaskSessionPersistPathInContainer(
 		input.stageRootInContainer,
 	);
 	const parentSessionPersistPathInContainer =
 		await resolveParentSessionPersistPathInContainer(input);
+	const driverTaskInput = {
+		taskId: input.taskId || undefined,
+		baseUrl: sandboxRuntime.server.baseUrl,
+		provider:
+			input.agentProfile?.provider === "claude_code" ? "claude" : "codex",
+		cwd: input.cwd,
+		prompt: promptWithOutputSchema,
+		outputTextChannel,
+		structuredOutputResultPathInContainer,
+		model: input.agentProfile?.model || null,
+		thinkingLevel: input.agentProfile?.thinkingLevel || null,
+		sessionMode: input.laneThreadId ? "persistent" : input.sessionMode || "new",
+		parentSessionId: input.parentSessionId || null,
+		parentSessionPersistPath: parentSessionPersistPathInContainer,
+		sessionPersistPath: sessionPersistPathInContainer,
+		jsonlPath: path.posix.join(
+			taskStageRootInContainer,
+			runtimeFileNames.jsonl,
+		),
+		textPath: path.posix.join(
+			taskStageRootInContainer,
+			runtimeFileNames.text,
+		),
+		stderrPath: path.posix.join(
+			taskStageRootInContainer,
+			runtimeFileNames.stderr,
+		),
+		stdoutPath: path.posix.join(
+			taskStageRootInContainer,
+			runtimeFileNames.stdout,
+		),
+		forkDebugPath: path.posix.join(
+			taskStageRootInContainer,
+			SANDBOX_AGENT_FORK_DEBUG_FILE_NAME,
+		),
+		parentReplayDebugPath: path.posix.join(
+			taskStageRootInContainer,
+			SANDBOX_AGENT_PARENT_CONTEXT_DEBUG_FILE_NAME,
+		),
+	};
+
+	const persistentDriverAlive =
+		input.persistent &&
+		(await isDriverAlive({ containerName: input.containerName, driverPidPath }));
+	if (persistentDriverAlive) {
+		const requestPath = path.posix.join(
+			taskQueueDir,
+			`${Date.now()}-${input.scanJob.scanJobId}-${Math.random().toString(16).slice(2)}.json`,
+		);
+		await writeContainerFile(
+			input.containerName,
+			requestPath,
+			JSON.stringify(driverTaskInput, null, 2),
+		);
+		return {
+			threadId: input.laneThreadId || null,
+		};
+	}
 
 	await writeContainerFile(
 		input.containerName,
@@ -2219,39 +2410,9 @@ export const runSingleTurnAgentInContainer = async (
 		driverInputPath,
 		JSON.stringify(
 			{
-				baseUrl: sandboxRuntime.server.baseUrl,
-				provider:
-					input.agentProfile?.provider === "claude_code" ? "claude" : "codex",
-				cwd: input.cwd,
-				prompt: promptWithOutputSchema,
-				outputTextChannel,
-				structuredOutputResultPathInContainer,
-				model: input.agentProfile?.model || null,
-				thinkingLevel: input.agentProfile?.thinkingLevel || null,
-				sessionMode: input.sessionMode || "new",
-				parentSessionId: input.parentSessionId || null,
-				parentSessionPersistPath: parentSessionPersistPathInContainer,
-				sessionPersistPath: sessionPersistPathInContainer,
-				jsonlPath: path.posix.join(
-					input.stageRootInContainer,
-					runtimeFileNames.jsonl,
-				),
-				textPath: path.posix.join(
-					input.stageRootInContainer,
-					runtimeFileNames.text,
-				),
-				stderrPath: path.posix.join(
-					input.stageRootInContainer,
-					runtimeFileNames.stderr,
-				),
-				forkDebugPath: path.posix.join(
-					input.stageRootInContainer,
-					SANDBOX_AGENT_FORK_DEBUG_FILE_NAME,
-				),
-				parentReplayDebugPath: path.posix.join(
-					input.stageRootInContainer,
-					SANDBOX_AGENT_PARENT_CONTEXT_DEBUG_FILE_NAME,
-				),
+				...driverTaskInput,
+				persistent: input.persistent || false,
+				taskQueueDir,
 			},
 			null,
 			2,
@@ -2264,12 +2425,13 @@ export const runSingleTurnAgentInContainer = async (
 			driverScriptPath,
 			driverInputPath,
 			driverStdoutPath,
+			driverPidPath,
 			taskStdoutPath: path.posix.join(
-				input.stageRootInContainer,
+				taskStageRootInContainer,
 				runtimeFileNames.stdout,
 			),
 			stderrPath: path.posix.join(
-				input.stageRootInContainer,
+				taskStageRootInContainer,
 				runtimeFileNames.stderr,
 			),
 		}),

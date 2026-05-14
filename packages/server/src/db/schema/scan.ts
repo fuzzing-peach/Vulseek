@@ -4,6 +4,7 @@ import {
 	index,
 	integer,
 	jsonb,
+	primaryKey,
 	pgEnum,
 	pgTable,
 	text,
@@ -150,6 +151,58 @@ export const tasks = pgTable(
 		),
 		threadIdx: index("tasks_thread_idx").on(table.threadId),
 		containerIdx: index("tasks_container_idx").on(table.containerName),
+	}),
+);
+
+export const scanStageLaneRuntimes = pgTable(
+	"scan_stage_lane_runtimes",
+	{
+		scanJobId: text("scanJobId")
+			.notNull()
+			.references(() => scanJobs.scanJobId, {
+				onDelete: "cascade",
+			}),
+		stageName: text("stageName").notNull(),
+		laneIndex: integer("laneIndex").notNull(),
+		containerName: text("containerName"),
+		threadId: text("threadId"),
+		activeTaskId: text("activeTaskId").references(() => tasks.taskId, {
+			onDelete: "set null",
+		}),
+		forkedFromTaskId: text("forkedFromTaskId").references(
+			(): AnyPgColumn => tasks.taskId,
+			{
+				onDelete: "set null",
+			},
+		),
+		forkedFromThreadId: text("forkedFromThreadId"),
+		status: text("status")
+			.$type<"idle" | "active" | "exiting">()
+			.notNull()
+			.default("idle"),
+		lastExitTaskId: text("lastExitTaskId"),
+		lastExitAt: text("lastExitAt"),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		pk: primaryKey({
+			columns: [table.scanJobId, table.stageName, table.laneIndex],
+		}),
+		scanJobStageIdx: index("scan_stage_lane_scan_job_stage_idx").on(
+			table.scanJobId,
+			table.stageName,
+		),
+		activeTaskIdx: index("scan_stage_lane_active_task_idx").on(
+			table.activeTaskId,
+		),
+		containerIdx: index("scan_stage_lane_container_idx").on(
+			table.containerName,
+		),
 	}),
 );
 
