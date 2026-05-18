@@ -1,5 +1,5 @@
 import { Activity, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { JsonRpcSummaryPanel } from "@/components/dashboard/scanning/jsonrpc-summary";
 import { useSandboxAgentActivity } from "@/components/dashboard/scanning/use-sandbox-agent-activity";
 import { useSandboxAgentSession } from "@/components/dashboard/scanning/use-sandbox-agent-session";
@@ -122,6 +122,8 @@ export const LiveTaskActivityButton = ({
 	iconOnly?: boolean;
 }) => {
 	const [isOpen, setIsOpen] = useState(false);
+	const openedAtRef = useRef<number | null>(null);
+	const messageCountRef = useRef(0);
 	const liveActivity = useSandboxAgentActivity({
 		taskId,
 		enabled: !!taskId && (!activity || isOpen),
@@ -137,6 +139,37 @@ export const LiveTaskActivityButton = ({
 		enabled: isOpen && !!taskId,
 	});
 
+	useEffect(() => {
+		messageCountRef.current = messages.length;
+	}, [messages.length]);
+
+	useEffect(() => {
+		if (!isOpen || !taskId) {
+			return;
+		}
+		if (openedAtRef.current === null) {
+			openedAtRef.current =
+				typeof performance !== "undefined" ? performance.now() : Date.now();
+		}
+		console.info("[sandbox-agent-output]", {
+			taskId,
+			event: "dialog.open",
+			elapsedMs: 0,
+			title,
+		});
+		return () => {
+			const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+			console.info("[sandbox-agent-output]", {
+				taskId,
+				event: "dialog.close",
+				elapsedMs:
+					openedAtRef.current === null ? null : Math.round(now - openedAtRef.current),
+				messageCount: messageCountRef.current,
+			});
+			openedAtRef.current = null;
+		};
+	}, [isOpen, taskId, title]);
+
 	return (
 		<>
 			<Button
@@ -148,6 +181,14 @@ export const LiveTaskActivityButton = ({
 				aria-label="View agent output"
 				onClick={(event) => {
 					event.stopPropagation();
+					openedAtRef.current =
+						typeof performance !== "undefined" ? performance.now() : Date.now();
+					console.info("[sandbox-agent-output]", {
+						taskId,
+						event: "activity_button.click",
+						elapsedMs: 0,
+						title,
+					});
 					setIsOpen(true);
 				}}
 			>
@@ -202,6 +243,7 @@ export const LiveTaskActivityButton = ({
 						messages={messages}
 						maxHeightClassName="max-h-[65vh]"
 						className="min-w-0"
+						debugTaskId={taskId}
 					/>
 				</DialogContent>
 			</Dialog>

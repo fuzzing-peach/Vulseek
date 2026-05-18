@@ -29,6 +29,23 @@ type StreamState = {
 	errorMessage: string | null;
 };
 
+const logSandboxAgentOutputTiming = (
+	taskId: string,
+	event: string,
+	startedAt: number,
+	details: Record<string, unknown> = {},
+) => {
+	if (typeof window === "undefined") {
+		return;
+	}
+	console.info("[sandbox-agent-output]", {
+		taskId,
+		event,
+		elapsedMs: Math.round(performance.now() - startedAt),
+		...details,
+	});
+};
+
 export const useSandboxAgentSession = ({
 	taskId,
 	enabled,
@@ -53,8 +70,14 @@ export const useSandboxAgentSession = ({
 			return;
 		}
 
+		const startedAt = performance.now();
 		let pendingMessages: JsonRpcStreamMessage[] = [];
 		let flushTimer: number | null = null;
+		let snapshotMessageCount = 0;
+		let deltaMessageCount = 0;
+		let firstMessageQueued = false;
+		let firstFlushLogged = false;
+		let firstDeltaLogged = false;
 		const flushMessages = () => {
 			flushTimer = null;
 			if (pendingMessages.length === 0) {
@@ -62,6 +85,14 @@ export const useSandboxAgentSession = ({
 			}
 			const messages = pendingMessages;
 			pendingMessages = [];
+			if (!firstFlushLogged) {
+				firstFlushLogged = true;
+				logSandboxAgentOutputTiming(taskId, "state_flush.first", startedAt, {
+					batchSize: messages.length,
+					snapshotMessageCount,
+					deltaMessageCount,
+				});
+			}
 			setState((current) => ({
 				...current,
 				messages: [...current.messages, ...messages],
@@ -69,9 +100,21 @@ export const useSandboxAgentSession = ({
 				errorMessage: null,
 			}));
 		};
-		const queueMessages = (messages: JsonRpcStreamMessage[]) => {
+		const queueMessages = (
+			messages: JsonRpcStreamMessage[],
+			source: "snapshot" | "delta",
+		) => {
 			if (messages.length === 0) {
 				return;
+			}
+			if (!firstMessageQueued) {
+				firstMessageQueued = true;
+				logSandboxAgentOutputTiming(taskId, "message_queue.first", startedAt, {
+					source,
+					batchSize: messages.length,
+					line: messages[0]?.line,
+					timestamp: messages[0]?.timestamp,
+				});
 			}
 			pendingMessages.push(...messages);
 			if (flushTimer === null) {
@@ -86,8 +129,12 @@ export const useSandboxAgentSession = ({
 			errorMessage: null,
 		});
 
+		logSandboxAgentOutputTiming(taskId, "eventsource.create", startedAt, {
+			url,
+		});
 		const eventSource = new EventSource(url);
 		eventSource.onopen = () => {
+			logSandboxAgentOutputTiming(taskId, "eventsource.open", startedAt);
 			setState((current) => ({
 				...current,
 				isConnected: true,
@@ -98,6 +145,11 @@ export const useSandboxAgentSession = ({
 				metadata?: SandboxAgentSessionMetadata;
 				messages?: JsonRpcStreamMessage[];
 			};
+			logSandboxAgentOutputTiming(taskId, "snapshot.legacy", startedAt, {
+				messageCount: payload.messages?.length || 0,
+				status: payload.metadata?.status,
+				jsonlExists: payload.metadata?.jsonlExists,
+			});
 			setState({
 				messages: payload.messages || [],
 				isConnected: true,
@@ -109,6 +161,11 @@ export const useSandboxAgentSession = ({
 			const payload = JSON.parse((event as MessageEvent).data) as {
 				metadata?: SandboxAgentSessionMetadata;
 			};
+			logSandboxAgentOutputTiming(taskId, "snapshot.start", startedAt, {
+				status: payload.metadata?.status,
+				jsonlExists: payload.metadata?.jsonlExists,
+				jsonlPath: payload.metadata?.jsonlPath,
+			});
 			pendingMessages = [];
 			if (flushTimer !== null) {
 				window.clearTimeout(flushTimer);
@@ -125,9 +182,14 @@ export const useSandboxAgentSession = ({
 			const message = JSON.parse(
 				(event as MessageEvent).data,
 			) as JsonRpcStreamMessage;
-			queueMessages([message]);
+			snapshotMessageCount += 1;
+			queueMessages([message], "snapshot");
 		});
 		eventSource.addEventListener("snapshot_end", () => {
+			logSandboxAgentOutputTiming(taskId, "snapshot.end", startedAt, {
+				snapshotMessageCount,
+				pendingMessages: pendingMessages.length,
+			});
 			flushMessages();
 			setState((current) => ({
 				...current,
@@ -139,12 +201,25 @@ export const useSandboxAgentSession = ({
 			const payload = JSON.parse((event as MessageEvent).data) as {
 				messages?: JsonRpcStreamMessage[];
 			};
-			queueMessages(payload.messages || []);
+			const messages = payload.messages || [];
+			deltaMessageCount += messages.length;
+			if (!firstDeltaLogged && messages.length > 0) {
+				firstDeltaLogged = true;
+				logSandboxAgentOutputTiming(taskId, "delta.first", startedAt, {
+					batchSize: messages.length,
+					line: messages[0]?.line,
+					timestamp: messages[0]?.timestamp,
+				});
+			}
+			queueMessages(messages, "delta");
 		});
 		eventSource.addEventListener("stream_error", (event) => {
 			const payload = JSON.parse((event as MessageEvent).data) as {
 				message?: string;
 			};
+			logSandboxAgentOutputTiming(taskId, "stream.error", startedAt, {
+				message: payload.message,
+			});
 			setState((current) => ({
 				...current,
 				isConnected: false,
@@ -152,6 +227,10 @@ export const useSandboxAgentSession = ({
 			}));
 		});
 		eventSource.addEventListener("done", () => {
+			logSandboxAgentOutputTiming(taskId, "stream.done", startedAt, {
+				snapshotMessageCount,
+				deltaMessageCount,
+			});
 			setState((current) => ({
 				...current,
 				isConnected: false,
@@ -159,6 +238,9 @@ export const useSandboxAgentSession = ({
 			eventSource.close();
 		});
 		eventSource.addEventListener("error", () => {
+			logSandboxAgentOutputTiming(taskId, "eventsource.error", startedAt, {
+				readyState: eventSource.readyState,
+			});
 			setState((current) => ({
 				...current,
 				isConnected: false,
@@ -170,9 +252,13 @@ export const useSandboxAgentSession = ({
 			if (flushTimer !== null) {
 				window.clearTimeout(flushTimer);
 			}
+			logSandboxAgentOutputTiming(taskId, "eventsource.cleanup", startedAt, {
+				snapshotMessageCount,
+				deltaMessageCount,
+			});
 			eventSource.close();
 		};
-	}, [enabled, url]);
+	}, [enabled, taskId, url]);
 
 	return state;
 };

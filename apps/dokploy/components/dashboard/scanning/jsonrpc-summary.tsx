@@ -639,15 +639,36 @@ export const JsonRpcSummaryPanel = ({
 	emptyLabel = "No agent output yet",
 	className = "",
 	maxHeightClassName = "max-h-40",
+	debugTaskId,
 }: {
 	messages: JsonRpcStreamMessage[];
 	emptyLabel?: string;
 	className?: string;
 	maxHeightClassName?: string;
+	debugTaskId?: string;
 }) => {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const autoScrollRef = useRef(true);
+	const firstMessagesRenderedRef = useRef(false);
+	const mountedAtRef = useRef(
+		typeof performance !== "undefined" ? performance.now() : Date.now(),
+	);
 	const summaryLines = extractJsonRpcSummaryLines(messages);
+
+	useEffect(() => {
+		if (!debugTaskId || firstMessagesRenderedRef.current || messages.length === 0) {
+			return;
+		}
+		firstMessagesRenderedRef.current = true;
+		const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+		console.info("[sandbox-agent-output]", {
+			taskId: debugTaskId,
+			event: "summary_panel.first_messages_rendered",
+			elapsedMs: Math.round(now - mountedAtRef.current),
+			messageCount: messages.length,
+			summaryLineCount: summaryLines.length,
+		});
+	}, [debugTaskId, messages.length, summaryLines.length]);
 
 	useEffect(() => {
 		const container = containerRef.current;
