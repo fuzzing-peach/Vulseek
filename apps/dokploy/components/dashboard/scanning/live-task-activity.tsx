@@ -1,7 +1,6 @@
 import { Activity, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { JsonRpcSummaryPanel } from "@/components/dashboard/scanning/jsonrpc-summary";
-import { setSandboxAgentOutputModalOpen } from "@/components/dashboard/scanning/sandbox-agent-output-modal-state";
 import { useSandboxAgentActivity } from "@/components/dashboard/scanning/use-sandbox-agent-activity";
 import { useSandboxAgentSession } from "@/components/dashboard/scanning/use-sandbox-agent-session";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +36,8 @@ export const LiveTaskActivity = ({
 	taskId,
 	title,
 	subtitle,
+	activity,
+	isConnected,
 	viewButtonVariant = "secondary",
 	viewButtonSize = "sm",
 	iconOnlyViewButton = false,
@@ -44,23 +45,30 @@ export const LiveTaskActivity = ({
 	taskId: string;
 	title: string;
 	subtitle?: string | null;
+	activity?: { kind: string; label: string };
+	isConnected?: boolean;
 	viewButtonVariant?: "default" | "secondary" | "outline" | "ghost";
 	viewButtonSize?: "default" | "sm" | "lg" | "icon";
 	iconOnlyViewButton?: boolean;
 }) => {
-	const { activity, isConnected } = useSandboxAgentActivity({
+	const liveActivity = useSandboxAgentActivity({
 		taskId,
-		enabled: !!taskId,
+		enabled: !!taskId && !activity,
 	});
+	const resolvedActivity = activity || liveActivity.activity;
+	const resolvedIsConnected = isConnected ?? liveActivity.isConnected;
 
 	return (
 		<div className="flex min-w-0 items-start justify-between gap-3">
-			<LiveTaskActivityBadge activity={activity} isConnected={isConnected} />
+			<LiveTaskActivityBadge
+				activity={resolvedActivity}
+				isConnected={resolvedIsConnected}
+			/>
 			<LiveTaskActivityButton
 				taskId={taskId}
 				title={title}
 				subtitle={subtitle}
-				activity={activity}
+				activity={resolvedActivity}
 				variant={viewButtonVariant}
 				size={viewButtonSize}
 				iconOnly={iconOnlyViewButton}
@@ -127,7 +135,7 @@ export const LiveTaskActivityButton = ({
 	const messageCountRef = useRef(0);
 	const liveActivity = useSandboxAgentActivity({
 		taskId,
-		enabled: !!taskId && (!activity || isOpen),
+		enabled: !!taskId && !activity,
 	});
 	const resolvedActivity = activity || liveActivity.activity;
 	const {
@@ -148,7 +156,6 @@ export const LiveTaskActivityButton = ({
 		if (!isOpen || !taskId) {
 			return;
 		}
-		setSandboxAgentOutputModalOpen(true);
 		if (openedAtRef.current === null) {
 			openedAtRef.current =
 				typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -169,7 +176,6 @@ export const LiveTaskActivityButton = ({
 				messageCount: messageCountRef.current,
 			});
 			openedAtRef.current = null;
-			setSandboxAgentOutputModalOpen(false);
 		};
 	}, [isOpen, taskId, title]);
 

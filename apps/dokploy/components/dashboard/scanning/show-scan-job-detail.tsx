@@ -37,6 +37,7 @@ import {
 	LiveTaskActivityBadge,
 	LiveTaskActivityButton,
 } from "@/components/dashboard/scanning/live-task-activity";
+import { useSandboxAgentActivities } from "@/components/dashboard/scanning/use-sandbox-agent-activity";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
 import { DateTooltip } from "@/components/shared/date-tooltip";
@@ -58,6 +59,10 @@ import {
 	PopoverTrigger,
 } from "@/components/ui/popover";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+	idleSandboxAgentActivity,
+	type SandboxAgentActivity,
+} from "@/lib/scan/sandbox-agent-activity";
 import { api } from "@/utils/api";
 
 interface Props {
@@ -288,6 +293,8 @@ const CandidateWorkflowSection = ({
 	description,
 	summaryCards,
 	inProgressCandidates,
+	activitiesByTaskId,
+	activityConnectedTaskIds,
 }: {
 	title: string;
 	description: string;
@@ -305,6 +312,8 @@ const CandidateWorkflowSection = ({
 		line: number | null;
 		stage: string;
 	}>;
+	activitiesByTaskId: Record<string, SandboxAgentActivity>;
+	activityConnectedTaskIds: Set<string>;
 }) => (
 	<div className="flex flex-col gap-6">
 		<div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -389,6 +398,13 @@ const CandidateWorkflowSection = ({
 													? `${candidate.filePath}${candidate.line ? `:${candidate.line}` : ""}`
 													: "Live candidate task operations"
 											}
+											activity={
+												activitiesByTaskId[candidate.taskId] ||
+												idleSandboxAgentActivity
+											}
+											isConnected={activityConnectedTaskIds.has(
+												candidate.taskId,
+											)}
 										/>
 									</td>
 								</tr>
@@ -654,6 +670,13 @@ export const ShowScanJobDetail = ({
 			{ scanJobId },
 			{ enabled: !!scanJobId, refetchInterval: 2000 },
 		);
+	const {
+		activitiesByTaskId,
+		connectedTaskIds: activityConnectedTaskIds,
+	} = useSandboxAgentActivities({
+		scanJobId,
+		enabled: !!scanJobId,
+	});
 	const { data: selectedFile, isLoading: isLoadingSelectedFile } =
 		api.scan.readFile.useQuery(
 			{ scanJobId, filePath: selectedFilePath || "" },
@@ -1799,6 +1822,8 @@ export const ShowScanJobDetail = ({
 											},
 										]}
 										inProgressCandidates={analysisInProgressCandidates}
+										activitiesByTaskId={activitiesByTaskId}
+										activityConnectedTaskIds={activityConnectedTaskIds}
 									/>
 									</div>
 							)}
@@ -1873,6 +1898,8 @@ export const ShowScanJobDetail = ({
 										},
 									]}
 									inProgressCandidates={verifyInProgressCandidates}
+									activitiesByTaskId={activitiesByTaskId}
+									activityConnectedTaskIds={activityConnectedTaskIds}
 								/>
 								</div>
 							)}
@@ -2580,13 +2607,25 @@ export const ShowScanJobDetail = ({
 																{formatTaskRuntime(task.startedAt, runtimeNowMs)}
 															</td>
 															<td className="w-[50%] px-4 py-3 align-top">
-																<LiveTaskActivityBadge taskId={task.taskId} />
+																<LiveTaskActivityBadge
+																	activity={
+																		activitiesByTaskId[task.taskId] ||
+																		idleSandboxAgentActivity
+																	}
+																	isConnected={activityConnectedTaskIds.has(
+																		task.taskId,
+																	)}
+																/>
 															</td>
 															<td className="w-[8%] px-4 py-3 align-top">
 																<LiveTaskActivityButton
 																	taskId={task.taskId}
 																	title={task.title}
 																	subtitle={task.subtitle}
+																	activity={
+																		activitiesByTaskId[task.taskId] ||
+																		idleSandboxAgentActivity
+																	}
 																	variant="outline"
 																	size="icon"
 																	iconOnly

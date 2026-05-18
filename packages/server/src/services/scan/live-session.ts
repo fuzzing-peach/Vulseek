@@ -7,9 +7,11 @@ import { findScanJobByIdRepo } from "./persistence/scan-job.repo";
 import { findVulnerabilityCandidateByIdRepo } from "./persistence/candidate.repo";
 import {
 	findTaskByIdRepo,
+	listTasksByScanJobIdRepo,
 	listTasksByScanJobAndStageRepo,
 } from "./persistence/task.repo";
 import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "./runtime/sandbox-agent-shared";
+import type { Task } from "./types";
 
 const sanitizePathPart = (value: string) =>
 	value
@@ -271,108 +273,118 @@ export const findSandboxAgentTaskRuntimeByTaskId = async (
 ): Promise<SandboxAgentTaskRuntime | null> => {
 	const task = await findTaskByIdRepo(taskId).catch(() => null);
 	if (task) {
-		const inputRecord = getTaskInputRecord(task.input);
-		const candidateRecord =
-			getNestedRecord(inputRecord, "candidate") ||
-			getNestedRecord(getNestedRecord(inputRecord, "analysisResult"), "candidate");
-		const baseDir = await resolveScanJobBaseDir(task.scanJobId);
-		const runtimeTaskName = resolveTaskRuntimeName(
-			task.stageName,
-			task.name,
-			task.input,
-		);
-		let runtimeDir = path.join(baseDir, sanitizePathPart(runtimeTaskName));
-		let taskKind: SandboxAgentTaskRuntime["taskKind"] = "repository_scanning";
-
-		switch (task.stageName) {
-			case "RepositoryScanningStage":
-				taskKind = "repository_scanning";
-				runtimeDir = resolveScanStageTaskRuntimeDir(
-					baseDir,
-					task.stageName,
-					runtimeTaskName,
-					task.taskId,
-				);
-				break;
-			case "ModuleScanningStage":
-				taskKind = "module_scanning";
-				runtimeDir = resolveScanStageTaskRuntimeDir(
-					baseDir,
-					task.stageName,
-					runtimeTaskName,
-					task.taskId,
-				);
-				break;
-			case "FunctionScanningStage":
-				taskKind = "function_scanning";
-				runtimeDir = resolveScanStageTaskRuntimeDir(
-					baseDir,
-					task.stageName,
-					runtimeTaskName,
-					task.taskId,
-				);
-				break;
-			case "AnalysisStage":
-				taskKind = "analyzing";
-				runtimeDir = resolveScanStageTaskRuntimeDir(
-					baseDir,
-					task.stageName,
-					runtimeTaskName,
-					task.taskId,
-				);
-				break;
-			case "FuzzBuildStage":
-				taskKind = "fuzz_building";
-				runtimeDir = resolveScanStageTaskRuntimeDir(
-					baseDir,
-					task.stageName,
-					runtimeTaskName,
-					task.taskId,
-				);
-				break;
-			case "FuzzRunStage":
-				taskKind = "fuzzing";
-				runtimeDir = resolveScanStageTaskRuntimeDir(
-					baseDir,
-					task.stageName,
-					runtimeTaskName,
-					task.taskId,
-				);
-				break;
-			case "AnalysisCriticStage":
-				taskKind = "criticizing";
-				runtimeDir = resolveScanStageTaskRuntimeDir(
-					baseDir,
-					task.stageName,
-					runtimeTaskName,
-					task.taskId,
-				);
-				break;
-			case "VerifyingStage":
-				taskKind = "verifying";
-				runtimeDir = resolveScanStageTaskRuntimeDir(
-					baseDir,
-					task.stageName,
-					runtimeTaskName,
-					task.taskId,
-				);
-				break;
-		}
-
-		return {
-			taskId,
-			scanJobId: task.scanJobId,
-			taskKind,
-			status: task.status,
-			containerName: task.containerName,
-			sessionId: task.threadId,
-			baseUrl: toPublicBaseUrl(task.containerName),
-			provider: resolveTaskSandboxAgentProvider(task.agentProfile),
-			...buildSandboxAgentRuntimeFiles(runtimeDir),
-			updatedAt: task.updatedAt || null,
-		};
+		return buildSandboxAgentTaskRuntime(task);
 	}
 	return null;
+};
+
+const buildSandboxAgentTaskRuntime = async (
+	task: Task,
+): Promise<SandboxAgentTaskRuntime> => {
+	const baseDir = await resolveScanJobBaseDir(task.scanJobId);
+	const runtimeTaskName = resolveTaskRuntimeName(
+		task.stageName,
+		task.name,
+		task.input,
+	);
+	let runtimeDir = path.join(baseDir, sanitizePathPart(runtimeTaskName));
+	let taskKind: SandboxAgentTaskRuntime["taskKind"] = "repository_scanning";
+
+	switch (task.stageName) {
+		case "RepositoryScanningStage":
+			taskKind = "repository_scanning";
+			runtimeDir = resolveScanStageTaskRuntimeDir(
+				baseDir,
+				task.stageName,
+				runtimeTaskName,
+				task.taskId,
+			);
+			break;
+		case "ModuleScanningStage":
+			taskKind = "module_scanning";
+			runtimeDir = resolveScanStageTaskRuntimeDir(
+				baseDir,
+				task.stageName,
+				runtimeTaskName,
+				task.taskId,
+			);
+			break;
+		case "FunctionScanningStage":
+			taskKind = "function_scanning";
+			runtimeDir = resolveScanStageTaskRuntimeDir(
+				baseDir,
+				task.stageName,
+				runtimeTaskName,
+				task.taskId,
+			);
+			break;
+		case "AnalysisStage":
+			taskKind = "analyzing";
+			runtimeDir = resolveScanStageTaskRuntimeDir(
+				baseDir,
+				task.stageName,
+				runtimeTaskName,
+				task.taskId,
+			);
+			break;
+		case "FuzzBuildStage":
+			taskKind = "fuzz_building";
+			runtimeDir = resolveScanStageTaskRuntimeDir(
+				baseDir,
+				task.stageName,
+				runtimeTaskName,
+				task.taskId,
+			);
+			break;
+		case "FuzzRunStage":
+			taskKind = "fuzzing";
+			runtimeDir = resolveScanStageTaskRuntimeDir(
+				baseDir,
+				task.stageName,
+				runtimeTaskName,
+				task.taskId,
+			);
+			break;
+		case "AnalysisCriticStage":
+			taskKind = "criticizing";
+			runtimeDir = resolveScanStageTaskRuntimeDir(
+				baseDir,
+				task.stageName,
+				runtimeTaskName,
+				task.taskId,
+			);
+			break;
+		case "VerifyingStage":
+			taskKind = "verifying";
+			runtimeDir = resolveScanStageTaskRuntimeDir(
+				baseDir,
+				task.stageName,
+				runtimeTaskName,
+				task.taskId,
+			);
+			break;
+	}
+
+	return {
+		taskId: task.taskId,
+		scanJobId: task.scanJobId,
+		taskKind,
+		status: task.status,
+		containerName: task.containerName,
+		sessionId: task.threadId,
+		baseUrl: toPublicBaseUrl(task.containerName),
+		provider: resolveTaskSandboxAgentProvider(task.agentProfile),
+		...buildSandboxAgentRuntimeFiles(runtimeDir),
+		updatedAt: task.updatedAt || null,
+	};
+};
+
+export const findRunningSandboxAgentTaskRuntimesByScanJobId = async (
+	scanJobId: string,
+): Promise<SandboxAgentTaskRuntime[]> => {
+	const tasks = await listTasksByScanJobIdRepo(scanJobId);
+	const runningTasks = tasks.filter((task) => task.status === "running");
+	return await Promise.all(runningTasks.map(buildSandboxAgentTaskRuntime));
 };
 
 export const findCandidateSandboxAgentSession = async (input: {
