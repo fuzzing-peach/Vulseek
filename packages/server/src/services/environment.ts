@@ -9,6 +9,26 @@ import { asc, eq } from "drizzle-orm";
 
 export type Environment = typeof environments.$inferSelect;
 
+const environmentApplicationColumns = {
+	applicationId: true,
+	name: true,
+	appName: true,
+	description: true,
+	createdAt: true,
+	applicationStatus: true,
+	serverId: true,
+} as const;
+
+const environmentComposeColumns = {
+	composeId: true,
+	name: true,
+	appName: true,
+	description: true,
+	createdAt: true,
+	composeStatus: true,
+	serverId: true,
+} as const;
+
 export const createEnvironment = async (
 	input: typeof apiCreateEnvironment._type,
 ) => {
@@ -34,13 +54,17 @@ export const findEnvironmentById = async (environmentId: string) => {
 	const environment = await db.query.environments.findFirst({
 		where: eq(environments.environmentId, environmentId),
 		with: {
-			applications: true,
+			applications: {
+				columns: environmentApplicationColumns,
+			},
 			mariadb: true,
 			mongo: true,
 			mysql: true,
 			postgres: true,
 			redis: true,
-			compose: true,
+			compose: {
+				columns: environmentComposeColumns,
+			},
 			project: true,
 		},
 	});
@@ -58,13 +82,17 @@ export const findEnvironmentsByProjectId = async (projectId: string) => {
 		where: eq(environments.projectId, projectId),
 		orderBy: asc(environments.createdAt),
 		with: {
-			applications: true,
+			applications: {
+				columns: environmentApplicationColumns,
+			},
 			mariadb: true,
 			mongo: true,
 			mysql: true,
 			postgres: true,
 			redis: true,
-			compose: true,
+			compose: {
+				columns: environmentComposeColumns,
+			},
 			project: true,
 		},
 	});

@@ -10,7 +10,6 @@ import {
 	createStageDefinition,
 	type StageQueueBinding,
 	type StageDefinition,
-	type StageOutputTextChannel,
 } from "../pipeline/stage-definition";
 import {
 	buildModuleScannerPrompt,
@@ -23,7 +22,7 @@ import {
 } from "../runtime/run-single-turn-agent";
 import {
 	type PipelineContext,
-	resolveScanProfileConcurrencySettings,
+	resolveStageConcurrencySetting,
 	type StageContext,
 } from "./full-scan-stage.runtime";
 
@@ -57,6 +56,7 @@ const executeModuleScanStage = async (
 	});
 	await startContainer({
 		scanJob: stageInput.scanJob,
+		taskId: ctx.taskId,
 		agentProfile: scanAgentProfile,
 		containerName,
 		codexHome: `${stageRootInContainer}/.codex`,
@@ -89,7 +89,6 @@ const executeModuleScanStage = async (
 			thinkingLevel: scanAgentProfile?.thinkingLevel || "medium",
 		}),
 		outputSchema: moduleSchema,
-		outputTextChannel: ctx.outputTextChannel,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
@@ -104,7 +103,6 @@ export const createModuleScanningStageDefinition = <
 	name?: string;
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
-	outputTextChannel?: StageOutputTextChannel;
 	queue?: StageQueueBinding<TPipelineContext, ModuleScanningStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -116,13 +114,12 @@ export const createModuleScanningStageDefinition = <
 		name: input.name || "ModuleScanningStage",
 		mode: input.mode || "fanout",
 		persistent: input.persistent,
-		outputTextChannel: input.outputTextChannel,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
-			Math.max(
-				1,
-				(await resolveScanProfileConcurrencySettings(ctx.scanJobId))
-					.fullScanModuleConcurrency || 1,
+			await resolveStageConcurrencySetting(
+				ctx.scanJobId,
+				"ModuleScanningStage",
+				(settings) => settings.fullScanModuleConcurrency,
 			),
 		run: async (ctx, stageInput) => {
 			const result = await executeModuleScanStage(

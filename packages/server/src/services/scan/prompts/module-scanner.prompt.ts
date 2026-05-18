@@ -18,10 +18,9 @@ export const buildModuleScannerPrompt = (input: {
 		`repository_json: ${input.repositoryJson}`,
 		`module_json: ${input.moduleJson}`,
 		"Use the provided module_json.files array as the source file set for this module scan.",
-		"Your final structured result must be the full canonical module object matching output.schema.json. Preserve the module metadata fields and populate the functions array.",
-		"Return exactly one top-level JSON object with no wrapper keys, no prose, and no markdown fences.",
-		"Before finishing, validate the final JSON against output.schema.json and follow the runtime output contract appended below.",
-		"After returning the structured result as required by that contract, also include <VULSEEK_EXIT> in the same final visible response so Dokploy can discard this module-scanner lane.",
+		"Return the full canonical module object. Preserve the module metadata fields and populate the functions array.",
+		"Before returning, validate the structured JSON against the runtime-provided output.schema.json.",
+		"Set output.json exit to true so Dokploy can discard this module-scanner lane after end_turn.",
 		"Each function entry must match the full canonical function schema, including: id, moduleId, moduleName, functionId, functionName, filePath, line, priority, summary, vulnerabilityType, score.",
 	].join("\n");
 };

@@ -113,6 +113,9 @@ export const createTaskRepo = async (input: {
 	output?: typeof tasks.$inferSelect.output;
 	rawOutput?: string | null;
 	errorMessage?: string | null;
+	exitReason?: typeof tasks.$inferSelect.exitReason;
+	exitNote?: string | null;
+	stageGroupInstanceId?: string | null;
 	startedAt?: string | null;
 	completedAt?: string | null;
 }) => {
@@ -142,6 +145,9 @@ export const createTaskRepo = async (input: {
 					output: input.output ?? null,
 					rawOutput: input.rawOutput ?? null,
 					errorMessage: input.errorMessage ?? null,
+					exitReason: input.exitReason ?? null,
+					exitNote: input.exitNote ?? null,
+					stageGroupInstanceId: input.stageGroupInstanceId ?? null,
 					startedAt: input.startedAt ?? null,
 					completedAt: input.completedAt ?? null,
 				})
@@ -283,7 +289,7 @@ export const transitionTaskStatusRepo = async (input: {
 			...(input.to === "launching" || input.to === "running"
 				? { startedAt: now, completedAt: null }
 				: {}),
-			...(input.to === "completed" || input.to === "failed"
+			...(input.to === "completed" || input.to === "failed" || input.to === "exited"
 				? { completedAt: now }
 				: {}),
 		})
@@ -331,7 +337,7 @@ export const updateTaskStatusRepo = async (input: {
 		patch.completedAt = null;
 	}
 
-	if (input.status === "completed" || input.status === "failed") {
+	if (input.status === "completed" || input.status === "failed" || input.status === "exited") {
 		patch.completedAt = new Date().toISOString();
 	}
 

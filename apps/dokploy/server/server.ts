@@ -78,16 +78,7 @@ void app.prepare().then(async () => {
 			const { deploymentWorker } = await import("./queues/deployments-queue");
 			void deploymentWorker.run();
 			console.log("Recovering Full Scan Queues");
-			const { scansQueue } = await import("./queues/queueSetup");
-			await recoverPendingFullScanQueues({
-				shouldRecoverScanJob: async (scanJobId) => {
-					const existingJobs = await Promise.all([
-						scansQueue.getJob(`scan:${scanJobId}`).catch(() => null),
-						scansQueue.getJob(`scan:retry:${scanJobId}`).catch(() => null),
-					]);
-					return existingJobs.every((job) => !job);
-				},
-			});
+			await recoverPendingFullScanQueues();
 			console.log("Starting Scans Worker");
 			const { scansWorker } = await import("./queues/scans-queue");
 			void scansWorker.run();

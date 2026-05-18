@@ -5,7 +5,6 @@ import {
 	createStageDefinition,
 	type StageQueueBinding,
 	type StageDefinition,
-	type StageOutputTextChannel,
 } from "../pipeline/stage-definition";
 import {
 	buildTaskAgentProfileSnapshot,
@@ -16,7 +15,9 @@ import {
 	startContainer,
 } from "../runtime/run-single-turn-agent";
 import type {
-	Analysis,
+	CriticResponse,
+	FuzzBuildResult,
+	FuzzRunResult,
 	Candidate,
 	Function,
 	ScanJob,
@@ -24,7 +25,7 @@ import type {
 } from "../types";
 import {
 	type PipelineContext,
-	resolveScanProfileConcurrencySettings,
+	resolveStageConcurrencySetting,
 	type StageContext,
 } from "./full-scan-stage.runtime";
 
@@ -37,9 +38,22 @@ export type CandidateAnalysisStageInput = {
 			module: Module & { scanJob: ScanJob };
 		};
 	};
+	feedback?:
+		| {
+				kind: "fuzz_build";
+				result: FuzzBuildResult;
+		  }
+		| {
+				kind: "fuzz_run";
+				result: FuzzRunResult;
+		  }
+		| {
+				kind: "critic";
+				result: CriticResponse;
+		  };
 };
 
-export type CandidateAnalysisStageOutput = Analysis;
+export type CandidateAnalysisStageOutput = unknown;
 
 type AnalysisStageContext = StageContext & {
 	executionContext?: { analysisConcurrency?: number };
@@ -66,16 +80,27 @@ const buildCandidateAnalysisPrompt = (
 		`candidate_line: ${typeof stageInput.candidate.line === "number" ? stageInput.candidate.line : "-"}`,
 		`task_dir: ${input.taskDirContainer}`,
 		`write_report_to: ${input.reportPath}`,
+		`feedback: ${stageInput.feedback ? JSON.stringify(stageInput.feedback) : "none"}`,
 		"",
 		"Use the installed skill named deep-analysis as your working method.",
-		"Strictly follow the fixed markdown template defined in the skill.",
+		"Follow the coordinator workflow defined in the skill.",
 		"Write every task artifact only under task_dir.",
-		"Your final structured result must be exactly one top-level JSON object matching output.schema.json with no wrapper keys, no prose, and no markdown fences.",
-		"Before finishing, validate the final JSON against output.schema.json and follow the runtime output contract appended below.",
-		`Set id to ${input.taskId}.`,
-		`Set reportPath to ${input.reportPath}.`,
+		"Decide whether this turn should request fuzzer construction, submit a draft analysis to critic, or finalize a critic-approved analysis.",
+		"The selected object type must match the selected route key.",
+		"Before returning, validate the structured JSON against the runtime-provided output.schema.json.",
+		`Use ${input.taskId} as the id when the selected schema has an id field.`,
+		`Use ${stageInput.candidate.id} as candidateId when returning BuildFuzzerRequest.`,
+		`Set reportPath to ${input.reportPath} when returning an analysis result.`,
 		"Set runtimeSeconds to null if unknown.",
 		"Set status to completed when the run succeeds.",
+		"Route mapping:",
+		"- BuildFuzzerRequest -> build_fuzzer",
+		"- analysisSchema draft for critic -> critic",
+		"- finalAnalysisSchema after matching critic convinced response -> verification and set output.json exit to true",
+		"When returning BuildFuzzerRequest, include candidateId, analysisFingerprint, entryToCandidatePath, harnessRequirements, expectedTriggerCondition, targetFunction, targetFilePath, and notes.",
+		"When returning an analysisSchema draft for critic, do not include BuildFuzzerRequest fields; return only an analysis result object that matches analysisSchema.",
+		"When returning finalAnalysisSchema for verification, include analysisFingerprint and criticApproval in addition to the analysis result fields.",
+		"Do not route verification unless the latest critic response is convinced for the same analysis fingerprint.",
 		"Compute score as a 0-10 estimated severity score. Consider CVSS-style dimensions and real-world impact breadth, including whether the vulnerable path appears in common usage scenarios.",
 		"",
 		"Recommended result enum values:",
@@ -110,6 +135,7 @@ const executeCandidateAnalysisStage = async (
 	});
 	await startContainer({
 		scanJob,
+		taskId: ctx.taskId,
 		agentProfile: analysisAgentProfile,
 		containerName,
 		codexHome: `${stageRootInContainer}/.codex`,
@@ -140,7 +166,7 @@ const executeCandidateAnalysisStage = async (
 			taskId: ctx.taskId,
 		}),
 		outputSchema: analysisSchema,
-		outputTextChannel: ctx.outputTextChannel,
+		routeOutputSchemas: ctx.routeOutputSchemas,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
@@ -155,7 +181,6 @@ export const createAnalysisStageDefinition = <
 	name?: string;
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
-	outputTextChannel?: StageOutputTextChannel;
 	queue?: StageQueueBinding<TPipelineContext, CandidateAnalysisStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -167,13 +192,12 @@ export const createAnalysisStageDefinition = <
 		name: input.name || "AnalysisStage",
 		mode: input.mode || "fanout",
 		persistent: input.persistent,
-		outputTextChannel: input.outputTextChannel,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
-			Math.max(
-				1,
-				(await resolveScanProfileConcurrencySettings(ctx.scanJobId))
-					.analysisConcurrency || 1,
+			await resolveStageConcurrencySetting(
+				ctx.scanJobId,
+				"AnalysisStage",
+				(settings) => settings.analysisConcurrency,
 			),
 		run: async (ctx, stageInput) =>
 			({

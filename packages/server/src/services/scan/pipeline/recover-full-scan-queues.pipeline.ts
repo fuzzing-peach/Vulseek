@@ -67,6 +67,9 @@ export const recoverFullScanQueuesPipeline = async <
 		if (job.scanType !== "full") {
 			continue;
 		}
+		if (job.status === "canceled") {
+			continue;
+		}
 
 		if (job.repositoryTaskStatus === "pending") {
 			await input.enqueueRepositoryScanWork(job.scanJobId);

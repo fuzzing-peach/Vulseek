@@ -17,7 +17,6 @@ You should be given:
 - module-level scan JSON
 - one function task
 - the checked out repository
-- the runtime-provided `output.schema.json`
 
 ## High-Level Objective
 
@@ -73,35 +72,17 @@ Each candidate should include:
 - `confidence`
 - `score`
 
-## Required Structured Result
+## Candidate Result Content
 
-Return exactly one top-level JSON object matching the runtime-provided `output.schema.json`.
-
-Use this fixed structure:
-
-```json
-{
-  "candidates": [
-    {
-      "title": "Handshake state transition may bypass required validation",
-      "description": "A state-changing path appears reachable before the expected validation gate completes.",
-      "filePath": "src/tls13.c",
-      "line": 447,
-      "confidence": 0.81,
-      "score": 6.4
-    }
-  ]
-}
-```
+The stage prompt and runtime contract define the exact structured output format.
+This skill defines what candidate records should contain.
 
 Rules:
 
-- output exactly one top-level object
-- always include `candidates`
-- use `[]` when there are no candidates
-- each candidate may contain only `title`, `description`, `filePath`, `line`, `confidence`, and `score`
-- validate the final JSON against `output.schema.json` before returning
-- return the validated JSON only inside `<VULSEEK_RET>...<VULSEEK_RET>`
+- always decide explicitly whether there are candidates
+- when there are no candidates, return an empty candidate list as requested by the stage prompt
+- keep every emitted candidate concrete and tied to a file and line when possible
+- avoid adding broad module-level observations as candidate records
 
 ## Working Style
 
@@ -114,4 +95,4 @@ Rules:
 
 ## Final Rule
 
-This layer is responsible for writing the final candidate list into the required JSON result file.
+This layer is responsible for producing the final candidate list requested by the stage prompt.

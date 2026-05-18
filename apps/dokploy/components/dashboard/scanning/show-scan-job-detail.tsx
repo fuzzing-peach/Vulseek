@@ -7,12 +7,20 @@ import {
 	FileSearch,
 	Folder,
 	Loader2,
+	RefreshCw,
 	Search,
 } from "lucide-react";
 import Head from "next/head";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type KeyboardEvent,
+	type ReactNode,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import {
 	ANALYSIS_RESULT_OPTIONS,
@@ -25,9 +33,10 @@ import {
 	type CandidateSortKey,
 } from "@/components/dashboard/scanning/candidate-list-query-state";
 import {
-	JsonRpcSummaryPanel,
-} from "@/components/dashboard/scanning/jsonrpc-summary";
-import { useSandboxAgentSession } from "@/components/dashboard/scanning/use-sandbox-agent-session";
+	LiveTaskActivity,
+	LiveTaskActivityBadge,
+	LiveTaskActivityButton,
+} from "@/components/dashboard/scanning/live-task-activity";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
 import { DateTooltip } from "@/components/shared/date-tooltip";
@@ -274,32 +283,6 @@ const LazyFileTree = ({
 	return <div className="h-[65vh] overflow-auto p-2">{renderItems(rootItems)}</div>;
 };
 
-const LiveCandidateAgentOutput = ({
-	taskId,
-}: {
-	taskId: string;
-}) => {
-	const { messages } = useSandboxAgentSession({
-		taskId,
-		enabled: !!taskId,
-	});
-
-	return <JsonRpcSummaryPanel messages={messages} />;
-};
-
-const LiveTaskAgentOutput = ({
-	taskId,
-}: {
-	taskId: string;
-}) => {
-	const { messages } = useSandboxAgentSession({
-		taskId,
-		enabled: !!taskId,
-	});
-
-	return <JsonRpcSummaryPanel messages={messages} maxHeightClassName="max-h-32" />;
-};
-
 const CandidateWorkflowSection = ({
 	title,
 	description,
@@ -364,7 +347,9 @@ const CandidateWorkflowSection = ({
 						<tr>
 							<th className="w-[24%] px-4 py-3 font-medium">Candidate</th>
 							<th className="w-[10%] px-4 py-3 font-medium">Stage</th>
-							<th className="w-[66%] px-4 py-3 font-medium">Agent Output</th>
+							<th className="w-[66%] px-4 py-3 font-medium">
+								Current Activity
+							</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -396,8 +381,14 @@ const CandidateWorkflowSection = ({
 										{candidate.stage}
 									</td>
 									<td className="w-[66%] px-4 py-3 align-top">
-										<LiveCandidateAgentOutput
+										<LiveTaskActivity
 											taskId={candidate.taskId}
+											title={candidate.title}
+											subtitle={
+												candidate.filePath
+													? `${candidate.filePath}${candidate.line ? `:${candidate.line}` : ""}`
+													: "Live candidate task operations"
+											}
 										/>
 									</td>
 								</tr>
@@ -506,11 +497,23 @@ const getTaskStageLabel = (stage?: string) => {
 	if (stage === "analyzing") {
 		return "Analysis";
 	}
+	if (stage === "fuzz_building") {
+		return "Fuzz Build";
+	}
+	if (stage === "fuzzing") {
+		return "Fuzz";
+	}
+	if (stage === "criticizing") {
+		return "Critic";
+	}
 	if (stage === "verifying") {
 		return "Verification";
 	}
 	return "Task";
 };
+
+const TERMINAL_CANDIDATE_STATUSES = new Set(["completed", "failed", "exited"]);
+const RERUNNABLE_TASK_STATUSES = new Set(["completed", "failed", "exited"]);
 
 const getTaskStatusLabel = (status?: string) => {
 	if (!status) {
@@ -537,8 +540,13 @@ const RUNNING_TASK_STAGE_ORDER: Record<string, number> = {
 	module_scanning: 1,
 	function_scanning: 2,
 	analyzing: 3,
-	verifying: 4,
+	fuzz_building: 4,
+	fuzzing: 5,
+	criticizing: 6,
+	verifying: 7,
 };
+
+const TASK_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
 const getQueueProgressClassName = (queueId: string) => {
 	if (queueId === "repository") {
@@ -552,6 +560,15 @@ const getQueueProgressClassName = (queueId: string) => {
 	}
 	if (queueId === "analysis") {
 		return "h-3 bg-secondary/70 [&>div]:bg-emerald-500";
+	}
+	if (queueId === "fuzz-build") {
+		return "h-3 bg-secondary/70 [&>div]:bg-cyan-500";
+	}
+	if (queueId === "fuzz-run") {
+		return "h-3 bg-secondary/70 [&>div]:bg-orange-500";
+	}
+	if (queueId === "analysis-critic") {
+		return "h-3 bg-secondary/70 [&>div]:bg-rose-500";
 	}
 	if (queueId === "verification") {
 		return "h-3 bg-secondary/70 [&>div]:bg-violet-500";
@@ -594,6 +611,13 @@ export const ShowScanJobDetail = ({
 	const [candidatePageSize, setCandidatePageSize] = useState(
 		() => initialCandidateListQueryState.candidatePageSize,
 	);
+	const [taskSearchQuery, setTaskSearchQuery] = useState("");
+	const [taskStageFilter, setTaskStageFilter] = useState("all");
+	const [taskStatusFilter, setTaskStatusFilter] = useState("all");
+	const [runningTaskPage, setRunningTaskPage] = useState(1);
+	const [runningTaskPageSize, setRunningTaskPageSize] = useState(10);
+	const [finishedTaskPage, setFinishedTaskPage] = useState(1);
+	const [finishedTaskPageSize, setFinishedTaskPageSize] = useState(20);
 	const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
 	const [noteDraft, setNoteDraft] = useState("");
 	const [expandedDirectories, setExpandedDirectories] = useState<Record<string, boolean>>(
@@ -621,7 +645,11 @@ export const ShowScanJobDetail = ({
 			{ scanJobId },
 			{ enabled: !!scanJobId, refetchInterval: 2000 },
 		);
-	const { data: statusView, isLoading: isLoadingStatusView } =
+	const {
+		data: statusView,
+		isLoading: isLoadingStatusView,
+		error: statusViewError,
+	} =
 		api.scan.statusView.useQuery(
 			{ scanJobId },
 			{ enabled: !!scanJobId, refetchInterval: 2000 },
@@ -632,8 +660,13 @@ export const ShowScanJobDetail = ({
 			{ enabled: !!scanJobId && !!selectedFilePath },
 		);
 	const retryFailedTasksMutation = api.scan.retryFailedTasks.useMutation();
+	const rerunTaskMutation = api.scan.rerunTask.useMutation();
 	const cancelScanJobMutation = api.scan.cancel.useMutation();
 	const updateNoteMutation = api.scan.updateNote.useMutation();
+	const analyzeCandidateMutation = api.scan.analyzeCandidate.useMutation();
+	const [reanalyzingCandidateId, setReanalyzingCandidateId] =
+		useState<string | null>(null);
+	const [rerunningTaskId, setRerunningTaskId] = useState<string | null>(null);
 	const rootDirectoryQuery = api.scan.listDirectory.useQuery(
 		{ scanJobId },
 		{
@@ -824,7 +857,7 @@ export const ShowScanJobDetail = ({
 	]);
 	const totalFailedTasks = useMemo(
 		() =>
-			(statusView?.queuePendingCounts || []).reduce(
+			(statusView?.queuePendingCounts ?? []).reduce(
 				(total, queue) => total + queue.failedCount,
 				0,
 			),
@@ -836,6 +869,32 @@ export const ShowScanJobDetail = ({
 		(statusView?.inProgressTasks.length || 0) === 0 &&
 		scanJob?.status === "finished";
 	const shouldShowRetryFailedTasks = totalFailedTasks > 0;
+	const queuePendingCounts = statusView?.queuePendingCounts ?? [];
+	const getQueueTerminalProgressValue = (queue: (typeof queuePendingCounts)[number]) =>
+		queue.totalCount > 0
+			? ((queue.completedCount + queue.failedCount + (queue.exitedCount ?? 0)) /
+					queue.totalCount) *
+				100
+			: 0;
+	const getQueueTaskMetrics = (queue: (typeof queuePendingCounts)[number]) => {
+		const queued =
+			(queue.waitingCount ?? queue.pendingCount ?? 0) +
+			(queue.queuedCount ?? 0) +
+			(queue.launchingCount ?? 0);
+		const running = queue.runningCount ?? 0;
+		const failed = queue.failedCount ?? 0;
+		const done = queue.completedCount + (queue.exitedCount ?? 0);
+		const terminal = done + failed;
+		return {
+			queued,
+			running,
+			failed,
+			done,
+			terminal,
+			total: queue.totalCount,
+			title: `Queued ${queued}, Running ${running}, Failed ${failed}, Done ${done}, Total ${queue.totalCount}`,
+		};
+	};
 	const analysisInProgressCandidates = useMemo(
 		() =>
 			(statusView?.inProgressCandidates || []).filter(
@@ -878,6 +937,131 @@ export const ShowScanJobDetail = ({
 			return right.updatedAt.localeCompare(left.updatedAt);
 		});
 	}, [statusView?.terminalTasks]);
+	const taskStageOptions = useMemo(() => {
+		const stages = new Set<string>();
+		for (const task of [...sortedInProgressTasks, ...sortedTerminalTasks]) {
+			if (task.stage) {
+				stages.add(task.stage);
+			}
+		}
+		return [...stages].sort((left, right) => {
+			const rankDiff =
+				(RUNNING_TASK_STAGE_ORDER[left] ?? Number.MAX_SAFE_INTEGER) -
+				(RUNNING_TASK_STAGE_ORDER[right] ?? Number.MAX_SAFE_INTEGER);
+			if (rankDiff !== 0) {
+				return rankDiff;
+			}
+			return getTaskStageLabel(left).localeCompare(getTaskStageLabel(right));
+		});
+	}, [sortedInProgressTasks, sortedTerminalTasks]);
+	const terminalTaskStatusOptions = useMemo(() => {
+		const statuses = new Set<string>();
+		for (const task of sortedTerminalTasks) {
+			if (task.status) {
+				statuses.add(task.status);
+			}
+		}
+		return [...statuses].sort((left, right) =>
+			getTaskStatusLabel(left).localeCompare(getTaskStatusLabel(right)),
+		);
+	}, [sortedTerminalTasks]);
+	const filteredInProgressTasks = useMemo(() => {
+		const query = taskSearchQuery.trim().toLowerCase();
+		return sortedInProgressTasks.filter((task) => {
+			if (taskStageFilter !== "all" && task.stage !== taskStageFilter) {
+				return false;
+			}
+			if (!query) {
+				return true;
+			}
+			return [
+				task.title,
+				task.subtitle || "",
+				task.stage || "",
+				getTaskStageLabel(task.stage),
+				task.taskId,
+			]
+				.join("\n")
+				.toLowerCase()
+				.includes(query);
+		});
+	}, [sortedInProgressTasks, taskSearchQuery, taskStageFilter]);
+	const filteredTerminalTasks = useMemo(() => {
+		const query = taskSearchQuery.trim().toLowerCase();
+		return sortedTerminalTasks.filter((task) => {
+			if (taskStageFilter !== "all" && task.stage !== taskStageFilter) {
+				return false;
+			}
+			if (taskStatusFilter !== "all" && task.status !== taskStatusFilter) {
+				return false;
+			}
+			if (!query) {
+				return true;
+			}
+			return [
+				task.title,
+				task.subtitle || "",
+				task.stage || "",
+				getTaskStageLabel(task.stage),
+				task.status || "",
+				getTaskStatusLabel(task.status),
+				task.errorMessage || "",
+				task.taskId,
+			]
+				.join("\n")
+				.toLowerCase()
+				.includes(query);
+		});
+	}, [
+		sortedTerminalTasks,
+		taskSearchQuery,
+		taskStageFilter,
+		taskStatusFilter,
+	]);
+	const runningTaskPagination = useMemo(() => {
+		const totalItems = filteredInProgressTasks.length;
+		const totalPages = Math.max(1, Math.ceil(totalItems / runningTaskPageSize));
+		const page = Math.min(Math.max(1, runningTaskPage), totalPages);
+		const startIndex = (page - 1) * runningTaskPageSize;
+		const endIndex = Math.min(totalItems, startIndex + runningTaskPageSize);
+		return {
+			page,
+			pageSize: runningTaskPageSize,
+			totalItems,
+			totalPages,
+			startIndex,
+			endIndex,
+			items: filteredInProgressTasks.slice(startIndex, endIndex),
+		};
+	}, [filteredInProgressTasks, runningTaskPage, runningTaskPageSize]);
+	const finishedTaskPagination = useMemo(() => {
+		const totalItems = filteredTerminalTasks.length;
+		const totalPages = Math.max(1, Math.ceil(totalItems / finishedTaskPageSize));
+		const page = Math.min(Math.max(1, finishedTaskPage), totalPages);
+		const startIndex = (page - 1) * finishedTaskPageSize;
+		const endIndex = Math.min(totalItems, startIndex + finishedTaskPageSize);
+		return {
+			page,
+			pageSize: finishedTaskPageSize,
+			totalItems,
+			totalPages,
+			startIndex,
+			endIndex,
+			items: filteredTerminalTasks.slice(startIndex, endIndex),
+		};
+	}, [filteredTerminalTasks, finishedTaskPage, finishedTaskPageSize]);
+
+	useEffect(() => {
+		if (runningTaskPage !== runningTaskPagination.page) {
+			setRunningTaskPage(runningTaskPagination.page);
+		}
+	}, [runningTaskPage, runningTaskPagination.page]);
+
+	useEffect(() => {
+		if (finishedTaskPage !== finishedTaskPagination.page) {
+			setFinishedTaskPage(finishedTaskPagination.page);
+		}
+	}, [finishedTaskPage, finishedTaskPagination.page]);
 
 	useEffect(() => {
 		if (sortedInProgressTasks.length === 0) {
@@ -956,6 +1140,45 @@ export const ShowScanJobDetail = ({
 			toast.error(
 				error instanceof Error ? error.message : "Failed to retry failed tasks",
 			);
+		}
+	};
+	const handleAnalyzeCandidate = async (vulnerabilityCandidateId: string) => {
+		setReanalyzingCandidateId(vulnerabilityCandidateId);
+		try {
+			await analyzeCandidateMutation.mutateAsync({
+				vulnerabilityCandidateId,
+			});
+			toast.success("Analysis requeued");
+			await Promise.all([
+				utils.scan.one.invalidate({ scanJobId }),
+				utils.scan.statusView.invalidate({ scanJobId }),
+				utils.scan.candidates.invalidate({ scanJobId }),
+			]);
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Failed to requeue analysis",
+			);
+		} finally {
+			setReanalyzingCandidateId((current) =>
+				current === vulnerabilityCandidateId ? null : current,
+			);
+		}
+	};
+	const handleRerunTask = async (taskId: string) => {
+		setRerunningTaskId(taskId);
+		try {
+			const result = await rerunTaskMutation.mutateAsync({ taskId });
+			toast.success(`Created rerun task ${result.task.taskId}`);
+			await Promise.all([
+				utils.scan.one.invalidate({ scanJobId }),
+				utils.scan.statusView.invalidate({ scanJobId }),
+			]);
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Failed to rerun task",
+			);
+		} finally {
+			setRerunningTaskId((current) => (current === taskId ? null : current));
 		}
 	};
 	const filteredCandidates = useMemo(() => {
@@ -1166,6 +1389,18 @@ export const ShowScanJobDetail = ({
 			currentCandidateListState,
 			"candidates",
 		);
+	const buildTaskDetailHref = (taskId: string) =>
+		`${candidateListPageBasePath}/tasks/${encodeURIComponent(taskId)}`;
+	const handleTaskRowKeyDown = (
+		event: KeyboardEvent<HTMLTableRowElement>,
+		taskId: string,
+	) => {
+		if (event.key !== "Enter" && event.key !== " ") {
+			return;
+		}
+		event.preventDefault();
+		void router.push(buildTaskDetailHref(taskId));
+	};
 	const handleCandidateLinkClick = () => {
 		if (typeof window === "undefined") {
 			return;
@@ -1857,7 +2092,7 @@ export const ShowScanJobDetail = ({
 																	<ChevronsUpDown className="size-3.5" />
 																</button>
 															</th>
-															<th className="w-[20%] px-4 py-3 font-medium">
+															<th className="w-[14%] px-4 py-3 font-medium">
 																<button
 																	type="button"
 																	onClick={() => toggleCandidateSort("score")}
@@ -1867,6 +2102,9 @@ export const ShowScanJobDetail = ({
 																	<ChevronsUpDown className="size-3.5" />
 																</button>
 															</th>
+															<th className="w-[8%] px-4 py-3 font-medium">
+																Actions
+															</th>
 														</tr>
 													</thead>
 													<tbody>
@@ -1874,6 +2112,11 @@ export const ShowScanJobDetail = ({
 															const verificationTruthBadge = getVerificationTruthBadge(
 																candidate.latestVerificationResult?.result,
 															);
+															const isTerminalCandidate =
+																TERMINAL_CANDIDATE_STATUSES.has(candidate.status);
+															const isReanalyzingCandidate =
+																reanalyzingCandidateId ===
+																candidate.vulnerabilityCandidateId;
 															return (
 																						<tr
 																							key={candidate.vulnerabilityCandidateId}
@@ -1962,6 +2205,38 @@ export const ShowScanJobDetail = ({
 																				: "-"}
 																		</Link>
 																	</td>
+																							<td className="px-4 py-3 align-top">
+																								<Button
+																									type="button"
+																									variant="outline"
+																									size="icon"
+																									title={
+																										isTerminalCandidate
+																											? "Re-run analysis"
+																											: "Analysis can be re-run after the candidate reaches a terminal state"
+																									}
+																									aria-label={
+																										isTerminalCandidate
+																											? "Re-run analysis"
+																											: "Analysis can be re-run after the candidate reaches a terminal state"
+																									}
+																									disabled={
+																										!isTerminalCandidate ||
+																										isReanalyzingCandidate
+																									}
+																									onClick={() =>
+																										handleAnalyzeCandidate(
+																											candidate.vulnerabilityCandidateId,
+																										)
+																									}
+																								>
+																									{isReanalyzingCandidate ? (
+																										<Loader2 className="size-4 animate-spin" />
+																									) : (
+																										<RefreshCw className="size-4" />
+																									)}
+																								</Button>
+																							</td>
 																</tr>
 															);
 														})}
@@ -2037,8 +2312,7 @@ export const ShowScanJobDetail = ({
 										<div>
 											<div className="font-medium">Failed Tasks</div>
 											<div className="text-sm text-muted-foreground">
-												{totalFailedTasks} failed tasks were found across repository,
-												module, function, analysis, and verification stages.
+												{totalFailedTasks} failed tasks were found across scan stages.
 											</div>
 											{!canRetryFailedTasks ? (
 												<div className="mt-1 text-xs text-muted-foreground">
@@ -2074,48 +2348,83 @@ export const ShowScanJobDetail = ({
 										</div>
 									</div>
 									<div className="overflow-x-auto">
-										{!statusView ? (
+										{statusViewError ? (
+											<div className="px-4 py-6 text-sm text-destructive">
+												Failed to load queue status.
+											</div>
+										) : !statusView ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
 												Loading queue status...
+											</div>
+										) : queuePendingCounts.length === 0 ? (
+											<div className="px-4 py-6 text-sm text-muted-foreground">
+												No task queues
 											</div>
 										) : (
 												<table className="w-full text-sm">
 													<thead className="border-b bg-muted/30 text-left">
-														<tr>
-															<th className="w-[22%] px-4 py-3 font-medium">Queue</th>
-															<th className="w-[30%] px-4 py-3 font-medium">BullMQ Name</th>
-															<th className="w-[34%] px-4 py-3 font-medium">Progress</th>
-															<th className="w-[14%] px-4 py-3 font-medium">
-																Completed / Failed / Total
-															</th>
-														</tr>
-													</thead>
-													<tbody>
-														{statusView.queuePendingCounts.map((queue) => (
-															<tr key={queue.id} className="border-b last:border-b-0">
-																<td className="px-4 py-3 align-top font-medium">
-																	{queue.title}
-																</td>
-																<td className="px-4 py-3 align-top font-mono text-xs text-muted-foreground break-all">
-																	{queue.queueName}
-																</td>
-																<td className="px-4 py-3 align-top">
-																	<Progress
-																		value={
-																			queue.totalCount > 0
-																				? ((queue.completedCount + queue.failedCount) /
-																						queue.totalCount) *
-																					100
-																				: 0
-																		}
-																		className={getQueueProgressClassName(queue.id)}
-																	/>
-																</td>
-																<td className="px-4 py-3 align-top">
-																	{queue.completedCount} / {queue.failedCount} / {queue.totalCount}
-																</td>
+															<tr>
+																<th className="w-[22%] px-4 py-3 font-medium">Queue</th>
+																<th className="w-[30%] px-4 py-3 font-medium">BullMQ Name</th>
+																<th className="w-[26%] px-4 py-3 font-medium">
+																	Tasks
+																</th>
+																<th className="w-[22%] px-4 py-3 font-medium">Progress</th>
 															</tr>
-														))}
+														</thead>
+													<tbody>
+														{queuePendingCounts.map((queue) => {
+															const metrics = getQueueTaskMetrics(queue);
+															return (
+																<tr key={queue.id} className="border-b last:border-b-0">
+																	<td className="px-4 py-3 align-top font-medium">
+																		{queue.title}
+																	</td>
+																	<td className="px-4 py-3 align-top font-mono text-xs text-muted-foreground break-all">
+																		{queue.queueName}
+																	</td>
+																	<td className="px-4 py-3 align-top" title={metrics.title}>
+																		<div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+																			<span className="whitespace-nowrap">
+																				<span className="font-medium tabular-nums text-foreground">
+																					{metrics.queued}
+																				</span>{" "}
+																				<span className="text-muted-foreground">
+																					queued
+																				</span>
+																			</span>
+																			<span className="whitespace-nowrap">
+																				<span className="font-medium tabular-nums text-foreground">
+																					{metrics.running}
+																				</span>{" "}
+																				<span className="text-muted-foreground">
+																					running
+																				</span>
+																			</span>
+																			{metrics.failed > 0 ? (
+																				<span className="whitespace-nowrap">
+																					<span className="font-medium tabular-nums text-red-600">
+																						{metrics.failed}
+																					</span>{" "}
+																					<span className="text-red-600">failed</span>
+																				</span>
+																			) : null}
+																		</div>
+																	</td>
+																	<td className="px-4 py-3 align-top" title={metrics.title}>
+																		<div className="flex items-center gap-3">
+																			<Progress
+																				value={getQueueTerminalProgressValue(queue)}
+																				className={getQueueProgressClassName(queue.id)}
+																			/>
+																			<span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+																				{metrics.terminal} / {metrics.total}
+																			</span>
+																		</div>
+																	</td>
+																</tr>
+															);
+														})}
 													</tbody>
 												</table>
 										)}
@@ -2129,25 +2438,134 @@ export const ShowScanJobDetail = ({
 											All running scanning, analysis, and verification agents for this job.
 										</div>
 									</div>
+									{statusView && sortedInProgressTasks.length > 0 ? (
+										<div className="flex flex-col gap-3 border-b px-4 py-3 text-sm xl:flex-row xl:items-center xl:justify-between">
+											<div className="grid min-w-0 flex-1 grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_180px]">
+												<div className="relative">
+													<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+													<input
+														type="text"
+														value={taskSearchQuery}
+														onChange={(event) => {
+															setTaskSearchQuery(event.target.value);
+															setRunningTaskPage(1);
+															setFinishedTaskPage(1);
+														}}
+														placeholder="Search tasks"
+														className="flex h-9 w-full rounded-md border border-input bg-background py-2 pl-9 pr-3 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+													/>
+												</div>
+												<select
+													value={taskStageFilter}
+													onChange={(event) => {
+														setTaskStageFilter(event.target.value);
+														setRunningTaskPage(1);
+														setFinishedTaskPage(1);
+													}}
+													className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+												>
+													<option value="all">All stages</option>
+													{taskStageOptions.map((stage) => (
+														<option key={stage} value={stage}>
+															{getTaskStageLabel(stage)}
+														</option>
+													))}
+												</select>
+											</div>
+											<div className="flex flex-wrap items-center gap-2">
+												<div className="text-muted-foreground">
+													Showing{" "}
+													{runningTaskPagination.totalItems > 0
+														? runningTaskPagination.startIndex + 1
+														: 0}
+													-{runningTaskPagination.endIndex} of{" "}
+													{runningTaskPagination.totalItems}
+												</div>
+												<span className="text-muted-foreground">Page size</span>
+												<select
+													value={runningTaskPageSize}
+													onChange={(event) => {
+														setRunningTaskPage(1);
+														setRunningTaskPageSize(
+															Number.parseInt(event.target.value, 10) || 10,
+														);
+													}}
+													className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+												>
+													{TASK_PAGE_SIZE_OPTIONS.map((size) => (
+														<option key={size} value={size}>
+															{size}
+														</option>
+													))}
+												</select>
+												<Button
+													type="button"
+													variant="outline"
+													size="sm"
+													onClick={() =>
+														setRunningTaskPage((current) =>
+															Math.max(1, current - 1),
+														)
+													}
+													disabled={runningTaskPagination.page <= 1}
+												>
+													Previous
+												</Button>
+												<div className="min-w-[88px] text-center text-muted-foreground">
+													Page {runningTaskPagination.page} /{" "}
+													{runningTaskPagination.totalPages}
+												</div>
+												<Button
+													type="button"
+													variant="outline"
+													size="sm"
+													onClick={() =>
+														setRunningTaskPage((current) =>
+															Math.min(
+																runningTaskPagination.totalPages,
+																current + 1,
+															),
+														)
+													}
+													disabled={
+														runningTaskPagination.page >=
+														runningTaskPagination.totalPages
+													}
+												>
+													Next
+												</Button>
+											</div>
+										</div>
+									) : null}
 									<div className="overflow-x-auto">
 										{!statusView || sortedInProgressTasks.length === 0 ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
 												No running tasks
 											</div>
+										) : filteredInProgressTasks.length === 0 ? (
+											<div className="px-4 py-6 text-sm text-muted-foreground">
+												No matching tasks
+											</div>
 										) : (
 											<table className="w-full text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
-														<th className="w-[24%] px-4 py-3 font-medium">Task</th>
+														<th className="w-[22%] px-4 py-3 font-medium">Task</th>
 														<th className="w-[10%] px-4 py-3 font-medium">Stage</th>
 														<th className="w-[10%] px-4 py-3 font-medium">Runtime</th>
-														<th className="w-[56%] px-4 py-3 font-medium">Agent Output</th>
+														<th className="w-[50%] px-4 py-3 font-medium">
+															Current Activity
+														</th>
+														<th className="w-[8%] px-4 py-3 font-medium">Actions</th>
 													</tr>
 												</thead>
 												<tbody>
-													{sortedInProgressTasks.map((task) => (
-														<tr key={task.id} className="border-b last:border-b-0">
-															<td className="w-[24%] px-4 py-3 align-top">
+													{runningTaskPagination.items.map((task) => (
+														<tr
+															key={task.id}
+															className="border-b last:border-b-0"
+														>
+															<td className="w-[22%] px-4 py-3 align-top">
 																<div className="line-clamp-2 font-medium">
 																	{task.title}
 																</div>
@@ -2161,8 +2579,18 @@ export const ShowScanJobDetail = ({
 															<td className="w-[10%] whitespace-nowrap px-4 py-3 align-top tabular-nums">
 																{formatTaskRuntime(task.startedAt, runtimeNowMs)}
 															</td>
-															<td className="w-[56%] px-4 py-3 align-top">
-																<LiveTaskAgentOutput taskId={task.taskId} />
+															<td className="w-[50%] px-4 py-3 align-top">
+																<LiveTaskActivityBadge taskId={task.taskId} />
+															</td>
+															<td className="w-[8%] px-4 py-3 align-top">
+																<LiveTaskActivityButton
+																	taskId={task.taskId}
+																	title={task.title}
+																	subtitle={task.subtitle}
+																	variant="outline"
+																	size="icon"
+																	iconOnly
+																/>
 															</td>
 														</tr>
 													))}
@@ -2179,27 +2607,159 @@ export const ShowScanJobDetail = ({
 											Completed, failed, and canceled tasks for this job.
 										</div>
 									</div>
+									{statusView && sortedTerminalTasks.length > 0 ? (
+										<div className="flex flex-col gap-3 border-b px-4 py-3 text-sm xl:flex-row xl:items-center xl:justify-between">
+											<div className="grid min-w-0 flex-1 grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_180px_180px]">
+												<div className="relative">
+													<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+													<input
+														type="text"
+														value={taskSearchQuery}
+														onChange={(event) => {
+															setTaskSearchQuery(event.target.value);
+															setRunningTaskPage(1);
+															setFinishedTaskPage(1);
+														}}
+														placeholder="Search tasks"
+														className="flex h-9 w-full rounded-md border border-input bg-background py-2 pl-9 pr-3 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+													/>
+												</div>
+												<select
+													value={taskStageFilter}
+													onChange={(event) => {
+														setTaskStageFilter(event.target.value);
+														setRunningTaskPage(1);
+														setFinishedTaskPage(1);
+													}}
+													className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+												>
+													<option value="all">All stages</option>
+													{taskStageOptions.map((stage) => (
+														<option key={stage} value={stage}>
+															{getTaskStageLabel(stage)}
+														</option>
+													))}
+												</select>
+												<select
+													value={taskStatusFilter}
+													onChange={(event) => {
+														setTaskStatusFilter(event.target.value);
+														setFinishedTaskPage(1);
+													}}
+													className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+												>
+													<option value="all">All statuses</option>
+													{terminalTaskStatusOptions.map((status) => (
+														<option key={status} value={status}>
+															{getTaskStatusLabel(status)}
+														</option>
+													))}
+												</select>
+											</div>
+											<div className="flex flex-wrap items-center gap-2">
+												<div className="text-muted-foreground">
+													Showing{" "}
+													{finishedTaskPagination.totalItems > 0
+														? finishedTaskPagination.startIndex + 1
+														: 0}
+													-{finishedTaskPagination.endIndex} of{" "}
+													{finishedTaskPagination.totalItems}
+												</div>
+												<span className="text-muted-foreground">Page size</span>
+												<select
+													value={finishedTaskPageSize}
+													onChange={(event) => {
+														setFinishedTaskPage(1);
+														setFinishedTaskPageSize(
+															Number.parseInt(event.target.value, 10) || 20,
+														);
+													}}
+													className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+												>
+													{TASK_PAGE_SIZE_OPTIONS.map((size) => (
+														<option key={size} value={size}>
+															{size}
+														</option>
+													))}
+												</select>
+												<Button
+													type="button"
+													variant="outline"
+													size="sm"
+													onClick={() =>
+														setFinishedTaskPage((current) =>
+															Math.max(1, current - 1),
+														)
+													}
+													disabled={finishedTaskPagination.page <= 1}
+												>
+													Previous
+												</Button>
+												<div className="min-w-[88px] text-center text-muted-foreground">
+													Page {finishedTaskPagination.page} /{" "}
+													{finishedTaskPagination.totalPages}
+												</div>
+												<Button
+													type="button"
+													variant="outline"
+													size="sm"
+													onClick={() =>
+														setFinishedTaskPage((current) =>
+															Math.min(
+																finishedTaskPagination.totalPages,
+																current + 1,
+															),
+														)
+													}
+													disabled={
+														finishedTaskPagination.page >=
+														finishedTaskPagination.totalPages
+													}
+												>
+													Next
+												</Button>
+											</div>
+										</div>
+									) : null}
 									<div className="overflow-x-auto">
 										{!statusView || sortedTerminalTasks.length === 0 ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
 												No finished tasks
 											</div>
+										) : filteredTerminalTasks.length === 0 ? (
+											<div className="px-4 py-6 text-sm text-muted-foreground">
+												No matching tasks
+											</div>
 										) : (
 											<table className="w-full text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
-														<th className="w-[24%] px-4 py-3 font-medium">Task</th>
-														<th className="w-[10%] px-4 py-3 font-medium">Stage</th>
-														<th className="w-[10%] px-4 py-3 font-medium">Status</th>
-														<th className="w-[12%] px-4 py-3 font-medium">Started</th>
-														<th className="w-[12%] px-4 py-3 font-medium">Finished</th>
-														<th className="w-[32%] px-4 py-3 font-medium">Details</th>
+														<th className="w-[22%] px-4 py-3 font-medium">Task</th>
+														<th className="w-[9%] px-4 py-3 font-medium">Stage</th>
+														<th className="w-[9%] px-4 py-3 font-medium">Status</th>
+														<th className="w-[11%] px-4 py-3 font-medium">Started</th>
+														<th className="w-[11%] px-4 py-3 font-medium">Finished</th>
+														<th className="w-[30%] px-4 py-3 font-medium">Details</th>
+														<th className="w-[8%] px-4 py-3 font-medium">Actions</th>
 													</tr>
 												</thead>
 												<tbody>
-													{sortedTerminalTasks.map((task) => (
-														<tr key={task.id} className="border-b last:border-b-0">
-															<td className="w-[24%] px-4 py-3 align-top">
+													{finishedTaskPagination.items.map((task) => {
+														const canRerunTask = RERUNNABLE_TASK_STATUSES.has(task.status);
+														const isRerunningTask = rerunningTaskId === task.taskId;
+														return (
+															<tr
+																key={task.id}
+																role="link"
+																tabIndex={0}
+																aria-label={`Open task ${task.title}`}
+																onClick={() => void router.push(buildTaskDetailHref(task.taskId))}
+																onKeyDown={(event) =>
+																	handleTaskRowKeyDown(event, task.taskId)
+																}
+																className="cursor-pointer border-b transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none last:border-b-0"
+															>
+															<td className="w-[22%] px-4 py-3 align-top">
 																<div className="line-clamp-2 font-medium">
 																	{task.title}
 																</div>
@@ -2207,10 +2767,10 @@ export const ShowScanJobDetail = ({
 																	{task.subtitle || "-"}
 																</div>
 															</td>
-															<td className="w-[10%] px-4 py-3 align-top capitalize">
+															<td className="w-[9%] px-4 py-3 align-top capitalize">
 																{getTaskStageLabel(task.stage)}
 															</td>
-															<td className="w-[10%] px-4 py-3 align-top">
+															<td className="w-[9%] px-4 py-3 align-top">
 																<Badge
 																	variant="outline"
 																	className={getTaskStatusBadgeClassName(task.status)}
@@ -2218,27 +2778,62 @@ export const ShowScanJobDetail = ({
 																	{getTaskStatusLabel(task.status)}
 																</Badge>
 															</td>
-															<td className="w-[12%] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
+															<td className="w-[11%] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
 																{task.startedAt ? (
 																	<DateTooltip date={task.startedAt} />
 																) : (
 																	"-"
 																)}
 															</td>
-															<td className="w-[12%] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
+															<td className="w-[11%] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
 																{task.completedAt ? (
 																	<DateTooltip date={task.completedAt} />
 																) : (
 																	"-"
 																)}
 															</td>
-															<td className="w-[32%] px-4 py-3 align-top text-xs text-muted-foreground">
+															<td className="w-[30%] px-4 py-3 align-top text-xs text-muted-foreground">
 																<div className="line-clamp-3 break-words">
 																	{task.errorMessage || "-"}
 																</div>
 															</td>
+															<td className="w-[8%] px-4 py-3 align-top">
+																<div className="flex items-center gap-2">
+																	<Button
+																		type="button"
+																		variant="outline"
+																		size="icon"
+																		title={
+																			canRerunTask
+																				? "Rerun task"
+																				: "Task can be rerun after it reaches a terminal state"
+																		}
+																		aria-label={
+																			canRerunTask
+																				? "Rerun task"
+																				: "Task can be rerun after it reaches a terminal state"
+																		}
+																		disabled={
+																			!canRerunTask ||
+																			isRerunningTask ||
+																			rerunTaskMutation.isLoading
+																		}
+																		onClick={(event) => {
+																			event.stopPropagation();
+																			void handleRerunTask(task.taskId);
+																		}}
+																	>
+																		{isRerunningTask ? (
+																			<Loader2 className="size-4 animate-spin" />
+																		) : (
+																			<RefreshCw className="size-4" />
+																		)}
+																	</Button>
+																</div>
+															</td>
 														</tr>
-													))}
+														);
+													})}
 												</tbody>
 											</table>
 										)}

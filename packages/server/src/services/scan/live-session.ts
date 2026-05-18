@@ -119,9 +119,12 @@ const resolveTaskRuntimeName = (
 				taskName
 			);
 		case "AnalysisStage":
+		case "FuzzBuildStage":
+		case "FuzzRunStage":
+		case "AnalysisCriticStage":
 			return (
 				getNestedString(getNestedRecord(inputRecord, "candidate"), ["title"]) ||
-				taskName
+				(stageName === "AnalysisStage" ? taskName : stageName)
 			);
 		case "VerifyingStage":
 			return (
@@ -156,6 +159,9 @@ export type SandboxAgentTaskRuntime = {
 		| "module_scanning"
 		| "function_scanning"
 		| "analyzing"
+		| "fuzz_building"
+		| "fuzzing"
+		| "criticizing"
 		| "verifying";
 	status: string;
 	containerName: string | null;
@@ -308,6 +314,33 @@ export const findSandboxAgentTaskRuntimeByTaskId = async (
 				break;
 			case "AnalysisStage":
 				taskKind = "analyzing";
+				runtimeDir = resolveScanStageTaskRuntimeDir(
+					baseDir,
+					task.stageName,
+					runtimeTaskName,
+					task.taskId,
+				);
+				break;
+			case "FuzzBuildStage":
+				taskKind = "fuzz_building";
+				runtimeDir = resolveScanStageTaskRuntimeDir(
+					baseDir,
+					task.stageName,
+					runtimeTaskName,
+					task.taskId,
+				);
+				break;
+			case "FuzzRunStage":
+				taskKind = "fuzzing";
+				runtimeDir = resolveScanStageTaskRuntimeDir(
+					baseDir,
+					task.stageName,
+					runtimeTaskName,
+					task.taskId,
+				);
+				break;
+			case "AnalysisCriticStage":
+				taskKind = "criticizing";
 				runtimeDir = resolveScanStageTaskRuntimeDir(
 					baseDir,
 					task.stageName,

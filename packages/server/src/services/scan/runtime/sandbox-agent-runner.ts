@@ -2,10 +2,7 @@ import { appendFile } from "node:fs/promises";
 import { SandboxAgent } from "sandbox-agent";
 import { Agent, type Dispatcher } from "undici";
 
-const ACP_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
 const SANDBOX_AGENT_PROMPT_TIMEOUT_MS = 30 * 60 * 1000;
-const VULSEEK_RET_MARKER = "<VULSEEK_RET>";
-const VULSEEK_RET_XML_CLOSE_MARKER = "</VULSEEK_RET>";
 
 type RequestInitWithDispatcher = RequestInit & {
   dispatcher?: Dispatcher;
@@ -34,8 +31,8 @@ type SandboxAgentSessionEvent = {
 type MaybeSandboxAgentSessionUpdate = SandboxAgentSessionUpdate | undefined;
 
 const acpHttpDispatcher = new Agent({
-  headersTimeout: ACP_HTTP_TIMEOUT_MS,
-  bodyTimeout: ACP_HTTP_TIMEOUT_MS,
+  headersTimeout: 0,
+  bodyTimeout: 0,
 });
 
 const sandboxAgentFetch: typeof fetch = async (input, init) => {
@@ -182,52 +179,6 @@ const renderSandboxAgentEvent = (event: SandboxAgentSessionEvent) => {
   }
 };
 
-const extractVulseekRetValue = (content: string): string | null => {
-  const acceptPairedPayload = (payload: string) => {
-    const trimmed = payload.trim();
-    return trimmed || null;
-  };
-
-  const acceptTrailingStructuredPayload = (payload: string) => {
-    const trimmed = payload.trim();
-    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-      return null;
-    }
-    try {
-      JSON.parse(trimmed);
-    } catch {
-      return null;
-    }
-    return trimmed;
-  };
-
-  const xmlEnd = content.lastIndexOf(VULSEEK_RET_XML_CLOSE_MARKER);
-  if (xmlEnd > 0) {
-    const xmlStart = content.lastIndexOf(VULSEEK_RET_MARKER, xmlEnd - 1);
-    if (xmlStart >= 0) {
-      return acceptPairedPayload(
-        content.slice(xmlStart + VULSEEK_RET_MARKER.length, xmlEnd),
-      );
-    }
-  }
-
-  const end = content.lastIndexOf(VULSEEK_RET_MARKER);
-  if (end >= 0) {
-    const trailingPayload = acceptTrailingStructuredPayload(
-      content.slice(end + VULSEEK_RET_MARKER.length),
-    );
-    if (trailingPayload !== null) {
-      return trailingPayload;
-    }
-  }
-  if (end <= 0) return null;
-  const start = content.lastIndexOf(VULSEEK_RET_MARKER, end - 1);
-  if (start < 0) return null;
-  return acceptPairedPayload(
-    content.slice(start + VULSEEK_RET_MARKER.length, end),
-  );
-};
-
 const withTimeout = async <T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -278,7 +229,6 @@ export const runSandboxAgentHeadlessTurnInContainer = async (input: {
 
   let eventWriteChain = Promise.resolve();
   let agentMessageText = "";
-  let returnValue = "";
 
   const appendSessionEvent = async (event: SandboxAgentSessionEvent) => {
     await appendScanRuntimeFile(input.jsonlPath, formatSandboxAgentSessionEvent(event));
@@ -291,33 +241,38 @@ export const runSandboxAgentHeadlessTurnInContainer = async (input: {
     const payloadRecord = asRecord(update);
     if (asString(payloadRecord?.sessionUpdate) === "agent_message_chunk") {
       agentMessageText += extractPayloadText(update);
-      const nextReturnValue = extractVulseekRetValue(agentMessageText);
-      if (nextReturnValue !== null) {
-        returnValue = nextReturnValue;
-      }
     }
+  };
+
+  const handlePermissionEvent = async (event: SandboxAgentSessionEvent) => {
+    const payload = getEventPayloadRecord(event);
+    if (asString(payload?.method) !== "session/request_permission") {
+      return;
+    }
+    const params = getEventParamsRecord(event) || {};
+    await autoApprovePermissionRequest(session, input.stderrPath, {
+      ...params,
+      id: asString(payload?.id) || asString(params.id) || undefined,
+    });
   };
 
   session.onEvent((event: SandboxAgentSessionEvent) => {
     eventWriteChain = eventWriteChain
       .then(() => appendSessionEvent(event))
-      .then(async () => {
-        const payload = getEventPayloadRecord(event);
-        if (asString(payload?.method) !== "session/request_permission") {
-          return;
-        }
-        const params = getEventParamsRecord(event) || {};
-        await autoApprovePermissionRequest(session, input.stderrPath, {
-          ...params,
-          id: asString(payload?.id) || asString(params.id) || undefined,
-        });
-      })
       .catch(async (error) => {
         await appendScanRuntimeFile(
           input.stderrPath,
           `[sandbox-agent-event] ${error instanceof Error ? error.message : "unknown error"}\n`,
         );
       });
+    void handlePermissionEvent(event).catch(async (error) => {
+      await appendScanRuntimeFile(
+        input.stderrPath,
+        `[sandbox-agent-permission] ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      ).catch(() => {});
+    });
   });
 
   session.onPermissionRequest((request: Record<string, unknown>) => {
@@ -352,6 +307,6 @@ export const runSandboxAgentHeadlessTurnInContainer = async (input: {
 
   return {
     sessionId,
-    rawOutput: returnValue,
+    rawOutput: agentMessageText,
   };
 };

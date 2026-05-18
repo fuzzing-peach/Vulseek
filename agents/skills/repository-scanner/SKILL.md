@@ -158,20 +158,17 @@ Minimum expected actions:
 
 Also record Serena initialization status inside the final structured result notes when relevant.
 
-## Final Structured Result
+## Final Result Content
 
-Generate the final structured result in the correct JSON format for this run and make sure it satisfies the runtime-provided `output.schema.json`.
+The stage prompt and runtime contract define the exact structured output format.
+This skill defines what the repository-level result should contain.
 
 Rules:
 
-- use the runtime-provided `output.schema.json` as the source of truth
-- validate the final JSON against `output.schema.json` before returning
 - do not write extra structured result files such as `repository_scan.json`, `module_plan.json`, `recent_cve.json`, `recent_prs.json`, or `recent_issues.json`
-- return the validated JSON inside `<VULSEEK_RET>...<VULSEEK_RET>`
-- the `<VULSEEK_RET>...<VULSEEK_RET>` payload must contain only the validated JSON object and no extra prose
 - keep values concise and repository-level
 - record the repository overview, runtime-relevant structure, attack surfaces, vulnerability themes, and notes about excluded or down-ranked trees
-- do not include markdown fences, comments, trailing explanatory text, or any non-JSON content
+- include module definitions that downstream module scanners can use directly
 
 ## Working Style
 

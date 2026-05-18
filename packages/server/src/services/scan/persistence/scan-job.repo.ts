@@ -257,7 +257,7 @@ export const updateScanJobRepositoryTaskStatusRepo = async (
     repositoryTaskPatch.startedAt = new Date().toISOString();
     repositoryTaskPatch.completedAt = null;
   }
-  if (repositoryTaskStatus === "completed" || repositoryTaskStatus === "failed") {
+  if (repositoryTaskStatus === "completed" || repositoryTaskStatus === "failed" || repositoryTaskStatus === "exited") {
     repositoryTaskPatch.completedAt = new Date().toISOString();
   }
   await db

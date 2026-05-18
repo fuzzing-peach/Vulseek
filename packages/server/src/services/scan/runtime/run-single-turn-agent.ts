@@ -17,8 +17,7 @@ import {
 } from "./runtime-files";
 import { installRuntimeSkillsInContainer } from "./runtime-skills";
 import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "./sandbox-agent-shared";
-import type { StageOutputTextChannel } from "../pipeline/stage-definition";
-import { findTaskByIdRepo } from "../persistence/task.repo";
+import { findTaskByIdRepo, updateTaskRepo } from "../persistence/task.repo";
 import { resolveTaskRootSegment } from "../stages/full-scan-stage.runtime";
 
 const RUNTIME_CUSTOM_SKILLS = [
@@ -31,6 +30,12 @@ const RUNTIME_CUSTOM_SKILLS = [
 	"module-scanner",
 	"function-scanner",
 	"deep-analysis",
+	"libafl",
+	"libafl-build",
+	"libafl-fuzz",
+	"address-sanitizer",
+	"coverage-analysis",
+	"analysis-critic",
 	"verify",
 	"search-registries",
 	"tree-sitter",
@@ -43,11 +48,15 @@ const DEFAULT_FULL_SCAN_MODULE_CONCURRENCY = 4;
 const DEFAULT_FULL_SCAN_FUNCTION_CONCURRENCY = 4;
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
 const STRUCTURED_OUTPUT_SCHEMA_FILE_NAME = "output.schema.json";
-const STRUCTURED_OUTPUT_RESULT_FILE_NAME = "structured-output.json";
+const STRUCTURED_OUTPUT_RESULT_FILE_NAME = "output.json";
 const CODEX_HOME_IN_CONTAINER = "/root/.codex";
 const CLAUDE_HOME_IN_CONTAINER = "/root/.claude";
 const SANDBOX_AGENT_SESSION_STORE_DIR_NAME = "session-store";
 const SANDBOX_AGENT_SESSION_PERSIST_FILE_NAME = "persist.json";
+const PERSISTENT_DRIVER_HEALTH_MAX_IDLE_MS = Number.parseInt(
+	process.env.VULSEEK_PERSISTENT_DRIVER_HEALTH_MAX_IDLE_MS || "120000",
+	10,
+);
 
 const sanitizeForImageTag = (value: string) =>
 	value.toLowerCase().replace(/[^a-z0-9_.-]/g, "-").replace(/-+/g, "-");
@@ -259,24 +268,60 @@ const writeContainerFile = async (
 	);
 };
 
+const writeContainerFileAtomically = async (
+	containerName: string,
+	filePath: string,
+	content: string,
+) => {
+	const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random()
+		.toString(16)
+		.slice(2)}`;
+	await writeContainerFile(containerName, tempPath, content);
+	await execAsync(
+		`docker exec ${containerName} bash -lc "mv -f '${tempPath}' '${filePath}'"`,
+	);
+};
+
+const appendContainerFile = async (
+	containerName: string,
+	filePath: string,
+	content: string,
+) => {
+	const encoded = Buffer.from(content, "utf-8").toString("base64");
+	await execAsync(
+		`docker exec ${containerName} bash -lc "mkdir -p '${path.posix.dirname(
+			filePath,
+		)}' && echo '${encoded}' | base64 -d >> '${filePath}'"`,
+	);
+};
+
 const sleep = async (ms: number) =>
 	await new Promise<void>((resolve) => {
 		setTimeout(resolve, ms);
 	});
 
+const getErrorMessage = (error: unknown) =>
+	error instanceof Error ? error.message : String(error);
+
 const execDockerRunWithRetry = async (input: {
 	containerName: string;
 	command: string;
+	taskId?: string;
 }) => {
 	let lastError: unknown = null;
-	for (let attempt = 1; attempt <= 3; attempt += 1) {
+	for (let attempt = 1; attempt <= 6; attempt += 1) {
 		try {
 			return await execAsync(input.command);
 		} catch (error) {
 			lastError = error;
+			if (input.taskId) {
+				await updateTaskRepo(input.taskId, {
+					errorMessage: `Docker container launch failed; docker run attempt ${attempt}/6: ${getErrorMessage(error)}`,
+				}).catch(() => {});
+			}
 			await execAsync(`docker rm -f ${input.containerName}`).catch(() => {});
-			if (attempt < 3) {
-				await sleep(attempt * 1500);
+			if (attempt < 6) {
+				await sleep(attempt * 2500);
 			}
 		}
 	}
@@ -502,6 +547,7 @@ const initializeClaudeHomeInContainer = async (
 
 export type StageContainerInput = {
 	scanJob: ScanJob;
+	taskId?: string;
 	agentProfile: AgentProfileLike | null;
 	containerName: string;
 	codexHome: string;
@@ -524,7 +570,12 @@ export type RunSingleTurnAgentInput = StageContainerInput & {
 	taskStageRootInContainer?: string;
 	laneThreadId?: string | null;
 	outputSchema?: ZodTypeAny;
-	outputTextChannel?: StageOutputTextChannel;
+	routeOutputSchemas?: Array<{
+		routeKey: string;
+		description?: string;
+		schema: ZodTypeAny;
+		default?: boolean;
+	}>;
 	onThreadId?: (threadId: string) => Promise<void>;
 	sessionMode?: "new" | "fork";
 	parentSessionId?: string | null;
@@ -535,47 +586,96 @@ export type RunSingleTurnAgentResult = {
 	threadId: string | null;
 };
 
+const buildStructuredOutputEnvelopeJsonSchema = (
+	schema: ZodTypeAny,
+	routeOutputSchemas?: Array<{
+		routeKey: string;
+		description?: string;
+		schema: ZodTypeAny;
+		default?: boolean;
+	}>,
+) => {
+	const buildOutputSchema = (outputSchema: ZodTypeAny) =>
+		zodToJsonSchema(outputSchema, {
+			target: "jsonSchema7",
+			$refStrategy: "none",
+		});
+	const buildEnvelopeSchema = (input: {
+		route: string | null;
+		outputSchema: ZodTypeAny;
+	}) => ({
+		type: "object",
+		properties: {
+			route:
+				input.route === null
+					? { type: "null" }
+					: { type: "string", const: input.route },
+			exit: { type: "boolean" },
+			output: buildOutputSchema(input.outputSchema),
+		},
+		required: ["route", "exit", "output"],
+		additionalProperties: false,
+		$schema: "http://json-schema.org/draft-07/schema#",
+	});
+	return routeOutputSchemas?.length
+		? {
+				anyOf: routeOutputSchemas.map((item) =>
+					buildEnvelopeSchema({
+						route: item.routeKey,
+						outputSchema: item.schema,
+					}),
+				),
+				$schema: "http://json-schema.org/draft-07/schema#",
+		  }
+		: buildEnvelopeSchema({ route: null, outputSchema: schema });
+};
+
 const buildStructuredOutputPromptSuffix = (
 	schema: ZodTypeAny,
 	schemaFilePath: string,
-	outputTextChannel: StageOutputTextChannel,
 	outputFilePath: string,
+	routeOutputSchemas?: Array<{
+		routeKey: string;
+		description?: string;
+		schema: ZodTypeAny;
+		default?: boolean;
+	}>,
 ) => {
-	const jsonSchema = zodToJsonSchema(schema, {
-		target: "jsonSchema7",
-		$refStrategy: "none",
-	});
-	const returnInstructions =
-		outputTextChannel === "file"
-			? [
-					`- Write the validated JSON object to ${outputFilePath}.`,
-					"- The output file content must be only the validated JSON object, with no markdown fences, comments, or prose.",
-					"- Do not print the full JSON object to the terminal, tool output, or final visible response.",
-					`- Your final visible return payload must contain exactly one <VULSEEK_RET>${outputFilePath}<VULSEEK_RET> block.`,
-					"- The marker payload must be only that output file path.",
-					"- Dokploy will read the JSON object from that file after receiving the marker payload.",
-				]
-			: [
-					"- Only after your structured output passes that validation may you return it inside <VULSEEK_RET>...<VULSEEK_RET>.",
-					"- Your final visible return payload must contain exactly one <VULSEEK_RET>...<VULSEEK_RET> block whose inner content is only the validated JSON object.",
-					"- You do not need to write the final JSON object to any output file. Only return the validated top-level JSON object inside <VULSEEK_RET>...<VULSEEK_RET>.",
-				];
+	const jsonSchema = buildStructuredOutputEnvelopeJsonSchema(
+		schema,
+		routeOutputSchemas,
+	);
 
 	return [
 		"",
 		"Structured JSON output requirement:",
-		`- The JSON Schema for this stage is written to ${schemaFilePath}.`,
-		"- You must use that schema file as the source of truth and validate your final structured output against it before returning.",
+		`- Write the final structured result to ${outputFilePath}.`,
+		"- The output file content must be only a JSON object, with no markdown fences, comments, or prose.",
+		"- The top-level JSON object must be an envelope with exactly these fields: route, exit, output.",
+		"- Set exit to true only when this lane should be discarded after this task; otherwise set exit to false.",
+		`- The JSON Schema for the complete output.json envelope is written to ${schemaFilePath}.`,
+		"- You must use that schema file as the source of truth and validate output.json against it before ending your turn.",
 		"- Perform validation with Python and the jsonschema package available in the container environment.",
-		"- Load the JSON object you intend to return, load the schema from the schema file, and validate it locally with python before returning.",
+		"- Load output.json, load the schema from the schema file, and validate it locally with python before ending your turn.",
 		"- During validation, do not print the full JSON object to the terminal or write it to a tool-output file; print only a short success/failure line.",
 		"- If validation fails, fix the JSON and validate again before returning.",
-		"- The structured JSON object you produce for this stage must conform exactly to that JSON Schema.",
+		"- The output.json envelope must conform exactly to that JSON Schema.",
 		"- Do not add extra fields outside the schema.",
 		"- Use null for nullable fields instead of omitting them unless the schema explicitly allows omission.",
-		"- Ensure the top-level value is a JSON object.",
-		"- If you have completed all useful work for this lane and want Dokploy to discard this long-lived runtime before the next task, include <VULSEEK_EXIT> in the same final visible response. This is optional and does not replace <VULSEEK_RET>.",
-		...returnInstructions,
+		...(routeOutputSchemas?.length
+			? [
+					"",
+					"Dynamic route requirement:",
+					"- Choose exactly one of the route keys below and set output.json route to that value.",
+					"- The output object must match the object type for the route you choose.",
+					"- If you cannot decide, use the route marked default.",
+					...routeOutputSchemas.map(
+						(item) =>
+							`- ${item.routeKey}${item.default ? " (default)" : ""}: ${item.description || "no description"}`,
+					),
+			  ]
+			: ["- This stage has no dynamic route; set output.json route to null."]),
+		"- Do not include any runtime markers in your final response. Dokploy will wait for end_turn and then read output.json.",
 		"",
 		"```json",
 		JSON.stringify(jsonSchema, null, 2),
@@ -679,6 +779,7 @@ export const startContainer = async (input: StageContainerInput) => {
 	});
 	await execDockerRunWithRetry({
 		containerName: input.containerName,
+		taskId: input.taskId,
 		command: `docker run -d --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.scanContextMount.dockerMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
 	});
 
@@ -727,12 +828,15 @@ const SANDBOX_AGENT_DRIVER_INPUT_FILE_NAME = "sandbox-agent-driver-input.json";
 const SANDBOX_AGENT_DRIVER_STDOUT_FILE_NAME = "sandbox-agent-driver-stdout.log";
 const SANDBOX_AGENT_DRIVER_LAUNCH_FILE_NAME = "sandbox-agent-driver-launch.sh";
 const SANDBOX_AGENT_DRIVER_PID_FILE_NAME = "sandbox-agent-driver.pid";
+const SANDBOX_AGENT_DRIVER_LIFECYCLE_FILE_NAME =
+	"sandbox-agent-driver-lifecycle.log";
 const SANDBOX_AGENT_DRIVER_TASK_DIR_NAME = "sandbox-agent-driver-tasks";
 const SANDBOX_AGENT_FORK_DEBUG_FILE_NAME = "sandbox-agent-fork-debug.json";
 const SANDBOX_AGENT_PARENT_CONTEXT_DEBUG_FILE_NAME =
 	"sandbox-agent-parent-context.compact.txt";
 
 const buildSandboxAgentDriverScript = () => String.raw`import crypto from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
@@ -740,15 +844,10 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 
-const ACP_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
 const SANDBOX_AGENT_PROMPT_TIMEOUT_MS = 30 * 60 * 1000;
 const SANDBOX_AGENT_POST_PROMPT_EVENT_IDLE_MS = 30 * 1000;
 const SANDBOX_AGENT_POST_PROMPT_EVENT_POLL_MS = 100;
-const VULSEEK_RET_MARKER = "<VULSEEK_RET>";
-const VULSEEK_RET_XML_CLOSE_MARKER = "</VULSEEK_RET>";
-const VULSEEK_EXIT_MARKER = "<VULSEEK_EXIT>";
 const MANUAL_REPLAY_PARENT_PROMPT_CHAR_LIMIT = 8000;
-const MANUAL_REPLAY_ASSISTANT_MARKER_CHAR_LIMIT = 50000;
 const MANUAL_REPLAY_ASSISTANT_TAIL_CHAR_LIMIT = 30000;
 const MANUAL_REPLAY_TOOL_OUTPUT_CHAR_LIMIT = 2000;
 const MANUAL_REPLAY_CHAR_LIMIT = 80000;
@@ -798,9 +897,6 @@ const acpFetch = async (input, init = {}) => {
       },
     );
 
-    req.setTimeout(ACP_HTTP_TIMEOUT_MS, () => {
-      req.destroy(new Error("sandbox-agent fetch timed out waiting for response"));
-    });
     req.on("error", fail);
 
     if (request.signal.aborted) {
@@ -883,48 +979,6 @@ const renderSandboxAgentEvent = (event) => {
   }
 };
 
-const extractVulseekRetValue = (content) => {
-	const acceptPairedPayload = (payload) => {
-		const trimmed = payload.trim();
-		return trimmed || null;
-	};
-
-	const acceptTrailingStructuredPayload = (payload) => {
-		const trimmed = payload.trim();
-		if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-			return null;
-		}
-    try {
-      JSON.parse(trimmed);
-    } catch {
-      return null;
-    }
-		return trimmed;
-	};
-
-  const xmlEnd = content.lastIndexOf(VULSEEK_RET_XML_CLOSE_MARKER);
-  if (xmlEnd > 0) {
-    const xmlStart = content.lastIndexOf(VULSEEK_RET_MARKER, xmlEnd - 1);
-    if (xmlStart >= 0) {
-      return acceptPairedPayload(content.slice(xmlStart + VULSEEK_RET_MARKER.length, xmlEnd));
-    }
-  }
-
-	const end = content.lastIndexOf(VULSEEK_RET_MARKER);
-	if (end >= 0) {
-    const trailingPayload = acceptTrailingStructuredPayload(
-      content.slice(end + VULSEEK_RET_MARKER.length),
-    );
-    if (trailingPayload !== null) {
-      return trailingPayload;
-    }
-  }
-	if (end <= 0) return null;
-	const start = content.lastIndexOf(VULSEEK_RET_MARKER, end - 1);
-	if (start < 0) return null;
-	return acceptPairedPayload(content.slice(start + VULSEEK_RET_MARKER.length, end));
-};
-
 const byteLength = (value) => Buffer.byteLength(value, "utf-8");
 
 const clipHead = (value, limit) =>
@@ -949,26 +1003,6 @@ const extractPromptTextForManualReplay = (event) => {
     return "";
   }
   return prompt.map((item) => extractTextValue(asRecord(item)?.text)).join("");
-};
-
-const extractVulseekRetBlocks = (content) => {
-  const blocks = [];
-  let cursor = 0;
-  while (cursor < content.length) {
-    const start = content.indexOf(VULSEEK_RET_MARKER, cursor);
-    if (start < 0) break;
-    const payloadStart = start + VULSEEK_RET_MARKER.length;
-    const xmlEnd = content.indexOf(VULSEEK_RET_XML_CLOSE_MARKER, payloadStart);
-    const markerEnd = content.indexOf(VULSEEK_RET_MARKER, payloadStart);
-    const end =
-      xmlEnd >= 0 && (markerEnd < 0 || xmlEnd <= markerEnd) ? xmlEnd : markerEnd;
-    if (end < 0) break;
-    const closeMarker =
-      end === xmlEnd ? VULSEEK_RET_XML_CLOSE_MARKER : VULSEEK_RET_MARKER;
-    blocks.push(content.slice(start, end + closeMarker.length));
-    cursor = end + closeMarker.length;
-  }
-  return blocks;
 };
 
 const extractPathValue = (record, keys) => {
@@ -1145,16 +1179,15 @@ const buildSandboxAgentManualReplayText = (parentEvents) => {
         : "";
     })
     .join("");
-  const markerBlocks = extractVulseekRetBlocks(assistantFullText);
-  const assistantHasMarkers = markerBlocks.length > 0;
-  const assistantText = assistantHasMarkers
-    ? clipHead(markerBlocks.join("\n\n"), MANUAL_REPLAY_ASSISTANT_MARKER_CHAR_LIMIT)
-    : clipTail(assistantFullText, MANUAL_REPLAY_ASSISTANT_TAIL_CHAR_LIMIT);
+  const assistantText = clipTail(
+    assistantFullText,
+    MANUAL_REPLAY_ASSISTANT_TAIL_CHAR_LIMIT,
+  );
   const toolSummary = buildManualReplayToolText(parentEvents);
   const fitted = fitManualReplayText({
     parentPromptText,
     assistantText,
-    assistantHasMarkers,
+    assistantHasMarkers: false,
     toolText: toolSummary.text,
   });
   return {
@@ -1205,22 +1238,40 @@ const appendSessionEvent = async (paths, state, event) => {
   }
   const update = getEventUpdate(event);
   const payloadRecord = asRecord(update);
-  if (asString(payloadRecord?.sessionUpdate) === "usage_update") {
+  const sessionUpdate = asString(payloadRecord?.sessionUpdate);
+  const toolCallId = asString(payloadRecord?.toolCallId);
+  state.lastEventSummary = {
+    eventIndex: event.eventIndex ?? null,
+    createdAt: event.createdAt || null,
+    sender: event.sender || null,
+    sessionUpdate: sessionUpdate || null,
+    kind: asString(payloadRecord?.kind) || null,
+    status: asString(payloadRecord?.status) || null,
+    toolCallId: toolCallId || null,
+  };
+  if (toolCallId && sessionUpdate === "tool_call") {
+    state.activeToolCalls[toolCallId] = {
+      toolCallId,
+      title: asString(payloadRecord?.title).slice(0, 240) || null,
+      startedAt: event.createdAt || new Date().toISOString(),
+      eventIndex: event.eventIndex ?? null,
+    };
+  } else if (
+    toolCallId &&
+    sessionUpdate === "tool_call_update" &&
+    ["completed", "failed", "cancelled"].includes(asString(payloadRecord?.status))
+  ) {
+    delete state.activeToolCalls[toolCallId];
+  }
+  if (sessionUpdate === "usage_update") {
     state.usageUpdates.push({
       createdAt: event.createdAt || null,
       update: payloadRecord,
     });
   }
-  if (asString(payloadRecord?.sessionUpdate) === "agent_message_chunk") {
+  if (sessionUpdate === "agent_message_chunk") {
     const chunkText = extractPayloadText(update);
     state.agentMessageText += chunkText;
-    if (state.agentMessageText.includes(VULSEEK_EXIT_MARKER)) {
-      state.exitRequested = true;
-    }
-    const nextReturnValue = extractVulseekRetValue(state.agentMessageText);
-    if (nextReturnValue !== null) {
-      state.returnValue = nextReturnValue;
-    }
   }
   const eventPayloadRecord = getEventPayloadRecord(event);
   const resultRecord = asRecord(eventPayloadRecord?.result);
@@ -1237,6 +1288,48 @@ const appendDriverLog = async (stderrPath, message) => {
   );
 };
 
+const formatErrorForLifecycle = (error) => {
+  if (error instanceof Error) return error.stack || error.message;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+};
+
+const appendDriverLifecycleLog = async (input, message) => {
+  const logPath = input?.driverLifecyclePath || input?.stderrPath;
+  if (!logPath) return;
+  await appendScanRuntimeFile(
+    logPath,
+    "[sandbox-agent-driver-lifecycle] " +
+      new Date().toISOString() +
+      " pid=" +
+      String(process.pid) +
+      " " +
+      message +
+      "\n",
+  );
+};
+
+const appendDriverLifecycleLogSync = (input, message) => {
+  const logPath = input?.driverLifecyclePath || input?.stderrPath;
+  if (!logPath) return;
+  try {
+    fsSync.appendFileSync(
+      logPath,
+      "[sandbox-agent-driver-lifecycle] " +
+        new Date().toISOString() +
+        " pid=" +
+        String(process.pid) +
+        " " +
+        message +
+        "\n",
+      "utf-8",
+    );
+  } catch {}
+};
+
 const sleep = async (ms) =>
   await new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -1244,23 +1337,108 @@ const sleep = async (ms) =>
 
 const createTaskState = () => ({
   agentMessageText: "",
+  activeToolCalls: {},
   usageUpdates: [],
-  returnValue: "",
   exitRequested: false,
   endTurnReceived: false,
   endTurnEventIndex: null,
   eventCount: 0,
   lastEventAt: 0,
+  lastEventSummary: null,
+  outputFile: null,
 });
 
-const readNextPersistentTaskInput = async (taskQueueDir) => {
+const inspectOutputEnvelopeFile = async (filePath) => {
+  const result = {
+    path: filePath,
+    exists: false,
+    validJson: false,
+    validEnvelope: false,
+    route: null,
+    exit: false,
+    error: null,
+  };
+  try {
+    const content = await fs.readFile(filePath, "utf-8");
+    result.exists = true;
+    let parsed;
+    try {
+      parsed = JSON.parse(content);
+      result.validJson = true;
+    } catch (error) {
+      result.error = "Invalid output.json: " + (error instanceof Error ? error.message : String(error));
+      return result;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      result.error = "output.json must be a JSON object";
+      return result;
+    }
+    if (!("route" in parsed) || !(parsed.route === null || typeof parsed.route === "string")) {
+      result.error = "output.json route must be a string or null";
+      return result;
+    }
+    if (typeof parsed.exit !== "boolean") {
+      result.error = "output.json exit must be boolean";
+      return result;
+    }
+    if (!("output" in parsed)) {
+      result.error = "output.json output field is required";
+      return result;
+    }
+    result.validEnvelope = true;
+    result.route = parsed.route;
+    result.exit = parsed.exit;
+    return result;
+  } catch (error) {
+    result.error = "output.json not found or unreadable: " + (error instanceof Error ? error.message : String(error));
+    return result;
+  }
+};
+
+const writeTaskStateFile = async (taskInput, state, extra = {}) => {
+  if (!taskInput.statePath) return;
+  await fs.writeFile(
+    taskInput.statePath,
+    JSON.stringify(
+      {
+        promptFinished: Boolean(state.promptFinished),
+        endTurnReceived: Boolean(state.endTurnReceived),
+        endTurnEventIndex: state.endTurnEventIndex ?? null,
+        eventCount: state.eventCount || 0,
+        lastEventAt: state.lastEventAt || null,
+        lastEventAgeMs:
+          state.lastEventAt > 0 ? Math.max(0, Date.now() - state.lastEventAt) : null,
+        lastEventSummary: state.lastEventSummary || null,
+        activeToolCalls: Object.values(state.activeToolCalls || {}),
+        outputFile: state.outputFile || null,
+        completedAt: state.completedAt || null,
+        ...extra,
+      },
+      null,
+      2,
+    ) + "\n",
+    "utf-8",
+  );
+};
+
+const extractQueuedTaskId = (content) => {
+  const match = content.match(/"taskId"\s*:\s*"([^"]+)"/);
+  return match ? match[1] : "";
+};
+
+const formatQueueReadFailureLog = (value) =>
+  String(value).replace(/\s+/g, " ").slice(0, 1000);
+
+const readNextPersistentTaskInput = async (taskQueueDir, lifecycleInput) => {
   await fs.mkdir(taskQueueDir, { recursive: true });
   const entries = (await fs.readdir(taskQueueDir))
     .filter(
       (entry) =>
         entry.endsWith(".json") &&
         !entry.endsWith(".running.json") &&
-        !entry.endsWith(".done.json"),
+        !entry.endsWith(".done.json") &&
+        !entry.endsWith(".failed.json") &&
+        !entry.endsWith(".failed.reason.json"),
     )
     .sort();
   for (const entry of entries) {
@@ -1268,10 +1446,66 @@ const readNextPersistentTaskInput = async (taskQueueDir) => {
     const runningPath = taskPath.replace(/\.json$/, ".running.json");
     try {
       await fs.rename(taskPath, runningPath);
-      const taskInput = JSON.parse(await fs.readFile(runningPath, "utf-8"));
-      await fs.rename(runningPath, runningPath.replace(/\.running\.json$/, ".done.json")).catch(() => {});
-      return taskInput;
-    } catch {}
+      let rawInput = "";
+      try {
+        rawInput = await fs.readFile(runningPath, "utf-8");
+        const taskInput = JSON.parse(rawInput);
+        taskInput.__queueEntry = entry;
+        taskInput.__queueRunningPath = runningPath;
+        await fs.rename(runningPath, runningPath.replace(/\.running\.json$/, ".done.json")).catch(() => {});
+        return taskInput;
+      } catch (error) {
+        const failedPath = runningPath.replace(/\.running\.json$/, ".failed.json");
+        const taskId = extractQueuedTaskId(rawInput);
+        await fs.rename(runningPath, failedPath).catch(() => {});
+        const reasonPath = failedPath.replace(/\.failed\.json$/, ".failed.reason.json");
+        await fs.writeFile(
+          reasonPath,
+          JSON.stringify(
+            {
+              taskId: taskId || null,
+              queueEntry: entry,
+              taskPath,
+              runningPath,
+              failedPath,
+              rawBytes: byteLength(rawInput),
+              error: formatErrorForLifecycle(error),
+              failedAt: new Date().toISOString(),
+            },
+            null,
+            2,
+          ) + "\n",
+          "utf-8",
+        ).catch(() => {});
+        await appendDriverLifecycleLog(
+          lifecycleInput,
+          "queue_task_read_failed task_id=" +
+            taskId +
+            " queue_entry=" +
+            entry +
+            " running_path=" +
+            runningPath +
+            " failed_path=" +
+            failedPath +
+            " raw_bytes=" +
+            String(byteLength(rawInput)) +
+            " error=" +
+            formatQueueReadFailureLog(formatErrorForLifecycle(error)),
+        );
+      }
+    } catch (error) {
+      await appendDriverLifecycleLog(
+        lifecycleInput,
+        "queue_task_claim_failed queue_entry=" +
+          entry +
+          " task_path=" +
+          taskPath +
+          " running_path=" +
+          runningPath +
+          " error=" +
+          formatQueueReadFailureLog(formatErrorForLifecycle(error)),
+      );
+    }
   }
   return null;
 };
@@ -1280,8 +1514,8 @@ const waitForPostPromptEventDrain = async (input, state, getEventWriteChain) => 
   const startedAt = Date.now();
   let logged = false;
   let loggedEndTurn = false;
-  let stopReason = "return_value";
-  while (!state.returnValue) {
+  let stopReason = "end_turn";
+  while (!state.endTurnReceived) {
     if (!logged) {
       logged = true;
       await appendDriverLog(
@@ -1292,16 +1526,15 @@ const waitForPostPromptEventDrain = async (input, state, getEventWriteChain) => 
     }
     await getEventWriteChain();
 
-    if (state.returnValue) {
+    if (state.endTurnReceived) {
+      if (!loggedEndTurn) {
+        loggedEndTurn = true;
+        await appendDriverLog(
+          input.stderrPath,
+          "received end_turn event index=" + String(state.endTurnEventIndex ?? ""),
+        );
+      }
       break;
-    }
-
-    if (state.endTurnReceived && !loggedEndTurn) {
-      loggedEndTurn = true;
-      await appendDriverLog(
-        input.stderrPath,
-        "received end_turn event index=" + String(state.endTurnEventIndex ?? ""),
-      );
     }
 
     const now = Date.now();
@@ -1314,7 +1547,7 @@ const waitForPostPromptEventDrain = async (input, state, getEventWriteChain) => 
     await sleep(SANDBOX_AGENT_POST_PROMPT_EVENT_POLL_MS);
   }
   await getEventWriteChain();
-  if (!state.returnValue) {
+  if (!state.endTurnReceived) {
     const now = Date.now();
     const lastEventAt = state.lastEventAt || startedAt;
     await appendDriverLog(
@@ -1965,6 +2198,70 @@ const main = async () => {
   );
   const input = JSON.parse(await fs.readFile(inputPath, "utf-8"));
   let activeInput = input;
+  let activePhase = "bootstrap";
+  let activeTaskId = String(input.taskId || "");
+  process.on("uncaughtException", (error) => {
+    appendDriverLifecycleLogSync(
+      activeInput || input,
+      "uncaught_exception phase=" +
+        activePhase +
+        " active_task_id=" +
+        activeTaskId +
+        " error=" +
+        formatErrorForLifecycle(error),
+    );
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    appendDriverLifecycleLogSync(
+      activeInput || input,
+      "unhandled_rejection phase=" +
+        activePhase +
+        " active_task_id=" +
+        activeTaskId +
+        " reason=" +
+        formatErrorForLifecycle(reason),
+    );
+    process.exit(1);
+  });
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+    process.on(signal, () => {
+      appendDriverLifecycleLogSync(
+        activeInput || input,
+        "signal signal=" +
+          signal +
+          " phase=" +
+          activePhase +
+          " active_task_id=" +
+          activeTaskId,
+      );
+      process.exit(128 + (signal === "SIGTERM" ? 15 : signal === "SIGINT" ? 2 : 1));
+    });
+  }
+  process.on("exit", (code) => {
+    appendDriverLifecycleLogSync(
+      activeInput || input,
+      "process_exit code=" +
+        String(code) +
+        " phase=" +
+        activePhase +
+        " active_task_id=" +
+        activeTaskId,
+    );
+  });
+  await appendDriverLifecycleLog(
+    input,
+    "driver_start input_path=" +
+      inputPath +
+      " task_id=" +
+      String(input.taskId || "") +
+      " persistent=" +
+      String(Boolean(input.persistent)) +
+      " queue_dir=" +
+      String(input.taskQueueDir || "") +
+      " base_url=" +
+      String(input.baseUrl || ""),
+  );
   await appendDriverLog(
     input.stderrPath,
     "loaded input provider=" +
@@ -2031,20 +2328,21 @@ const main = async () => {
   let state = createTaskState();
   let eventWriteChain = Promise.resolve();
 
+  const handlePermissionEvent = async (event) => {
+    const payload = getEventPayloadRecord(event);
+    if (asString(payload?.method) !== "session/request_permission") {
+      return;
+    }
+    const params = asRecord(payload?.params) || {};
+    await autoApprovePermissionRequest(session, activeInput, {
+      ...params,
+      id: asString(payload?.id) || asString(params.id) || undefined,
+    });
+  };
+
   session.onEvent((event) => {
     eventWriteChain = eventWriteChain
       .then(() => appendSessionEvent(activeInput, state, event))
-      .then(async () => {
-        const payload = getEventPayloadRecord(event);
-        if (asString(payload?.method) !== "session/request_permission") {
-          return;
-        }
-        const params = asRecord(payload?.params) || {};
-        await autoApprovePermissionRequest(session, activeInput, {
-          ...params,
-          id: asString(payload?.id) || asString(params.id) || undefined,
-        });
-      })
       .catch(async (error) => {
         await appendScanRuntimeFile(
           input.stderrPath,
@@ -2053,6 +2351,14 @@ const main = async () => {
             "\n",
         );
       });
+    void handlePermissionEvent(event).catch(async (error) => {
+      await appendScanRuntimeFile(
+        activeInput.stderrPath || input.stderrPath,
+        "[sandbox-agent-permission] " +
+          (error instanceof Error ? error.message : String(error)) +
+          "\n",
+      ).catch(() => {});
+    });
   });
 
   session.onPermissionRequest((request) => {
@@ -2061,7 +2367,18 @@ const main = async () => {
 
   const runPromptTask = async (taskInput, replayText) => {
     activeInput = taskInput;
+    activeTaskId = String(taskInput.taskId || "");
+    activePhase = "prompt";
     state = createTaskState();
+    await appendDriverLifecycleLog(
+      taskInput,
+      "prompt_start task_id=" +
+        String(taskInput.taskId || "") +
+        " session_mode=" +
+        String(taskInput.sessionMode || "new") +
+        " queue_entry=" +
+        String(taskInput.__queueEntry || ""),
+    );
     if (sessionId) {
       await appendScanRuntimeFile(taskInput.stdoutPath || "", "THREAD_ID:" + sessionId + "\n").catch(() => {});
       process.stdout.write("THREAD_ID:" + sessionId + "\n");
@@ -2070,18 +2387,68 @@ const main = async () => {
     const promptText = replayText
       ? replayText + "\n\nCurrent task:\n" + taskInput.prompt
       : taskInput.prompt;
-    await withTimeout(
-      session.prompt([{ type: "text", text: promptText }]),
-      SANDBOX_AGENT_PROMPT_TIMEOUT_MS,
-      () =>
-        new Error(
-          "sandbox-agent session.prompt timed out after " +
-            SANDBOX_AGENT_PROMPT_TIMEOUT_MS / 1000 +
-            "s",
-        ),
+    const promptStartedAt = Date.now();
+    await withHeartbeat(
+      withTimeout(
+        session.prompt([{ type: "text", text: promptText }]),
+        SANDBOX_AGENT_PROMPT_TIMEOUT_MS,
+        () =>
+          new Error(
+            "sandbox-agent session.prompt timed out after " +
+              SANDBOX_AGENT_PROMPT_TIMEOUT_MS / 1000 +
+              "s",
+          ),
+      ),
+        30000,
+        async () => {
+          const outputFile = await inspectOutputEnvelopeFile(
+            taskInput.structuredOutputResultPathInContainer,
+          );
+          await appendDriverLog(
+            taskInput.stderrPath,
+            "waiting for prompt completion elapsed_ms=" +
+              String(Date.now() - promptStartedAt) +
+              " events=" +
+              String(state.eventCount || 0) +
+              " last_event_age_ms=" +
+              String(state.lastEventAt ? Date.now() - state.lastEventAt : null) +
+              " end_turn=" +
+              String(Boolean(state.endTurnReceived)) +
+              " output_exists=" +
+              String(Boolean(outputFile.exists)) +
+              " output_valid_envelope=" +
+              String(Boolean(outputFile.validEnvelope)) +
+              " output_route=" +
+              String(outputFile.route ?? "") +
+              " active_tool_calls=" +
+              String(Object.keys(state.activeToolCalls || {}).length),
+          );
+          await writeTaskStateFile(taskInput, state, {
+            promptWaiting: true,
+            promptElapsedMs: Date.now() - promptStartedAt,
+            outputFile,
+          });
+        },
     );
     await appendDriverLog(taskInput.stderrPath, "prompt finished");
+    await appendDriverLifecycleLog(
+      taskInput,
+      "prompt_resolved task_id=" +
+        String(taskInput.taskId || "") +
+        " events=" +
+        String(state.eventCount || 0) +
+        " end_turn=" +
+        String(Boolean(state.endTurnReceived)),
+    );
+    state.promptFinished = true;
+    activePhase = "post_prompt_drain";
     await waitForPostPromptEventDrain(taskInput, state, () => eventWriteChain);
+    state.outputFile = await inspectOutputEnvelopeFile(
+      taskInput.structuredOutputResultPathInContainer,
+    );
+    state.exitRequested = Boolean(state.outputFile?.validEnvelope && state.outputFile.exit);
+    state.completedAt = new Date().toISOString();
+    await writeTaskStateFile(taskInput, state);
     if (String(taskInput.sessionMode || "new") === "fork") {
       const usageForkCheck = await buildUsageForkCheck(
         taskInput,
@@ -2099,27 +2466,76 @@ const main = async () => {
         await mergeForkDebugFile(taskInput, { usageForkCheck });
       }
     }
-    if (!state.returnValue) {
+    if (!state.endTurnReceived) {
       await appendScanRuntimeFile(
         taskInput.stderrPath,
-        "[sandbox-agent-driver] prompt completed without <VULSEEK_RET>\n",
+        "[sandbox-agent-driver] prompt completed without end_turn\n",
       );
     }
     if (state.exitRequested) {
-      await appendDriverLog(taskInput.stderrPath, "received <VULSEEK_EXIT>");
+      await appendDriverLog(taskInput.stderrPath, "output.json requested lane exit");
     }
+    await appendDriverLifecycleLog(
+      taskInput,
+      "prompt_task_complete task_id=" +
+        String(taskInput.taskId || "") +
+        " events=" +
+        String(state.eventCount || 0) +
+        " end_turn=" +
+        String(Boolean(state.endTurnReceived)) +
+        " output_exists=" +
+        String(Boolean(state.outputFile?.exists)) +
+        " output_valid_envelope=" +
+        String(Boolean(state.outputFile?.validEnvelope)) +
+        " output_route=" +
+        String(state.outputFile?.route ?? "") +
+        " exit_requested=" +
+        String(Boolean(state.exitRequested)),
+    );
+    activePhase = "idle";
     return state;
   };
 
   await runPromptTask(input, manualReplayText);
+  let lastIdleLifecycleLogAt = 0;
   while (input.persistent && !state.exitRequested) {
-    const nextTaskInput = await readNextPersistentTaskInput(input.taskQueueDir);
+    activeInput = input;
+    activeTaskId = "";
+    activePhase = "idle";
+    const now = Date.now();
+    if (now - lastIdleLifecycleLogAt >= 30000) {
+      lastIdleLifecycleLogAt = now;
+      await appendDriverLifecycleLog(
+        input,
+        "persistent_idle queue_dir=" + String(input.taskQueueDir || ""),
+      );
+    }
+    const nextTaskInput = await readNextPersistentTaskInput(
+      input.taskQueueDir,
+      input,
+    );
     if (!nextTaskInput) {
       await sleep(500);
       continue;
     }
+    nextTaskInput.driverLifecyclePath =
+      nextTaskInput.driverLifecyclePath || input.driverLifecyclePath;
+    await appendDriverLifecycleLog(
+      nextTaskInput,
+      "queue_task_claimed task_id=" +
+        String(nextTaskInput.taskId || "") +
+        " queue_entry=" +
+        String(nextTaskInput.__queueEntry || "") +
+        " running_path=" +
+        String(nextTaskInput.__queueRunningPath || ""),
+    );
     await runPromptTask(nextTaskInput, "");
   }
+  activePhase = "complete";
+  await appendDriverLifecycleLog(
+    input,
+    "driver_loop_complete exit_requested=" + String(Boolean(state.exitRequested)),
+  );
 };
 
 main().catch(async (error) => {
@@ -2127,6 +2543,11 @@ main().catch(async (error) => {
   if (inputPath) {
     try {
       const input = JSON.parse(await fs.readFile(inputPath, "utf-8"));
+      await appendDriverLifecycleLog(
+        input,
+        "main_catch error=" +
+          (error instanceof Error ? error.stack || error.message : String(error)),
+      ).catch(() => {});
       await appendScanRuntimeFile(
         input.stderrPath,
         "[sandbox-agent-driver] " +
@@ -2144,6 +2565,7 @@ const buildSandboxAgentDriverLaunchScript = (input: {
 	driverInputPath: string;
 	driverStdoutPath: string;
 	driverPidPath: string;
+	driverLifecyclePath: string;
 	taskStdoutPath: string;
 	stderrPath: string;
 }) => `#!/usr/bin/env bash
@@ -2152,9 +2574,10 @@ set -euo pipefail
 mkdir -p '${escapeSingleQuotes(path.posix.dirname(input.driverScriptPath))}'
 : > '${escapeSingleQuotes(input.driverStdoutPath)}'
 
-nohup bash -lc 'export SANDBOX_AGENT_MODULE_PATH="$(npm root -g)/sandbox-agent" && node "${input.driverScriptPath}" "${input.driverInputPath}" > >(tee -a "${input.driverStdoutPath}" "${input.taskStdoutPath}" >/dev/null) 2>> "${input.stderrPath}"; status=$?; echo "[sandbox-agent-driver] exit_code=$status" >> "${input.stderrPath}"' >/dev/null 2>&1 &
+nohup bash -lc 'echo "[sandbox-agent-driver-lifecycle] $(date -Iseconds) shell_start pid=$$" >> "${input.driverLifecyclePath}"; export SANDBOX_AGENT_MODULE_PATH="$(npm root -g)/sandbox-agent" && node "${input.driverScriptPath}" "${input.driverInputPath}" > >(tee -a "${input.driverStdoutPath}" "${input.taskStdoutPath}" >/dev/null) 2>> "${input.stderrPath}"; status=$?; echo "[sandbox-agent-driver] exit_code=$status" >> "${input.stderrPath}"; echo "[sandbox-agent-driver-lifecycle] $(date -Iseconds) shell_exit status=$status" >> "${input.driverLifecyclePath}"' >/dev/null 2>&1 &
 driver_pid=$!
 echo "[sandbox-agent-driver] pid=$driver_pid" >> '${escapeSingleQuotes(input.stderrPath)}'
+echo "[sandbox-agent-driver-lifecycle] $(date -Iseconds) launch_background_pid=$driver_pid" >> '${escapeSingleQuotes(input.driverLifecyclePath)}'
 echo "$driver_pid" > '${escapeSingleQuotes(input.driverPidPath)}'
 `;
 
@@ -2165,15 +2588,118 @@ const launchDriver = async (input: {
 	await execAsync(`docker exec ${input.containerName} bash '${input.driverLaunchPath}'`);
 };
 
-const isDriverAlive = async (input: {
+type DriverHealth = {
+	alive: boolean;
+	reason: string | null;
+	pid: string | null;
+	state: string | null;
+	lifecycleAgeMs: number | null;
+	lastLifecycleLine: string | null;
+};
+
+const parseDriverHealthOutput = (output: string): DriverHealth => {
+	const record = new Map<string, string>();
+	for (const line of output.split("\n")) {
+		const index = line.indexOf("=");
+		if (index <= 0) {
+			continue;
+		}
+		record.set(line.slice(0, index), line.slice(index + 1));
+	}
+	const age = Number.parseInt(record.get("age_ms") || "", 10);
+	return {
+		alive: record.get("alive") === "true",
+		reason: record.get("reason") || null,
+		pid: record.get("pid") || null,
+		state: record.get("state") || null,
+		lifecycleAgeMs: Number.isFinite(age) ? age : null,
+		lastLifecycleLine: record.get("last_line") || null,
+	};
+};
+
+const inspectDriverHealth = async (input: {
 	containerName: string;
 	driverPidPath: string;
-}) =>
-	await execAsync(
-		`docker exec ${input.containerName} bash -lc "test -f '${input.driverPidPath}' && kill -0 \\$(cat '${input.driverPidPath}')"`,
+	driverLifecyclePath: string;
+}): Promise<DriverHealth> => {
+	const maxIdleMs = Number.isFinite(PERSISTENT_DRIVER_HEALTH_MAX_IDLE_MS)
+		? Math.max(30000, PERSISTENT_DRIVER_HEALTH_MAX_IDLE_MS)
+		: 120000;
+	const maxIdleSeconds = Math.ceil(maxIdleMs / 1000);
+	const probe = [
+		"set -u",
+		`pid_path='${escapeSingleQuotes(input.driverPidPath)}'`,
+		`lifecycle_path='${escapeSingleQuotes(input.driverLifecyclePath)}'`,
+		`max_idle_seconds=${maxIdleSeconds}`,
+		"pid=''",
+		"if [ -f \"$pid_path\" ]; then pid=$(cat \"$pid_path\" 2>/dev/null || true); fi",
+		"if [ -z \"$pid\" ]; then echo 'alive=false'; echo 'reason=missing_pid'; exit 0; fi",
+		"state=$(ps -p \"$pid\" -o stat= 2>/dev/null | tr -d '[:space:]' || true)",
+		"if [ -z \"$state\" ]; then echo 'alive=false'; echo 'reason=process_not_running'; echo \"pid=$pid\"; exit 0; fi",
+		"case \"$state\" in *Z*) echo 'alive=false'; echo 'reason=process_zombie'; echo \"pid=$pid\"; echo \"state=$state\"; exit 0;; esac",
+		"if ! kill -0 \"$pid\" 2>/dev/null; then echo 'alive=false'; echo 'reason=kill_check_failed'; echo \"pid=$pid\"; echo \"state=$state\"; exit 0; fi",
+		"if [ ! -f \"$lifecycle_path\" ]; then echo 'alive=false'; echo 'reason=missing_lifecycle'; echo \"pid=$pid\"; echo \"state=$state\"; exit 0; fi",
+		"now=$(date +%s)",
+		"mtime=$(stat -c %Y \"$lifecycle_path\" 2>/dev/null || echo 0)",
+		"age_seconds=$((now - mtime))",
+		"age_ms=$((age_seconds * 1000))",
+		"last_line=$(tail -n 1 \"$lifecycle_path\" 2>/dev/null | tr '\\n' ' ' || true)",
+		"if [ \"$age_seconds\" -gt \"$max_idle_seconds\" ]; then echo 'alive=false'; echo 'reason=stale_lifecycle'; echo \"pid=$pid\"; echo \"state=$state\"; echo \"age_ms=$age_ms\"; echo \"last_line=$last_line\"; exit 0; fi",
+		"echo 'alive=true'",
+		"echo 'reason=ok'",
+		"echo \"pid=$pid\"",
+		"echo \"state=$state\"",
+		"echo \"age_ms=$age_ms\"",
+		"echo \"last_line=$last_line\"",
+	].join("; ");
+	return await execAsync(
+		`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(probe)}'`,
 	)
-		.then(() => true)
-		.catch(() => false);
+		.then(({ stdout }) => parseDriverHealthOutput(stdout))
+		.catch((error) => ({
+			alive: false,
+			reason: `health_probe_failed: ${
+				error instanceof Error ? error.message : String(error)
+			}`,
+			pid: null,
+			state: null,
+			lifecycleAgeMs: null,
+			lastLifecycleLine: null,
+		}));
+};
+
+const stopPersistentDriver = async (input: {
+	containerName: string;
+	driverPidPath: string;
+}) => {
+	const script = [
+		"set -u",
+		`pid_path='${escapeSingleQuotes(input.driverPidPath)}'`,
+		"pid=''",
+		"if [ -f \"$pid_path\" ]; then pid=$(cat \"$pid_path\" 2>/dev/null || true); fi",
+		"if [ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null; then kill \"$pid\" 2>/dev/null || true; sleep 1; fi",
+		"if [ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null; then kill -9 \"$pid\" 2>/dev/null || true; fi",
+		"rm -f \"$pid_path\"",
+	].join("; ");
+	await execAsync(
+		`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(script)}'`,
+	).catch(() => {});
+};
+
+const quarantinePersistentDriverTaskQueue = async (input: {
+	containerName: string;
+	taskQueueDir: string;
+}) => {
+	const script = [
+		"set -u",
+		`queue_dir='${escapeSingleQuotes(input.taskQueueDir)}'`,
+		"if [ -d \"$queue_dir\" ]; then mv \"$queue_dir\" \"$queue_dir.stale-$(date +%s)-$$\" 2>/dev/null || true; fi",
+		"mkdir -p \"$queue_dir\"",
+	].join("; ");
+	await execAsync(
+		`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(script)}'`,
+	).catch(() => {});
+};
 
 const buildTaskSessionPersistPathInContainer = (taskRootInContainer: string) =>
 	path.posix.join(
@@ -2231,12 +2757,11 @@ export const runSingleTurnAgentInContainer = async (
 		taskStageRootInContainer,
 		STRUCTURED_OUTPUT_RESULT_FILE_NAME,
 	);
-	const outputTextChannel = input.outputTextChannel || "file";
-	if (input.outputSchema) {
-		const jsonSchema = zodToJsonSchema(input.outputSchema, {
-			target: "jsonSchema7",
-			$refStrategy: "none",
-		});
+	if (input.outputSchema || input.routeOutputSchemas?.length) {
+		const jsonSchema = buildStructuredOutputEnvelopeJsonSchema(
+			input.outputSchema || input.routeOutputSchemas![0]!.schema,
+			input.routeOutputSchemas,
+		);
 		await fs.mkdir(taskStageDirPath, { recursive: true });
 		await fs.writeFile(
 			structuredOutputSchemaPathOnHost,
@@ -2249,12 +2774,12 @@ export const runSingleTurnAgentInContainer = async (
 		typeof input.prompt === "string"
 			? input.prompt
 			: await input.prompt(input.containerName);
-	const promptWithOutputSchema = input.outputSchema
+	const promptWithOutputSchema = input.outputSchema || input.routeOutputSchemas?.length
 		? `${resolvedPrompt.trimEnd()}\n${buildStructuredOutputPromptSuffix(
-				input.outputSchema,
+				input.outputSchema || input.routeOutputSchemas![0]!.schema,
 				structuredOutputSchemaPathInContainer,
-				outputTextChannel,
 				structuredOutputResultPathInContainer,
+				input.routeOutputSchemas,
 			)}`
 		: resolvedPrompt;
 	const runtimeFileNames = input.runtimeFileNames || {
@@ -2314,6 +2839,10 @@ export const runSingleTurnAgentInContainer = async (
 		input.stageRootInContainer,
 		SANDBOX_AGENT_DRIVER_PID_FILE_NAME,
 	);
+	const driverLifecyclePath = path.posix.join(
+		input.stageRootInContainer,
+		SANDBOX_AGENT_DRIVER_LIFECYCLE_FILE_NAME,
+	);
 	const taskQueueDir = path.posix.join(
 		input.stageRootInContainer,
 		SANDBOX_AGENT_DRIVER_TASK_DIR_NAME,
@@ -2348,7 +2877,6 @@ export const runSingleTurnAgentInContainer = async (
 			input.agentProfile?.provider === "claude_code" ? "claude" : "codex",
 		cwd: input.cwd,
 		prompt: promptWithOutputSchema,
-		outputTextChannel,
 		structuredOutputResultPathInContainer,
 		model: input.agentProfile?.model || null,
 		thinkingLevel: input.agentProfile?.thinkingLevel || null,
@@ -2372,6 +2900,11 @@ export const runSingleTurnAgentInContainer = async (
 			taskStageRootInContainer,
 			runtimeFileNames.stdout,
 		),
+		statePath: path.posix.join(
+			taskStageRootInContainer,
+			taskRuntimeArtifacts.stateFileName,
+		),
+		driverLifecyclePath,
 		forkDebugPath: path.posix.join(
 			taskStageRootInContainer,
 			SANDBOX_AGENT_FORK_DEBUG_FILE_NAME,
@@ -2382,15 +2915,27 @@ export const runSingleTurnAgentInContainer = async (
 		),
 	};
 
-	const persistentDriverAlive =
-		input.persistent &&
-		(await isDriverAlive({ containerName: input.containerName, driverPidPath }));
+	const persistentDriverHealth = input.persistent
+		? await inspectDriverHealth({
+				containerName: input.containerName,
+				driverPidPath,
+				driverLifecyclePath,
+			})
+		: null;
+	const persistentDriverAlive = Boolean(
+		input.persistent && persistentDriverHealth?.alive,
+	);
 	if (persistentDriverAlive) {
 		const requestPath = path.posix.join(
 			taskQueueDir,
 			`${Date.now()}-${input.scanJob.scanJobId}-${Math.random().toString(16).slice(2)}.json`,
 		);
-		await writeContainerFile(
+		await appendContainerFile(
+			input.containerName,
+			driverLifecyclePath,
+			`[sandbox-agent-driver-lifecycle] ${new Date().toISOString()} host_enqueue task_id=${input.taskId || ""} request_path=${requestPath} lane_thread_id=${input.laneThreadId || ""}\n`,
+		).catch(() => {});
+		await writeContainerFileAtomically(
 			input.containerName,
 			requestPath,
 			JSON.stringify(driverTaskInput, null, 2),
@@ -2398,6 +2943,21 @@ export const runSingleTurnAgentInContainer = async (
 		return {
 			threadId: input.laneThreadId || null,
 		};
+	}
+	if (input.persistent && input.laneThreadId && persistentDriverHealth) {
+		await appendContainerFile(
+			input.containerName,
+			driverLifecyclePath,
+			`[sandbox-agent-driver-lifecycle] ${new Date().toISOString()} host_driver_unhealthy task_id=${input.taskId || ""} reason=${persistentDriverHealth.reason || ""} pid=${persistentDriverHealth.pid || ""} state=${persistentDriverHealth.state || ""} lifecycle_age_ms=${persistentDriverHealth.lifecycleAgeMs ?? ""} last_lifecycle=${JSON.stringify(persistentDriverHealth.lastLifecycleLine || "")}\n`,
+		).catch(() => {});
+		await stopPersistentDriver({
+			containerName: input.containerName,
+			driverPidPath,
+		});
+		await quarantinePersistentDriverTaskQueue({
+			containerName: input.containerName,
+			taskQueueDir,
+		});
 	}
 
 	await writeContainerFile(
@@ -2426,6 +2986,7 @@ export const runSingleTurnAgentInContainer = async (
 			driverInputPath,
 			driverStdoutPath,
 			driverPidPath,
+			driverLifecyclePath,
 			taskStdoutPath: path.posix.join(
 				taskStageRootInContainer,
 				runtimeFileNames.stdout,

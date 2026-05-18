@@ -54,6 +54,26 @@ import {
 	redis,
 } from "@/server/db/schema";
 
+const projectListApplicationColumns = {
+	applicationId: true,
+	name: true,
+	appName: true,
+	description: true,
+	createdAt: true,
+	applicationStatus: true,
+	serverId: true,
+} as const;
+
+const projectListComposeColumns = {
+	composeId: true,
+	name: true,
+	appName: true,
+	description: true,
+	createdAt: true,
+	composeStatus: true,
+	serverId: true,
+} as const;
+
 export const projectRouter = createTRPCRouter({
 	create: protectedProcedure
 		.input(apiCreateProject)
@@ -133,6 +153,7 @@ export const projectRouter = createTRPCRouter({
 										applications.applicationId,
 										accessedServices,
 									),
+									columns: projectListApplicationColumns,
 								},
 								compose: {
 									where: buildServiceFilter(
@@ -219,6 +240,7 @@ export const projectRouter = createTRPCRouter({
 									applications.applicationId,
 									accessedServices,
 								),
+								columns: projectListApplicationColumns,
 								with: { domains: true },
 							},
 							mariadb: {
@@ -241,6 +263,7 @@ export const projectRouter = createTRPCRouter({
 							},
 							compose: {
 								where: buildServiceFilter(compose.composeId, accessedServices),
+								columns: projectListComposeColumns,
 								with: { domains: true },
 							},
 						},
@@ -255,6 +278,7 @@ export const projectRouter = createTRPCRouter({
 				environments: {
 					with: {
 						applications: {
+							columns: projectListApplicationColumns,
 							with: {
 								domains: true,
 							},
@@ -265,6 +289,7 @@ export const projectRouter = createTRPCRouter({
 						postgres: true,
 						redis: true,
 						compose: {
+							columns: projectListComposeColumns,
 							with: {
 								domains: true,
 							},

@@ -8,9 +8,12 @@ import {
 	findApplicationById,
 	findComposeById,
 	findScanJobById,
+	findTaskById,
 	findScanJobStatusView,
 	cancelScanJob,
 	retryFailedScanJobTasks,
+	rerunScanTask,
+	startCandidateAnalysis,
 	startCandidateVerification,
 	syncFullScanTasksFromArtifacts,
 	findVulnerabilityCandidateById,
@@ -273,6 +276,49 @@ export const scanRouter = createTRPCRouter({
 			return scanJob;
 		}),
 
+	task: protectedProcedure
+		.input(
+			z.object({
+				taskId: z.string().min(1),
+				scanJobId: z.string().min(1).optional(),
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			const task = await findTaskById(input.taskId);
+			if (input.scanJobId && task.scanJobId !== input.scanJobId) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Task not found for this scan job",
+				});
+			}
+
+			const scanJob = await findScanJobById(task.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to access this scan task",
+				});
+			}
+
+			return { task, scanJob };
+		}),
+
 	updateNote: protectedProcedure
 		.input(apiUpdateScanJobNote)
 		.mutation(async ({ input, ctx }) => {
@@ -418,6 +464,49 @@ export const scanRouter = createTRPCRouter({
 
 			await scansQueue.add("scans", queueData, {
 				jobId: `scan:retry:${scanJob.scanJobId}`,
+				removeOnComplete: true,
+				removeOnFail: true,
+			});
+
+			return result;
+		}),
+
+	rerunTask: protectedProcedure
+		.input(z.object({ taskId: z.string().min(1) }))
+		.mutation(async ({ input, ctx }) => {
+			const sourceTask = await findTaskById(input.taskId);
+			const scanJob = await findScanJobById(sourceTask.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to rerun this scan task",
+				});
+			}
+
+			const result = await rerunScanTask(input.taskId);
+			const queueData: ScanQueueJob = {
+				scanJobId: result.task.scanJobId,
+				mode: "rerun-task",
+			};
+
+			await scansQueue.add("scans", queueData, {
+				jobId: `scan:rerun-task:${result.task.scanJobId}:${result.task.taskId}`,
 				removeOnComplete: true,
 				removeOnFail: true,
 			});
@@ -608,6 +697,55 @@ export const scanRouter = createTRPCRouter({
 			}
 
 			return enrichedCandidate;
+		}),
+
+	analyzeCandidate: protectedProcedure
+		.input(
+			z.object({
+				vulnerabilityCandidateId: z.string().min(1),
+			}),
+		)
+		.mutation(async ({ input, ctx }) => {
+			const candidate = await findVulnerabilityCandidateById(
+				input.vulnerabilityCandidateId,
+			);
+			const scanJob = await findScanJobById(candidate.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to analyze this candidate",
+				});
+			}
+
+			const result = await startCandidateAnalysis(input.vulnerabilityCandidateId);
+			const queueData: ScanQueueJob = {
+				scanJobId: result.scanJobId,
+				mode: "full",
+			};
+
+			await scansQueue.add("scans", queueData, {
+				jobId: `scan:reanalyze:${result.scanJobId}:${result.taskId}`,
+				removeOnComplete: true,
+				removeOnFail: true,
+			});
+
+			return result;
 		}),
 
 	verifyCandidate: protectedProcedure

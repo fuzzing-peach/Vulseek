@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -14,6 +15,18 @@ import { execAsync } from "../utils/process/execAsync";
 import { getGlobalContainerEnvironmentPairs } from "../utils/docker/utils";
 import {
 	candidateSchema,
+	analysisSchema,
+	buildFuzzerRequestSchema,
+	criticResponseSchema,
+	finalAnalysisSchema,
+	fuzzBuildResultSchema,
+	fuzzRunResultSchema,
+	type BuildFuzzerRequest,
+	type Analysis,
+	type CriticResponse,
+	type FinalAnalysis,
+	type FuzzBuildResult,
+	type FuzzRunResult,
 } from "./scan/artifacts/contracts/domain-object.contract";
 import {
 	findVulnerabilityCandidateByIdRepo,
@@ -73,6 +86,18 @@ import {
 	createVerifyingStageDefinition,
 	type CandidateVerificationStageInput,
 } from "./scan/stages/candidate-verification.stage";
+import {
+	createAnalysisCriticStageDefinition,
+	type AnalysisCriticStageInput,
+} from "./scan/stages/analysis-critic.stage";
+import {
+	createFuzzBuildStageDefinition,
+	type FuzzBuildStageInput,
+} from "./scan/stages/fuzz-build.stage";
+import {
+	createFuzzRunStageDefinition,
+	type FuzzRunStageInput,
+} from "./scan/stages/fuzz-run.stage";
 import type { PipelineContext } from "./scan/stages/full-scan-stage.runtime";
 import {
 	runPipeline,
@@ -135,6 +160,12 @@ const RUNTIME_CUSTOM_SKILLS = [
 	"module-scanner",
 	"function-scanner",
 	"deep-analysis",
+	"libafl",
+	"libafl-build",
+	"libafl-fuzz",
+	"address-sanitizer",
+	"coverage-analysis",
+	"analysis-critic",
 	"verify",
 	"search-registries",
 	"tree-sitter",
@@ -222,6 +253,9 @@ type InProgressTaskView = {
 		| "module_scanning"
 		| "function_scanning"
 		| "analyzing"
+		| "fuzz_building"
+		| "fuzzing"
+		| "criticizing"
 		| "verifying";
 	startedAt: string | null;
 	updatedAt: string;
@@ -237,8 +271,13 @@ type QueuePendingCountView = {
 	id: ScanStageQueueKind;
 	title: string;
 	queueName: string;
+	waitingCount: number;
+	queuedCount: number;
+	launchingCount: number;
+	runningCount: number;
 	completedCount: number;
 	failedCount: number;
+	exitedCount: number;
 	totalCount: number;
 	pendingCount: number;
 };
@@ -248,7 +287,10 @@ const IN_PROGRESS_TASK_STAGE_ORDER: Record<InProgressTaskView["stage"], number> 
 	module_scanning: 1,
 	function_scanning: 2,
 	analyzing: 3,
-	verifying: 4,
+	fuzz_building: 4,
+	fuzzing: 5,
+	criticizing: 6,
+	verifying: 7,
 };
 
 const compareInProgressTaskView = (
@@ -287,6 +329,9 @@ type ScanStageQueueKind =
 	| "module"
 	| "function"
 	| "analysis"
+	| "fuzz-build"
+	| "fuzz-run"
+	| "analysis-critic"
 	| "verification";
 
 type RequestInitWithDispatcher = RequestInit & {
@@ -307,6 +352,12 @@ const sandboxAgentFetch: typeof fetch = async (input, init) => {
 	};
 	return fetch(input, nextInit);
 };
+
+const buildAnalysisFingerprint = (value: unknown) =>
+	crypto
+		.createHash("sha1")
+		.update(JSON.stringify(value))
+		.digest("hex");
 
 const parseRedisConnection = (url?: string) => {
 	if (!url) {
@@ -369,6 +420,15 @@ const getFunctionScanQueue = (scanJobId: string) =>
 
 const getAnalysisQueue = (scanJobId: string) =>
 	getScanStageQueue(scanJobId, "analysis");
+
+const getFuzzBuildQueue = (scanJobId: string) =>
+	getScanStageQueue(scanJobId, "fuzz-build");
+
+const getFuzzRunQueue = (scanJobId: string) =>
+	getScanStageQueue(scanJobId, "fuzz-run");
+
+const getAnalysisCriticQueue = (scanJobId: string) =>
+	getScanStageQueue(scanJobId, "analysis-critic");
 
 const getVerificationQueue = (scanJobId: string) =>
 	getScanStageQueue(scanJobId, "verification");
@@ -596,6 +656,13 @@ const readCandidateRecordFromTaskInput = (
 	if (task.stageName === "AnalysisStage") {
 		return asTaskRecord(input?.candidate);
 	}
+	if (
+		task.stageName === "FuzzBuildStage" ||
+		task.stageName === "FuzzRunStage" ||
+		task.stageName === "AnalysisCriticStage"
+	) {
+		return asTaskRecord(input?.candidate);
+	}
 	if (task.stageName === "VerifyingStage") {
 		return asTaskRecord(asTaskRecord(input?.analysisResult)?.candidate);
 	}
@@ -665,6 +732,63 @@ const buildInProgressTaskView = (task: Task): InProgressTaskView | null => {
 						readString(candidate, "vulnerabilityType"),
 					) || "-",
 				stage: "analyzing",
+				startedAt: task.startedAt,
+				updatedAt: task.updatedAt,
+			};
+		}
+		case "FuzzBuildStage": {
+			const candidate = readCandidateRecordFromTaskInput(task);
+			return {
+				id: `fuzz-build-${task.taskId}`,
+				taskId: task.taskId,
+				title: readString(candidate, "title") || task.name,
+				subtitle:
+					joinTaskSubtitle(
+						formatTaskLocation(
+							readString(candidate, "filePath"),
+							readNumber(candidate, "line"),
+						),
+						readString(candidate, "vulnerabilityType"),
+					) || "-",
+				stage: "fuzz_building",
+				startedAt: task.startedAt,
+				updatedAt: task.updatedAt,
+			};
+		}
+		case "FuzzRunStage": {
+			const candidate = readCandidateRecordFromTaskInput(task);
+			return {
+				id: `fuzz-run-${task.taskId}`,
+				taskId: task.taskId,
+				title: readString(candidate, "title") || task.name,
+				subtitle:
+					joinTaskSubtitle(
+						formatTaskLocation(
+							readString(candidate, "filePath"),
+							readNumber(candidate, "line"),
+						),
+						readString(candidate, "vulnerabilityType"),
+					) || "-",
+				stage: "fuzzing",
+				startedAt: task.startedAt,
+				updatedAt: task.updatedAt,
+			};
+		}
+		case "AnalysisCriticStage": {
+			const candidate = readCandidateRecordFromTaskInput(task);
+			return {
+				id: `analysis-critic-${task.taskId}`,
+				taskId: task.taskId,
+				title: readString(candidate, "title") || task.name,
+				subtitle:
+					joinTaskSubtitle(
+						formatTaskLocation(
+							readString(candidate, "filePath"),
+							readNumber(candidate, "line"),
+						),
+						readString(candidate, "vulnerabilityType"),
+					) || "-",
+				stage: "criticizing",
 				startedAt: task.startedAt,
 				updatedAt: task.updatedAt,
 			};
@@ -749,6 +873,24 @@ const listQueuePendingCountsByScanJobId = async (
 			queue: getAnalysisQueue(scanJobId),
 		},
 		{
+			id: "fuzz-build",
+			title: "Fuzz Build",
+			stageName: "FuzzBuildStage",
+			queue: getFuzzBuildQueue(scanJobId),
+		},
+		{
+			id: "fuzz-run",
+			title: "Fuzz Run",
+			stageName: "FuzzRunStage",
+			queue: getFuzzRunQueue(scanJobId),
+		},
+		{
+			id: "analysis-critic",
+			title: "Analysis Critic",
+			stageName: "AnalysisCriticStage",
+			queue: getAnalysisCriticQueue(scanJobId),
+		},
+		{
 			id: "verification",
 			title: "Verification",
 			stageName: "VerifyingStage",
@@ -758,26 +900,53 @@ const listQueuePendingCountsByScanJobId = async (
 
 	return await Promise.all(
 		queueEntries.map(async ({ id, title, stageName, queue }) => {
-			const counts = await queue.getJobCounts(
-				"waiting",
-				"prioritized",
-				"delayed",
-			);
+			const counts = await queue
+				.getJobCounts("waiting", "prioritized", "delayed")
+				.catch((error) => {
+					console.warn(
+						"[scan-status-view]",
+						JSON.stringify({
+							event: "queueCounts.readFailed",
+							scanJobId,
+							queueName: queue.name,
+							error:
+								error instanceof Error
+									? error.message
+									: String(error),
+						}),
+					);
+					return {
+						waiting: 0,
+						prioritized: 0,
+						delayed: 0,
+					};
+				});
 			const matchingTasks = allTasks.filter((task) => task.stageName === stageName);
+			const waitingCount =
+				(counts.waiting || 0) +
+				(counts.prioritized || 0) +
+				(counts.delayed || 0);
 			return {
 				id,
 				title,
 				queueName: queue.name,
+				waitingCount,
+				queuedCount: matchingTasks.filter((task) => task.status === "pending")
+					.length,
+				launchingCount: matchingTasks.filter(
+					(task) => task.status === "launching",
+				).length,
+				runningCount: matchingTasks.filter((task) => task.status === "running")
+					.length,
 				completedCount: matchingTasks.filter(
 					(task) => task.status === "completed",
 				).length,
 				failedCount: matchingTasks.filter((task) => task.status === "failed")
 					.length,
+				exitedCount: matchingTasks.filter((task) => task.status === "exited")
+					.length,
 				totalCount: matchingTasks.length,
-				pendingCount:
-					(counts.waiting || 0) +
-					(counts.prioritized || 0) +
-					(counts.delayed || 0),
+				pendingCount: waitingCount,
 			};
 		}),
 	);
@@ -798,6 +967,79 @@ export const retryFailedScanJobTasks = async (scanJobId: string) =>
 				errorMessage: null,
 			}),
 	});
+
+const RERUNNABLE_TASK_STATUSES = new Set<Task["status"]>([
+	"completed",
+	"failed",
+	"exited",
+]);
+
+const RERUNNABLE_TASK_STAGE_NAMES = new Set<Task["stageName"]>([
+	"RepositoryScanningStage",
+	"ModuleScanningStage",
+	"FunctionScanningStage",
+	"AnalysisStage",
+	"FuzzBuildStage",
+	"FuzzRunStage",
+	"AnalysisCriticStage",
+	"VerifyingStage",
+]);
+
+export const rerunScanTask = async (taskId: string) => {
+	const originalTask = await findTaskByIdRepo(taskId);
+	const scanJob = await findScanJobByIdRepo(originalTask.scanJobId);
+	if (scanJob.scanType !== "full") {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Task rerun is only supported for full scan jobs",
+		});
+	}
+	if (scanJob.status === "canceled") {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Canceled scan jobs cannot rerun tasks",
+		});
+	}
+	if (!RERUNNABLE_TASK_STATUSES.has(originalTask.status)) {
+		throw new TRPCError({
+			code: "CONFLICT",
+			message: "Only completed, failed, or exited tasks can be rerun",
+		});
+	}
+	if (!RERUNNABLE_TASK_STAGE_NAMES.has(originalTask.stageName)) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: `Task stage is not rerunnable: ${originalTask.stageName}`,
+		});
+	}
+
+	const task = await createTaskRepo({
+		taskId: createShortTaskId(),
+		scanJobId: originalTask.scanJobId,
+		parentTaskId: originalTask.parentTaskId,
+		name: `${originalTask.name} (rerun)`,
+		stageName: originalTask.stageName,
+		priority: originalTask.priority,
+		input: originalTask.input,
+		runtimeMode: originalTask.runtimeMode,
+		forkedFromTaskId: originalTask.forkedFromTaskId,
+		forkedFromThreadId: originalTask.forkedFromThreadId,
+	});
+
+	await enqueueRetriedTask(task.scanJobId, task);
+	if (scanJob.status === "finished") {
+		await resetScanJobForRetryRepo(scanJob.scanJobId, {
+			status: "pending",
+			errorMessage: null,
+		}).catch(() => {});
+	}
+	await recalculateScanTaskCountsRepo(scanJob.scanJobId).catch(() => {});
+
+	return {
+		originalTaskId: originalTask.taskId,
+		task,
+	};
+};
 
 const toGitUrl = (
 	provider: "github" | "gitlab" | "bitbucket" | "gitea",
@@ -4402,7 +4644,8 @@ const buildCandidateObject = (
 	status:
 		candidate.status === "running" ||
 		candidate.status === "completed" ||
-		candidate.status === "failed"
+		candidate.status === "failed" ||
+		candidate.status === "exited"
 			? candidate.status
 			: "pending",
 	currentStage:
@@ -4473,12 +4716,14 @@ const runFullScan = async (
 	const moduleScanQueue = getModuleScanQueue(scanJob.scanJobId);
 	const functionScanQueue = getFunctionScanQueue(scanJob.scanJobId);
 	const analysisQueue = getAnalysisQueue(scanJob.scanJobId);
+	const fuzzBuildQueue = getFuzzBuildQueue(scanJob.scanJobId);
+	const fuzzRunQueue = getFuzzRunQueue(scanJob.scanJobId);
+	const analysisCriticQueue = getAnalysisCriticQueue(scanJob.scanJobId);
 	const verificationQueue = getVerificationQueue(
 		scanJob.scanJobId,
 	);
 	const repositoryStage =
 		createRepositoryScanningStageDefinition<FullScanPipelineContext>({
-			outputTextChannel: "file",
 			queue: createStageQueueBinding({
 				queue: repositoryScanQueue,
 				ownsInputId: async (ctx, inputId) => {
@@ -4506,7 +4751,6 @@ const runFullScan = async (
 
 	const moduleStage =
 		createModuleScanningStageDefinition<FullScanPipelineContext>({
-			outputTextChannel: "file",
 			queue: createStageQueueBinding({
 				queue: moduleScanQueue,
 				ownsInputId: async (ctx, inputId) => {
@@ -4535,7 +4779,6 @@ const runFullScan = async (
 		
 	const functionStage =
 		createFunctionScanningStageDefinition<FullScanPipelineContext>({
-			outputTextChannel: "file",
 			queue: createStageQueueBinding({
 				queue: functionScanQueue,
 				ownsInputId: async (ctx, inputId) => {
@@ -4562,7 +4805,6 @@ const runFullScan = async (
 			}),
 		});
 	const analysisStage = createAnalysisStageDefinition<FullScanPipelineContext>({
-		outputTextChannel: "file",
 		queue: createStageQueueBinding({
 			queue: analysisQueue,
 			ownsInputId: async (ctx, inputId) => {
@@ -4588,9 +4830,88 @@ const runFullScan = async (
 			},
 		}),
 	});
+	const fuzzBuildStage =
+		createFuzzBuildStageDefinition<FullScanPipelineContext>({
+			queue: createStageQueueBinding({
+				queue: fuzzBuildQueue,
+				ownsInputId: async (ctx, inputId) => {
+					const task = await findTaskByIdRepo(inputId).catch(() => null);
+					return Boolean(
+						task &&
+							task.scanJobId === ctx.scanJob.scanJobId &&
+							task.stageName === "FuzzBuildStage",
+					);
+				},
+				loadInput: async (ctx, inputId) => {
+					const task = await findTaskByIdRepo(inputId).catch(() => null);
+					if (
+						!task ||
+						task.scanJobId !== ctx.scanJob.scanJobId ||
+						task.stageName !== "FuzzBuildStage" ||
+						task.status !== "pending" ||
+						!task.input
+					) {
+						return undefined;
+					}
+					return task.input as FuzzBuildStageInput;
+				},
+			}),
+		});
+	const fuzzRunStage = createFuzzRunStageDefinition<FullScanPipelineContext>({
+		queue: createStageQueueBinding({
+			queue: fuzzRunQueue,
+			ownsInputId: async (ctx, inputId) => {
+				const task = await findTaskByIdRepo(inputId).catch(() => null);
+				return Boolean(
+					task &&
+						task.scanJobId === ctx.scanJob.scanJobId &&
+						task.stageName === "FuzzRunStage",
+				);
+			},
+			loadInput: async (ctx, inputId) => {
+				const task = await findTaskByIdRepo(inputId).catch(() => null);
+				if (
+					!task ||
+					task.scanJobId !== ctx.scanJob.scanJobId ||
+					task.stageName !== "FuzzRunStage" ||
+					task.status !== "pending" ||
+					!task.input
+				) {
+					return undefined;
+				}
+				return task.input as FuzzRunStageInput;
+			},
+		}),
+	});
+	const analysisCriticStage =
+		createAnalysisCriticStageDefinition<FullScanPipelineContext>({
+			queue: createStageQueueBinding({
+				queue: analysisCriticQueue,
+				ownsInputId: async (ctx, inputId) => {
+					const task = await findTaskByIdRepo(inputId).catch(() => null);
+					return Boolean(
+						task &&
+							task.scanJobId === ctx.scanJob.scanJobId &&
+							task.stageName === "AnalysisCriticStage",
+					);
+				},
+				loadInput: async (ctx, inputId) => {
+					const task = await findTaskByIdRepo(inputId).catch(() => null);
+					if (
+						!task ||
+						task.scanJobId !== ctx.scanJob.scanJobId ||
+						task.stageName !== "AnalysisCriticStage" ||
+						task.status !== "pending" ||
+						!task.input
+					) {
+						return undefined;
+					}
+					return task.input as AnalysisCriticStageInput;
+				},
+			}),
+		});
 	const verifyingStage =
 		createVerifyingStageDefinition<FullScanPipelineContext>({
-			outputTextChannel: "file",
 			queue: createStageQueueBinding({
 				queue: verificationQueue,
 				ownsInputId: async (ctx, inputId) => {
@@ -4622,6 +4943,9 @@ const runFullScan = async (
 		moduleStage,
 		functionStage,
 		analysisStage,
+		fuzzBuildStage,
+		fuzzRunStage,
+		analysisCriticStage,
 		verifyingStage,
 	] as const;
 	const edges = [
@@ -4634,7 +4958,7 @@ const runFullScan = async (
 				name: "repository-to-module",
 				from: repositoryStage,
 				to: moduleStage,
-				fork: true,
+				fork: false,
 				transformOutput: async ({ ctx, stageOutput }) =>
 					stageOutput.modules.map((module) => ({
 						scanJob: ctx.scanJob,
@@ -4739,14 +5063,109 @@ const runFullScan = async (
 			createPipelineEdge<
 				FullScanPipelineContext,
 				typeof analysisStage,
+				FuzzBuildStageInput,
+				typeof fuzzBuildStage,
+				BuildFuzzerRequest
+			>({
+				name: "analysis-to-fuzz-build",
+				from: analysisStage,
+				to: fuzzBuildStage,
+				fork: true,
+				route: { key: "build_fuzzer", default: true },
+				outputSchema: buildFuzzerRequestSchema,
+				outputSchemaDescription: "BuildFuzzerRequest for constructing a LibAFL fuzzer",
+				transformOutput: async ({ stageInput, stageOutput }) => [
+					{
+						...stageInput,
+						buildRequest: stageOutput,
+					},
+				],
+				createTasks: async ({ fromTaskId, stageInput, nextInputObjects }) => {
+					const taskIds: string[] = [];
+					for (const downstreamInput of nextInputObjects) {
+						const taskId = createShortTaskId();
+						const task = await createTaskRepo({
+							taskId,
+							scanJobId: stageInput.candidate.scanJob.scanJobId,
+							parentTaskId: fromTaskId,
+							name: `Fuzz Build: ${stageInput.candidate.title}`,
+							stageName: "FuzzBuildStage",
+							input: downstreamInput,
+						});
+						taskIds.push(task.taskId);
+					}
+					return taskIds;
+				},
+			}),
+			createPipelineEdge<
+				FullScanPipelineContext,
+				typeof analysisStage,
+				AnalysisCriticStageInput,
+				typeof analysisCriticStage,
+				Analysis
+			>({
+				name: "analysis-to-critic",
+				from: analysisStage,
+				to: analysisCriticStage,
+				route: { key: "critic" },
+				outputSchema: analysisSchema,
+				outputSchemaDescription: "Draft analysisSchema result for critic review",
+				fork: false,
+				transformOutput: async ({ stageInput, stageOutput }) => [
+					{
+						...stageInput,
+						draftAnalysis: stageOutput,
+						analysisFingerprint: buildAnalysisFingerprint(stageOutput),
+					},
+				],
+				createTasks: async ({ fromTaskId, stageInput, nextInputObjects }) => {
+					const taskIds: string[] = [];
+					for (const downstreamInput of nextInputObjects) {
+						const taskId = createShortTaskId();
+						const task = await createTaskRepo({
+							taskId,
+							scanJobId: stageInput.candidate.scanJob.scanJobId,
+							parentTaskId: fromTaskId,
+							name: `Analysis Critic: ${stageInput.candidate.title}`,
+							stageName: "AnalysisCriticStage",
+							input: downstreamInput,
+						});
+						taskIds.push(task.taskId);
+					}
+					return taskIds;
+				},
+			}),
+			createPipelineEdge<
+				FullScanPipelineContext,
+				typeof analysisStage,
 				CandidateVerificationStageInput,
-				typeof verifyingStage
+				typeof verifyingStage,
+				FinalAnalysis
 			>({
 				name: "analysis-to-verification",
 				from: analysisStage,
 				to: verifyingStage,
-				fork: true,
+				fork: false,
+				route: { key: "verification" },
+				outputSchema: finalAnalysisSchema,
+				outputSchemaDescription: "Final critic-approved analysis result",
 				transformOutput: async ({ stageInput, stageOutput }) => {
+					const criticFeedback =
+						stageInput.feedback?.kind === "critic"
+							? stageInput.feedback.result
+							: null;
+					if (
+						!criticFeedback ||
+						criticFeedback.stance !== "convinced" ||
+						criticFeedback.reviewedAnalysisFingerprint !==
+							stageOutput.analysisFingerprint ||
+						stageOutput.criticApproval.reviewedAnalysisFingerprint !==
+							stageOutput.analysisFingerprint
+					) {
+						throw new Error(
+							"Final analysis requires a matching convinced critic response",
+						);
+					}
 					if (!shouldVerifyFromAnalysisResult(stageOutput.result)) {
 						return [];
 					}
@@ -4779,6 +5198,160 @@ const runFullScan = async (
 					return taskIds;
 				},
 			}),
+			createPipelineEdge<
+				FullScanPipelineContext,
+				typeof fuzzBuildStage,
+				FuzzRunStageInput,
+				typeof fuzzRunStage,
+				FuzzBuildResult
+			>({
+				name: "fuzz-build-to-fuzz-run",
+				from: fuzzBuildStage,
+				to: fuzzRunStage,
+				fork: true,
+				route: { key: "run_fuzzer" },
+				outputSchema: fuzzBuildResultSchema,
+				outputSchemaDescription: "FuzzBuildResult for running the built fuzzer",
+				transformOutput: async ({ stageInput, stageOutput }) => [
+					{
+						...stageInput,
+						buildResult: stageOutput,
+					},
+				],
+				createTasks: async ({ fromTaskId, stageInput, nextInputObjects }) => {
+					const taskIds: string[] = [];
+					for (const downstreamInput of nextInputObjects) {
+						const taskId = createShortTaskId();
+						const task = await createTaskRepo({
+							taskId,
+							scanJobId: stageInput.candidate.scanJob.scanJobId,
+							parentTaskId: fromTaskId,
+							name: `Fuzz Run: ${stageInput.candidate.title}`,
+							stageName: "FuzzRunStage",
+							input: downstreamInput,
+						});
+						taskIds.push(task.taskId);
+					}
+					return taskIds;
+				},
+			}),
+			createPipelineEdge<
+				FullScanPipelineContext,
+				typeof fuzzBuildStage,
+				CandidateAnalysisStageInput,
+				typeof analysisStage,
+				FuzzBuildResult
+			>({
+				name: "fuzz-build-to-analysis",
+				from: fuzzBuildStage,
+				to: analysisStage,
+				route: { key: "analysis", default: true },
+				outputSchema: fuzzBuildResultSchema,
+				outputSchemaDescription: "FuzzBuildResult feedback for analysis",
+				transformOutput: async ({ stageInput, stageOutput }) => [
+					{
+						candidate: stageInput.candidate,
+						feedback: {
+							kind: "fuzz_build",
+							result: stageOutput,
+						},
+					},
+				],
+				createTasks: async ({ fromTaskId, stageInput, nextInputObjects }) => {
+					const taskIds: string[] = [];
+					for (const downstreamInput of nextInputObjects) {
+						const taskId = createShortTaskId();
+						const task = await createTaskRepo({
+							taskId,
+							scanJobId: stageInput.candidate.scanJob.scanJobId,
+							parentTaskId: fromTaskId,
+							name: `Candidate Analysis: ${stageInput.candidate.title}`,
+							stageName: "AnalysisStage",
+							input: downstreamInput,
+						});
+						taskIds.push(task.taskId);
+					}
+					return taskIds;
+				},
+			}),
+			createPipelineEdge<
+				FullScanPipelineContext,
+				typeof fuzzRunStage,
+				CandidateAnalysisStageInput,
+				typeof analysisStage,
+				FuzzRunResult
+			>({
+				name: "fuzz-run-to-analysis",
+				from: fuzzRunStage,
+				to: analysisStage,
+				route: { key: "analysis", default: true },
+				outputSchema: fuzzRunResultSchema,
+				outputSchemaDescription: "FuzzRunResult feedback for analysis",
+				transformOutput: async ({ stageInput, stageOutput }) => [
+					{
+						candidate: stageInput.candidate,
+						feedback: {
+							kind: "fuzz_run",
+							result: stageOutput,
+						},
+					},
+				],
+				createTasks: async ({ fromTaskId, stageInput, nextInputObjects }) => {
+					const taskIds: string[] = [];
+					for (const downstreamInput of nextInputObjects) {
+						const taskId = createShortTaskId();
+						const task = await createTaskRepo({
+							taskId,
+							scanJobId: stageInput.candidate.scanJob.scanJobId,
+							parentTaskId: fromTaskId,
+							name: `Candidate Analysis: ${stageInput.candidate.title}`,
+							stageName: "AnalysisStage",
+							input: downstreamInput,
+						});
+						taskIds.push(task.taskId);
+					}
+					return taskIds;
+				},
+			}),
+			createPipelineEdge<
+				FullScanPipelineContext,
+				typeof analysisCriticStage,
+				CandidateAnalysisStageInput,
+				typeof analysisStage,
+				CriticResponse
+			>({
+				name: "critic-to-analysis",
+				from: analysisCriticStage,
+				to: analysisStage,
+				route: { key: "analysis", default: true },
+				outputSchema: criticResponseSchema,
+				outputSchemaDescription: "CriticResponse feedback for analysis",
+				transformOutput: async ({ stageInput, stageOutput }) => [
+					{
+						candidate: stageInput.candidate,
+						feedback: {
+							kind: "critic",
+							result: stageOutput,
+						},
+					},
+				],
+				createTasks: async ({ fromTaskId, stageInput, nextInputObjects }) => {
+					const taskIds: string[] = [];
+					for (const downstreamInput of nextInputObjects) {
+						const taskId = createShortTaskId();
+						const task = await createTaskRepo({
+							taskId,
+							scanJobId: stageInput.candidate.scanJob.scanJobId,
+							parentTaskId: fromTaskId,
+							name: `Candidate Analysis: ${stageInput.candidate.title}`,
+							stageName: "AnalysisStage",
+							input: downstreamInput,
+						});
+						taskIds.push(task.taskId);
+					}
+					return taskIds;
+				},
+			}),
 		] as const;
 	const pipeline: PipelineDefinition<
 		FullScanPipelineContext,
@@ -4788,6 +5361,13 @@ const runFullScan = async (
 		name: "full-scan-programmatic",
 		stages,
 		edges,
+		groups: [
+			{
+				name: "analysis-fuzzing-debate",
+				leader: analysisStage,
+				members: [fuzzBuildStage, fuzzRunStage, analysisCriticStage],
+			},
+		],
 	});
 
 	try {
@@ -5271,6 +5851,22 @@ const enqueueRepositoryScanTask = async (scanJobId: string) => {
 	);
 };
 
+const enqueueRepositoryTask = async (
+	scanJobId: string,
+	repositoryTaskId: string,
+) => {
+	const repositoryScanQueue = getRepositoryScanQueue(scanJobId);
+	await repositoryScanQueue.add(
+		"repository",
+		repositoryTaskId,
+		{
+			jobId: buildQueueTaskJobId(repositoryScanQueue.name, repositoryTaskId),
+			removeOnComplete: true,
+			removeOnFail: true,
+		},
+	);
+};
+
 const enqueueAnalysisTask = async (
 	scanJobId: string,
 	analysisTaskId: string,
@@ -5335,10 +5931,61 @@ const enqueueVerificationTask = async (
 	);
 };
 
+const enqueueFuzzBuildTask = async (
+	scanJobId: string,
+	fuzzBuildTaskId: string,
+) => {
+	const fuzzBuildQueue = getFuzzBuildQueue(scanJobId);
+	await fuzzBuildQueue.add(
+		"fuzz-build",
+		fuzzBuildTaskId,
+		{
+			jobId: buildQueueTaskJobId(fuzzBuildQueue.name, fuzzBuildTaskId),
+			removeOnComplete: true,
+			removeOnFail: true,
+		},
+	);
+};
+
+const enqueueFuzzRunTask = async (
+	scanJobId: string,
+	fuzzRunTaskId: string,
+) => {
+	const fuzzRunQueue = getFuzzRunQueue(scanJobId);
+	await fuzzRunQueue.add(
+		"fuzz-run",
+		fuzzRunTaskId,
+		{
+			jobId: buildQueueTaskJobId(fuzzRunQueue.name, fuzzRunTaskId),
+			removeOnComplete: true,
+			removeOnFail: true,
+		},
+	);
+};
+
+const enqueueAnalysisCriticTask = async (
+	scanJobId: string,
+	analysisCriticTaskId: string,
+) => {
+	const analysisCriticQueue = getAnalysisCriticQueue(scanJobId);
+	await analysisCriticQueue.add(
+		"analysis-critic",
+		analysisCriticTaskId,
+		{
+			jobId: buildQueueTaskJobId(
+				analysisCriticQueue.name,
+				analysisCriticTaskId,
+			),
+			removeOnComplete: true,
+			removeOnFail: true,
+		},
+	);
+};
+
 const enqueueRetriedTask = async (scanJobId: string, task: Task) => {
 	switch (task.stageName) {
 		case "RepositoryScanningStage":
-			await enqueueRepositoryScanTask(scanJobId);
+			await enqueueRepositoryTask(scanJobId, task.taskId);
 			return;
 		case "ModuleScanningStage":
 			await enqueueModuleScanWork(scanJobId, task.taskId);
@@ -5348,6 +5995,15 @@ const enqueueRetriedTask = async (scanJobId: string, task: Task) => {
 			return;
 		case "AnalysisStage":
 			await enqueueAnalysisTask(scanJobId, task.taskId);
+			return;
+		case "FuzzBuildStage":
+			await enqueueFuzzBuildTask(scanJobId, task.taskId);
+			return;
+		case "FuzzRunStage":
+			await enqueueFuzzRunTask(scanJobId, task.taskId);
+			return;
+		case "AnalysisCriticStage":
+			await enqueueAnalysisCriticTask(scanJobId, task.taskId);
 			return;
 		case "VerifyingStage":
 			await enqueueVerificationTask(scanJobId, task.taskId);
@@ -5435,6 +6091,40 @@ const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
 							getAnalysisQueue(scanJobId),
 							jobId,
 						).catch(() => {}),
+				),
+			);
+			return;
+		case "FuzzBuildStage":
+			await Promise.all(
+				buildKnownQueueJobIdsForTask(getFuzzBuildQueue(scanJobId), task).map(
+					(jobId) =>
+						forceRemoveStageQueueJob(
+							getFuzzBuildQueue(scanJobId),
+							jobId,
+						).catch(() => {}),
+				),
+			);
+			return;
+		case "FuzzRunStage":
+			await Promise.all(
+				buildKnownQueueJobIdsForTask(getFuzzRunQueue(scanJobId), task).map(
+					(jobId) =>
+						forceRemoveStageQueueJob(getFuzzRunQueue(scanJobId), jobId).catch(
+							() => {},
+						),
+				),
+			);
+			return;
+		case "AnalysisCriticStage":
+			await Promise.all(
+				buildKnownQueueJobIdsForTask(
+					getAnalysisCriticQueue(scanJobId),
+					task,
+				).map((jobId) =>
+					forceRemoveStageQueueJob(
+						getAnalysisCriticQueue(scanJobId),
+						jobId,
+					).catch(() => {}),
 				),
 			);
 			return;
@@ -5538,49 +6228,26 @@ export const cancelScanJob = async (scanJobId: string) => {
 	const functionTasks = allTasks.filter(
 		(task) => task.stageName === "FunctionScanningStage",
 	);
-	const analysisTasks = allTasks.filter(
-		(task) => task.stageName === "AnalysisStage",
-	);
-	const verificationTasks = allTasks.filter(
-		(task) => task.stageName === "VerifyingStage",
-	);
+	const tasksToCancelById = new Map<string, Task>();
+	for (const task of allTasks) {
+		tasksToCancelById.set(task.taskId, task);
+	}
+	if (repositoryTask) {
+		tasksToCancelById.set(repositoryTask.taskId, repositoryTask);
+	}
+	const tasksToCancel = [...tasksToCancelById.values()];
 	const repositoryScanQueue = getRepositoryScanQueue(scanJobId);
-	const moduleScanQueue = getModuleScanQueue(scanJobId);
-	const functionScanQueue = getFunctionScanQueue(scanJobId);
 
 	const stopMessage = MANUAL_STOP_MESSAGE;
-	const now = new Date().toISOString();
 	const containerNames = new Set<string>();
 
 	await updateScanJobStatusRepo(scanJobId, "canceled", stopMessage).catch(() => {});
 
-	if (repositoryTask?.containerName) {
-		containerNames.add(repositoryTask.containerName);
-	}
-
-	for (const task of moduleTasks) {
+	for (const task of tasksToCancel) {
 		if (task.containerName) {
 			containerNames.add(task.containerName);
 		}
 	}
-
-		for (const task of functionTasks) {
-			if (task.containerName) {
-				containerNames.add(task.containerName);
-			}
-		}
-
-		for (const task of analysisTasks) {
-			if (task.containerName) {
-				containerNames.add(task.containerName);
-			}
-		}
-
-		for (const task of verificationTasks) {
-			if (task.containerName) {
-				containerNames.add(task.containerName);
-			}
-		}
 
 	await Promise.all([
 		...buildKnownQueueJobIdsForTask(repositoryScanQueue, {
@@ -5590,21 +6257,8 @@ export const cancelScanJob = async (scanJobId: string) => {
 		} as Task).map((jobId) =>
 			forceRemoveStageQueueJob(repositoryScanQueue, jobId).catch(() => {}),
 		),
-		...moduleTasks.flatMap((task) =>
-			buildKnownQueueJobIdsForTask(moduleScanQueue, task).map((jobId) =>
-				forceRemoveStageQueueJob(moduleScanQueue, jobId).catch(() => {}),
-			),
-		),
-		...functionTasks.flatMap((task) =>
-			buildKnownQueueJobIdsForTask(functionScanQueue, task).map((jobId) =>
-				forceRemoveStageQueueJob(functionScanQueue, jobId).catch(() => {}),
-			),
-		),
-		...analysisTasks.map((task) =>
-			removeQueuedAnalysisTask(scanJobId, task.taskId).catch(() => {}),
-		),
-		...verificationTasks.map((task) =>
-			removeQueuedVerificationTask(scanJobId, task.taskId).catch(() => {}),
+		...tasksToCancel.map((task) =>
+			removeQueuedTaskForRetry(scanJobId, task).catch(() => {}),
 		),
 	]);
 
@@ -5613,42 +6267,7 @@ export const cancelScanJob = async (scanJobId: string) => {
 	).filter(Boolean).length;
 
 	await Promise.all([
-		repositoryTask &&
-		(["pending", "launching", "running"].includes(repositoryTask.status))
-			? updateTaskRepo(repositoryTask.taskId, {
-					status: "failed",
-					errorMessage: stopMessage,
-					completedAt: now,
-			  }).catch(() => null)
-			: Promise.resolve(null),
-		...moduleTasks.map((task) =>
-			["pending", "launching", "running"].includes(task.status)
-				? updateTaskStatusRepo({
-						taskId: task.taskId,
-						status: "failed",
-						errorMessage: stopMessage,
-				  }).catch(() => null)
-				: Promise.resolve(null),
-		),
-		...functionTasks.map((task) =>
-			["pending", "launching", "running"].includes(task.status)
-				? updateTaskStatusRepo({
-						taskId: task.taskId,
-						status: "failed",
-						errorMessage: stopMessage,
-				  }).catch(() => null)
-				: Promise.resolve(null),
-		),
-		...analysisTasks.map((task) =>
-			["pending", "launching", "running"].includes(task.status)
-				? updateTaskStatusRepo({
-						taskId: task.taskId,
-						status: "failed",
-						errorMessage: stopMessage,
-				  }).catch(() => null)
-				: Promise.resolve(null),
-		),
-		...verificationTasks.map((task) =>
+		...tasksToCancel.map((task) =>
 			["pending", "launching", "running"].includes(task.status)
 				? updateTaskStatusRepo({
 						taskId: task.taskId,
@@ -5666,6 +6285,9 @@ export const cancelScanJob = async (scanJobId: string) => {
 		cancelled: true,
 		scanJobId: scanJob.scanJobId,
 		stoppedContainers,
+		clearedTasks: tasksToCancel.filter((task) =>
+			["pending", "launching", "running"].includes(task.status),
+		).length,
 		clearedModuleTasks: moduleTasks.filter(
 			(task) => ["pending", "launching", "running"].includes(task.status),
 		).length,
@@ -5847,6 +6469,31 @@ const buildJoinedAnalysisResultInput = async (
 			reportPath: analysisResult.reportPath,
 			runtimeSeconds: analysisResult.runtimeSeconds,
 			status: analysisResult.status,
+			analysisFingerprint: buildAnalysisFingerprint({
+				id: analysisResult.taskId,
+				result: analysisResult.result,
+				summary: analysisResult.summary || "",
+				confidence: analysisResult.confidence,
+				score: analysisResult.score,
+				reportPath: analysisResult.reportPath,
+				runtimeSeconds: analysisResult.runtimeSeconds,
+				status: analysisResult.status,
+			}),
+			criticApproval: {
+				criticTaskId: "manual-verification",
+				reviewedAnalysisFingerprint: buildAnalysisFingerprint({
+					id: analysisResult.taskId,
+					result: analysisResult.result,
+					summary: analysisResult.summary || "",
+					confidence: analysisResult.confidence,
+					score: analysisResult.score,
+					reportPath: analysisResult.reportPath,
+					runtimeSeconds: analysisResult.runtimeSeconds,
+					status: analysisResult.status,
+				}),
+				stance: "convinced",
+				summary: "Manual verification requested for existing analysis result.",
+			},
 			scanJob: candidateInput.candidate.scanJob,
 			module: candidateInput.candidate.module,
 			function: candidateInput.candidate.function,
@@ -5994,5 +6641,107 @@ export const startCandidateVerification = async (
 	return {
 		started: true,
 		reverify: hasPreviousVerification,
+	};
+};
+
+export const startCandidateAnalysis = async (
+	vulnerabilityCandidateId: string,
+) => {
+	const candidate = await findVulnerabilityCandidateByIdRepo(vulnerabilityCandidateId);
+	const scanJob = await findScanJobByIdRepo(candidate.scanJobId);
+	if (!["completed", "failed", "exited"].includes(candidate.status)) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message:
+				"Candidate analysis can only be requeued after the candidate reaches a terminal state",
+		});
+	}
+	if (!candidate.scanFunctionTaskId) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Candidate does not have a source function task",
+		});
+	}
+
+	const functionTask = await findTaskByIdRepo(candidate.scanFunctionTaskId);
+	if (
+		functionTask.scanJobId !== scanJob.scanJobId ||
+		functionTask.stageName !== "FunctionScanningStage" ||
+		!functionTask.input
+	) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Candidate source function task is not available",
+		});
+	}
+
+	const functionOutput = functionTask.output as { candidates?: unknown } | null;
+	const rawCandidates = Array.isArray(functionOutput?.candidates)
+		? functionOutput.candidates
+		: [];
+	const sourceCandidate = rawCandidates
+		.map((rawCandidate) => candidateSchema.safeParse(rawCandidate))
+		.find(
+			(parsed) =>
+				parsed.success &&
+				parsed.data.id === vulnerabilityCandidateId,
+		);
+	if (!sourceCandidate?.success) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Candidate not found in source function task output",
+		});
+	}
+
+	const existingActiveAnalysisTask = (
+		await listTasksByScanJobAndStageRepo({
+			scanJobId: scanJob.scanJobId,
+			stageName: "AnalysisStage",
+		})
+	).find((task) => {
+		if (!["pending", "launching", "running"].includes(task.status)) {
+			return false;
+		}
+		const taskInput = task.input as { candidate?: { id?: unknown } } | null;
+		return taskInput?.candidate?.id === vulnerabilityCandidateId;
+	});
+	if (existingActiveAnalysisTask) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Candidate analysis is already queued or running",
+		});
+	}
+
+	const stageInput = functionTask.input as FunctionScanningStageInput;
+	const analysisTask = await createTaskRepo({
+		taskId: createShortTaskId(),
+		scanJobId: scanJob.scanJobId,
+		parentTaskId: functionTask.taskId,
+		name: `Candidate Analysis: ${sourceCandidate.data.title}`,
+		stageName: "AnalysisStage",
+		runtimeMode: "new_session",
+		input: buildCandidateAnalysisStageInput({
+			scanJob,
+			module: stageInput.module,
+			function: stageInput.function,
+			candidate: sourceCandidate.data,
+		}),
+	});
+
+	if (scanJob.status !== "running") {
+		await resetScanJobForRetryRepo(scanJob.scanJobId, {
+			status: "running",
+			errorMessage: null,
+		}).catch(() => {});
+		await updateScanJobStatusRepo(scanJob.scanJobId, "running").catch(() => {});
+	}
+	await enqueueAnalysisTask(scanJob.scanJobId, analysisTask.taskId);
+	await recalculateScanTaskCountsRepo(scanJob.scanJobId).catch(() => {});
+	await reconcileScanJobCandidatePipelineStatus(scanJob.scanJobId).catch(() => null);
+
+	return {
+		started: true,
+		taskId: analysisTask.taskId,
+		scanJobId: scanJob.scanJobId,
 	};
 };

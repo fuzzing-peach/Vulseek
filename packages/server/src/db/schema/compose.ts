@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm";
-import { boolean, integer, pgEnum, pgTable, text } from "drizzle-orm/pg-core";
+import { boolean, integer, jsonb, pgEnum, pgTable, text } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { nanoid } from "nanoid";
 import { z } from "zod";
@@ -15,7 +15,12 @@ import { gitlab } from "./gitlab";
 import { mounts } from "./mount";
 import { schedules } from "./schedule";
 import { server } from "./server";
-import { applicationStatus, triggerType } from "./shared";
+import {
+	applicationStatus,
+	type ScanStageSettings,
+	ScanStageSettingsSchema,
+	triggerType,
+} from "./shared";
 import { sshKeys } from "./ssh-key";
 import { generateAppName } from "./utils";
 export const sourceTypeCompose = pgEnum("sourceTypeCompose", [
@@ -52,6 +57,9 @@ export const compose = pgTable("compose", {
 	autoDeltaScan: boolean("autoDeltaScan").$defaultFn(() => true),
 	analysisConcurrency: integer("analysisConcurrency").notNull().default(2),
 	verifyConcurrency: integer("verifyConcurrency").notNull().default(1),
+	fuzzingBudgetSeconds: integer("fuzzingBudgetSeconds")
+		.notNull()
+		.default(600),
 	// Gitlab
 	gitlabProjectId: integer("gitlabProjectId"),
 	gitlabRepository: text("gitlabRepository"),
@@ -134,6 +142,10 @@ export const compose = pgTable("compose", {
 	fullScanFunctionConcurrency: integer("fullScanFunctionConcurrency")
 		.notNull()
 		.default(4),
+	scanStageSettings: jsonb("scanStageSettings")
+		.$type<ScanStageSettings>()
+		.notNull()
+		.default({}),
 });
 
 export const composeRelations = relations(compose, ({ one, many }) => ({
@@ -193,8 +205,10 @@ const createSchema = createInsertSchema(compose, {
 	autoDeltaScan: z.boolean(),
 	analysisConcurrency: z.number().int().min(1).max(16).default(2),
 	verifyConcurrency: z.number().int().min(1).max(16).default(1),
+	fuzzingBudgetSeconds: z.number().int().min(1).max(86400).default(600),
 	fullScanModuleConcurrency: z.number().int().min(1).max(32).default(4),
 	fullScanFunctionConcurrency: z.number().int().min(1).max(64).default(4),
+	scanStageSettings: ScanStageSettingsSchema.default({}),
 	env: z.string().optional(),
 	composeFile: z.string().optional(),
 	environmentId: z.string(),

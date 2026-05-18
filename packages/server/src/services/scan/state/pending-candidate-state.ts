@@ -17,7 +17,8 @@ export const getPendingAnalysisCandidateState = <
 	const pendingCandidates = input.candidates.filter(
 		(candidate) =>
 			!analysisCandidateIds.has(candidate.vulnerabilityCandidateId) &&
-			candidate.status !== "failed",
+			candidate.status !== "failed" &&
+			candidate.status !== "exited",
 	);
 	const failed = input.candidates.filter(
 		(candidate) =>
@@ -101,7 +102,7 @@ export const getPendingVerificationCandidateState = <
 			return false;
 		}
 
-		return candidate.status !== "failed";
+		return candidate.status !== "failed" && candidate.status !== "exited";
 	});
 
 	const failed = input.candidates.filter((candidate) => {

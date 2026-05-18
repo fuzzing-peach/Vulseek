@@ -7,10 +7,12 @@ import {
 	scanJobs,
 } from "@dokploy/server/db/schema";
 import { eq } from "drizzle-orm";
+import type { ZodTypeAny } from "zod";
+import { getAgentProfileById } from "../../ai";
 import { findApplicationById } from "../../application";
 import { findComposeById } from "../../compose";
-import type { StageOutputTextChannel } from "../pipeline/stage-definition";
 import type { AgentProfileLike, ScanJob } from "../types";
+import type { ScanStageSettings } from "@dokploy/server/db/schema";
 
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
 
@@ -25,6 +27,8 @@ export type ScanProfileConcurrencySettings = {
 	verifyConcurrency: number | null;
 	fullScanModuleConcurrency: number | null;
 	fullScanFunctionConcurrency: number | null;
+	fuzzingBudgetSeconds: number | null;
+	scanStageSettings: ScanStageSettings;
 };
 
 export type StageAgentKind = "scan" | "analysis" | "verification";
@@ -40,6 +44,9 @@ const sanitizeContainerNamePart = (value: string) =>
 const resolveStageAgentKindFromStageName = (stageName: string): StageAgentKind => {
 	switch (stageName) {
 		case "AnalysisStage":
+		case "FuzzBuildStage":
+		case "FuzzRunStage":
+		case "AnalysisCriticStage":
 			return "analysis";
 		case "VerifyingStage":
 			return "verification";
@@ -58,6 +65,12 @@ const resolveStageContainerPrefix = (stageName: string) => {
 			return "function-scan";
 		case "AnalysisStage":
 			return "analysis";
+		case "FuzzBuildStage":
+			return "fuzz-build";
+		case "FuzzRunStage":
+			return "fuzz-run";
+		case "AnalysisCriticStage":
+			return "analysis-critic";
 		case "VerifyingStage":
 			return "verify";
 		default:
@@ -143,12 +156,24 @@ const resolveScanContextMount = async (
 export const resolveStageAgentProfile = async (
 	scanJob: ScanJobRef,
 	kind: StageAgentKind,
+	stageName?: string,
 ): Promise<AgentProfileLike | null> => {
 	const target = scanJob.applicationId
 		? await findApplicationById(scanJob.applicationId)
 		: await findComposeById(scanJob.composeId as string);
 	const targetDefaultAgentProfile =
 		("agentProfile" in target && target.agentProfile) || null;
+	const stageAgentProfileId =
+		stageName && "scanStageSettings" in target
+			? target.scanStageSettings?.[stageName]?.agentProfileId
+			: null;
+	if (stageAgentProfileId) {
+		return (
+			(await getAgentProfileById(stageAgentProfileId).catch(() => null)) ||
+			targetDefaultAgentProfile ||
+			null
+		);
+	}
 
 	switch (kind) {
 		case "scan":
@@ -189,9 +214,11 @@ export const resolveScanProfileConcurrencySettings = async (
 			.select({
 				analysisConcurrency: applications.analysisConcurrency,
 				verifyConcurrency: applications.verifyConcurrency,
+				fuzzingBudgetSeconds: applications.fuzzingBudgetSeconds,
 				fullScanModuleConcurrency: applications.fullScanModuleConcurrency,
 				fullScanFunctionConcurrency:
 					applications.fullScanFunctionConcurrency,
+				scanStageSettings: applications.scanStageSettings,
 			})
 			.from(applications)
 			.where(eq(applications.applicationId, scanJob.applicationId))
@@ -199,9 +226,11 @@ export const resolveScanProfileConcurrencySettings = async (
 		return {
 			analysisConcurrency: row?.analysisConcurrency ?? null,
 			verifyConcurrency: row?.verifyConcurrency ?? null,
+			fuzzingBudgetSeconds: row?.fuzzingBudgetSeconds ?? null,
 			fullScanModuleConcurrency: row?.fullScanModuleConcurrency ?? null,
 			fullScanFunctionConcurrency:
 				row?.fullScanFunctionConcurrency ?? null,
+			scanStageSettings: row?.scanStageSettings ?? {},
 		};
 	}
 
@@ -210,8 +239,10 @@ export const resolveScanProfileConcurrencySettings = async (
 			.select({
 				analysisConcurrency: compose.analysisConcurrency,
 				verifyConcurrency: compose.verifyConcurrency,
+				fuzzingBudgetSeconds: compose.fuzzingBudgetSeconds,
 				fullScanModuleConcurrency: compose.fullScanModuleConcurrency,
 				fullScanFunctionConcurrency: compose.fullScanFunctionConcurrency,
+				scanStageSettings: compose.scanStageSettings,
 			})
 			.from(compose)
 			.where(eq(compose.composeId, scanJob.composeId))
@@ -219,9 +250,11 @@ export const resolveScanProfileConcurrencySettings = async (
 		return {
 			analysisConcurrency: row?.analysisConcurrency ?? null,
 			verifyConcurrency: row?.verifyConcurrency ?? null,
+			fuzzingBudgetSeconds: row?.fuzzingBudgetSeconds ?? null,
 			fullScanModuleConcurrency: row?.fullScanModuleConcurrency ?? null,
 			fullScanFunctionConcurrency:
 				row?.fullScanFunctionConcurrency ?? null,
+			scanStageSettings: row?.scanStageSettings ?? {},
 		};
 	}
 
@@ -230,7 +263,23 @@ export const resolveScanProfileConcurrencySettings = async (
 		verifyConcurrency: null,
 		fullScanModuleConcurrency: null,
 		fullScanFunctionConcurrency: null,
+		fuzzingBudgetSeconds: null,
+		scanStageSettings: {},
 	};
+};
+
+export const resolveStageConcurrencySetting = async (
+	scanJobId: string,
+	stageName: string,
+	fallback: (settings: ScanProfileConcurrencySettings) => number | null,
+) => {
+	const settings = await resolveScanProfileConcurrencySettings(scanJobId);
+	return Math.max(
+		1,
+		settings.scanStageSettings?.[stageName]?.concurrency ||
+			fallback(settings) ||
+			1,
+	);
 };
 
 export const resolveRepositoryArtifactsDir = async (input: {
@@ -295,7 +344,12 @@ export type StageContext = PipelineContext & {
 	persistent: boolean;
 	laneIndex: number | null;
 	laneThreadId: string | null;
-	outputTextChannel: StageOutputTextChannel;
+	routeOutputSchemas?: Array<{
+		routeKey: string;
+		description?: string;
+		schema: ZodTypeAny;
+		default?: boolean;
+	}>;
 	sessionMode: "new" | "fork";
 	parentSessionId: string | null;
 	parentTaskId: string | null;
@@ -326,7 +380,12 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 	scanJob: ScanJobRef;
 	taskId: string;
 	taskName: string;
-	outputTextChannel?: StageOutputTextChannel;
+	routeOutputSchemas?: Array<{
+		routeKey: string;
+		description?: string;
+		schema: ZodTypeAny;
+		default?: boolean;
+	}>;
 	persistent?: boolean;
 	laneIndex?: number | null;
 	laneThreadId?: string | null;
@@ -341,7 +400,7 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 	persistent: input.persistent ?? false,
 	laneIndex: input.laneIndex ?? null,
 	laneThreadId: input.laneThreadId ?? null,
-	outputTextChannel: input.outputTextChannel || "file",
+	routeOutputSchemas: input.routeOutputSchemas,
 	sessionMode: input.sessionMode || "new",
 	parentSessionId: input.parentSessionId ?? null,
 	parentTaskId: input.parentTaskId ?? null,
@@ -349,6 +408,7 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 		await resolveStageAgentProfile(
 			input.scanJob,
 			resolveStageAgentKindFromStageName(input.stageName),
+			input.stageName,
 		),
 	containerName: (...parts) =>
 		[

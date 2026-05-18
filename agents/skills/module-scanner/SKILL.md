@@ -20,7 +20,6 @@ You should be given:
 - repository-level scan JSON
 - one module definition
 - the checked out repository
-- the runtime-provided `output.schema.json`
 
 ## External Code And Nested Repository Exclusion
 
@@ -61,20 +60,12 @@ Use `tree-sitter` to extract concrete function definitions from the module file 
 
 Rules:
 
-- prefer calling `extract_functions.py` first for function inventory generation
+- use the installed `tree-sitter` skill as the function inventory method
 - do not manually invent the function list from memory
 - do not rely on loose grep-only heuristics when tree-sitter extraction is available
 - if tree-sitter extraction fails for some files, note the failure and continue with the successfully extracted functions
 - current expected first-class language support is C/C++
 - if tree-sitter extracts functions from excluded external paths, remove them from the final plan unless the exception rule applies
-
-Preferred invocation:
-
-```bash
-python3 /opt/dokploy-agents/tools/extract_functions.py \
-  --file-list <file-list.txt> \
-  --out <output.json>
-```
 
 ## Lookup Priority
 
@@ -94,16 +85,13 @@ Do not default to raw grep when Serena can answer the question more precisely.
 4. enumerate functions worth deeper scanning
 5. create a function task plan
 
-## Final Structured Result
+## Final Result Content
 
-Return exactly one top-level JSON object matching the runtime-provided `output.schema.json`.
-
-Use `output.schema.json` as the source of truth.
+The stage prompt and runtime contract define the exact structured output format.
+This skill defines what the module-level result should contain.
 
 Rules:
 
-- validate the final JSON against `output.schema.json` before returning
-- return the validated JSON only inside `<VULSEEK_RET>...<VULSEEK_RET>`
 - do not write `module_scan.md`, `module_scan.json`, or `function_plan.json`
 - keep `functions` tool-derived and scoped to the provided `module_json.files`
 
@@ -118,52 +106,6 @@ Rules:
 - notes about skipped areas
 - notes about excluded external paths when relevant
 
-### Fixed Result Template
-
-Use this fixed top-level structure:
-
-```json
-{
-  "module": {
-    "moduleId": "tls-runtime",
-    "name": "TLS Runtime",
-    "summary": "Handles TLS handshake, record processing, session state, and related certificate paths."
-  },
-  "importantFiles": [
-    "src/tls.c",
-    "src/ssl.c"
-  ],
-  "entryPoints": [
-    "DoTls13Handshake",
-    "ProcessReply"
-  ],
-  "trustBoundaries": [
-    "network_input",
-    "certificate_input"
-  ],
-  "attackSurfaces": [
-    "record_parsing",
-    "handshake_state_transition"
-  ],
-  "vulnerabilityThemes": [
-    "state_machine_consistency",
-    "bounds_checks",
-    "resource_cleanup"
-  ],
-  "notes": [
-    "Generated compatibility glue was down-ranked."
-  ]
-}
-```
-
-Rules:
-
-- output exactly one top-level object
-- always include all top-level fields above
-- `module.moduleId`, `module.name`, and `module.summary` are mandatory
-- use arrays for list-like fields, never comma-joined strings
-- use `[]` if a list is empty
-
 ## What The `functions` Array Should Capture
 
 For each function task:
@@ -174,7 +116,7 @@ For each function task:
 - `line`
 - `priority`
 - `summary`
-- `riskType` when clear
+- `vulnerabilityType` when clear
 
 The function list should be based on tree-sitter extracted definitions first, then filtered and prioritized by the module scanner.
 
@@ -187,25 +129,6 @@ Include functions that are:
 - auth, permission, signature, certificate, key handling code
 - wrappers around dangerous sinks
 - suspiciously inconsistent with sibling functions
-
-### Fixed `functions` Example
-
-Use this fixed top-level structure:
-
-```json
-[
-  {
-    "functionId": "fn-2f6e4d4d8a9a6f12",
-    "functionName": "DoTls13Handshake",
-    "filePath": "src/tls13.c",
-    "line": 412,
-    "priority": 93,
-    "summary": "Processes TLS 1.3 handshake state transitions from untrusted peer messages.",
-    "riskType": "state_machine",
-    "score": 8.4
-  }
-]
-```
 
 Rules:
 

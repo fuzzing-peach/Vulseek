@@ -100,6 +100,7 @@ export const createApplication = async (
 				verifyConcurrency: 1,
 				fullScanModuleConcurrency: 4,
 				fullScanFunctionConcurrency: 4,
+				scanStageSettings: {},
 			})
 			.returning()
 			.then((value) => value[0]);

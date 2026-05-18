@@ -6,6 +6,7 @@ export const scanTaskStatusSchema = z.enum([
 	"running",
 	"completed",
 	"failed",
+	"exited",
 ]);
 
 export const vulnerabilityCandidateStageSchema = z.enum([
@@ -108,6 +109,61 @@ export const analysisSchema = z.object({
 	status: scanTaskStatusSchema.optional(),
 });
 
+export const buildFuzzerRequestSchema = z.object({
+	id: z.string().min(1),
+	candidateId: z.string().min(1),
+	analysisFingerprint: z.string().min(1),
+	entryToCandidatePath: z.array(z.string().min(1)).min(1),
+	harnessRequirements: z.string().min(1),
+	expectedTriggerCondition: z.string().min(1),
+	targetFunction: z.string().nullable(),
+	targetFilePath: z.string().nullable(),
+	notes: z.array(z.string()).default([]),
+});
+
+export const fuzzBuildResultSchema = z.object({
+	id: z.string().min(1),
+	requestId: z.string().min(1).nullable(),
+	status: z.enum(["built", "failed"]),
+	cratePath: z.string().nullable(),
+	executablePath: z.string().nullable(),
+	harnessSummary: z.string(),
+	buildLogsPath: z.string().nullable(),
+	errorSummary: z.string().nullable(),
+});
+
+export const fuzzRunResultSchema = z.object({
+	id: z.string().min(1),
+	buildResultId: z.string().min(1).nullable(),
+	runtimeSeconds: z.number().nullable(),
+	foundTriggeringInput: z.boolean(),
+	triggeringInputPath: z.string().nullable(),
+	corpusPath: z.string().nullable(),
+	crashArtifactsPath: z.string().nullable(),
+	logsPath: z.string().nullable(),
+	summary: z.string(),
+});
+
+export const criticResponseSchema = z.object({
+	id: z.string().min(1),
+	stance: z.enum(["object", "convinced"]),
+	reviewedAnalysisFingerprint: z.string().min(1),
+	summary: z.string(),
+	objections: z.array(z.string()),
+	requiredAdditionalEvidence: z.array(z.string()),
+	suggestedNextAction: z.string().nullable(),
+});
+
+export const finalAnalysisSchema = analysisSchema.extend({
+	analysisFingerprint: z.string().min(1),
+	criticApproval: z.object({
+		criticTaskId: z.string().min(1),
+		reviewedAnalysisFingerprint: z.string().min(1),
+		stance: z.literal("convinced"),
+		summary: z.string(),
+	}),
+});
+
 export const verificationSchema = z.object({
 	id: z.string().min(1),
 	// scanJobId: z.string().min(1),
@@ -132,4 +188,9 @@ export type Module = z.infer<typeof moduleSchema>;
 export type Function = z.infer<typeof functionSchema>;
 export type Candidate = z.infer<typeof candidateSchema>;
 export type Analysis = z.infer<typeof analysisSchema>;
+export type BuildFuzzerRequest = z.infer<typeof buildFuzzerRequestSchema>;
+export type FuzzBuildResult = z.infer<typeof fuzzBuildResultSchema>;
+export type FuzzRunResult = z.infer<typeof fuzzRunResultSchema>;
+export type CriticResponse = z.infer<typeof criticResponseSchema>;
+export type FinalAnalysis = z.infer<typeof finalAnalysisSchema>;
 export type Verification = z.infer<typeof verificationSchema>;

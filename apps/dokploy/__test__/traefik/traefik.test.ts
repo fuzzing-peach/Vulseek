@@ -26,6 +26,8 @@ const baseApp: ApplicationNested = {
 	verifyConcurrency: 1,
 	fullScanModuleConcurrency: 4,
 	fullScanFunctionConcurrency: 4,
+	fuzzingBudgetSeconds: 600,
+	scanStageSettings: {},
 	enableSubmodules: false,
 	previewRequireCollaboratorPermissions: false,
 	serverId: "",

@@ -64,6 +64,7 @@ services:
       # 挂载源代码，实现热重载
       - ./apps:/app/apps
       - ./packages:/app/packages
+      - ./agents:/app/agents
       - ./package.json:/app/package.json
       - ./pnpm-workspace.yaml:/app/pnpm-workspace.yaml
       - ./tsconfig.json:/app/tsconfig.json

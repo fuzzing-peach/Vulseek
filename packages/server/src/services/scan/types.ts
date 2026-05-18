@@ -4,16 +4,26 @@ import {
 } from "@dokploy/server/db/schema";
 import type {
 	Analysis,
+	BuildFuzzerRequest,
 	Candidate,
+	CriticResponse,
+	FinalAnalysis,
 	Function,
+	FuzzBuildResult,
+	FuzzRunResult,
 	Module,
 	Repository,
 	Verification,
 } from "./artifacts/contracts/domain-object.contract";
 export type {
 	Analysis,
+	BuildFuzzerRequest,
 	Candidate,
+	CriticResponse,
+	FinalAnalysis,
 	Function,
+	FuzzBuildResult,
+	FuzzRunResult,
 	Module,
 	Repository,
 	Verification,
@@ -33,7 +43,7 @@ export type VulnerabilityCandidate = {
 	filePath: string | null;
 	line: number | null;
 	vulnerabilityType: string | null;
-	status: "pending" | "launching" | "running" | "completed" | "failed";
+	status: "pending" | "launching" | "running" | "completed" | "failed" | "exited";
 	currentStage: "analyzing" | "fuzzing" | "verifying";
 	confidence: number | null;
 	score: number | null;

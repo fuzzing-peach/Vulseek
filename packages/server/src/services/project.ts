@@ -17,6 +17,26 @@ import { createProductionEnvironment } from "./environment";
 
 export type Project = typeof projects.$inferSelect;
 
+const projectApplicationColumns = {
+	applicationId: true,
+	name: true,
+	appName: true,
+	description: true,
+	createdAt: true,
+	applicationStatus: true,
+	serverId: true,
+} as const;
+
+const projectComposeColumns = {
+	composeId: true,
+	name: true,
+	appName: true,
+	description: true,
+	createdAt: true,
+	composeStatus: true,
+	serverId: true,
+} as const;
+
 export const createProject = async (
 	input: typeof apiCreateProject._type,
 	organizationId: string,
@@ -79,13 +99,17 @@ export const findProjectById = async (projectId: string) => {
 		with: {
 			environments: {
 				with: {
-					applications: true,
+					applications: {
+						columns: projectApplicationColumns,
+					},
 					mariadb: true,
 					mongo: true,
 					mysql: true,
 					postgres: true,
 					redis: true,
-					compose: true,
+					compose: {
+						columns: projectComposeColumns,
+					},
 				},
 			},
 		},

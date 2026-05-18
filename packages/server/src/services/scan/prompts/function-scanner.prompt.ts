@@ -29,10 +29,9 @@ export const buildFunctionScannerPrompt = (input: {
 		`repository_json: ${input.repositoryJson}`,
 		`module_json: ${input.moduleJson}`,
 		`function_json: ${input.functionJson}`,
-		"Your final structured result must be exactly one top-level JSON object matching output.schema.json with no prose and no markdown fences.",
-		"Before finishing, validate the final JSON against output.schema.json and follow the runtime output contract appended below.",
 		"Return an object with a `candidates` array field.",
 		"Each candidate object must match the canonical candidate schema, including: id, functionId, title, description, filePath, line, vulnerabilityType, confidence, score. Include status/currentStage when available.",
 		"Always return an object, even when there are no candidates; use `{ \"candidates\": [] }` in that case.",
+		"Before returning, validate the structured JSON against the runtime-provided output.schema.json.",
 	].join("\n");
 };

@@ -50,23 +50,14 @@ You should also identify and preserve the current affected version context:
 - current target tag if present
 - current target commit
 
-## Required Result JSON
+## Verification Result Content
 
-After the verification artifacts are written, you must return one top-level JSON object through the runtime channel requested by the prompt.
+After the verification artifacts are written, return the final classification,
+bug/security booleans, score, summary, confidence when supported, artifact paths,
+runtime status, and any other fields requested by the stage prompt.
 
-The result JSON must be one top-level object. Required fields:
-
-- `result`
-- `isBug`
-- `isSecurity`
-- `score`
-- `summary`
-
-Optional field:
-
-- `confidence`
-
-Do not write a separate machine-readable result file unless the prompt explicitly requires it.
+Do not write a separate machine-readable result file unless the stage prompt
+explicitly requires it.
 
 ## High-Level Objective
 

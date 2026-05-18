@@ -15,14 +15,19 @@ export const getPendingScanTaskStateView = <
 }) => {
 	const repositoryPending =
 		input.scanJob.repositoryTaskStatus !== "completed" &&
-		input.scanJob.repositoryTaskStatus !== "failed";
+		input.scanJob.repositoryTaskStatus !== "failed" &&
+		input.scanJob.repositoryTaskStatus !== "exited";
 	const modulePending = input.moduleTasks.filter(
 		(moduleTask) =>
-			moduleTask.status !== "completed" && moduleTask.status !== "failed",
+			moduleTask.status !== "completed" &&
+			moduleTask.status !== "failed" &&
+			moduleTask.status !== "exited",
 	);
 	const functionPending = input.functionTasks.filter(
 		(functionTask) =>
-			functionTask.status !== "completed" && functionTask.status !== "failed",
+			functionTask.status !== "completed" &&
+			functionTask.status !== "failed" &&
+			functionTask.status !== "exited",
 	);
 
 	return {

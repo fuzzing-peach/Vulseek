@@ -136,7 +136,8 @@ const buildDerivedCandidatesFromTasks = (input: {
 				currentStage = "verifying";
 			} else if (analysisTask) {
 				if (
-					analysisTask.status === "completed" &&
+					(analysisTask.status === "completed" ||
+						analysisTask.status === "exited") &&
 					analysisOutput?.success &&
 					shouldVerifyFromAnalysisResult(analysisOutput.data.result)
 				) {

@@ -5,7 +5,6 @@ import {
 	createStageDefinition,
 	type StageQueueBinding,
 	type StageDefinition,
-	type StageOutputTextChannel,
 } from "../pipeline/stage-definition";
 import {
 	buildTaskAgentProfileSnapshot,
@@ -17,8 +16,8 @@ import {
 } from "../runtime/run-single-turn-agent";
 import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "../runtime/sandbox-agent-shared";
 import type {
-	Analysis,
 	Candidate,
+	FinalAnalysis,
 	Function,
 	Module,
 	ScanJob,
@@ -26,12 +25,12 @@ import type {
 } from "../types";
 import {
 	type PipelineContext,
-	resolveScanProfileConcurrencySettings,
+	resolveStageConcurrencySetting,
 	type StageContext,
 } from "./full-scan-stage.runtime";
 
 export type CandidateVerificationStageInput = {
-	analysisResult: Analysis & {
+	analysisResult: FinalAnalysis & {
 		scanJob: ScanJob;
 		module: Module & { scanJob: ScanJob };
 		function: Function & {
@@ -81,6 +80,9 @@ const buildCandidateVerificationPrompt = (
 		`candidate_line: ${typeof candidate.line === "number" ? candidate.line : "-"}`,
 		`analysis_result: ${analysisResult.result}`,
 		`analysis_summary: ${analysisResult.summary || "-"}`,
+		`analysis_fingerprint: ${analysisResult.analysisFingerprint || "-"}`,
+		`critic_approval: ${analysisResult.criticApproval?.summary || "-"}`,
+		`critic_task_id: ${analysisResult.criticApproval?.criticTaskId || "-"}`,
 		`analysis_report_path: ${analysisResult.reportPath || "-"}`,
 		`task_dir: ${input.taskDirContainer}`,
 		`write_verify_report_to: ${input.reportPath}`,
@@ -92,8 +94,7 @@ const buildCandidateVerificationPrompt = (
 		"Use the installed skill named verify as your working method.",
 		"Strictly follow the skill workflow and produce the required markdown artifacts.",
 		"Write every task artifact only under task_dir.",
-		"Your final structured result must be exactly one top-level JSON object matching output.schema.json with no wrapper keys, no prose, and no markdown fences.",
-		"Before finishing, validate the final JSON against output.schema.json and follow the runtime output contract appended below.",
+		"Before returning, validate the structured JSON against the runtime-provided output.schema.json.",
 		`Set id to ${input.taskId}.`,
 		`Set reportPath to ${input.reportPath}.`,
 		`Set issueDraftPath to ${input.issueDraftPath}.`,
@@ -134,6 +135,7 @@ const executeCandidateVerificationStage = async (
 	});
 	await startContainer({
 		scanJob,
+		taskId: ctx.taskId,
 		agentProfile: verifierAgentProfile,
 		containerName,
 		codexHome: `${stageRootInContainer}/.codex-verify`,
@@ -170,7 +172,6 @@ const executeCandidateVerificationStage = async (
 			taskId: ctx.taskId,
 		}),
 		outputSchema: verificationSchema,
-		outputTextChannel: ctx.outputTextChannel,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
@@ -185,7 +186,6 @@ export const createVerifyingStageDefinition = <
 	name?: string;
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
-	outputTextChannel?: StageOutputTextChannel;
 	queue?: StageQueueBinding<TPipelineContext, CandidateVerificationStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -197,13 +197,12 @@ export const createVerifyingStageDefinition = <
 		name: input.name || "VerifyingStage",
 		mode: input.mode || "fanout",
 		persistent: input.persistent,
-		outputTextChannel: input.outputTextChannel,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
-			Math.max(
-				1,
-				(await resolveScanProfileConcurrencySettings(ctx.scanJobId))
-					.verifyConcurrency || 1,
+			await resolveStageConcurrencySetting(
+				ctx.scanJobId,
+				"VerifyingStage",
+				(settings) => settings.verifyConcurrency,
 			),
 		run: async (ctx, stageInput) =>
 			({

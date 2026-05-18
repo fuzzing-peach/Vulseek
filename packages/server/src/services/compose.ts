@@ -95,6 +95,7 @@ export const createCompose = async (input: typeof apiCreateCompose._type) => {
 			verifyConcurrency: 1,
 			fullScanModuleConcurrency: 4,
 			fullScanFunctionConcurrency: 4,
+			scanStageSettings: {},
 		})
 		.returning()
 		.then((value) => value[0]);
@@ -149,6 +150,7 @@ export const createComposeByTemplate = async (
 			verifyConcurrency: input.verifyConcurrency ?? 1,
 			fullScanModuleConcurrency: input.fullScanModuleConcurrency ?? 4,
 			fullScanFunctionConcurrency: input.fullScanFunctionConcurrency ?? 4,
+			scanStageSettings: input.scanStageSettings ?? {},
 		})
 		.returning()
 		.then((value) => value[0]);

@@ -1,4 +1,7 @@
-# search-registries skill
+---
+name: search-registries
+description: Search and cross-reference CVE, OSV, NVD, MITRE, GitHub PR, and issue signals for repository security intelligence.
+---
 
 Search and cross-reference CVE databases (NVD, MITRE, OSV) for known vulnerabilities.
 

@@ -1,3 +1,4 @@
+---
 name: tree-sitter
 description: Use tree-sitter-based parsing to enumerate concrete function definitions from source files, currently optimized for C/C++. Use when module-level scanning needs a reliable function inventory before generating function scan tasks.
 ---
@@ -50,7 +51,7 @@ Expected output:
 1. use tree-sitter extraction first
 2. do not invent function lists manually when the extractor can run
 3. if some files fail to parse, keep the successful results and note the failures
-4. use the extracted functions as the base for `function_plan.json`
+4. use the extracted functions as the base for the module scanner's function list
 5. filtering and prioritization happen after extraction, not before
 
 ## Typical Workflow
@@ -59,7 +60,7 @@ Expected output:
 2. run tree-sitter-based extraction over the module file list
 3. inspect the resulting function inventory
 4. remove clearly irrelevant functions if needed
-5. write `function_plan.json`
+5. pass the filtered inventory back to the module scanner's structured result
 
 ## Non-Goals
 

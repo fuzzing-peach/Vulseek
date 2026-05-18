@@ -6,7 +6,13 @@ export type ScanPipelineJobStatus =
 
 export type ResolveScanPipelineStateInput = {
 	scanJobStatus: ScanPipelineJobStatus;
-	repositoryTaskStatus: "pending" | "launching" | "running" | "completed" | "failed";
+	repositoryTaskStatus:
+		| "pending"
+		| "launching"
+		| "running"
+		| "completed"
+		| "failed"
+		| "exited";
 	modulePendingCount: number;
 	functionPendingCount: number;
 	moduleFailed: number;
@@ -27,7 +33,8 @@ export const resolveNextScanPipelineState = (
 ): ResolvedScanPipelineState => {
 	const repositoryPending =
 		input.repositoryTaskStatus !== "completed" &&
-		input.repositoryTaskStatus !== "failed";
+		input.repositoryTaskStatus !== "failed" &&
+		input.repositoryTaskStatus !== "exited";
 
 	if (
 		repositoryPending ||

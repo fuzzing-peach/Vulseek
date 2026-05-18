@@ -1,4 +1,7 @@
-# deep-analysis skill
+---
+name: deep-analysis
+description: Analyze a vulnerability candidate in depth, establish reachability and constraints, decide whether fuzzing or critic review is needed, and prepare final analysis for verification.
+---
 
 Analyze a given vulnerability candidate in depth and decide whether it is a real vulnerability, under what trigger conditions it can be reached, and which paths are worth prioritizing for further runtime validation.
 
@@ -6,19 +9,28 @@ Analyze a given vulnerability candidate in depth and decide whether it is a real
 
 Use this skill when Vulseek asks an analysis agent to investigate one specific `VulnerabilityCandidate` in depth.
 
-## Required Result JSON
+## Coordinator Decision Loop
 
-After the analysis report is written, you must return one top-level JSON object through the runtime channel requested by the prompt.
+In the analysis-fuzzing-debate workflow, this skill is a coordinator. The
+analysis agent decides which result type the current turn needs. The stage
+prompt defines the exact schema and route markers for each decision.
 
-The result JSON must be one top-level object. Required fields:
+Allowed decisions:
 
-- `result`
-- `score`
-- `summary`
+- Need fuzzing evidence: request fuzzer construction.
+- Current draft analysis appears established: submit a draft analysis to the critic.
+- The latest critic response is `convinced` for the same analysis fingerprint: finalize the analysis for verification.
 
-Optional field:
+Do not route `verification` directly from your own judgment. A matching convinced
+critic response is required first. If the critic objects, or if your own view
+changes, continue the build/fuzz/critic loop.
 
-- `confidence`
+## Analysis Result Content
+
+When your current decision is to submit a draft analysis to the critic or to
+return a final critic-approved analysis, include the classification, score,
+summary, confidence when supported, report path, and runtime status requested by
+the stage prompt.
 
 Recommended result enum values:
 
@@ -34,7 +46,8 @@ The `score` is an estimated prioritization score on a 0-10 scale. It should comb
 
 The score is an estimated prioritization score, not a precise CVSS base score. Keep it internally consistent and explain the rationale in the markdown report.
 
-Do not write a separate machine-readable result file unless the prompt explicitly requires it.
+Do not write a separate machine-readable result file unless the stage prompt
+explicitly requires it.
 
 The goal is not to restate why the candidate was reported. The goal is to determine whether the candidate corresponds to a real vulnerability, what reachable execution paths lead to it, what untrusted inputs can influence it, and what concrete trigger conditions must hold along those paths.
 

@@ -23,7 +23,7 @@ type ParseState = {
 const sendEvent = (
 	res: NextApiResponse,
 	event: string,
-	payload: Record<string, unknown>,
+	payload: unknown,
 ) => {
 	res.write(`event: ${event}\n`);
 	res.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -55,6 +55,7 @@ const toStreamMessage = (
 const parseJsonlLines = (
 	content: string,
 	parseState: ParseState,
+	onMessage?: (message: StreamMessage) => void,
 ): StreamMessage[] => {
 	const combined = parseState.pending + content;
 	const lines = combined.split("\n");
@@ -71,7 +72,11 @@ const parseJsonlLines = (
 			const parsed = JSON.parse(trimmed) as Record<string, unknown>;
 			const message = toStreamMessage(parseState.nextLine, parsed);
 			if (message) {
-				messages.push(message);
+				if (onMessage) {
+					onMessage(message);
+				} else {
+					messages.push(message);
+				}
 			}
 		} catch {}
 	}
@@ -79,16 +84,29 @@ const parseJsonlLines = (
 	return messages;
 };
 
-const buildSnapshotPayload = (
+const sendSnapshotStream = (
+	res: NextApiResponse,
 	content: string,
 	metadata: Record<string, unknown>,
 ) => {
-	const allMessages = parseJsonlLines(content, { nextLine: 0, pending: "" });
-	return {
+	sendEvent(res, "snapshot_start", {
 		metadata,
-		messages: allMessages,
 		truncated: false,
-	};
+	});
+
+	const parseState: ParseState = { nextLine: 0, pending: "" };
+	let count = 0;
+	parseJsonlLines(content, parseState, (message) => {
+		count += 1;
+		sendEvent(res, "snapshot_message", message);
+	});
+
+	sendEvent(res, "snapshot_end", {
+		count,
+		truncated: false,
+	});
+
+	return parseState;
 };
 
 export default async function handler(
@@ -165,7 +183,7 @@ export default async function handler(
 	};
 
 	if (!jsonlExists) {
-		sendEvent(res, "error", {
+		sendEvent(res, "stream_error", {
 			message: "Sandbox agent event file is not visible to this API process",
 			taskId: runtime.taskId,
 			jsonlPath: runtime.jsonlPath,
@@ -176,10 +194,7 @@ export default async function handler(
 
 	const buffer = getFileStreamBuffer(runtime.jsonlPath);
 	const snapshot = await buffer.getSnapshot();
-	sendEvent(res, "snapshot", buildSnapshotPayload(snapshot.content, metadata));
-
-	const parseState: ParseState = { nextLine: 0, pending: "" };
-	parseJsonlLines(snapshot.content, parseState);
+	const parseState = sendSnapshotStream(res, snapshot.content, metadata);
 
 	const cleanup = () => {
 		unsubscribe();
@@ -199,10 +214,11 @@ export default async function handler(
 
 			parseState.nextLine = 0;
 			parseState.pending = "";
-			sendEvent(res, "snapshot", buildSnapshotPayload(event.content, metadata));
-			parseJsonlLines(event.content, parseState);
+			const nextParseState = sendSnapshotStream(res, event.content, metadata);
+			parseState.nextLine = nextParseState.nextLine;
+			parseState.pending = nextParseState.pending;
 		} catch (error) {
-			sendEvent(res, "error", {
+			sendEvent(res, "stream_error", {
 				message: error instanceof Error ? error.message : "Unknown stream error",
 			});
 			cleanup();
@@ -227,7 +243,7 @@ export default async function handler(
 				res.end();
 			}
 		} catch (error) {
-			sendEvent(res, "error", {
+			sendEvent(res, "stream_error", {
 				message: error instanceof Error ? error.message : "Unknown stream error",
 			});
 			cleanup();

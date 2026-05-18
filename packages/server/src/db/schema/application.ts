@@ -4,6 +4,7 @@ import {
 	boolean,
 	integer,
 	json,
+	jsonb,
 	pgEnum,
 	pgTable,
 	text,
@@ -41,6 +42,8 @@ import {
 	RestartPolicySwarmSchema,
 	type ServiceModeSwarm,
 	ServiceModeSwarmSchema,
+	type ScanStageSettings,
+	ScanStageSettingsSchema,
 	triggerType,
 	type UpdateConfigSwarm,
 	UpdateConfigSwarmSchema,
@@ -123,6 +126,9 @@ export const applications = pgTable("application", {
 	autoDeltaScan: boolean("autoDeltaScan").$defaultFn(() => true),
 	analysisConcurrency: integer("analysisConcurrency").notNull().default(2),
 	verifyConcurrency: integer("verifyConcurrency").notNull().default(1),
+	fuzzingBudgetSeconds: integer("fuzzingBudgetSeconds")
+		.notNull()
+		.default(600),
 	// Gitlab
 	gitlabProjectId: integer("gitlabProjectId"),
 	gitlabRepository: text("gitlabRepository"),
@@ -235,6 +241,10 @@ export const applications = pgTable("application", {
 	fullScanFunctionConcurrency: integer("fullScanFunctionConcurrency")
 		.notNull()
 		.default(4),
+	scanStageSettings: jsonb("scanStageSettings")
+		.$type<ScanStageSettings>()
+		.notNull()
+		.default({}),
 });
 
 export const applicationsRelations = relations(
@@ -310,8 +320,10 @@ const createSchema = createInsertSchema(applications, {
 	autoDeltaScan: z.boolean(),
 	analysisConcurrency: z.number().int().min(1).max(16).default(2),
 	verifyConcurrency: z.number().int().min(1).max(16).default(1),
+	fuzzingBudgetSeconds: z.number().int().min(1).max(86400).default(600),
 	fullScanModuleConcurrency: z.number().int().min(1).max(32).default(4),
 	fullScanFunctionConcurrency: z.number().int().min(1).max(64).default(4),
+	scanStageSettings: ScanStageSettingsSchema.default({}),
 	env: z.string().optional(),
 	buildArgs: z.string().optional(),
 	buildSecrets: z.string().optional(),

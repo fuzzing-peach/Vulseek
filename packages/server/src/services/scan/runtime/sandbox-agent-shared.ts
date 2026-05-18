@@ -5,10 +5,6 @@ export const SANDBOX_AGENT_RUNTIME_FILE_NAMES = {
 	stdout: "task-stdout.log",
 } as const;
 
-const VULSEEK_RET_MARKER = "<VULSEEK_RET>";
-const VULSEEK_RET_XML_CLOSE_MARKER = "</VULSEEK_RET>";
-const VULSEEK_EXIT_MARKER = "<VULSEEK_EXIT>";
-
 type SandboxAgentSessionUpdate =
 	| {
 			sessionUpdate?: string;
@@ -55,9 +51,11 @@ const extractTextValue = (value: unknown): string => {
 	if (Array.isArray(value)) return value.map(extractTextValue).join("");
 	if (!value || typeof value !== "object") return "";
 	const record = value as Record<string, unknown>;
-	return [record.text, record.value, record.content]
-		.map(extractTextValue)
-		.find(Boolean) || "";
+	return (
+		[record.text, record.value, record.content]
+			.map(extractTextValue)
+			.find(Boolean) || ""
+	);
 };
 
 export const extractPayloadText = (
@@ -114,54 +112,7 @@ export const isAgentMessageChunkEvent = (event: SandboxAgentSessionEvent) => {
 	return asString(payloadRecord?.sessionUpdate) === "agent_message_chunk";
 };
 
-export const extractVulseekRetValue = (content: string): string | null => {
-	const acceptPairedPayload = (payload: string) => {
-		const trimmed = payload.trim();
-		return trimmed || null;
-	};
-
-	const acceptTrailingStructuredPayload = (payload: string) => {
-		const trimmed = payload.trim();
-		if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-			return null;
-		}
-		try {
-			JSON.parse(trimmed);
-		} catch {
-			return null;
-		}
-		return trimmed;
-	};
-
-	const xmlEnd = content.lastIndexOf(VULSEEK_RET_XML_CLOSE_MARKER);
-	if (xmlEnd > 0) {
-		const xmlStart = content.lastIndexOf(VULSEEK_RET_MARKER, xmlEnd - 1);
-		if (xmlStart >= 0) {
-			return acceptPairedPayload(
-				content.slice(xmlStart + VULSEEK_RET_MARKER.length, xmlEnd),
-			);
-		}
-	}
-
-	const end = content.lastIndexOf(VULSEEK_RET_MARKER);
-	if (end >= 0) {
-		const trailingPayload = acceptTrailingStructuredPayload(
-			content.slice(end + VULSEEK_RET_MARKER.length),
-		);
-		if (trailingPayload !== null) {
-			return trailingPayload;
-		}
-	}
-	if (end <= 0) return null;
-	const start = content.lastIndexOf(VULSEEK_RET_MARKER, end - 1);
-	if (start < 0) return null;
-	return acceptPairedPayload(
-		content.slice(start + VULSEEK_RET_MARKER.length, end),
-	);
-};
-
-export const extractRetFromJsonlContent = (content: string): string | null => {
-	let agentMessageText = "";
+export const hasEndTurnInJsonlContent = (content: string): boolean => {
 	for (const rawLine of content.split("\n")) {
 		const trimmed = rawLine.trim();
 		if (!trimmed) {
@@ -169,33 +120,9 @@ export const extractRetFromJsonlContent = (content: string): string | null => {
 		}
 		try {
 			const parsed = JSON.parse(trimmed) as SandboxAgentSessionEvent;
-			if (!isAgentMessageChunkEvent(parsed)) {
-				continue;
-			}
-			agentMessageText += extractPayloadText(getEventUpdate(parsed));
-			const ret = extractVulseekRetValue(agentMessageText);
-			if (ret !== null) {
-				return ret;
-			}
-		} catch {}
-	}
-	return null;
-};
-
-export const hasExitSignalInJsonlContent = (content: string): boolean => {
-	let agentMessageText = "";
-	for (const rawLine of content.split("\n")) {
-		const trimmed = rawLine.trim();
-		if (!trimmed) {
-			continue;
-		}
-		try {
-			const parsed = JSON.parse(trimmed) as SandboxAgentSessionEvent;
-			if (!isAgentMessageChunkEvent(parsed)) {
-				continue;
-			}
-			agentMessageText += extractPayloadText(getEventUpdate(parsed));
-			if (agentMessageText.includes(VULSEEK_EXIT_MARKER)) {
+			const payloadRecord = getEventPayloadRecord(parsed);
+			const resultRecord = asRecord(payloadRecord?.result);
+			if (asString(resultRecord?.stopReason) === "end_turn") {
 				return true;
 			}
 		} catch {}

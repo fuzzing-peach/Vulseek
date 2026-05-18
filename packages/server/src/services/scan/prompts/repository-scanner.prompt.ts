@@ -32,9 +32,8 @@ export const buildRepositoryScannerPrompt = (input: {
 		"Produce at least 10 functional modules by default.",
 		"Only produce fewer than 10 modules if the repository is genuinely too small or too tightly coupled to support a defensible split, and explain that decision explicitly in notes.",
 		"Do not collapse distinct runtime subsystems into one broad catch-all module when they can be separated by protocol layer, parser family, validation stack, crypto family, API family, daemon/client role, or compatibility boundary.",
-		"Your final structured result must be exactly one top-level JSON object matching output.schema.json with no wrapper keys, no prose, and no markdown fences.",
 		"Populate each module's files array with repository-relative source file paths that belong to that module.",
-		"Before finishing, validate the final JSON against output.schema.json and follow the runtime output contract appended below.",
-		"After returning the structured result as required by that contract, also include <VULSEEK_EXIT> in the same final visible response so Dokploy can discard this repository-scanner lane.",
+		"Before returning, validate the structured JSON against the runtime-provided output.schema.json.",
+		"Set output.json exit to true so Dokploy can discard this repository-scanner lane after end_turn.",
 	].join("\n");
 };

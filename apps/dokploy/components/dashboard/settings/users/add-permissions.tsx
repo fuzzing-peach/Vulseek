@@ -34,6 +34,60 @@ type Environment = Omit<
 	"project"
 >;
 
+type ExtractableService = {
+	appName: string;
+	name: string;
+	description?: string | null;
+	createdAt: string;
+	serverId?: string | null;
+	applicationStatus?: "idle" | "running" | "done" | "error";
+};
+
+type ExtractableEnvironment = {
+	applications?: Array<
+		ExtractableService & {
+			applicationId: string;
+			applicationStatus: "idle" | "running" | "done" | "error";
+		}
+	>;
+	mariadb?: Array<
+		ExtractableService & {
+			mariadbId: string;
+			applicationStatus: "idle" | "running" | "done" | "error";
+		}
+	>;
+	mongo?: Array<
+		ExtractableService & {
+			mongoId: string;
+			applicationStatus: "idle" | "running" | "done" | "error";
+		}
+	>;
+	mysql?: Array<
+		ExtractableService & {
+			mysqlId: string;
+			applicationStatus: "idle" | "running" | "done" | "error";
+		}
+	>;
+	postgres?: Array<
+		ExtractableService & {
+			postgresId: string;
+			applicationStatus: "idle" | "running" | "done" | "error";
+		}
+	>;
+	redis?: Array<
+		ExtractableService & {
+			redisId: string;
+			applicationStatus: "idle" | "running" | "done" | "error";
+		}
+	>;
+	compose?: Array<
+		ExtractableService & {
+			composeId: string;
+			composeStatus: "idle" | "running" | "done" | "error";
+		}
+	>;
+};
+
 export type Services = {
 	appName: string;
 	serverId?: string | null;
@@ -52,9 +106,11 @@ export type Services = {
 	status?: "idle" | "running" | "done" | "error";
 };
 
-export const extractServices = (data: Environment | undefined) => {
+export const extractServices = (
+	data: ExtractableEnvironment | Environment | undefined,
+) => {
 	const applications: Services[] =
-		data?.applications.map((item) => ({
+		data?.applications?.map((item) => ({
 			appName: item.appName,
 			name: item.name,
 			type: "application",
@@ -66,7 +122,7 @@ export const extractServices = (data: Environment | undefined) => {
 		})) || [];
 
 	const mariadb: Services[] =
-		data?.mariadb.map((item) => ({
+		data?.mariadb?.map((item) => ({
 			appName: item.appName,
 			name: item.name,
 			type: "mariadb",
@@ -78,7 +134,7 @@ export const extractServices = (data: Environment | undefined) => {
 		})) || [];
 
 	const postgres: Services[] =
-		data?.postgres.map((item) => ({
+		data?.postgres?.map((item) => ({
 			appName: item.appName,
 			name: item.name,
 			type: "postgres",
@@ -90,7 +146,7 @@ export const extractServices = (data: Environment | undefined) => {
 		})) || [];
 
 	const mongo: Services[] =
-		data?.mongo.map((item) => ({
+		data?.mongo?.map((item) => ({
 			appName: item.appName,
 			name: item.name,
 			type: "mongo",
@@ -102,7 +158,7 @@ export const extractServices = (data: Environment | undefined) => {
 		})) || [];
 
 	const redis: Services[] =
-		data?.redis.map((item) => ({
+		data?.redis?.map((item) => ({
 			appName: item.appName,
 			name: item.name,
 			type: "redis",
@@ -114,7 +170,7 @@ export const extractServices = (data: Environment | undefined) => {
 		})) || [];
 
 	const mysql: Services[] =
-		data?.mysql.map((item) => ({
+		data?.mysql?.map((item) => ({
 			appName: item.appName,
 			name: item.name,
 			type: "mysql",
@@ -126,7 +182,7 @@ export const extractServices = (data: Environment | undefined) => {
 		})) || [];
 
 	const compose: Services[] =
-		data?.compose.map((item) => ({
+		data?.compose?.map((item) => ({
 			appName: item.appName,
 			name: item.name,
 			type: "compose",

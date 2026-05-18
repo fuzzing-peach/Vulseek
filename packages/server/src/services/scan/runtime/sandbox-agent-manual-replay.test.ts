@@ -108,7 +108,7 @@ test("buildSandboxAgentManualReplayText keeps replay under the hard limit", () =
 	assert.ok(result.stats.manualReplayTruncatedBytes > 0);
 });
 
-test("buildSandboxAgentManualReplayText prioritizes VULSEEK return blocks", () => {
+test("buildSandboxAgentManualReplayText keeps recent assistant tail", () => {
 	const result = buildSandboxAgentManualReplayText([
 		{
 			payload: {
@@ -117,7 +117,7 @@ test("buildSandboxAgentManualReplayText prioritizes VULSEEK return blocks", () =
 						sessionUpdate: "agent_message_chunk",
 						content: [
 							"noise ".repeat(10000),
-							"<VULSEEK_RET>{\"ok\":true}</VULSEEK_RET>",
+							"middle context",
 							"tail ".repeat(10000),
 						].join(""),
 					},
@@ -126,7 +126,7 @@ test("buildSandboxAgentManualReplayText prioritizes VULSEEK return blocks", () =
 		},
 	]);
 
-	assert.match(result.text, /<VULSEEK_RET>\{"ok":true\}<\/VULSEEK_RET>/);
+	assert.match(result.text, /tail tail tail/);
 	assert.doesNotMatch(result.text, /noise noise noise/);
-	assert.doesNotMatch(result.text, /tail tail tail/);
+	assert.doesNotMatch(result.text, /middle context/);
 });

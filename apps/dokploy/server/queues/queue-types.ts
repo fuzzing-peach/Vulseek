@@ -32,5 +32,5 @@ export type DeploymentJob = DeployJob;
 
 export type ScanQueueJob = {
 	scanJobId: string;
-	mode?: "full" | "retry-failed-tasks";
+	mode?: "full" | "retry-failed-tasks" | "rerun-task";
 };

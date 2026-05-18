@@ -1,8 +1,4 @@
-const VULSEEK_RET_MARKER = "<VULSEEK_RET>";
-const VULSEEK_RET_XML_CLOSE_MARKER = "</VULSEEK_RET>";
-
 const PARENT_PROMPT_CHAR_LIMIT = 8000;
-const ASSISTANT_MARKER_CHAR_LIMIT = 50000;
 const ASSISTANT_TAIL_CHAR_LIMIT = 30000;
 const TOOL_OUTPUT_CHAR_LIMIT = 2000;
 const MANUAL_REPLAY_CHAR_LIMIT = 80000;
@@ -96,26 +92,6 @@ const extractPromptText = (event: PersistEvent) => {
 	return prompt
 		.map((item) => extractTextValue(asRecord(item)?.text))
 		.join("");
-};
-
-const extractVulseekRetBlocks = (content: string) => {
-	const blocks: string[] = [];
-	let cursor = 0;
-	while (cursor < content.length) {
-		const start = content.indexOf(VULSEEK_RET_MARKER, cursor);
-		if (start < 0) break;
-		const payloadStart = start + VULSEEK_RET_MARKER.length;
-		const xmlEnd = content.indexOf(VULSEEK_RET_XML_CLOSE_MARKER, payloadStart);
-		const markerEnd = content.indexOf(VULSEEK_RET_MARKER, payloadStart);
-		const end =
-			xmlEnd >= 0 && (markerEnd < 0 || xmlEnd <= markerEnd) ? xmlEnd : markerEnd;
-		if (end < 0) break;
-		const closeMarker =
-			end === xmlEnd ? VULSEEK_RET_XML_CLOSE_MARKER : VULSEEK_RET_MARKER;
-		blocks.push(content.slice(start, end + closeMarker.length));
-		cursor = end + closeMarker.length;
-	}
-	return blocks;
 };
 
 const extractPathValue = (record: Record<string, unknown>, keys: string[]) => {
@@ -303,16 +279,12 @@ export const buildSandboxAgentManualReplayText = (
 				: "";
 		})
 		.join("");
-	const markerBlocks = extractVulseekRetBlocks(assistantFullText);
-	const assistantHasMarkers = markerBlocks.length > 0;
-	const assistantText = assistantHasMarkers
-		? clipHead(markerBlocks.join("\n\n"), ASSISTANT_MARKER_CHAR_LIMIT)
-		: clipTail(assistantFullText, ASSISTANT_TAIL_CHAR_LIMIT);
+	const assistantText = clipTail(assistantFullText, ASSISTANT_TAIL_CHAR_LIMIT);
 	const toolSummary = buildToolText(parentEvents);
 	const fitted = fitReplayText({
 		parentPromptText,
 		assistantText,
-		assistantHasMarkers,
+		assistantHasMarkers: false,
 		toolText: toolSummary.text,
 	});
 

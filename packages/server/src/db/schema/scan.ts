@@ -37,6 +37,7 @@ export const taskStatusEnum = pgEnum("taskStatus", [
 	"running",
 	"completed",
 	"failed",
+	"exited",
 ]);
 
 export const scanJobs = pgTable("scan_jobs", {
@@ -115,10 +116,15 @@ export const tasks = pgTable(
 			},
 		),
 		forkedFromThreadId: text("forkedFromThreadId"),
+		stageGroupInstanceId: text("stageGroupInstanceId"),
 		input: jsonb("input").$type<unknown | null>(),
 		output: jsonb("output").$type<unknown | null>(),
 		rawOutput: text("rawOutput"),
 		errorMessage: text("errorMessage"),
+		exitReason: text("exitReason").$type<
+			"agent_exit" | "leader_exit" | null
+		>(),
+		exitNote: text("exitNote"),
 		startedAt: text("startedAt"),
 		completedAt: text("completedAt"),
 		createdAt: text("createdAt")
@@ -202,6 +208,80 @@ export const scanStageLaneRuntimes = pgTable(
 		),
 		containerIdx: index("scan_stage_lane_container_idx").on(
 			table.containerName,
+		),
+	}),
+);
+
+export const scanStageGroupInstances = pgTable(
+	"scan_stage_group_instances",
+	{
+		groupInstanceId: text("groupInstanceId")
+			.notNull()
+			.primaryKey()
+			.$defaultFn(() => nanoid()),
+		scanJobId: text("scanJobId")
+			.notNull()
+			.references(() => scanJobs.scanJobId, {
+				onDelete: "cascade",
+			}),
+		groupName: text("groupName").notNull(),
+		leaderStageName: text("leaderStageName").notNull(),
+		leaderLaneIndex: integer("leaderLaneIndex").notNull(),
+		leaderTaskId: text("leaderTaskId").references(() => tasks.taskId, {
+			onDelete: "set null",
+		}),
+		status: text("status")
+			.$type<"active" | "exited">()
+			.notNull()
+			.default("active"),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		scanJobGroupIdx: index("scan_stage_group_instance_scan_job_group_idx").on(
+			table.scanJobId,
+			table.groupName,
+		),
+		leaderIdx: index("scan_stage_group_instance_leader_idx").on(
+			table.scanJobId,
+			table.leaderStageName,
+			table.leaderLaneIndex,
+		),
+	}),
+);
+
+export const scanStageGroupLaneMemberships = pgTable(
+	"scan_stage_group_lane_memberships",
+	{
+		groupInstanceId: text("groupInstanceId")
+			.notNull()
+			.references(() => scanStageGroupInstances.groupInstanceId, {
+				onDelete: "cascade",
+			}),
+		stageName: text("stageName").notNull(),
+		laneIndex: integer("laneIndex").notNull(),
+		role: text("role").$type<"leader" | "member">().notNull(),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		pk: primaryKey({
+			columns: [table.groupInstanceId, table.stageName],
+		}),
+		groupIdx: index("scan_stage_group_lane_membership_group_idx").on(
+			table.groupInstanceId,
+		),
+		stageLaneIdx: index("scan_stage_group_lane_membership_stage_lane_idx").on(
+			table.stageName,
+			table.laneIndex,
 		),
 	}),
 );

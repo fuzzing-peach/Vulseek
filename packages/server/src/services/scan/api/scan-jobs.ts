@@ -43,13 +43,13 @@ export const resetScanJobForRetry = async (
 	input?: {
 		status?: "pending" | "running" | "finished" | "canceled";
 		errorMessage?: string | null;
-		repositoryTaskStatus?: "pending" | "launching" | "running" | "completed" | "failed";
+		repositoryTaskStatus?: "pending" | "launching" | "running" | "completed" | "failed" | "exited";
 	},
 ) => await resetScanJobForRetryRepo(scanJobId, input);
 
 export const updateScanJobRepositoryTaskStatus = async (
 	scanJobId: string,
-	repositoryTaskStatus: "pending" | "launching" | "running" | "completed" | "failed",
+	repositoryTaskStatus: "pending" | "launching" | "running" | "completed" | "failed" | "exited",
 ) => await updateScanJobRepositoryTaskStatusRepo(scanJobId, repositoryTaskStatus);
 
 export const recalculateScanTaskCounts = async (scanJobId: string) =>

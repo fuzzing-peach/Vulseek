@@ -41,7 +41,7 @@ export const updateTask = async (
 
 export const updateTaskStatus = async (
 	taskId: string,
-	status: "pending" | "launching" | "running" | "completed" | "failed",
+	status: "pending" | "launching" | "running" | "completed" | "failed" | "exited",
 	errorMessage?: string | null,
 ) => await updateTaskStatusRepo({ taskId, status, errorMessage });
 

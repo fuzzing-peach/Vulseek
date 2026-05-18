@@ -2,6 +2,7 @@ FROM ubuntu:24.04 AS tools
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG CODEQL_VERSION="2.20.6"
+ARG RUST_TOOLCHAIN="stable"
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
@@ -16,7 +17,11 @@ ENV HTTP_PROXY=$HTTP_PROXY \
     https_proxy=$https_proxy \
     no_proxy=$no_proxy \
     PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
-    PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+    PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn \
+    CARGO_HOME=/root/.cargo \
+    RUSTUP_HOME=/root/.rustup \
+    RUSTUP_DIST_SERVER=https://mirrors.tuna.tsinghua.edu.cn/rustup \
+    RUSTUP_UPDATE_ROOT=https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup
 
 RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.ustc.edu.cn/ubuntu/|g; s|http://security.ubuntu.com/ubuntu/|http://mirrors.ustc.edu.cn/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
 
@@ -32,6 +37,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN sed -i 's|http://mirrors.ustc.edu.cn/ubuntu/|https://mirrors.ustc.edu.cn/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
+
+# Rust toolchain for LibAFL fuzzers.
+# LibAFL main currently declares rust-version = "1.89" in crates/libafl/Cargo.toml.
+# The Tsinghua rustup mirror exposes the stable channel; as of 2026-05-15
+# stable resolves to rustc 1.95.0, which satisfies LibAFL's requirement.
+ENV PATH="/root/.cargo/bin:$PATH"
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" \
+    && mkdir -p "${CARGO_HOME}" \
+    && printf '%s\n' \
+      '[source.crates-io]' \
+      'replace-with = "tuna"' \
+      '' \
+      '[source.tuna]' \
+      'registry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"' \
+      '' \
+      '[registries.tuna]' \
+      'index = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"' \
+      > "${CARGO_HOME}/config.toml"
+RUN rustc --version && cargo --version
 
 # Node.js (LTS)
 RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \

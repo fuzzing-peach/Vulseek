@@ -74,6 +74,16 @@ export interface LabelsSwarm {
 	[name: string]: string;
 }
 
+export const ScanStageSettingSchema = z.object({
+	agentProfileId: z.string().nullable().optional(),
+	concurrency: z.number().int().min(1).max(128).nullable().optional(),
+});
+
+export const ScanStageSettingsSchema = z.record(ScanStageSettingSchema);
+
+export type ScanStageSetting = z.infer<typeof ScanStageSettingSchema>;
+export type ScanStageSettings = z.infer<typeof ScanStageSettingsSchema>;
+
 export const HealthCheckSwarmSchema = z
 	.object({
 		Test: z.array(z.string()).optional(),
