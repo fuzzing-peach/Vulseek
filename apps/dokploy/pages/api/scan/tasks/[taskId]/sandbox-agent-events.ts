@@ -1,8 +1,6 @@
 import {
-	findApplicationById,
-	findComposeById,
+	findScanJobOrganizationId,
 	findSandboxAgentTaskRuntimeByTaskId,
-	findScanJobById,
 	validateRequest,
 } from "@dokploy/server";
 import type { NextApiRequest, NextApiResponse } from "next";
@@ -118,34 +116,26 @@ export default async function handler(
 		return;
 	}
 
-	const { user, session } = await validateRequest(req);
-	if (!user || !session) {
-		res.status(401).json({ message: "Unauthorized" });
-		return;
-	}
-
 	const taskId = req.query.taskId;
 	if (typeof taskId !== "string" || !taskId) {
 		res.status(400).json({ message: "Invalid task id" });
 		return;
 	}
 
-	const runtime = await findSandboxAgentTaskRuntimeByTaskId(taskId);
+	const [{ user, session }, runtime] = await Promise.all([
+		validateRequest(req),
+		findSandboxAgentTaskRuntimeByTaskId(taskId),
+	]);
+	if (!user || !session) {
+		res.status(401).json({ message: "Unauthorized" });
+		return;
+	}
 	if (!runtime) {
 		res.status(404).json({ message: "Task not found" });
 		return;
 	}
 
-	const scanJob = await findScanJobById(runtime.scanJobId);
-	let organizationId = "";
-	if (scanJob.applicationId) {
-		const application = await findApplicationById(scanJob.applicationId);
-		organizationId = application.environment.project.organizationId;
-	}
-	if (scanJob.composeId) {
-		const compose = await findComposeById(scanJob.composeId);
-		organizationId = compose.environment.project.organizationId;
-	}
+	const organizationId = await findScanJobOrganizationId(runtime.scanJobId);
 	if (!organizationId || organizationId !== session.activeOrganizationId) {
 		res.status(403).json({ message: "Forbidden" });
 		return;

@@ -1,5 +1,14 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { db } from "@dokploy/server/db";
+import {
+	applications,
+	compose,
+	environments,
+	projects,
+	scanJobs,
+} from "@dokploy/server/db/schema";
+import { eq } from "drizzle-orm";
 import { findApplicationById } from "../application";
 import { findComposeById } from "../compose";
 import { execAsync } from "../../utils/process/execAsync";
@@ -54,19 +63,99 @@ const resolveScanContextRoot = async () => {
 	return "/scan-context";
 };
 
+const findScanJobTargetSummary = async (scanJobId: string) => {
+	const applicationTarget = await db
+		.select({
+			projectName: projects.name,
+			serviceName: applications.name,
+			appName: applications.appName,
+			organizationId: projects.organizationId,
+		})
+		.from(scanJobs)
+		.innerJoin(
+			applications,
+			eq(scanJobs.applicationId, applications.applicationId),
+		)
+		.innerJoin(
+			environments,
+			eq(applications.environmentId, environments.environmentId),
+		)
+		.innerJoin(projects, eq(environments.projectId, projects.projectId))
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.limit(1)
+		.then((rows) => rows[0] || null);
+
+	if (applicationTarget) {
+		return {
+			projectName: applicationTarget.projectName,
+			serviceName:
+				applicationTarget.serviceName || applicationTarget.appName || "application",
+			organizationId: applicationTarget.organizationId,
+		};
+	}
+
+	const composeTarget = await db
+		.select({
+			projectName: projects.name,
+			serviceName: compose.name,
+			appName: compose.appName,
+			organizationId: projects.organizationId,
+		})
+		.from(scanJobs)
+		.innerJoin(compose, eq(scanJobs.composeId, compose.composeId))
+		.innerJoin(environments, eq(compose.environmentId, environments.environmentId))
+		.innerJoin(projects, eq(environments.projectId, projects.projectId))
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.limit(1)
+		.then((rows) => rows[0] || null);
+
+	if (composeTarget) {
+		return {
+			projectName: composeTarget.projectName,
+			serviceName: composeTarget.serviceName || composeTarget.appName || "compose",
+			organizationId: composeTarget.organizationId,
+		};
+	}
+
+	return null;
+};
+
+export const findScanJobOrganizationId = async (scanJobId: string) =>
+	(await findScanJobTargetSummary(scanJobId))?.organizationId || null;
+
+export const findScanJobStatusById = async (scanJobId: string) =>
+	await db
+		.select({ status: scanJobs.status })
+		.from(scanJobs)
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.limit(1)
+		.then((rows) => rows[0]?.status || null);
+
 const resolveScanJobBaseDir = async (scanJobId: string) => {
-	const scanJob = await findScanJobByIdRepo(scanJobId);
-	const target = scanJob.applicationId
-		? await findApplicationById(scanJob.applicationId)
-		: await findComposeById(scanJob.composeId as string);
-	const projectName = target.environment.project.name;
-	const serviceName = target.name || target.appName;
+	const target = await findScanJobTargetSummary(scanJobId);
+	if (!target) {
+		const scanJob = await findScanJobByIdRepo(scanJobId);
+		const fullTarget = scanJob.applicationId
+			? await findApplicationById(scanJob.applicationId)
+			: await findComposeById(scanJob.composeId as string);
+		const projectName = fullTarget.environment.project.name;
+		const serviceName = fullTarget.name || fullTarget.appName;
+		return path.join(
+			await resolveScanContextRoot(),
+			"projects",
+			sanitizePathPart(projectName),
+			"profiles",
+			sanitizePathPart(serviceName),
+			"jobs",
+			scanJobId,
+		);
+	}
 	return path.join(
 		await resolveScanContextRoot(),
 		"projects",
-		sanitizePathPart(projectName),
+		sanitizePathPart(target.projectName),
 		"profiles",
-		sanitizePathPart(serviceName),
+		sanitizePathPart(target.serviceName),
 		"jobs",
 		scanJobId,
 	);

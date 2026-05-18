@@ -1,9 +1,8 @@
 import {
-	findApplicationById,
-	findComposeById,
 	findRunningSandboxAgentTaskRuntimesByScanJobId,
+	findScanJobOrganizationId,
+	findScanJobStatusById,
 	findSandboxAgentTaskRuntimeByTaskId,
-	findScanJobById,
 	type SandboxAgentTaskRuntime,
 	validateRequest,
 } from "@dokploy/server";
@@ -140,27 +139,19 @@ export default async function handler(
 		return;
 	}
 
-	const { user, session } = await validateRequest(req);
-	if (!user || !session) {
-		res.status(401).json({ message: "Unauthorized" });
-		return;
-	}
-
 	const scanJobId = req.query.scanJobId;
 	if (typeof scanJobId !== "string" || !scanJobId) {
 		res.status(400).json({ message: "Invalid scan job id" });
 		return;
 	}
 
-	const scanJob = await findScanJobById(scanJobId);
-	let organizationId = "";
-	if (scanJob.applicationId) {
-		const application = await findApplicationById(scanJob.applicationId);
-		organizationId = application.environment.project.organizationId;
-	}
-	if (scanJob.composeId) {
-		const compose = await findComposeById(scanJob.composeId);
-		organizationId = compose.environment.project.organizationId;
+	const [{ user, session }, organizationId] = await Promise.all([
+		validateRequest(req),
+		findScanJobOrganizationId(scanJobId),
+	]);
+	if (!user || !session) {
+		res.status(401).json({ message: "Unauthorized" });
+		return;
 	}
 	if (!organizationId || organizationId !== session.activeOrganizationId) {
 		res.status(403).json({ message: "Forbidden" });
@@ -304,9 +295,10 @@ export default async function handler(
 
 	const reconcilePoll = setInterval(async () => {
 		try {
-			const latestScanJob = await findScanJobById(scanJobId);
-			const latestRuntimes =
-				await findRunningSandboxAgentTaskRuntimesByScanJobId(scanJobId);
+			const [latestScanJobStatus, latestRuntimes] = await Promise.all([
+				findScanJobStatusById(scanJobId),
+				findRunningSandboxAgentTaskRuntimesByScanJobId(scanJobId),
+			]);
 			const latestIds = new Set(latestRuntimes.map((runtime) => runtime.taskId));
 
 			for (const taskId of subscriptions.keys()) {
@@ -331,10 +323,14 @@ export default async function handler(
 				sendEvent(res, "activity", subscribed);
 			}
 
-			if (isTerminalScanStatus(latestScanJob.status) && latestRuntimes.length === 0) {
+			if (
+				latestScanJobStatus &&
+				isTerminalScanStatus(latestScanJobStatus) &&
+				latestRuntimes.length === 0
+			) {
 				sendEvent(res, "done", {
 					taskId: null,
-					status: latestScanJob.status,
+					status: latestScanJobStatus,
 					taskKind: "scan_job",
 				});
 				cleanup();
