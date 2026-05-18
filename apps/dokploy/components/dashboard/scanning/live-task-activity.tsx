@@ -1,6 +1,7 @@
 import { Activity, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { JsonRpcSummaryPanel } from "@/components/dashboard/scanning/jsonrpc-summary";
+import { setSandboxAgentOutputModalOpen } from "@/components/dashboard/scanning/sandbox-agent-output-modal-state";
 import { useSandboxAgentActivity } from "@/components/dashboard/scanning/use-sandbox-agent-activity";
 import { useSandboxAgentSession } from "@/components/dashboard/scanning/use-sandbox-agent-session";
 import { Badge } from "@/components/ui/badge";
@@ -147,6 +148,7 @@ export const LiveTaskActivityButton = ({
 		if (!isOpen || !taskId) {
 			return;
 		}
+		setSandboxAgentOutputModalOpen(true);
 		if (openedAtRef.current === null) {
 			openedAtRef.current =
 				typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -167,6 +169,7 @@ export const LiveTaskActivityButton = ({
 				messageCount: messageCountRef.current,
 			});
 			openedAtRef.current = null;
+			setSandboxAgentOutputModalOpen(false);
 		};
 	}, [isOpen, taskId, title]);
 

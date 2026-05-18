@@ -3,6 +3,7 @@ import {
 	idleSandboxAgentActivity,
 	type SandboxAgentActivity,
 } from "@/lib/scan/sandbox-agent-activity";
+import { useIsSandboxAgentOutputModalOpen } from "./sandbox-agent-output-modal-state";
 
 type SandboxAgentActivityMetadata = {
 	taskId: string;
@@ -39,9 +40,10 @@ export const useSandboxAgentActivity = ({
 		isConnected: false,
 		metadata: null,
 	});
+	const isOutputModalOpen = useIsSandboxAgentOutputModalOpen();
 
 	useEffect(() => {
-		if (!enabled || !url || typeof window === "undefined") {
+		if (!enabled || isOutputModalOpen || !url || typeof window === "undefined") {
 			return;
 		}
 
@@ -96,7 +98,7 @@ export const useSandboxAgentActivity = ({
 		return () => {
 			eventSource.close();
 		};
-	}, [enabled, url]);
+	}, [enabled, isOutputModalOpen, url]);
 
 	return state;
 };
