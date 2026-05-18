@@ -42,6 +42,10 @@ import {
 	updateScanJobTargetContextRepo,
 } from "./scan/persistence/scan-job.repo";
 import {
+	findStageGroupInstanceByIdRepo,
+	listStageGroupInstancesByScanJobIdRepo,
+} from "./scan/persistence/stage-lane-runtime.repo";
+import {
 	createTaskRepo,
 	findTaskByIdRepo,
 	findLatestAnalysisResultByCandidateIdRepo,
@@ -392,6 +396,12 @@ const buildScanStageQueueName = (
 	kind: ScanStageQueueKind,
 ) => `scan:${scanJobId}:${kind}`;
 
+const buildScanStageGroupQueueName = (
+	scanJobId: string,
+	groupInstanceId: string,
+	kind: ScanStageQueueKind,
+) => `scan:${scanJobId}:group:${groupInstanceId}:${kind}`;
+
 const getScanStageQueue = (
 	scanJobId: string,
 	kind: ScanStageQueueKind,
@@ -407,6 +417,84 @@ const getScanStageQueue = (
 	});
 	scanStageQueueCache.set(queueName, queue);
 	return queue;
+};
+
+const getScanStageGroupQueue = (
+	scanJobId: string,
+	groupInstanceId: string,
+	kind: ScanStageQueueKind,
+) => {
+	const queueName = buildScanStageGroupQueueName(
+		scanJobId,
+		groupInstanceId,
+		kind,
+	);
+	const cached = scanStageQueueCache.get(queueName);
+	if (cached) {
+		return cached;
+	}
+
+	const queue = new Queue<string>(queueName, {
+		connection: bullRedisConnection,
+	});
+	scanStageQueueCache.set(queueName, queue);
+	return queue;
+};
+
+const obliterateScanStageGroupQueue = async (
+	scanJobId: string,
+	groupInstanceId: string,
+	kind: ScanStageQueueKind,
+) => {
+	const queueName = buildScanStageGroupQueueName(
+		scanJobId,
+		groupInstanceId,
+		kind,
+	);
+	const queue =
+		scanStageQueueCache.get(queueName) ||
+		new Queue<string>(queueName, {
+			connection: bullRedisConnection,
+		});
+	await queue.obliterate({ force: true }).catch(() => {});
+	await queue.close().catch(() => {});
+	scanStageQueueCache.delete(queueName);
+};
+
+const obliterateScanStageGroupQueues = async (
+	scanJobId: string,
+	groupInstanceId: string,
+) => {
+	await Promise.all(
+		([
+			"repository",
+			"module",
+			"function",
+			"analysis",
+			"fuzz-build",
+			"fuzz-run",
+			"analysis-critic",
+			"verification",
+		] satisfies ScanStageQueueKind[]).map((kind) =>
+			obliterateScanStageGroupQueue(scanJobId, groupInstanceId, kind),
+		),
+	);
+};
+
+const taskMatchesStageQueueScope = async (
+	task: Pick<Task, "taskId" | "stageGroupInstanceId">,
+	groupInstanceId?: string | null,
+) => {
+	if (groupInstanceId) {
+		return task.stageGroupInstanceId === groupInstanceId;
+	}
+	if (!task.stageGroupInstanceId) {
+		return true;
+	}
+	const group = await findStageGroupInstanceByIdRepo(
+		task.stageGroupInstanceId,
+	).catch(() => null);
+	return group?.leaderTaskId === task.taskId;
 };
 
 const getRepositoryScanQueue = (scanJobId: string) =>
@@ -842,6 +930,9 @@ const listQueuePendingCountsByScanJobId = async (
 	scanJobId: string,
 	allTasks: Task[],
 ): Promise<QueuePendingCountView[]> => {
+	const activeStageGroups = (
+		await listStageGroupInstancesByScanJobIdRepo(scanJobId).catch(() => [])
+	).filter((group) => group.status === "active");
 	const queueEntries: Array<{
 		id: ScanStageQueueKind;
 		title: string;
@@ -900,15 +991,16 @@ const listQueuePendingCountsByScanJobId = async (
 
 	return await Promise.all(
 		queueEntries.map(async ({ id, title, stageName, queue }) => {
-			const counts = await queue
-				.getJobCounts("waiting", "prioritized", "delayed")
-				.catch((error) => {
+			const readCounts = async (targetQueue: Queue<string>) =>
+				await targetQueue
+					.getJobCounts("waiting", "prioritized", "delayed")
+					.catch((error) => {
 					console.warn(
 						"[scan-status-view]",
 						JSON.stringify({
 							event: "queueCounts.readFailed",
 							scanJobId,
-							queueName: queue.name,
+								queueName: targetQueue.name,
 							error:
 								error instanceof Error
 									? error.message
@@ -921,11 +1013,27 @@ const listQueuePendingCountsByScanJobId = async (
 						delayed: 0,
 					};
 				});
+			const counts = await readCounts(queue);
+			const groupCounts = await Promise.all(
+				activeStageGroups.map((group) =>
+					readCounts(
+						getScanStageGroupQueue(scanJobId, group.groupInstanceId, id),
+					),
+				),
+			);
 			const matchingTasks = allTasks.filter((task) => task.stageName === stageName);
 			const waitingCount =
 				(counts.waiting || 0) +
 				(counts.prioritized || 0) +
-				(counts.delayed || 0);
+				(counts.delayed || 0) +
+				groupCounts.reduce(
+					(total, item) =>
+						total +
+						(item.waiting || 0) +
+						(item.prioritized || 0) +
+						(item.delayed || 0),
+					0,
+				);
 			return {
 				id,
 				title,
@@ -4726,12 +4834,21 @@ const runFullScan = async (
 		createRepositoryScanningStageDefinition<FullScanPipelineContext>({
 			queue: createStageQueueBinding({
 				queue: repositoryScanQueue,
-				ownsInputId: async (ctx, inputId) => {
+				getGroupQueue: (groupInstanceId) =>
+					getScanStageGroupQueue(scanJob.scanJobId, groupInstanceId, "repository"),
+				obliterateGroupQueue: (groupInstanceId) =>
+					obliterateScanStageGroupQueue(
+						scanJob.scanJobId,
+						groupInstanceId,
+						"repository",
+					),
+				ownsInputId: async (ctx, inputId, _jobData, _jobId, scope) => {
 					const task = await findTaskByIdRepo(inputId).catch(() => null);
 					return Boolean(
 						task &&
 							task.scanJobId === ctx.scanJob.scanJobId &&
-							task.stageName === "RepositoryScanningStage",
+							task.stageName === "RepositoryScanningStage" &&
+							await taskMatchesStageQueueScope(task, scope?.groupInstanceId),
 					);
 				},
 				loadInput: async (ctx, inputId) => {
@@ -4753,12 +4870,21 @@ const runFullScan = async (
 		createModuleScanningStageDefinition<FullScanPipelineContext>({
 			queue: createStageQueueBinding({
 				queue: moduleScanQueue,
-				ownsInputId: async (ctx, inputId) => {
+				getGroupQueue: (groupInstanceId) =>
+					getScanStageGroupQueue(scanJob.scanJobId, groupInstanceId, "module"),
+				obliterateGroupQueue: (groupInstanceId) =>
+					obliterateScanStageGroupQueue(
+						scanJob.scanJobId,
+						groupInstanceId,
+						"module",
+					),
+				ownsInputId: async (ctx, inputId, _jobData, _jobId, scope) => {
 					const task = await findTaskByIdRepo(inputId).catch(() => null);
 					return Boolean(
 						task &&
 						task.scanJobId === ctx.scanJob.scanJobId &&
-						task.stageName === "ModuleScanningStage",
+						task.stageName === "ModuleScanningStage" &&
+							await taskMatchesStageQueueScope(task, scope?.groupInstanceId),
 					);
 				},
 				loadInput: async (ctx, inputId) => {
@@ -4781,12 +4907,21 @@ const runFullScan = async (
 		createFunctionScanningStageDefinition<FullScanPipelineContext>({
 			queue: createStageQueueBinding({
 				queue: functionScanQueue,
-				ownsInputId: async (ctx, inputId) => {
+				getGroupQueue: (groupInstanceId) =>
+					getScanStageGroupQueue(scanJob.scanJobId, groupInstanceId, "function"),
+				obliterateGroupQueue: (groupInstanceId) =>
+					obliterateScanStageGroupQueue(
+						scanJob.scanJobId,
+						groupInstanceId,
+						"function",
+					),
+				ownsInputId: async (ctx, inputId, _jobData, _jobId, scope) => {
 					const task = await findTaskByIdRepo(inputId).catch(() => null);
 					return Boolean(
 						task &&
 						task.scanJobId === ctx.scanJob.scanJobId &&
-						task.stageName === "FunctionScanningStage",
+						task.stageName === "FunctionScanningStage" &&
+							await taskMatchesStageQueueScope(task, scope?.groupInstanceId),
 					);
 				},
 				loadInput: async (ctx, inputId) => {
@@ -4807,12 +4942,21 @@ const runFullScan = async (
 	const analysisStage = createAnalysisStageDefinition<FullScanPipelineContext>({
 		queue: createStageQueueBinding({
 			queue: analysisQueue,
-			ownsInputId: async (ctx, inputId) => {
+			getGroupQueue: (groupInstanceId) =>
+				getScanStageGroupQueue(scanJob.scanJobId, groupInstanceId, "analysis"),
+			obliterateGroupQueue: (groupInstanceId) =>
+				obliterateScanStageGroupQueue(
+					scanJob.scanJobId,
+					groupInstanceId,
+					"analysis",
+				),
+			ownsInputId: async (ctx, inputId, _jobData, _jobId, scope) => {
 				const task = await findTaskByIdRepo(inputId).catch(() => null);
 				return Boolean(
 					task &&
 					task.scanJobId === ctx.scanJob.scanJobId &&
-					task.stageName === "AnalysisStage",
+					task.stageName === "AnalysisStage" &&
+							await taskMatchesStageQueueScope(task, scope?.groupInstanceId),
 				);
 			},
 			loadInput: async (ctx, inputId) => {
@@ -4834,12 +4978,25 @@ const runFullScan = async (
 		createFuzzBuildStageDefinition<FullScanPipelineContext>({
 			queue: createStageQueueBinding({
 				queue: fuzzBuildQueue,
-				ownsInputId: async (ctx, inputId) => {
+				getGroupQueue: (groupInstanceId) =>
+					getScanStageGroupQueue(
+						scanJob.scanJobId,
+						groupInstanceId,
+						"fuzz-build",
+					),
+				obliterateGroupQueue: (groupInstanceId) =>
+					obliterateScanStageGroupQueue(
+						scanJob.scanJobId,
+						groupInstanceId,
+						"fuzz-build",
+					),
+				ownsInputId: async (ctx, inputId, _jobData, _jobId, scope) => {
 					const task = await findTaskByIdRepo(inputId).catch(() => null);
 					return Boolean(
 						task &&
 							task.scanJobId === ctx.scanJob.scanJobId &&
-							task.stageName === "FuzzBuildStage",
+							task.stageName === "FuzzBuildStage" &&
+							await taskMatchesStageQueueScope(task, scope?.groupInstanceId),
 					);
 				},
 				loadInput: async (ctx, inputId) => {
@@ -4860,12 +5017,25 @@ const runFullScan = async (
 	const fuzzRunStage = createFuzzRunStageDefinition<FullScanPipelineContext>({
 		queue: createStageQueueBinding({
 			queue: fuzzRunQueue,
-			ownsInputId: async (ctx, inputId) => {
+			getGroupQueue: (groupInstanceId) =>
+				getScanStageGroupQueue(
+					scanJob.scanJobId,
+					groupInstanceId,
+					"fuzz-run",
+				),
+			obliterateGroupQueue: (groupInstanceId) =>
+				obliterateScanStageGroupQueue(
+					scanJob.scanJobId,
+					groupInstanceId,
+					"fuzz-run",
+				),
+			ownsInputId: async (ctx, inputId, _jobData, _jobId, scope) => {
 				const task = await findTaskByIdRepo(inputId).catch(() => null);
 				return Boolean(
 					task &&
 						task.scanJobId === ctx.scanJob.scanJobId &&
-						task.stageName === "FuzzRunStage",
+						task.stageName === "FuzzRunStage" &&
+							await taskMatchesStageQueueScope(task, scope?.groupInstanceId),
 				);
 			},
 			loadInput: async (ctx, inputId) => {
@@ -4887,12 +5057,25 @@ const runFullScan = async (
 		createAnalysisCriticStageDefinition<FullScanPipelineContext>({
 			queue: createStageQueueBinding({
 				queue: analysisCriticQueue,
-				ownsInputId: async (ctx, inputId) => {
+				getGroupQueue: (groupInstanceId) =>
+					getScanStageGroupQueue(
+						scanJob.scanJobId,
+						groupInstanceId,
+						"analysis-critic",
+					),
+				obliterateGroupQueue: (groupInstanceId) =>
+					obliterateScanStageGroupQueue(
+						scanJob.scanJobId,
+						groupInstanceId,
+						"analysis-critic",
+					),
+				ownsInputId: async (ctx, inputId, _jobData, _jobId, scope) => {
 					const task = await findTaskByIdRepo(inputId).catch(() => null);
 					return Boolean(
 						task &&
 							task.scanJobId === ctx.scanJob.scanJobId &&
-							task.stageName === "AnalysisCriticStage",
+							task.stageName === "AnalysisCriticStage" &&
+							await taskMatchesStageQueueScope(task, scope?.groupInstanceId),
 					);
 				},
 				loadInput: async (ctx, inputId) => {
@@ -4914,12 +5097,25 @@ const runFullScan = async (
 		createVerifyingStageDefinition<FullScanPipelineContext>({
 			queue: createStageQueueBinding({
 				queue: verificationQueue,
-				ownsInputId: async (ctx, inputId) => {
+				getGroupQueue: (groupInstanceId) =>
+					getScanStageGroupQueue(
+						scanJob.scanJobId,
+						groupInstanceId,
+						"verification",
+					),
+				obliterateGroupQueue: (groupInstanceId) =>
+					obliterateScanStageGroupQueue(
+						scanJob.scanJobId,
+						groupInstanceId,
+						"verification",
+					),
+				ownsInputId: async (ctx, inputId, _jobData, _jobId, scope) => {
 					const task = await findTaskByIdRepo(inputId).catch(() => null);
 					return Boolean(
 						task &&
 						task.scanJobId === ctx.scanJob.scanJobId &&
-						task.stageName === "VerifyingStage",
+						task.stageName === "VerifyingStage" &&
+							await taskMatchesStageQueueScope(task, scope?.groupInstanceId),
 					);
 				},
 				loadInput: async (ctx, inputId) => {
@@ -6212,7 +6408,8 @@ const assertScanJobNotCancelled = async (scanJobId: string) => {
 };
 
 export const cancelScanJob = async (scanJobId: string) => {
-	const [scanJob, repositoryTask, allTasks, candidates] = await Promise.all([
+	const [scanJob, repositoryTask, allTasks, candidates, stageGroups] =
+		await Promise.all([
 		findScanJobByIdRepo(scanJobId),
 		findScanJobByIdRepo(scanJobId).then((job) =>
 			job.repositoryTaskId
@@ -6221,6 +6418,7 @@ export const cancelScanJob = async (scanJobId: string) => {
 		),
 		listTasksByScanJobIdRepo(scanJobId),
 		findVulnerabilityCandidatesByScanJobIdRepo(scanJobId),
+		listStageGroupInstancesByScanJobIdRepo(scanJobId),
 	]);
 	const moduleTasks = allTasks.filter(
 		(task) => task.stageName === "ModuleScanningStage",
@@ -6259,6 +6457,11 @@ export const cancelScanJob = async (scanJobId: string) => {
 		),
 		...tasksToCancel.map((task) =>
 			removeQueuedTaskForRetry(scanJobId, task).catch(() => {}),
+		),
+		...stageGroups.map((group) =>
+			obliterateScanStageGroupQueues(scanJobId, group.groupInstanceId).catch(
+				() => {},
+			),
 		),
 	]);
 

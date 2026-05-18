@@ -11,6 +11,10 @@ export type StageExecution<TInput> = {
 	input: TInput;
 };
 
+export type StageQueueScope = {
+	groupInstanceId?: string | null;
+};
+
 export type StageRunResult =
 	| {
 			completion: "immediate";
@@ -26,8 +30,14 @@ export type StageQueueBinding<
 	TInput,
 > = {
 	queue: Queue<string>;
-	poll: (ctx: TPipelineContext) => Promise<StageExecution<TInput> | undefined>;
-	enqueue: (taskId: string) => Promise<void>;
+	getQueue: (scope?: StageQueueScope) => Queue<string>;
+	poll: (
+		ctx: TPipelineContext,
+		scope?: StageQueueScope,
+	) => Promise<StageExecution<TInput> | undefined>;
+	enqueue: (taskId: string, scope?: StageQueueScope) => Promise<void>;
+	remove: (taskId: string, scope?: StageQueueScope) => Promise<void>;
+	obliterateGroup: (groupInstanceId: string) => Promise<void>;
 };
 
 type StageQueueBindingOptions<
@@ -35,12 +45,15 @@ type StageQueueBindingOptions<
 	TInput,
 > = {
 	queue: Queue<string>;
+	getGroupQueue?: (groupInstanceId: string) => Queue<string>;
+	obliterateGroupQueue?: (groupInstanceId: string) => Promise<void>;
 	getInputId?: (jobData: string, jobId: string) => string | null;
 	ownsInputId?: (
 		ctx: TPipelineContext,
 		inputId: string,
 		jobData: string,
 		jobId: string,
+		scope?: StageQueueScope,
 	) => Promise<boolean>;
 	loadInput: (ctx: TPipelineContext, inputId: string) => Promise<TInput | undefined>;
 };
@@ -120,8 +133,13 @@ const pollStageQueue = async <
 >(
 	binding: StageQueueBindingOptions<TPipelineContext, TInput>,
 	ctx: TPipelineContext,
+	scope?: StageQueueScope,
 ): Promise<StageExecution<TInput> | undefined> => {
-	const jobs = await binding.queue.getJobs(["prioritized", "waiting"], 0, 25, true);
+	const queue =
+		scope?.groupInstanceId && binding.getGroupQueue
+			? binding.getGroupQueue(scope.groupInstanceId)
+			: binding.queue;
+	const jobs = await queue.getJobs(["prioritized", "waiting"], 0, 25, true);
 	for (const job of jobs) {
 		const rawJobData = typeof job.data === "string" ? job.data : "";
 		const jobId = String(job.id ?? "");
@@ -133,7 +151,9 @@ const pollStageQueue = async <
 				JSON.stringify({
 					event: "poll.skipped_missing_input_id",
 					scanJobId: ctx.scanJobId,
-					queueName: binding.queue.name,
+					queueName: queue.name,
+					queueScope: scope?.groupInstanceId ? "group" : "global",
+					groupInstanceId: scope?.groupInstanceId ?? null,
 					jobId,
 				}),
 			);
@@ -142,7 +162,7 @@ const pollStageQueue = async <
 
 		if (
 			binding.ownsInputId &&
-			!(await binding.ownsInputId(ctx, inputId, rawJobData, jobId))
+			!(await binding.ownsInputId(ctx, inputId, rawJobData, jobId, scope))
 		) {
 			continue;
 		}
@@ -153,7 +173,9 @@ const pollStageQueue = async <
 			JSON.stringify({
 				event: input !== undefined ? "poll.loaded_input" : "poll.input_missing",
 				scanJobId: ctx.scanJobId,
-				queueName: binding.queue.name,
+				queueName: queue.name,
+				queueScope: scope?.groupInstanceId ? "group" : "global",
+				groupInstanceId: scope?.groupInstanceId ?? null,
 				jobId,
 				inputId,
 			}),
@@ -178,12 +200,31 @@ export const createStageQueueBinding = <
 	binding: StageQueueBindingOptions<TPipelineContext, TInput>,
 ): StageQueueBinding<TPipelineContext, TInput> => ({
 	queue: binding.queue,
-	poll: (ctx) => pollStageQueue(binding, ctx),
-	enqueue: async (taskId) => {
-		await binding.queue.add(binding.queue.name, taskId, {
-			jobId: `${binding.queue.name}:${taskId}`,
+	getQueue: (scope) =>
+		scope?.groupInstanceId && binding.getGroupQueue
+			? binding.getGroupQueue(scope.groupInstanceId)
+			: binding.queue,
+	poll: (ctx, scope) => pollStageQueue(binding, ctx, scope),
+	enqueue: async (taskId, scope) => {
+		const queue =
+			scope?.groupInstanceId && binding.getGroupQueue
+				? binding.getGroupQueue(scope.groupInstanceId)
+				: binding.queue;
+		await queue.add(queue.name, taskId, {
+			jobId: `${queue.name}:${taskId}`,
 			removeOnComplete: true,
 			removeOnFail: true,
 		});
+	},
+	remove: async (taskId, scope) => {
+		const queue =
+			scope?.groupInstanceId && binding.getGroupQueue
+				? binding.getGroupQueue(scope.groupInstanceId)
+				: binding.queue;
+		const job = await queue.getJob(`${queue.name}:${taskId}`).catch(() => null);
+		await job?.remove().catch(() => {});
+	},
+	obliterateGroup: async (groupInstanceId) => {
+		await binding.obliterateGroupQueue?.(groupInstanceId);
 	},
 });

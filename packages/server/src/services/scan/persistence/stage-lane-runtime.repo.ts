@@ -385,6 +385,12 @@ export const findStageGroupInstanceByIdRepo = async (groupInstanceId: string) =>
 		.limit(1)
 		.then((rows) => rows[0] || null);
 
+export const listStageGroupInstancesByScanJobIdRepo = async (scanJobId: string) =>
+	await db
+		.select()
+		.from(scanStageGroupInstances)
+		.where(eq(scanStageGroupInstances.scanJobId, scanJobId));
+
 export const markStageGroupInstanceExitedRepo = async (groupInstanceId: string) =>
 	await db
 		.update(scanStageGroupInstances)

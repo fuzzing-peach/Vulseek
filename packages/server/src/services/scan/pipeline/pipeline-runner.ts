@@ -56,6 +56,7 @@ import {
 	isFanoutStage,
 	type StageDefinition,
 	type StageExecution,
+	type StageQueueScope,
 } from "./stage-definition";
 
 type PipelineRefreshContext = {
@@ -524,7 +525,12 @@ const markTaskExited = async (input: {
 		},
 	}).catch(() => null);
 
-const cleanupStageGroupForLeaderExit = async (leaderTaskId: string) => {
+const cleanupStageGroupForLeaderExit = async <
+	TPipelineContext extends PipelineContext,
+>(
+	leaderTaskId: string,
+	runtime?: JobRuntime<TPipelineContext>,
+) => {
 	const leaderTask = await findTaskByIdRepo(leaderTaskId).catch(() => null);
 	const groupInstanceId = leaderTask?.stageGroupInstanceId;
 	if (!groupInstanceId) {
@@ -539,6 +545,7 @@ const cleanupStageGroupForLeaderExit = async (leaderTaskId: string) => {
 		return;
 	}
 	await markStageGroupInstanceExitedRepo(groupInstanceId).catch(() => null);
+	await cleanupStageGroupQueues(runtime, groupInstanceId);
 	const memberships = await listStageGroupLaneMembershipsRepo(
 		groupInstanceId,
 	).catch(() => []);
@@ -585,8 +592,13 @@ const cleanupStageGroupForLeaderExit = async (leaderTaskId: string) => {
 	}
 };
 
-const cleanupPersistentLaneForTask = async (taskId: string) => {
-	await cleanupStageGroupForLeaderExit(taskId).catch(() => {});
+const cleanupPersistentLaneForTask = async <
+	TPipelineContext extends PipelineContext,
+>(
+	taskId: string,
+	runtime?: JobRuntime<TPipelineContext>,
+) => {
+	await cleanupStageGroupForLeaderExit(taskId, runtime).catch(() => {});
 	const lane = await findStageLaneRuntimeByActiveTaskIdRepo(taskId);
 	if (!lane) {
 		return;
@@ -604,10 +616,36 @@ const releasePersistentLaneForTask = async (taskId: string) => {
 const isOpenTaskStatus = (status: string) =>
 	status === "pending" || status === "launching" || status === "running";
 
+const cleanupStageGroupQueues = async <
+	TPipelineContext extends PipelineContext,
+>(
+	runtime: JobRuntime<TPipelineContext> | null | undefined,
+	groupInstanceId: string,
+) => {
+	if (!runtime) {
+		return;
+	}
+	let removedQueues = 0;
+	for (const stage of runtime.pipeline.stages) {
+		if (!stage.queue) {
+			continue;
+		}
+		await stage.queue.obliterateGroup(groupInstanceId).catch(() => {});
+		removedQueues += 1;
+	}
+	logPipelineEvent("stage.group_queues_deleted", {
+		scanJobId: runtime.ctx.scanJobId,
+		pipelineName: runtime.pipeline.name,
+		groupInstanceId,
+		queueCount: removedQueues,
+	});
+};
+
 const listReservedLaneIndexesForStage = async (input: {
 	scanJobId: string;
 	stageName: string;
 	allowedGroupInstanceId?: string | null;
+	runtime?: JobRuntime<PipelineContext>;
 }) => {
 	const memberships = await listActiveStageGroupLaneMembershipsForStageRepo({
 		scanJobId: input.scanJobId,
@@ -637,6 +675,7 @@ const listReservedLaneIndexesForStage = async (input: {
 		await markStageGroupInstanceExitedRepo(membership.groupInstanceId).catch(
 			() => null,
 		);
+		await cleanupStageGroupQueues(input.runtime, membership.groupInstanceId);
 		logPipelineEvent("stage.group_exited", {
 			scanJobId: input.scanJobId,
 			groupName: group?.groupName ?? null,
@@ -656,7 +695,12 @@ const listReservedLaneIndexesForStage = async (input: {
 		.map((membership) => membership.laneIndex);
 };
 
-const maybeMarkTaskStageGroupExited = async (taskId: string) => {
+const maybeMarkTaskStageGroupExited = async <
+	TPipelineContext extends PipelineContext,
+>(
+	taskId: string,
+	runtime?: JobRuntime<TPipelineContext>,
+) => {
 	const task = await findTaskByIdRepo(taskId).catch(() => null);
 	const groupInstanceId = task?.stageGroupInstanceId;
 	if (!task || !groupInstanceId) {
@@ -680,6 +724,7 @@ const maybeMarkTaskStageGroupExited = async (taskId: string) => {
 		return;
 	}
 	await markStageGroupInstanceExitedRepo(groupInstanceId).catch(() => null);
+	await cleanupStageGroupQueues(runtime, groupInstanceId);
 	logPipelineEvent("stage.group_exited", {
 		scanJobId: group.scanJobId,
 		groupName: group.groupName,
@@ -928,7 +973,7 @@ const failSilentStuckTask = async <TPipelineContext extends PipelineContext>(
 		taskName: task.name,
 		errorMessage: `Task became silently stuck: ${reason}`,
 	});
-	await maybeMarkTaskStageGroupExited(task.taskId);
+	await maybeMarkTaskStageGroupExited(task.taskId, runtime);
 	await refreshPipelineState(runtime.ctx).catch(() => {});
 	runtime.wakeSignal.notify();
 };
@@ -1300,6 +1345,7 @@ const persistTerminalSuccess = async <
 	options?: {
 		exitLane?: boolean;
 		exitReason?: "agent_exit";
+		runtime?: JobRuntime<TPipelineContext>;
 	},
 ) => {
 	const currentTask = await findTaskByIdRepo(stageCtx.taskId).catch(() => null);
@@ -1335,7 +1381,7 @@ const persistTerminalSuccess = async <
 	await refreshPipelineState(ctx);
 	if (stage.persistent ?? true) {
 		if (options?.exitLane) {
-			await cleanupPersistentLaneForTask(stageCtx.taskId);
+			await cleanupPersistentLaneForTask(stageCtx.taskId, options.runtime);
 		} else {
 			await releasePersistentLaneForTask(stageCtx.taskId);
 		}
@@ -1712,6 +1758,9 @@ const launchStageExecution = async <
 	const pendingTask = await findTaskByIdRepo(execution.taskId).catch(
 		() => null,
 	);
+	const queueScope = pendingTask
+		? (await resolvePendingTaskQueueScope(pendingTask)) || {}
+		: {};
 	const group = getStageGroup(runtime.pipeline, stageState.stageName);
 	const leaderGroup = getStageLeaderGroup(
 		runtime.pipeline,
@@ -1728,9 +1777,10 @@ const launchStageExecution = async <
 		!boundMembership && (stageState.stage.persistent ?? true)
 			? await listReservedLaneIndexesForStage({
 					scanJobId: runtime.ctx.scanJobId,
-					stageName: stageState.stageName,
-					allowedGroupInstanceId: pendingTask?.stageGroupInstanceId ?? null,
-				})
+				stageName: stageState.stageName,
+				allowedGroupInstanceId: pendingTask?.stageGroupInstanceId ?? null,
+				runtime: runtime as unknown as JobRuntime<PipelineContext>,
+			})
 			: [];
 	let laneRuntime = boundMembership
 		? await claimSpecificStageLaneRuntimeRepo({
@@ -1752,7 +1802,7 @@ const launchStageExecution = async <
 				})
 			: null;
 	if ((stageState.stage.persistent ?? true) && !laneRuntime) {
-		await stageState.stage.queue?.enqueue(execution.taskId).catch(() => {});
+		await stageState.stage.queue?.enqueue(execution.taskId, queueScope).catch(() => {});
 		return false;
 	}
 	const launched = await transitionTaskStatusRepo({
@@ -1880,6 +1930,7 @@ const launchStageExecution = async <
 				runtime.ctx,
 				stageCtx,
 				runResult.rawOutput,
+				{ runtime },
 			);
 			if (terminalUpdated) {
 				await dispatchPipelineDownstream(
@@ -1890,7 +1941,7 @@ const launchStageExecution = async <
 					output,
 					null,
 				);
-				await maybeMarkTaskStageGroupExited(execution.taskId);
+				await maybeMarkTaskStageGroupExited(execution.taskId, runtime);
 			}
 		}
 	} catch (error) {
@@ -1921,7 +1972,7 @@ const launchStageExecution = async <
 					errorMessage: `Transient runtime launch failure; retry ${nextAttempt}/${MAX_TRANSIENT_LAUNCH_RETRIES}: ${getErrorMessage(error)}`,
 				},
 			});
-			await stageState.stage.queue?.enqueue(execution.taskId).catch(() => {});
+			await stageState.stage.queue?.enqueue(execution.taskId, queueScope).catch(() => {});
 			logPipelineEvent("stage.launch_retry", {
 				scanJobId: runtime.ctx.scanJobId,
 				pipelineName: runtime.pipeline.name,
@@ -1932,7 +1983,7 @@ const launchStageExecution = async <
 				maxAttempts: MAX_TRANSIENT_LAUNCH_RETRIES,
 				errorMessage: getErrorMessage(error),
 			});
-			await backfillStageFromQueue(runtime, stageState);
+			await backfillStageQueue(runtime, stageState);
 			return true;
 		}
 		await persistTerminalFailure(
@@ -1942,8 +1993,8 @@ const launchStageExecution = async <
 			execution.input,
 			error,
 		);
-		await maybeMarkTaskStageGroupExited(execution.taskId);
-		await backfillStageFromQueue(runtime, stageState);
+		await maybeMarkTaskStageGroupExited(execution.taskId, runtime);
+		await backfillStageQueue(runtime, stageState);
 	} finally {
 		runtime.wakeSignal.notify();
 	}
@@ -2015,8 +2066,8 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 							`Sandbox agent driver exited with code ${exitCode} before reporting THREAD_ID`,
 						),
 			);
-			await maybeMarkTaskStageGroupExited(task.taskId);
-			await backfillStageFromQueue(runtime, stageState);
+			await maybeMarkTaskStageGroupExited(task.taskId, runtime);
+			await backfillStageQueue(runtime, stageState);
 			return true;
 		}
 
@@ -2029,8 +2080,8 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 				input,
 				new Error("Task runtime container stopped before reporting THREAD_ID"),
 			);
-			await maybeMarkTaskStageGroupExited(task.taskId);
-			await backfillStageFromQueue(runtime, stageState);
+			await maybeMarkTaskStageGroupExited(task.taskId, runtime);
+			await backfillStageQueue(runtime, stageState);
 			return true;
 		}
 
@@ -2046,8 +2097,8 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 				input,
 				new Error(`Task became silently stuck: ${halfStarted.reason}`),
 			);
-			await maybeMarkTaskStageGroupExited(task.taskId);
-			await backfillStageFromQueue(runtime, stageState);
+			await maybeMarkTaskStageGroupExited(task.taskId, runtime);
+			await backfillStageQueue(runtime, stageState);
 			return true;
 		}
 		return false;
@@ -2064,8 +2115,8 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			input,
 			error,
 		);
-		await maybeMarkTaskStageGroupExited(task.taskId);
-		await backfillStageFromQueue(runtime, stageState);
+		await maybeMarkTaskStageGroupExited(task.taskId, runtime);
+		await backfillStageQueue(runtime, stageState);
 		return true;
 	}
 	const {
@@ -2097,10 +2148,11 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 				{
 					exitLane: hasExitSignal,
 					exitReason: hasExitSignal ? "agent_exit" : undefined,
+					runtime,
 				},
 			);
 			if (terminalUpdated) {
-				await backfillStageFromQueue(runtime, stageState);
+				await backfillStageQueue(runtime, stageState);
 				await dispatchPipelineDownstream(
 					runtime,
 					stageState.stageName,
@@ -2109,7 +2161,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 					output,
 					routeKey,
 				);
-				await maybeMarkTaskStageGroupExited(task.taskId);
+				await maybeMarkTaskStageGroupExited(task.taskId, runtime);
 			}
 		} catch (error) {
 			if (hasExitSignal) {
@@ -2121,7 +2173,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 					runtime.ctx,
 					stageCtx,
 					rawOutput,
-					{ exitLane: true, exitReason: "agent_exit" },
+					{ exitLane: true, exitReason: "agent_exit", runtime },
 				);
 			} else {
 				await persistTerminalFailure(
@@ -2132,9 +2184,9 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 					error,
 					{ exitLane: hasExitSignal },
 				);
-				await maybeMarkTaskStageGroupExited(task.taskId);
+				await maybeMarkTaskStageGroupExited(task.taskId, runtime);
 			}
-			await backfillStageFromQueue(runtime, stageState);
+			await backfillStageQueue(runtime, stageState);
 		}
 		return true;
 	}
@@ -2153,8 +2205,8 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 				: new Error(`Sandbox agent driver exited with code ${exitCode}`),
 			{ exitLane: hasExitSignal },
 		);
-		await maybeMarkTaskStageGroupExited(task.taskId);
-		await backfillStageFromQueue(runtime, stageState);
+		await maybeMarkTaskStageGroupExited(task.taskId, runtime);
+		await backfillStageQueue(runtime, stageState);
 		return true;
 	}
 
@@ -2169,8 +2221,8 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			),
 			{ exitLane: hasExitSignal },
 		);
-		await maybeMarkTaskStageGroupExited(task.taskId);
-		await backfillStageFromQueue(runtime, stageState);
+		await maybeMarkTaskStageGroupExited(task.taskId, runtime);
+		await backfillStageQueue(runtime, stageState);
 		return true;
 	}
 
@@ -2185,8 +2237,8 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 				"Task runtime container stopped before end_turn/output.json completion",
 			),
 		);
-		await maybeMarkTaskStageGroupExited(task.taskId);
-		await backfillStageFromQueue(runtime, stageState);
+		await maybeMarkTaskStageGroupExited(task.taskId, runtime);
+		await backfillStageQueue(runtime, stageState);
 		return true;
 	}
 
@@ -2198,19 +2250,20 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			halfStarted.reason,
 			halfStarted.diagnostics,
 		);
-		await backfillStageFromQueue(runtime, stageState);
+		await backfillStageQueue(runtime, stageState);
 		return true;
 	}
 	return false;
 };
 
-const backfillStageFromQueue = async <
+const backfillStageQueue = async <
 	TPipelineContext extends PipelineContext,
 	TInput,
 	TOutput,
 >(
 	runtime: JobRuntime<TPipelineContext>,
 	stageState: RuntimeStageState<TPipelineContext, TInput, TOutput>,
+	scope?: StageQueueScope,
 ) => {
 	await assertScanJobNotCancelled(runtime.ctx);
 	const limit = await getStageConcurrencyLimit(stageState.stage, runtime.ctx);
@@ -2225,7 +2278,7 @@ const backfillStageFromQueue = async <
 		if (activeCount >= limit) {
 			break;
 		}
-		const execution = await stageState.stage.queue?.poll(runtime.ctx);
+		const execution = await stageState.stage.queue?.poll(runtime.ctx, scope);
 		if (execution === undefined) {
 			break;
 		}
@@ -2243,10 +2296,33 @@ const backfillStageFromQueue = async <
 			stageName: stageState.stageName,
 			taskId: execution.taskId,
 			concurrencyLimit: limit,
+			queueScope: scope?.groupInstanceId ? "group" : "global",
+			groupInstanceId: scope?.groupInstanceId ?? null,
 		});
 	}
 
 	return launchedAny;
+};
+
+const resolvePendingTaskQueueScope = async (
+	task: {
+		taskId: string;
+		stageGroupInstanceId?: string | null;
+	},
+): Promise<StageQueueScope | null> => {
+	if (!task.stageGroupInstanceId) {
+		return {};
+	}
+	const group = await findStageGroupInstanceByIdRepo(
+		task.stageGroupInstanceId,
+	).catch(() => null);
+	if (!group || group.status !== "active") {
+		return null;
+	}
+	if (group.leaderTaskId === task.taskId) {
+		return {};
+	}
+	return { groupInstanceId: task.stageGroupInstanceId };
 };
 
 const reenqueueMissingPendingTasks = async <
@@ -2268,27 +2344,66 @@ const reenqueueMissingPendingTasks = async <
 		if (!stageState || !queueBinding) {
 			continue;
 		}
-		const knownJobIds = buildKnownQueueJobIdsForTask(queueBinding.queue, task);
+		const queueScope = await resolvePendingTaskQueueScope(task);
+		if (queueScope === null) {
+			continue;
+		}
+		const scopedQueue = queueBinding.getQueue(queueScope);
+		const knownJobIds = buildKnownQueueJobIdsForTask(scopedQueue, task);
 		const existingJobs = await Promise.all(
 			knownJobIds.map((jobId) =>
-				queueBinding.queue.getJob(jobId).catch(() => null),
+				scopedQueue.getJob(jobId).catch(() => null),
 			),
 		);
 		const existingJob = existingJobs.find(Boolean);
 		if (existingJob) {
 			continue;
 		}
-		await queueBinding.enqueue(task.taskId);
+		await queueBinding.enqueue(task.taskId, queueScope);
 		logPipelineEvent("loop.pending_task_reenqueued", {
 			scanJobId: runtime.ctx.scanJobId,
 			pipelineName: runtime.pipeline.name,
 			stageName: task.stageName,
 			taskId: task.taskId,
 			taskName: task.name,
+			queueName: scopedQueue.name,
+			queueScope: queueScope.groupInstanceId ? "group" : "global",
+			groupInstanceId: queueScope.groupInstanceId ?? null,
 		});
 		changed = true;
 	}
 	return changed;
+};
+
+const backfillActiveGroupQueues = async <
+	TPipelineContext extends PipelineContext,
+>(
+	runtime: JobRuntime<TPipelineContext>,
+) => {
+	const tasks = await listTasksByScanJobIdRepo(runtime.ctx.scanJobId);
+	const seen = new Set<string>();
+	let progressed = false;
+	for (const task of tasks) {
+		if (task.status !== "pending" || !task.stageGroupInstanceId) {
+			continue;
+		}
+		const queueScope = await resolvePendingTaskQueueScope(task);
+		if (!queueScope?.groupInstanceId) {
+			continue;
+		}
+		const key = `${queueScope.groupInstanceId}:${task.stageName}`;
+		if (seen.has(key)) {
+			continue;
+		}
+		seen.add(key);
+		const stageState = runtime.stageStates.get(task.stageName);
+		if (!stageState) {
+			continue;
+		}
+		progressed =
+			(await backfillStageQueue(runtime, stageState, queueScope)) || progressed;
+	}
+	return progressed;
 };
 
 const inspectActiveTasks = async <TPipelineContext extends PipelineContext>(
@@ -2312,8 +2427,9 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 	runtime: JobRuntime<TPipelineContext>,
 ) => {
 	await reenqueueMissingPendingTasks(runtime);
+	await backfillActiveGroupQueues(runtime);
 	for (const stageState of runtime.stageStates.values()) {
-		await backfillStageFromQueue(runtime, stageState);
+		await backfillStageQueue(runtime, stageState);
 	}
 
 	while (!runtime.stopRequested) {
@@ -2328,9 +2444,10 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 
 		let progressed = await inspectActiveTasks(runtime);
 		progressed = (await reenqueueMissingPendingTasks(runtime)) || progressed;
+		progressed = (await backfillActiveGroupQueues(runtime)) || progressed;
 		for (const stageState of runtime.stageStates.values()) {
 			progressed =
-				(await backfillStageFromQueue(runtime, stageState)) || progressed;
+				(await backfillStageQueue(runtime, stageState)) || progressed;
 		}
 		if (await isJobRuntimeQuiescent(runtime)) {
 			return;
@@ -2529,49 +2646,12 @@ const dispatchPipelineDownstream = async <
 			continue;
 		}
 
-		const limit = await getStageConcurrencyLimit(
-			edge.to as StageDefinition<
-				TPipelineContext,
-				unknown,
-				unknown,
-				StageContext
-			>,
-			runtime.ctx,
-		);
-		for (const [index, taskId] of taskIds.entries()) {
-			const activeCount = await countActiveTasksByScanJobAndStageRepo({
-				scanJobId: runtime.ctx.scanJobId,
-				stageName: downstreamStageState.stageName,
-			});
-			if (activeCount < limit) {
-				const input = downstreamInputs[index];
-				if (input === undefined) {
-					continue;
-				}
-				await launchStageExecution(
-					runtime,
-					downstreamStageState as RuntimeStageState<
-						TPipelineContext,
-						unknown,
-						unknown
-					>,
-					{ taskId, input },
-					{ logEvent: "loop.downstream_spawned" },
-				);
-				logPipelineEvent("loop.downstream_spawned", {
-					scanJobId: runtime.ctx.scanJobId,
-					pipelineName: runtime.pipeline.name,
-					edgeName: edge.name,
-					fromStageName: stageName,
-					toStageName: edge.to.name,
-					taskId,
-					activeCount,
-					concurrencyLimit: limit,
-				});
-				continue;
-			}
-
-			await downstreamQueue.enqueue(taskId);
+		const queueScope: StageQueueScope = {
+			groupInstanceId: downstreamGroupInstanceId,
+		};
+		const queue = downstreamQueue.getQueue(queueScope);
+		for (const taskId of taskIds) {
+			await downstreamQueue.enqueue(taskId, queueScope);
 			logPipelineEvent("loop.downstream_enqueued", {
 				scanJobId: runtime.ctx.scanJobId,
 				pipelineName: runtime.pipeline.name,
@@ -2579,8 +2659,9 @@ const dispatchPipelineDownstream = async <
 				fromStageName: stageName,
 				toStageName: edge.to.name,
 				taskId,
-				activeCount,
-				concurrencyLimit: limit,
+				queueName: queue.name,
+				queueScope: downstreamGroupInstanceId ? "group" : "global",
+				groupInstanceId: downstreamGroupInstanceId,
 			});
 		}
 	}
