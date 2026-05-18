@@ -613,11 +613,45 @@ const listReservedLaneIndexesForStage = async (input: {
 		scanJobId: input.scanJobId,
 		stageName: input.stageName,
 	}).catch(() => []);
+	if (memberships.length === 0) {
+		return [];
+	}
+	const tasks = await listTasksByScanJobIdRepo(input.scanJobId).catch(() => []);
+	const staleGroupInstanceIds = new Set<string>();
+	for (const membership of memberships) {
+		if (staleGroupInstanceIds.has(membership.groupInstanceId)) {
+			continue;
+		}
+		const hasOpenTask = tasks.some(
+			(task) =>
+				task.stageGroupInstanceId === membership.groupInstanceId &&
+				isOpenTaskStatus(task.status),
+		);
+		if (hasOpenTask) {
+			continue;
+		}
+		staleGroupInstanceIds.add(membership.groupInstanceId);
+		const group = await findStageGroupInstanceByIdRepo(
+			membership.groupInstanceId,
+		).catch(() => null);
+		await markStageGroupInstanceExitedRepo(membership.groupInstanceId).catch(
+			() => null,
+		);
+		logPipelineEvent("stage.group_exited", {
+			scanJobId: input.scanJobId,
+			groupName: group?.groupName ?? null,
+			groupInstanceId: membership.groupInstanceId,
+			leaderStageName: group?.leaderStageName ?? null,
+			leaderLaneIndex: group?.leaderLaneIndex ?? null,
+			reason: "stale_active_group_without_open_tasks",
+		});
+	}
 	return memberships
 		.filter(
 			(membership) =>
-				!input.allowedGroupInstanceId ||
-				membership.groupInstanceId !== input.allowedGroupInstanceId,
+				!staleGroupInstanceIds.has(membership.groupInstanceId) &&
+				(!input.allowedGroupInstanceId ||
+					membership.groupInstanceId !== input.allowedGroupInstanceId),
 		)
 		.map((membership) => membership.laneIndex);
 };
@@ -894,6 +928,7 @@ const failSilentStuckTask = async <TPipelineContext extends PipelineContext>(
 		taskName: task.name,
 		errorMessage: `Task became silently stuck: ${reason}`,
 	});
+	await maybeMarkTaskStageGroupExited(task.taskId);
 	await refreshPipelineState(runtime.ctx).catch(() => {});
 	runtime.wakeSignal.notify();
 };
