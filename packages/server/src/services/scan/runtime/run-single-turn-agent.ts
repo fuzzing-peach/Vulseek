@@ -18,7 +18,12 @@ import {
 import { installRuntimeSkillsInContainer } from "./runtime-skills";
 import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "./sandbox-agent-shared";
 import { findTaskByIdRepo, updateTaskRepo } from "../persistence/task.repo";
-import { resolveTaskRootSegment } from "../stages/full-scan-stage.runtime";
+import { findStageLaneRuntimeByTaskIdRepo } from "../persistence/stage-lane-runtime.repo";
+import {
+	resolveStageLaneRootSegment,
+	resolveTaskRootSegment,
+} from "../stages/full-scan-stage.runtime";
+import { resolveStageTaskName } from "../stage-task-name";
 
 const RUNTIME_CUSTOM_SKILLS = [
 	"codeql",
@@ -225,6 +230,8 @@ const parseAgentProfileEnvPairs = (agentProfile: AgentProfileLike) =>
 		});
 
 const buildClaudeEnvPairs = (agentProfile: AgentProfileLike) => [
+	`CLAUDE_CONFIG_DIR=${CLAUDE_HOME_IN_CONTAINER}`,
+	`CLAUDE_HOME=${CLAUDE_HOME_IN_CONTAINER}`,
 	`ANTHROPIC_BASE_URL=${agentProfile.baseUrl}`,
 	`ANTHROPIC_API_KEY=${agentProfile.apiKey}`,
 	`ANTHROPIC_AUTH_TOKEN=${agentProfile.apiKey}`,
@@ -831,12 +838,9 @@ const SANDBOX_AGENT_DRIVER_PID_FILE_NAME = "sandbox-agent-driver.pid";
 const SANDBOX_AGENT_DRIVER_LIFECYCLE_FILE_NAME =
 	"sandbox-agent-driver-lifecycle.log";
 const SANDBOX_AGENT_DRIVER_TASK_DIR_NAME = "sandbox-agent-driver-tasks";
-const SANDBOX_AGENT_FORK_DEBUG_FILE_NAME = "sandbox-agent-fork-debug.json";
-const SANDBOX_AGENT_PARENT_CONTEXT_DEBUG_FILE_NAME =
-	"sandbox-agent-parent-context.compact.txt";
+const SANDBOX_AGENT_AGENT_HOME_DIR_NAME = "agent-home";
 
-const buildSandboxAgentDriverScript = () => String.raw`import crypto from "node:crypto";
-import fsSync from "node:fs";
+const buildSandboxAgentDriverScript = () => String.raw`import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
@@ -847,10 +851,6 @@ import { pathToFileURL } from "node:url";
 const SANDBOX_AGENT_PROMPT_TIMEOUT_MS = 30 * 60 * 1000;
 const SANDBOX_AGENT_POST_PROMPT_EVENT_IDLE_MS = 30 * 1000;
 const SANDBOX_AGENT_POST_PROMPT_EVENT_POLL_MS = 100;
-const MANUAL_REPLAY_PARENT_PROMPT_CHAR_LIMIT = 8000;
-const MANUAL_REPLAY_ASSISTANT_TAIL_CHAR_LIMIT = 30000;
-const MANUAL_REPLAY_TOOL_OUTPUT_CHAR_LIMIT = 2000;
-const MANUAL_REPLAY_CHAR_LIMIT = 80000;
 
 const acpFetch = async (input, init = {}) => {
   const request = new Request(input, init);
@@ -981,227 +981,6 @@ const renderSandboxAgentEvent = (event) => {
 
 const byteLength = (value) => Buffer.byteLength(value, "utf-8");
 
-const clipHead = (value, limit) =>
-  value.length > limit ? value.slice(0, limit) : value;
-
-const clipTail = (value, limit) =>
-  value.length > limit ? value.slice(value.length - limit) : value;
-
-const truncateWithNote = (value, limit) => {
-  if (value.length <= limit) return value;
-  if (limit <= 32) return value.slice(0, Math.max(0, limit));
-  return value.slice(0, limit - 32) + "\n...[truncated]";
-};
-
-const extractPromptTextForManualReplay = (event) => {
-  const payload = getEventPayloadRecord(event);
-  if (asString(payload?.method) !== "session/prompt") {
-    return "";
-  }
-  const prompt = asRecord(payload?.params)?.prompt;
-  if (!Array.isArray(prompt)) {
-    return "";
-  }
-  return prompt.map((item) => extractTextValue(asRecord(item)?.text)).join("");
-};
-
-const extractPathValue = (record, keys) => {
-  for (const key of keys) {
-    const parts = key.split(".");
-    let current = record;
-    for (const part of parts) {
-      current = asRecord(current)?.[part];
-    }
-    const value = extractTextValue(current);
-    if (value) return value;
-  }
-  return "";
-};
-
-const simplifyManualReplayToolCall = (update) => {
-  const lines = [];
-  const title =
-    asString(update.title) ||
-    asString(update.name) ||
-    asString(update.tool) ||
-    "tool";
-  const kind = asString(update.kind) || asString(update.type);
-  const status = asString(update.status);
-  lines.push(
-    [
-      "tool: " + title,
-      kind ? "kind=" + kind : "",
-      status ? "status=" + status : "",
-    ].filter(Boolean).join(" "),
-  );
-
-  const command = extractPathValue(update, [
-    "command",
-    "cmd",
-    "rawInput.command",
-    "rawInput.cmd",
-    "input.command",
-    "action.command",
-  ]);
-  const cwd = extractPathValue(update, [
-    "cwd",
-    "rawInput.cwd",
-    "input.cwd",
-    "action.cwd",
-  ]);
-  const filePath = extractPathValue(update, [
-    "path",
-    "filePath",
-    "rawInput.path",
-    "input.path",
-  ]);
-  if (command) lines.push("command: " + truncateWithNote(command, 500));
-  if (cwd) lines.push("cwd: " + truncateWithNote(cwd, 300));
-  if (filePath) lines.push("path: " + truncateWithNote(filePath, 300));
-  return lines.join("\n");
-};
-
-const summarizeManualReplayRawOutput = (rawOutput, limit) => {
-  const record = asRecord(rawOutput);
-  if (!record) {
-    return truncateWithNote(extractTextValue(rawOutput), limit);
-  }
-  const lines = [];
-  const exitCode = record.exit_code ?? record.exitCode ?? record.code;
-  const status = asString(record.status);
-  if (exitCode !== undefined) lines.push("exit_code: " + String(exitCode));
-  if (status) lines.push("status: " + status);
-  const stderr = extractTextValue(record.stderr);
-  if (stderr) lines.push("stderr:\n" + truncateWithNote(stderr, 600));
-  const stdout =
-    extractTextValue(record.stdout) ||
-    extractTextValue(record.aggregated_output) ||
-    extractTextValue(record.aggregatedOutput) ||
-    extractTextValue(record.output);
-  if (stdout) lines.push("output:\n" + truncateWithNote(stdout, limit));
-  return truncateWithNote(lines.join("\n"), limit);
-};
-
-const buildManualReplayToolText = (events) => {
-  const entries = [];
-  let toolOutputCharsKept = 0;
-  for (const event of events) {
-    const update = getEventUpdate(event);
-    const record = asRecord(update);
-    const updateType = asString(record?.sessionUpdate);
-    if (!record || (updateType !== "tool_call" && updateType !== "tool_call_update")) {
-      continue;
-    }
-    const lines = [simplifyManualReplayToolCall(record)];
-    if (updateType === "tool_call_update") {
-      const rawOutput =
-        record.rawOutput ?? record.output ?? record.content ?? record.result;
-      const outputText = summarizeManualReplayRawOutput(
-        rawOutput,
-        MANUAL_REPLAY_TOOL_OUTPUT_CHAR_LIMIT,
-      );
-      if (outputText) {
-        toolOutputCharsKept += outputText.length;
-        lines.push("output summary:\n" + outputText);
-      }
-    }
-    entries.push(lines.filter(Boolean).join("\n"));
-  }
-  return { text: entries.join("\n\n"), toolOutputCharsKept };
-};
-
-const fitManualReplayText = (input) => {
-  let parentPromptText = input.parentPromptText;
-  let assistantText = input.assistantText;
-  let toolText = input.toolText;
-
-  const render = () =>
-    [
-      "Previous parent task context follows. Treat it as read-only context. The current task below is authoritative.",
-      "<parent_context>",
-      parentPromptText ? "Parent task prompt:\n" + parentPromptText : "",
-      assistantText ? "Assistant result/context:\n" + assistantText : "",
-      toolText ? "Tool activity summary:\n" + toolText : "",
-      "</parent_context>",
-    ].filter(Boolean).join("\n\n");
-
-  let text = render();
-  const initialBytes = byteLength(text);
-  if (text.length <= MANUAL_REPLAY_CHAR_LIMIT) {
-    return { text, truncatedBytes: 0 };
-  }
-
-  let excess = text.length - MANUAL_REPLAY_CHAR_LIMIT;
-  if (toolText && excess > 0) {
-    toolText = truncateWithNote(toolText, Math.max(0, toolText.length - excess));
-    text = render();
-    excess = text.length - MANUAL_REPLAY_CHAR_LIMIT;
-  }
-  if (parentPromptText && excess > 0) {
-    parentPromptText = truncateWithNote(
-      parentPromptText,
-      Math.max(0, parentPromptText.length - excess),
-    );
-    text = render();
-    excess = text.length - MANUAL_REPLAY_CHAR_LIMIT;
-  }
-  if (assistantText && !input.assistantHasMarkers && excess > 0) {
-    assistantText = clipTail(
-      assistantText,
-      Math.max(0, assistantText.length - excess),
-    );
-    text = render();
-  }
-  if (text.length > MANUAL_REPLAY_CHAR_LIMIT) {
-    text = truncateWithNote(text, MANUAL_REPLAY_CHAR_LIMIT);
-  }
-
-  return {
-    text,
-    truncatedBytes: Math.max(0, initialBytes - byteLength(text)),
-  };
-};
-
-const buildSandboxAgentManualReplayText = (parentEvents) => {
-  const parentPromptText = clipHead(
-    parentEvents
-      .map(extractPromptTextForManualReplay)
-      .filter(Boolean)
-      .join("\n\n---\n\n"),
-    MANUAL_REPLAY_PARENT_PROMPT_CHAR_LIMIT,
-  );
-  const assistantFullText = parentEvents
-    .map((event) => {
-      const update = getEventUpdate(event);
-      const record = asRecord(update);
-      return asString(record?.sessionUpdate) === "agent_message_chunk"
-        ? extractPayloadText(update)
-        : "";
-    })
-    .join("");
-  const assistantText = clipTail(
-    assistantFullText,
-    MANUAL_REPLAY_ASSISTANT_TAIL_CHAR_LIMIT,
-  );
-  const toolSummary = buildManualReplayToolText(parentEvents);
-  const fitted = fitManualReplayText({
-    parentPromptText,
-    assistantText,
-    assistantHasMarkers: false,
-    toolText: toolSummary.text,
-  });
-  return {
-    text: fitted.text,
-    stats: {
-      parentEventCount: parentEvents.length,
-      manualReplayTextBytes: byteLength(fitted.text),
-      manualReplayTruncatedBytes: fitted.truncatedBytes,
-      toolOutputCharsKept: toolSummary.toolOutputCharsKept,
-      promptContainsJsonRpcReplay: false,
-    },
-  };
-};
-
 const withTimeout = async (promise, timeoutMs, errorFactory) => {
   let timeout = null;
   try {
@@ -1262,12 +1041,6 @@ const appendSessionEvent = async (paths, state, event) => {
     ["completed", "failed", "cancelled"].includes(asString(payloadRecord?.status))
   ) {
     delete state.activeToolCalls[toolCallId];
-  }
-  if (sessionUpdate === "usage_update") {
-    state.usageUpdates.push({
-      createdAt: event.createdAt || null,
-      update: payloadRecord,
-    });
   }
   if (sessionUpdate === "agent_message_chunk") {
     const chunkText = extractPayloadText(update);
@@ -1338,7 +1111,6 @@ const sleep = async (ms) =>
 const createTaskState = () => ({
   agentMessageText: "",
   activeToolCalls: {},
-  usageUpdates: [],
   exitRequested: false,
   endTurnReceived: false,
   endTurnEventIndex: null,
@@ -1418,6 +1190,115 @@ const writeTaskStateFile = async (taskInput, state, extra = {}) => {
       2,
     ) + "\n",
     "utf-8",
+  );
+};
+
+const fileSizeOrZero = async (filePath) => {
+  if (!filePath) return 0;
+  const stat = await fs.stat(filePath).catch(() => null);
+  return stat ? Number(stat.size || 0) : 0;
+};
+
+const copyParentRuntimeFileOnce = async (input, parentPath, childPath) => {
+  if (!parentPath || !childPath) {
+    return { copied: false, bytes: 0, reason: "missing_path" };
+  }
+  const parentSize = await fileSizeOrZero(parentPath);
+  if (parentSize <= 0) {
+    return { copied: false, bytes: 0, reason: "empty_parent" };
+  }
+  const childSize = await fileSizeOrZero(childPath);
+  if (childSize > 0) {
+    return { copied: false, bytes: childSize, reason: "target_has_content" };
+  }
+  await fs.mkdir(path.dirname(childPath), { recursive: true });
+  const content = await fs.readFile(parentPath, "utf-8");
+  await fs.writeFile(childPath, content, "utf-8");
+  return { copied: true, bytes: Buffer.byteLength(content, "utf-8"), reason: "copied" };
+};
+
+const deriveParentRuntimePath = (parentSessionPersistPath, filePath, parentRuntimeRootPath) => {
+  if (parentRuntimeRootPath && filePath) {
+    return path.join(parentRuntimeRootPath, path.basename(filePath));
+  }
+  if (!parentSessionPersistPath || !filePath) return "";
+  return path.join(
+    path.dirname(path.dirname(parentSessionPersistPath)),
+    path.basename(filePath),
+  );
+};
+
+const inheritForkRuntimeArtifactsOnce = async (taskInput, sessionId) => {
+  if (taskInput.sessionMode !== "fork") {
+    return;
+  }
+  const parentSessionId = asString(taskInput.parentSessionId);
+  if (!parentSessionId || !taskInput.parentSessionPersistPath) {
+    await appendDriverLifecycleLog(
+      taskInput,
+      "fork_inheritance_skipped parent_agent_session_id=" +
+        parentSessionId +
+        " reason=missing_parent_artifacts",
+    );
+    return;
+  }
+  const markerPath =
+    (taskInput.statePath || taskInput.jsonlPath || "") + ".fork-inheritance.done";
+  const markerExists = markerPath ? Boolean(await fs.stat(markerPath).catch(() => null)) : false;
+  if (markerExists) {
+    await appendDriverLifecycleLog(
+      taskInput,
+      "fork_inheritance_skipped parent_agent_session_id=" +
+        parentSessionId +
+        " child_agent_session_id=" +
+        sessionId +
+        " reason=already_inherited",
+    );
+    return;
+  }
+  const textResult = await copyParentRuntimeFileOnce(
+    taskInput,
+    deriveParentRuntimePath(
+      taskInput.parentSessionPersistPath,
+      taskInput.textPath,
+      taskInput.parentRuntimeRootPath,
+    ),
+    taskInput.textPath,
+  );
+  if (markerPath) {
+    await fs.writeFile(
+      markerPath,
+      JSON.stringify(
+        {
+          inheritedAt: new Date().toISOString(),
+          parentAgentSessionId: parentSessionId,
+          childAgentSessionId: sessionId,
+          jsonl: {
+            copied: false,
+            bytes: 0,
+            reason: "disabled",
+          },
+          text: textResult,
+        },
+        null,
+        2,
+      ) + "\n",
+      "utf-8",
+    ).catch(() => {});
+  }
+  await appendDriverLifecycleLog(
+    taskInput,
+    "fork_inheritance_complete parent_agent_session_id=" +
+      parentSessionId +
+      " child_agent_session_id=" +
+      sessionId +
+      " jsonl_copied=false jsonl_bytes=0 jsonl_reason=disabled" +
+      " text_copied=" +
+      String(Boolean(textResult.copied)) +
+      " text_bytes=" +
+      String(textResult.bytes || 0) +
+      " text_reason=" +
+      String(textResult.reason || ""),
   );
 };
 
@@ -1620,10 +1501,65 @@ const autoApprovePermissionRequest = async (session, input, request) => {
 class FileSessionPersistDriver {
   constructor(filePath) {
     this.filePath = filePath;
-    this.lockPath = filePath + ".lock";
+    this.rootDir = path.dirname(filePath);
+    this.sessionsDir = path.join(this.rootDir, "sessions");
+    this.lockPath = path.join(this.rootDir, ".persist.lock");
   }
 
-  async readData() {
+  encodeSessionId(sessionId) {
+    return encodeURIComponent(String(sessionId));
+  }
+
+  decodeSessionId(sessionDirName) {
+    try {
+      return decodeURIComponent(String(sessionDirName));
+    } catch {
+      return String(sessionDirName);
+    }
+  }
+
+  sessionDir(sessionId) {
+    return path.join(this.sessionsDir, this.encodeSessionId(sessionId));
+  }
+
+  sessionJournalPath(sessionId) {
+    return path.join(this.sessionDir(sessionId), "session.jsonl");
+  }
+
+  eventJournalPath(sessionId) {
+    return path.join(this.sessionDir(sessionId), "events.jsonl");
+  }
+
+  async appendJsonLine(filePath, value) {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.appendFile(filePath, JSON.stringify(value) + "\n", "utf-8");
+  }
+
+  async readJsonl(filePath) {
+    let content = "";
+    try {
+      content = await fs.readFile(filePath, "utf-8");
+    } catch (error) {
+      if (error && typeof error === "object" && error.code === "ENOENT") {
+        return [];
+      }
+      throw error;
+    }
+    const items = [];
+    for (const line of content.split(/\r?\n/)) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        items.push(JSON.parse(line));
+      } catch {
+        // Ignore a partial trailing line from an interrupted append.
+      }
+    }
+    return items;
+  }
+
+  async readLegacyData() {
     try {
       const parsed = JSON.parse(await fs.readFile(this.filePath, "utf-8"));
       return {
@@ -1638,12 +1574,76 @@ class FileSessionPersistDriver {
     }
   }
 
-  async writeData(data) {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-    const tmpPath =
-      this.filePath + "." + process.pid + "." + Date.now() + ".tmp";
-    await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), "utf-8");
-    await fs.rename(tmpPath, this.filePath);
+  normalizeSessionJournalEntry(entry) {
+    if (!entry || typeof entry !== "object") {
+      return null;
+    }
+    if (entry.__op === "renamed") {
+      return { op: "renamed", oldId: entry.oldId, newId: entry.newId };
+    }
+    if (entry.__op === "save_session") {
+      return entry.session && typeof entry.session === "object"
+        ? entry.session
+        : null;
+    }
+    return entry;
+  }
+
+  async readSessionFromJournal(sessionId) {
+    const entries = await this.readJsonl(this.sessionJournalPath(sessionId));
+    let latest = null;
+    for (const entry of entries) {
+      const normalized = this.normalizeSessionJournalEntry(entry);
+      if (!normalized) {
+        continue;
+      }
+      if (normalized.op === "renamed") {
+        latest = null;
+        continue;
+      }
+      latest = normalized;
+    }
+    return latest;
+  }
+
+  async readEvents(sessionId) {
+    const legacy = await this.readLegacyData();
+    const legacyEvents = Array.isArray(legacy.eventsBySession[sessionId])
+      ? legacy.eventsBySession[sessionId]
+      : [];
+    const journalEvents = await this.readJsonl(this.eventJournalPath(sessionId));
+    return [...legacyEvents, ...journalEvents];
+  }
+
+  async listSessionIdsFromDirectories() {
+    const entries = await fs.readdir(this.sessionsDir, { withFileTypes: true }).catch(
+      () => [],
+    );
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => this.decodeSessionId(entry.name));
+  }
+
+  async readData() {
+    const legacy = await this.readLegacyData();
+    const sessions = { ...legacy.sessions };
+    const eventsBySession = { ...legacy.eventsBySession };
+    const sessionIds = new Set([
+      ...Object.keys(legacy.sessions),
+      ...Object.keys(legacy.eventsBySession),
+      ...(await this.listSessionIdsFromDirectories()),
+    ]);
+    for (const sessionId of sessionIds) {
+      const journalSession = await this.readSessionFromJournal(sessionId);
+      if (journalSession) {
+        sessions[sessionId] = journalSession;
+      }
+      const events = await this.readEvents(sessionId);
+      if (events.length) {
+        eventsBySession[sessionId] = events;
+      }
+    }
+    return { sessions, eventsBySession };
   }
 
   async withLock(callback) {
@@ -1684,8 +1684,16 @@ class FileSessionPersistDriver {
   }
 
   async getSession(id) {
-    const data = await this.readData();
-    return data.sessions[id];
+    const sessionId = asString(id);
+    if (!sessionId) {
+      return undefined;
+    }
+    const journalSession = await this.readSessionFromJournal(sessionId);
+    if (journalSession) {
+      return journalSession;
+    }
+    const legacy = await this.readLegacyData();
+    return legacy.sessions[sessionId];
   }
 
   async listSessions(request = {}) {
@@ -1703,17 +1711,96 @@ class FileSessionPersistDriver {
 
   async updateSession(session) {
     await this.withLock(async () => {
-      const data = await this.readData();
-      data.sessions[session.id] = session;
-      await this.writeData(data);
+      const id = getAgentSessionId(session);
+      await this.appendJsonLine(this.sessionJournalPath(id), {
+        __op: "save_session",
+        session,
+        writtenAt: Date.now(),
+      });
+    });
+  }
+
+  async renameSessionId(oldId, newId) {
+    const sourceId = asString(oldId);
+    const targetId = asString(newId);
+    if (!sourceId || !targetId || sourceId === targetId) {
+      return;
+    }
+    await this.withLock(async () => {
+      const sourceSession = await this.getSession(sourceId);
+      const targetSession = await this.getSession(targetId);
+      if (sourceSession && !targetSession) {
+        await this.appendJsonLine(this.sessionJournalPath(targetId), {
+          __op: "save_session",
+          session: {
+            ...sourceSession,
+            id: targetId,
+            agentSessionId:
+              asString(sourceSession?.agentSessionId) || targetId,
+          },
+          writtenAt: Date.now(),
+        });
+      }
+      await this.appendJsonLine(this.sessionJournalPath(sourceId), {
+        __op: "renamed",
+        oldId: sourceId,
+        newId: targetId,
+        writtenAt: Date.now(),
+      });
+      const sourceEvents = await this.readEvents(sourceId);
+      if (sourceEvents.length) {
+        await fs.mkdir(this.sessionDir(targetId), { recursive: true });
+        const rewritten = sourceEvents.map((event) =>
+          event && typeof event === "object"
+            ? {
+                ...event,
+                sessionId: targetId,
+              }
+            : event,
+        );
+        await fs.appendFile(
+          this.eventJournalPath(targetId),
+          rewritten.map((event) => JSON.stringify(event)).join("\n") + "\n",
+          "utf-8",
+        );
+      }
+    });
+  }
+
+  async importEventsFrom(sourcePersist, sourceSessionId, targetSessionId) {
+    const sourceId = asString(sourceSessionId);
+    const targetId = asString(targetSessionId);
+    if (!sourcePersist || !sourceId || !targetId) {
+      return { imported: false, count: 0, reason: "missing_input" };
+    }
+    const sourceEvents = await sourcePersist.readEvents(sourceId);
+    if (!sourceEvents.length) {
+      return { imported: false, count: 0, reason: "no_source_events" };
+    }
+    return await this.withLock(async () => {
+      const existing = await this.readEvents(targetId);
+      if (existing.length > 0) {
+        return {
+          imported: false,
+          count: existing.length,
+          reason: "target_has_events",
+        };
+      }
+      await fs.mkdir(this.sessionDir(targetId), { recursive: true });
+      const rewritten = sourceEvents.map((event) =>
+        event && typeof event === "object" ? { ...event, sessionId: targetId } : event,
+      );
+      await fs.appendFile(
+        this.eventJournalPath(targetId),
+        rewritten.map((event) => JSON.stringify(event)).join("\n") + "\n",
+        "utf-8",
+      );
+      return { imported: true, count: sourceEvents.length, reason: "imported" };
     });
   }
 
   async listEvents(request) {
-    const data = await this.readData();
-    const events = Array.isArray(data.eventsBySession[request.sessionId])
-      ? data.eventsBySession[request.sessionId]
-      : [];
+    const events = await this.readEvents(request.sessionId);
     const items = events
       .slice()
       .sort((left, right) => (left.eventIndex || 0) - (right.eventIndex || 0));
@@ -1727,294 +1814,19 @@ class FileSessionPersistDriver {
 
   async insertEvent(sessionId, event) {
     await this.withLock(async () => {
-      const data = await this.readData();
-      const events = Array.isArray(data.eventsBySession[sessionId])
-        ? data.eventsBySession[sessionId]
-        : [];
-      events.push(event);
-      data.eventsBySession[sessionId] = events;
-      await this.writeData(data);
+      await this.appendJsonLine(this.eventJournalPath(sessionId), event);
     });
   }
 
-  async writeForkedSessionFrom(parentPersist, parentSessionId, childSessionId) {
-    const parentData = await parentPersist.readData();
-    const parentRecord = parentData.sessions[parentSessionId];
-    if (!parentRecord) {
-      throw new Error("parent session '" + parentSessionId + "' not found in parent persist");
-    }
-    const parentEvents = Array.isArray(parentData.eventsBySession[parentSessionId])
-      ? parentData.eventsBySession[parentSessionId]
-      : [];
-    await this.withLock(async () => {
-      const data = await this.readData();
-      data.sessions[childSessionId] = {
-        ...parentRecord,
-        id: childSessionId,
-        agentSessionId: "",
-        lastConnectionId: "",
-        createdAt: Date.now(),
-        destroyedAt: undefined,
-      };
-      data.eventsBySession[childSessionId] = parentEvents.map((event) => ({
-        ...event,
-        id: crypto.randomUUID(),
-        sessionId: childSessionId,
-      }));
-      await this.writeData(data);
-    });
-    return parentEvents.length;
-  }
 }
 
-const normalizePersistEventForForkCompare = (event) => {
-  if (!event || typeof event !== "object") return event;
-  const normalized = { ...event };
-  delete normalized.id;
-  delete normalized.sessionId;
-  return normalized;
-};
-
-const writeForkDebugFile = async (input, childPersist, details = {}) => {
-  if (!input.forkDebugPath) {
-    return;
+const getAgentSessionId = (session) => {
+  const sessionId = asString(session?.agentSessionId);
+  if (!sessionId) {
+    throw new Error("sandbox-agent session is missing native agentSessionId");
   }
-  const parentSessionId = asString(input.parentSessionId);
-  const childSessionId = asString(details.childSessionId);
-  const resumeMethod = asString(details.resumeMethod);
-  const parentReplayStats = asRecord(details.parentReplayStats);
-  const isManualReplay = resumeMethod === "manual_plain_prompt_replay";
-  let parentEventCount = null;
-  let childEventCount = null;
-  let childHasParentPrefix = null;
-  let parentFirstEventMethod = null;
-  let childFirstEventMethod = null;
-  let childFirstPromptTextPrefix = null;
-
-  const parentPersist = details.parentPersist || null;
-  if (parentReplayStats && typeof parentReplayStats.parentEventCount === "number") {
-    parentEventCount = parentReplayStats.parentEventCount;
-  }
-  if (!isManualReplay && childPersist && parentPersist && parentSessionId && childSessionId) {
-    const parentData = await parentPersist.readData();
-    const childData = await childPersist.readData();
-    const parentEvents = Array.isArray(parentData.eventsBySession[parentSessionId])
-      ? parentData.eventsBySession[parentSessionId]
-      : [];
-    const childEvents = Array.isArray(childData.eventsBySession[childSessionId])
-      ? childData.eventsBySession[childSessionId]
-      : [];
-    const parentNormalized = parentEvents.map(normalizePersistEventForForkCompare);
-    const childNormalizedPrefix = childEvents
-      .slice(0, parentEvents.length)
-      .map(normalizePersistEventForForkCompare);
-    parentEventCount = parentEvents.length;
-    childEventCount = childEvents.length;
-    childHasParentPrefix =
-      parentEventCount > 0 &&
-      JSON.stringify(parentNormalized) === JSON.stringify(childNormalizedPrefix);
-    parentFirstEventMethod = asString(asRecord(parentEvents[0]?.payload)?.method);
-    childFirstEventMethod = asString(asRecord(childEvents[0]?.payload)?.method);
-    const firstPrompt = childEvents.find(
-      (event) => asString(asRecord(event?.payload)?.method) === "session/prompt",
-    );
-    const prompt = asRecord(asRecord(firstPrompt?.payload)?.params)?.prompt;
-    childFirstPromptTextPrefix = Array.isArray(prompt)
-      ? prompt.map((item) => asString(asRecord(item)?.text)).join("").slice(0, 240)
-      : null;
-  }
-
-  const debug = {
-    writtenAt: new Date().toISOString(),
-    sessionMode: String(input.sessionMode || "new"),
-    provider: String(input.provider || ""),
-    resumeMethod: resumeMethod || null,
-    parentSessionId: parentSessionId || null,
-    childSessionId: childSessionId || null,
-    resumedSessionId: asString(details.resumedSessionId) || null,
-    persistPath: input.sessionPersistPath || null,
-    parentPersistPath: input.parentSessionPersistPath || null,
-    parentReplayDebugPath: input.parentReplayDebugPath || null,
-    parentEventCount,
-    childEventCount,
-    childHasParentPrefix,
-    parentFirstEventMethod,
-    childFirstEventMethod,
-    childFirstPromptTextPrefix,
-    manualReplayTextBytes:
-      typeof parentReplayStats?.manualReplayTextBytes === "number"
-        ? parentReplayStats.manualReplayTextBytes
-        : null,
-    manualReplayTruncatedBytes:
-      typeof parentReplayStats?.manualReplayTruncatedBytes === "number"
-        ? parentReplayStats.manualReplayTruncatedBytes
-        : null,
-    toolOutputCharsKept:
-      typeof parentReplayStats?.toolOutputCharsKept === "number"
-        ? parentReplayStats.toolOutputCharsKept
-        : null,
-    promptContainsJsonRpcReplay:
-      typeof parentReplayStats?.promptContainsJsonRpcReplay === "boolean"
-        ? parentReplayStats.promptContainsJsonRpcReplay
-        : null,
-    stageCwd: input.cwd || null,
-    note:
-      isManualReplay
-        ? "manual plain prompt replay used; child persist intentionally does not include parent event prefix"
-        : childHasParentPrefix === true
-        ? "child persist begins with normalized parent events"
-        : "prefix check unavailable or failed",
-  };
-  await fs.mkdir(path.dirname(input.forkDebugPath), { recursive: true });
-  await fs.writeFile(input.forkDebugPath, JSON.stringify(debug, null, 2), "utf-8");
+  return sessionId;
 };
-
-const writeManualReplayDebugFile = async (input, parentReplay) => {
-  if (!input.parentReplayDebugPath || !parentReplay) {
-    return;
-  }
-  const content = [
-    "Manual compact parent session for sandbox-agent fork resume.",
-    "This file is debug-only. The exact compact context below is what Dokploy prepends before the current task prompt.",
-    "",
-    "parentSessionId: " + String(input.parentSessionId || ""),
-    "parentPersistPath: " + String(input.parentSessionPersistPath || ""),
-    "",
-    "stats:",
-    JSON.stringify(parentReplay.stats || {}, null, 2),
-    "",
-    "compactParentContext:",
-    parentReplay.text || "",
-    "",
-  ].join("\n");
-  await fs.mkdir(path.dirname(input.parentReplayDebugPath), { recursive: true });
-  await fs.writeFile(input.parentReplayDebugPath, content, "utf-8");
-};
-
-const mergeForkDebugFile = async (input, patch) => {
-  if (!input.forkDebugPath) {
-    return;
-  }
-  let existing = {};
-  try {
-    existing = JSON.parse(await fs.readFile(input.forkDebugPath, "utf-8"));
-  } catch {}
-  await fs.mkdir(path.dirname(input.forkDebugPath), { recursive: true });
-  await fs.writeFile(
-    input.forkDebugPath,
-    JSON.stringify(
-      {
-        ...asRecord(existing),
-        ...patch,
-        updatedAt: new Date().toISOString(),
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-};
-
-const readUsageUsed = (usage) => {
-  const record = asRecord(usage);
-  const used = record?.used;
-  const totalTokens = record?.totalTokens ?? record?.total_tokens ?? record?.total;
-  if (typeof used === "number") return used;
-  if (typeof totalTokens === "number") return totalTokens;
-  return null;
-};
-
-const attachUsageUsed = (usage) => {
-  if (!usage) {
-    return null;
-  }
-  return {
-    ...usage,
-    used: readUsageUsed(usage.update),
-  };
-};
-
-const extractUsageUpdateFromEvent = (event) => {
-  const update = asRecord(getEventUpdate(event));
-  if (asString(update?.sessionUpdate) !== "usage_update") {
-    return null;
-  }
-  return {
-    createdAt: event.createdAt || null,
-    update,
-  };
-};
-
-const getLastPersistUsageUpdate = (events) => {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const usage = extractUsageUpdateFromEvent(events[index]);
-    if (usage) {
-      return usage;
-    }
-  }
-  return null;
-};
-
-const buildUsageForkCheck = async (input, childPersist, state, sessionId, parentPersist = null) => {
-  if (String(input.sessionMode || "new") !== "fork") {
-    return null;
-  }
-  const parentSessionId = asString(input.parentSessionId);
-  const parentData =
-    parentPersist && parentSessionId ? await parentPersist.readData() : null;
-  const childData = childPersist && sessionId ? await childPersist.readData() : null;
-  const parentEvents =
-    parentData && Array.isArray(parentData.eventsBySession[parentSessionId])
-      ? parentData.eventsBySession[parentSessionId]
-      : [];
-  const childEvents =
-    childData && Array.isArray(childData.eventsBySession[sessionId])
-      ? childData.eventsBySession[sessionId]
-      : [];
-  const parentLastUsage = getLastPersistUsageUpdate(parentEvents);
-  const childPersistLastUsage = getLastPersistUsageUpdate(childEvents);
-  const childFirstObservedUsage = state.usageUpdates[0] || null;
-  const childLastObservedUsage =
-    state.usageUpdates.length > 0
-      ? state.usageUpdates[state.usageUpdates.length - 1]
-      : null;
-  const stagePromptEstimatedTokens = Math.ceil(asString(input.prompt).length / 4);
-  const childFirstUsed = readUsageUsed(childFirstObservedUsage?.update);
-  const childCurrentUsed = readUsageUsed(childLastObservedUsage?.update);
-  const parentLastUsed = readUsageUsed(parentLastUsage?.update);
-  const childFirstUsageExceedsPromptEstimate =
-    typeof childFirstUsed === "number"
-      ? childFirstUsed > stagePromptEstimatedTokens
-      : null;
-  const childFirstUsageExceedsParentUsage =
-    typeof childFirstUsed === "number" && typeof parentLastUsed === "number"
-      ? childFirstUsed > parentLastUsed
-      : null;
-  return {
-    enabled: true,
-    method: "usage_update_initial_context_size_heuristic",
-    stagePromptCharCount: asString(input.prompt).length,
-    stagePromptEstimatedTokens,
-    observedUsageUpdateCount: state.usageUpdates.length,
-    parentLastUsed,
-    childFirstUsed,
-    childCurrentUsed,
-    parentLastUsage: attachUsageUsed(parentLastUsage),
-    childFirstObservedUsage: attachUsageUsed(childFirstObservedUsage),
-    childLastObservedUsage: attachUsageUsed(childLastObservedUsage),
-    childPersistLastUsage: attachUsageUsed(childPersistLastUsage),
-    childFirstUsageExceedsPromptEstimate,
-    childFirstUsageExceedsParentUsage,
-    likelyForkContextLoadedFromUsage:
-      childFirstUsageExceedsParentUsage === true ||
-      childFirstUsageExceedsPromptEstimate === true,
-    note:
-      "usage_update is a runtime heuristic: if the first observed child session context token count exceeds the parent's last usage or the current prompt estimate, the agent runtime likely loaded forked context. It does not identify which parent supplied the context.",
-  };
-};
-
-const getSessionId = (session) =>
-  asString(session?.id) || asString(session?.agentSessionId) || "";
 
 const createNewSession = async (client, input) =>
   await client.createSession({
@@ -2025,99 +1837,40 @@ const createNewSession = async (client, input) =>
     mode: input.provider === "codex" ? "full-access" : undefined,
   });
 
-const resumeParentSession = async (client, input) => {
+const resolveParentAgentSessionId = (input) => {
   const parentSessionId = asString(input.parentSessionId);
   if (!parentSessionId) {
     throw new Error("fork session requested but parentSessionId is missing");
   }
-  if (typeof client.resumeSession !== "function") {
-    throw new Error("sandbox-agent client does not support resumeSession");
-  }
-  return await client.resumeSession(parentSessionId);
+  return parentSessionId;
 };
 
-const forkPersistedSession = async (childPersist, parentPersist, input) => {
-  const parentSessionId = asString(input.parentSessionId);
-  if (!parentSessionId) {
-    throw new Error("fork session requested but parentSessionId is missing");
+const loadParentSessionAsChild = async (client, input) => {
+  if (typeof client.loadSession !== "function") {
+    throw new Error("sandbox-agent client does not support loadSession");
   }
-  if (!parentPersist) {
-    throw new Error("fork session requested but parentSessionPersistPath is missing");
-  }
-  const childSessionId = crypto.randomUUID();
-  const parentEventCount = await childPersist.writeForkedSessionFrom(
-    parentPersist,
-    parentSessionId,
-    childSessionId,
-  );
+  const parentAgentSessionId = resolveParentAgentSessionId(input);
   await appendDriverLog(
     input.stderrPath,
-    "forked persisted parent session " +
-      parentSessionId +
-      " into child session " +
-      childSessionId +
-      " with events=" +
-      String(parentEventCount),
+    "loading parent native session parent_agent_session_id=" +
+      parentAgentSessionId,
   );
-  return childSessionId;
-};
-
-const forkFromResumedSession = async (client, parentSession, input) => {
-  const parentSessionId = asString(input.parentSessionId);
-  if (parentSession && typeof parentSession.fork === "function") {
-    return await parentSession.fork({
-      cwd: input.cwd,
-      model: input.model || undefined,
-      thoughtLevel: input.thinkingLevel || undefined,
-      mode: input.provider === "codex" ? "full-access" : undefined,
-    });
-  }
-  if (parentSession && typeof parentSession.forkSession === "function") {
-    return await parentSession.forkSession({
-      cwd: input.cwd,
-      model: input.model || undefined,
-      thoughtLevel: input.thinkingLevel || undefined,
-      mode: input.provider === "codex" ? "full-access" : undefined,
-    });
-  }
-  if (typeof client.forkSession === "function") {
-    const forkInput = {
-      agent: input.provider,
-      cwd: input.cwd,
-      agentSessionId: parentSessionId,
-      sessionId: parentSessionId,
-      id: parentSessionId,
-      model: input.model || undefined,
-      thoughtLevel: input.thinkingLevel || undefined,
-      mode: input.provider === "codex" ? "full-access" : undefined,
-    };
-    try {
-      return await client.forkSession(forkInput);
-    } catch (error) {
-      await appendDriverLog(
-        input.stderrPath,
-        "forkSession object form failed: " +
-          (error instanceof Error ? error.message : String(error)),
-      );
-      return await client.forkSession(parentSessionId, forkInput);
-    }
-  }
-  throw new Error("sandbox-agent client does not support session fork");
-};
-
-const buildManualReplayFromParentPersist = async (parentPersist, input) => {
-  const parentSessionId = asString(input.parentSessionId);
-  if (!parentSessionId) {
-    throw new Error("fork session requested but parentSessionId is missing");
-  }
-  if (!parentPersist) {
-    throw new Error("fork session requested but parentSessionPersistPath is missing");
-  }
-  const parentData = await parentPersist.readData();
-  const parentEvents = Array.isArray(parentData.eventsBySession[parentSessionId])
-    ? parentData.eventsBySession[parentSessionId]
-    : [];
-  return buildSandboxAgentManualReplayText(parentEvents);
+  const session = await client.loadSession({
+    agent: input.provider,
+    agentSessionId: parentAgentSessionId,
+    cwd: input.cwd,
+    model: input.model || undefined,
+    thoughtLevel: input.thinkingLevel || undefined,
+    mode: input.provider === "codex" ? "full-access" : undefined,
+  });
+  await appendDriverLog(
+    input.stderrPath,
+    "loaded parent native session parent_agent_session_id=" +
+      parentAgentSessionId +
+      " session_handle_agent_session_id=" +
+      getAgentSessionId(session),
+  );
+  return { session };
 };
 
 const createDriverSession = async (client, input, persist, parentPersist = null) => {
@@ -2125,61 +1878,38 @@ const createDriverSession = async (client, input, persist, parentPersist = null)
     await appendDriverLog(input.stderrPath, "creating session");
     return {
       session: await createNewSession(client, input),
-      manualReplayText: "",
-      parentReplayStats: null,
     };
   }
 
   await appendDriverLog(
     input.stderrPath,
-    "preparing manual parent replay " + String(input.parentSessionId || ""),
+    "preparing native parent session load " + String(input.parentSessionId || ""),
   );
-  if (persist) {
-    const parentReplay = await buildManualReplayFromParentPersist(parentPersist, input);
-    await writeManualReplayDebugFile(input, parentReplay);
+  if (!persist) {
+    throw new Error("fork session requested but sessionPersistPath is missing");
+  }
+  if (parentPersist) {
+    const parentAgentSessionId = resolveParentAgentSessionId(input);
+    const importResult = await persist.importEventsFrom(
+      parentPersist,
+      parentAgentSessionId,
+      parentAgentSessionId,
+    );
     await appendDriverLog(
       input.stderrPath,
-      "manual replay built parent_events=" +
-        String(parentReplay.stats.parentEventCount) +
-        " bytes=" +
-        String(parentReplay.stats.manualReplayTextBytes) +
-        " truncated_bytes=" +
-        String(parentReplay.stats.manualReplayTruncatedBytes),
+      "fork event inheritance persist_import parent_agent_session_id=" +
+        parentAgentSessionId +
+        " imported=" +
+        String(Boolean(importResult.imported)) +
+        " count=" +
+        String(importResult.count || 0) +
+        " reason=" +
+        String(importResult.reason || ""),
     );
-    await appendDriverLog(input.stderrPath, "creating fresh child session for fork");
-    const childSession = await createNewSession(client, input);
-    const childSessionId = getSessionId(childSession);
-    await writeForkDebugFile(input, persist, {
-      parentPersist,
-      childSessionId,
-      resumedSessionId: getSessionId(childSession),
-      resumeMethod: "manual_plain_prompt_replay",
-      parentReplayStats: parentReplay.stats,
-    });
-    return {
-      session: childSession,
-      manualReplayText: parentReplay.text,
-      parentReplayStats: parentReplay.stats,
-    };
   }
-
-  const parentSession = await resumeParentSession(client, input);
-  await appendDriverLog(
-    input.stderrPath,
-    "parent session resumed keys=" +
-      JSON.stringify(Object.keys(asRecord(parentSession) || {})),
-  );
-  await appendDriverLog(input.stderrPath, "forking session from parent");
-  const childSession = await forkFromResumedSession(client, parentSession, input);
-  await writeForkDebugFile(input, persist, {
-    childSessionId: getSessionId(childSession),
-    resumedSessionId: getSessionId(childSession),
-    resumeMethod: "native_fork_session",
-  });
+  const { session: childSession } = await loadParentSessionAsChild(client, input);
   return {
     session: childSession,
-    manualReplayText: "",
-    parentReplayStats: null,
   };
 };
 
@@ -2301,7 +2031,6 @@ const main = async () => {
     },
   );
   const session = driverSession.session || driverSession;
-  const manualReplayText = asString(driverSession.manualReplayText);
   const sessionRecord = asRecord(session);
   await appendDriverLog(
     input.stderrPath,
@@ -2311,19 +2040,10 @@ const main = async () => {
       JSON.stringify(Object.keys(sessionRecord || {})),
   );
 
-  const sessionId = getSessionId(session);
-  if (sessionId) {
-    await appendDriverLog(input.stderrPath, "emitting thread id");
-    process.stdout.write("THREAD_ID:" + sessionId + "\n");
-  } else {
-    await appendDriverLog(
-      input.stderrPath,
-      "session created without thread id agentSessionId=" +
-        String(asString(session?.agentSessionId) || "") +
-        " id=" +
-        String(asString(session?.id) || ""),
-    );
-  }
+  const sessionId = getAgentSessionId(session);
+  await inheritForkRuntimeArtifactsOnce(input, sessionId);
+  await appendDriverLog(input.stderrPath, "emitting thread id");
+  process.stdout.write("THREAD_ID:" + sessionId + "\n");
 
   let state = createTaskState();
   let eventWriteChain = Promise.resolve();
@@ -2365,7 +2085,7 @@ const main = async () => {
     void autoApprovePermissionRequest(session, activeInput, request);
   });
 
-  const runPromptTask = async (taskInput, replayText) => {
+  const runPromptTask = async (taskInput) => {
     activeInput = taskInput;
     activeTaskId = String(taskInput.taskId || "");
     activePhase = "prompt";
@@ -2384,13 +2104,10 @@ const main = async () => {
       process.stdout.write("THREAD_ID:" + sessionId + "\n");
     }
     await appendDriverLog(taskInput.stderrPath, "starting prompt task_id=" + String(taskInput.taskId || ""));
-    const promptText = replayText
-      ? replayText + "\n\nCurrent task:\n" + taskInput.prompt
-      : taskInput.prompt;
     const promptStartedAt = Date.now();
     await withHeartbeat(
       withTimeout(
-        session.prompt([{ type: "text", text: promptText }]),
+        session.prompt([{ type: "text", text: taskInput.prompt }]),
         SANDBOX_AGENT_PROMPT_TIMEOUT_MS,
         () =>
           new Error(
@@ -2449,23 +2166,6 @@ const main = async () => {
     state.exitRequested = Boolean(state.outputFile?.validEnvelope && state.outputFile.exit);
     state.completedAt = new Date().toISOString();
     await writeTaskStateFile(taskInput, state);
-    if (String(taskInput.sessionMode || "new") === "fork") {
-      const usageForkCheck = await buildUsageForkCheck(
-        taskInput,
-        persist,
-        state,
-        sessionId,
-        parentPersist,
-      ).catch((error) => ({
-        enabled: true,
-        method: "usage_update_initial_context_size_heuristic",
-        error: error instanceof Error ? error.message : String(error),
-        likelyForkContextLoadedFromUsage: null,
-      }));
-      if (usageForkCheck) {
-        await mergeForkDebugFile(taskInput, { usageForkCheck });
-      }
-    }
     if (!state.endTurnReceived) {
       await appendScanRuntimeFile(
         taskInput.stderrPath,
@@ -2496,7 +2196,7 @@ const main = async () => {
     return state;
   };
 
-  await runPromptTask(input, manualReplayText);
+  await runPromptTask(input);
   let lastIdleLifecycleLogAt = 0;
   while (input.persistent && !state.exitRequested) {
     activeInput = input;
@@ -2708,7 +2408,50 @@ const buildTaskSessionPersistPathInContainer = (taskRootInContainer: string) =>
 		SANDBOX_AGENT_SESSION_PERSIST_FILE_NAME,
 	);
 
-const resolveParentSessionPersistPathInContainer = async (
+const buildTaskAgentHomePathInContainer = (taskRootInContainer: string) =>
+	path.posix.join(taskRootInContainer, SANDBOX_AGENT_AGENT_HOME_DIR_NAME);
+
+const buildTaskRootInContainer = (input: {
+	scanJobId: string;
+	stageName: string;
+	name: string;
+	taskId: string;
+}) =>
+	path.posix.join(
+		CONTAINER_SCAN_CONTEXT_ROOT,
+		"jobs",
+		input.scanJobId,
+		resolveTaskRootSegment(input.stageName, input.name, input.taskId)
+			.split(path.sep)
+			.join("/"),
+	);
+
+const buildLaneRootInContainer = (input: {
+	scanJobId: string;
+	stageName: string;
+	laneIndex: number;
+}) =>
+	path.posix.join(
+		CONTAINER_SCAN_CONTEXT_ROOT,
+		"jobs",
+		input.scanJobId,
+		resolveStageLaneRootSegment(input.stageName, input.laneIndex)
+			.split(path.sep)
+			.join("/"),
+	);
+
+const resolvePersistentLaneIndexFromContainerName = (
+	containerName: string | null | undefined,
+) => {
+	const match = (containerName || "").match(/(?:^|-)lane-(\d+)$/);
+	if (!match?.[1]) {
+		return null;
+	}
+	const laneIndex = Number.parseInt(match[1], 10);
+	return Number.isFinite(laneIndex) ? laneIndex : null;
+};
+
+const resolveParentTaskRootInContainer = async (
 	input: RunSingleTurnAgentInput,
 ) => {
 	if (input.sessionMode !== "fork") {
@@ -2723,20 +2466,172 @@ const resolveParentSessionPersistPathInContainer = async (
 			`Fork session requested but parent task '${input.parentTaskId}' was not found`,
 		);
 	}
-	return buildTaskSessionPersistPathInContainer(
-		path.posix.join(
-			CONTAINER_SCAN_CONTEXT_ROOT,
-			"jobs",
-			input.scanJob.scanJobId,
-			resolveTaskRootSegment(
-				parentTask.stageName,
-				parentTask.name,
-				parentTask.taskId,
-			)
-				.split(path.sep)
-				.join("/"),
-		),
+	return buildTaskRootInContainer({
+		scanJobId: input.scanJob.scanJobId,
+		stageName: parentTask.stageName,
+		name:
+			resolveStageTaskName(parentTask.stageName, parentTask.input) ||
+			parentTask.name,
+		taskId: parentTask.taskId,
+	});
+};
+
+const resolveParentAgentHomePathInContainer = async (
+	input: RunSingleTurnAgentInput,
+) => {
+	if (input.sessionMode !== "fork" || !input.parentTaskId) {
+		return null;
+	}
+	const parentTask = await findTaskByIdRepo(input.parentTaskId).catch(() => null);
+	if (!parentTask) {
+		throw new Error(
+			`Fork session requested but parent task '${input.parentTaskId}' was not found`,
+		);
+	}
+	const parentContainerLaneIndex = resolvePersistentLaneIndexFromContainerName(
+		parentTask.containerName,
 	);
+	if (parentContainerLaneIndex !== null) {
+		return buildTaskAgentHomePathInContainer(
+			buildLaneRootInContainer({
+				scanJobId: input.scanJob.scanJobId,
+				stageName: parentTask.stageName,
+				laneIndex: parentContainerLaneIndex,
+			}),
+		);
+	}
+	const parentLaneRuntime = await findStageLaneRuntimeByTaskIdRepo({
+		scanJobId: input.scanJob.scanJobId,
+		stageName: parentTask.stageName,
+		taskId: parentTask.taskId,
+	}).catch(() => null);
+	if (parentLaneRuntime) {
+		return buildTaskAgentHomePathInContainer(
+			buildLaneRootInContainer({
+				scanJobId: input.scanJob.scanJobId,
+				stageName: parentTask.stageName,
+				laneIndex: parentLaneRuntime.laneIndex,
+			}),
+		);
+	}
+	const parentTaskRoot = await resolveParentTaskRootInContainer(input);
+	return parentTaskRoot ? buildTaskAgentHomePathInContainer(parentTaskRoot) : null;
+};
+
+const resolveParentSessionPersistPathInContainer = async (
+	input: RunSingleTurnAgentInput,
+) => {
+	if (input.sessionMode !== "fork" || !input.parentTaskId) {
+		return null;
+	}
+	const parentTask = await findTaskByIdRepo(input.parentTaskId).catch(() => null);
+	if (!parentTask) {
+		throw new Error(
+			`Fork session requested but parent task '${input.parentTaskId}' was not found`,
+		);
+	}
+	const parentContainerLaneIndex = resolvePersistentLaneIndexFromContainerName(
+		parentTask.containerName,
+	);
+	if (parentContainerLaneIndex !== null) {
+		return buildTaskSessionPersistPathInContainer(
+			buildLaneRootInContainer({
+				scanJobId: input.scanJob.scanJobId,
+				stageName: parentTask.stageName,
+				laneIndex: parentContainerLaneIndex,
+			}),
+		);
+	}
+	const parentLaneRuntime = await findStageLaneRuntimeByTaskIdRepo({
+		scanJobId: input.scanJob.scanJobId,
+		stageName: parentTask.stageName,
+		taskId: parentTask.taskId,
+	}).catch(() => null);
+	if (parentLaneRuntime) {
+		return buildTaskSessionPersistPathInContainer(
+			buildLaneRootInContainer({
+				scanJobId: input.scanJob.scanJobId,
+				stageName: parentTask.stageName,
+				laneIndex: parentLaneRuntime.laneIndex,
+			}),
+		);
+	}
+	const parentTaskRoot = await resolveParentTaskRootInContainer(input);
+	return parentTaskRoot ? buildTaskSessionPersistPathInContainer(parentTaskRoot) : null;
+};
+
+const resolveAgentHomeLinkPathInContainer = (agentProvider: string) =>
+	agentProvider === "claude_code"
+		? CLAUDE_HOME_IN_CONTAINER
+		: CODEX_HOME_IN_CONTAINER;
+
+const prepareTaskAgentHomeInContainer = async (input: {
+	containerName: string;
+	agentProvider: string;
+	agentProfile: AgentProfileLike | null;
+	agentsDir: string | null;
+	agentHomeRootInContainer: string;
+	sessionMode?: "new" | "fork";
+	parentAgentHomePathInContainer: string | null;
+	reuseExistingAgentHome?: boolean;
+}) => {
+	const agentHomePathInContainer = buildTaskAgentHomePathInContainer(
+		input.agentHomeRootInContainer,
+	);
+	const agentHomeLinkPathInContainer = resolveAgentHomeLinkPathInContainer(
+		input.agentProvider,
+	);
+	const isFork = input.sessionMode === "fork";
+	const setupScript = [
+		"set -euo pipefail",
+		`agent_home='${escapeSingleQuotes(agentHomePathInContainer)}'`,
+		`agent_home_link='${escapeSingleQuotes(agentHomeLinkPathInContainer)}'`,
+		`parent_agent_home='${escapeSingleQuotes(input.parentAgentHomePathInContainer || "")}'`,
+		`reuse_existing='${input.reuseExistingAgentHome ? "1" : "0"}'`,
+		"mkdir -p \"$(dirname \"$agent_home\")\" \"$(dirname \"$agent_home_link\")\"",
+		"if [ \"$reuse_existing\" = \"1\" ] && [ -d \"$agent_home\" ]; then",
+		"  :",
+		"else",
+		isFork
+			? [
+					"  if [ -z \"$parent_agent_home\" ] || [ ! -d \"$parent_agent_home\" ]; then",
+					"    echo \"fork session requested but parent agent-home is missing: $parent_agent_home\" >&2",
+					"    exit 1",
+					"  fi",
+					"  rm -rf \"$agent_home\"",
+					"  cp -a \"$parent_agent_home\" \"$agent_home\"",
+			  ].join("\n")
+			: "  rm -rf \"$agent_home\" && mkdir -p \"$agent_home\"",
+		"fi",
+		"rm -rf \"$agent_home_link\"",
+		"ln -s \"$agent_home\" \"$agent_home_link\"",
+		"mkdir -p \"$agent_home/skills\"",
+	].join("\n");
+
+	await execAsync(
+		`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(setupScript)}'`,
+	);
+
+	if (input.agentProvider === "claude_code") {
+		await initializeClaudeHomeInContainer(
+			input.containerName,
+			agentHomePathInContainer,
+		);
+	} else {
+		await copyCodexAssetsToContainerHome(
+			input.containerName,
+			agentHomePathInContainer,
+			input.agentsDir,
+			input.agentProfile,
+		);
+	}
+
+	return {
+		agentHomePathInContainer,
+		agentHomeLinkPathInContainer,
+		parentAgentHomePathInContainer: input.parentAgentHomePathInContainer,
+		agentHomeCopiedFromParent: isFork,
+	};
 };
 
 export const runSingleTurnAgentInContainer = async (
@@ -2848,6 +2743,48 @@ export const runSingleTurnAgentInContainer = async (
 		SANDBOX_AGENT_DRIVER_TASK_DIR_NAME,
 	);
 
+	const persistentDriverHealth = input.persistent
+		? await inspectDriverHealth({
+				containerName: input.containerName,
+				driverPidPath,
+				driverLifecyclePath,
+			})
+		: null;
+	const persistentDriverAlive = Boolean(
+		input.persistent && persistentDriverHealth?.alive,
+	);
+	const agentHomeRootInContainer = input.persistent
+		? input.stageRootInContainer
+		: taskStageRootInContainer;
+	const parentTaskRootInContainer =
+		input.sessionMode === "fork"
+			? await resolveParentTaskRootInContainer(input)
+			: null;
+	const parentAgentHomePathInContainer =
+		await resolveParentAgentHomePathInContainer(input);
+	const agentsDir = await resolveAgentsDirectory();
+	const taskAgentHome = persistentDriverAlive
+		? {
+				agentHomePathInContainer: buildTaskAgentHomePathInContainer(
+					agentHomeRootInContainer,
+				),
+				agentHomeLinkPathInContainer: resolveAgentHomeLinkPathInContainer(
+					agentProvider,
+				),
+				parentAgentHomePathInContainer,
+				agentHomeCopiedFromParent: false,
+		  }
+		: await prepareTaskAgentHomeInContainer({
+				containerName: input.containerName,
+				agentProvider,
+				agentProfile: input.agentProfile,
+				agentsDir,
+				agentHomeRootInContainer,
+				sessionMode: input.sessionMode,
+				parentAgentHomePathInContainer,
+				reuseExistingAgentHome: Boolean(input.persistent),
+		  });
+
 	const sandboxRuntime = await prepareSandboxAgentRuntime({
 		containerName: input.containerName,
 		stageDirPath: input.stageDirPath,
@@ -2882,6 +2819,7 @@ export const runSingleTurnAgentInContainer = async (
 		thinkingLevel: input.agentProfile?.thinkingLevel || null,
 		sessionMode: input.laneThreadId ? "persistent" : input.sessionMode || "new",
 		parentSessionId: input.parentSessionId || null,
+		parentRuntimeRootPath: parentTaskRootInContainer,
 		parentSessionPersistPath: parentSessionPersistPathInContainer,
 		sessionPersistPath: sessionPersistPathInContainer,
 		jsonlPath: path.posix.join(
@@ -2905,26 +2843,11 @@ export const runSingleTurnAgentInContainer = async (
 			taskRuntimeArtifacts.stateFileName,
 		),
 		driverLifecyclePath,
-		forkDebugPath: path.posix.join(
-			taskStageRootInContainer,
-			SANDBOX_AGENT_FORK_DEBUG_FILE_NAME,
-		),
-		parentReplayDebugPath: path.posix.join(
-			taskStageRootInContainer,
-			SANDBOX_AGENT_PARENT_CONTEXT_DEBUG_FILE_NAME,
-		),
+		agentHomePathInContainer: taskAgentHome.agentHomePathInContainer,
+		agentHomeLinkPathInContainer: taskAgentHome.agentHomeLinkPathInContainer,
+		parentAgentHomePathInContainer: taskAgentHome.parentAgentHomePathInContainer,
+		agentHomeCopiedFromParent: taskAgentHome.agentHomeCopiedFromParent,
 	};
-
-	const persistentDriverHealth = input.persistent
-		? await inspectDriverHealth({
-				containerName: input.containerName,
-				driverPidPath,
-				driverLifecyclePath,
-			})
-		: null;
-	const persistentDriverAlive = Boolean(
-		input.persistent && persistentDriverHealth?.alive,
-	);
 	if (persistentDriverAlive) {
 		const requestPath = path.posix.join(
 			taskQueueDir,

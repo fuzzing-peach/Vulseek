@@ -266,7 +266,7 @@ type InProgressTaskView = {
 };
 
 type TerminalTaskView = InProgressTaskView & {
-	status: "completed" | "failed" | "canceled";
+	status: "completed" | "failed" | "canceled" | "exited";
 	completedAt: string | null;
 	errorMessage: string | null;
 };
@@ -910,7 +910,8 @@ const buildTerminalTaskView = (task: Task): TerminalTaskView | null => {
 	if (
 		status !== "completed" &&
 		status !== "failed" &&
-		status !== "canceled"
+		status !== "canceled" &&
+		status !== "exited"
 	) {
 		return null;
 	}
@@ -1198,6 +1199,36 @@ const buildScanDockerfileTemplate = async () => {
 	return await fs.readFile(templatePath, "utf-8");
 };
 
+const resolveSandboxAgentPatchPath = async () => {
+	const candidates = [
+		path.resolve(process.cwd(), "patches/sandbox-agent@0.4.2.patch"),
+		path.resolve(process.cwd(), "../../patches/sandbox-agent@0.4.2.patch"),
+		path.resolve(
+			process.cwd(),
+			"packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch",
+		),
+		path.resolve(
+			process.cwd(),
+			"../../packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch",
+		),
+		"/app/patches/sandbox-agent@0.4.2.patch",
+		"/app/packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch",
+		"/data/exp/dkzou/dokploy/patches/sandbox-agent@0.4.2.patch",
+		"/data/exp/dkzou/dokploy/packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch",
+	];
+
+	for (const candidate of candidates) {
+		try {
+			const stat = await fs.stat(candidate);
+			if (stat.isFile()) {
+				return candidate;
+			}
+		} catch {}
+	}
+
+	throw new Error("Unable to locate sandbox-agent@0.4.2.patch");
+};
+
 type CheckoutStatus = "running" | "completed" | "failed";
 
 type CheckoutTask = {
@@ -1428,6 +1459,10 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dokploy-scan-checkout-"));
 	const dockerfilePath = path.join(tempDir, "Dockerfile.scan");
 	const tempAgentsPath = path.join(tempDir, "agents");
+	const tempSandboxAgentPatchPath = path.join(
+		tempDir,
+		"sandbox-agent@0.4.2.patch",
+	);
 	const args = [
 		"build",
 		"-f",
@@ -1461,6 +1496,10 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 		if (agentsDir) {
 			await fs.cp(agentsDir, tempAgentsPath, { recursive: true });
 		}
+		await fs.copyFile(
+			await resolveSandboxAgentPatchPath(),
+			tempSandboxAgentPatchPath,
+		);
 		await fs.writeFile(dockerfilePath, task.dockerfileTemplate, "utf-8");
 		await new Promise<void>((resolve, reject) => {
 			const child = spawn("docker", args, {
@@ -4154,16 +4193,15 @@ const persistFunctionResultCandidates = async (input: {
 			stageName: "FunctionScanningStage",
 			status: "completed",
 			priority: syntheticFunction.priority,
-			input: {
-				scanJob: input.scanJob,
-				module: syntheticModule,
-				function: syntheticFunction,
-			},
-			output: {
-				candidates: [normalizedCandidate],
-			},
-			rawOutput: JSON.stringify([normalizedCandidate]),
-		});
+				input: {
+					scanJob: input.scanJob,
+					module: syntheticModule,
+					function: syntheticFunction,
+				},
+				output: {
+					candidates: [normalizedCandidate],
+				},
+			});
 		const analysisTaskId = createShortTaskId();
 		await createTaskRepo({
 			taskId: analysisTaskId,
@@ -4544,10 +4582,10 @@ const runSandboxAgentHeadlessTurnInContainer = async (input: {
 		mode: input.provider === "codex" ? "full-access" : undefined,
 	} as never);
 
-	const sessionId =
-		asString(session?.agentSessionId) ||
-		asString(session?.id) ||
-		"";
+	const sessionId = asString(session?.agentSessionId);
+	if (!sessionId) {
+		throw new Error("sandbox-agent session is missing native agentSessionId");
+	}
 	if (sessionId) {
 		await input.onSessionId?.(sessionId);
 	}
@@ -5150,14 +5188,14 @@ const runFullScan = async (
 				typeof repositoryStage,
 				ModuleScanningStageInput,
 				typeof moduleStage
-			>({
-				name: "repository-to-module",
-				from: repositoryStage,
-				to: moduleStage,
-				fork: false,
-				transformOutput: async ({ ctx, stageOutput }) =>
-					stageOutput.modules.map((module) => ({
-						scanJob: ctx.scanJob,
+				>({
+					name: "repository-to-module",
+					from: repositoryStage,
+					to: moduleStage,
+					fork: true,
+					transformOutput: async ({ ctx, stageOutput }) =>
+						stageOutput.modules.map((module) => ({
+							scanJob: ctx.scanJob,
 						repository: stageOutput.repository,
 						module,
 					})),

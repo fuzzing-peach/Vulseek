@@ -3,6 +3,7 @@ import { format } from "date-fns";
 import Head from "next/head";
 import Link from "next/link";
 import { useRouter } from "next/router";
+import JsonView from "react18-json-view";
 import { toast } from "sonner";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
@@ -85,6 +86,13 @@ const formatValue = (value?: string | number | null) => {
 		return "-";
 	}
 	return String(value);
+};
+
+const formatTokenUsage = (value?: number | null) => {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return "-";
+	}
+	return `${new Intl.NumberFormat().format(value)} tokens`;
 };
 
 const stringifyJson = (value: unknown) => {
@@ -192,9 +200,14 @@ const JsonBlock = ({ label, value }: { label: string; value: unknown }) => {
 					className="size-7 shrink-0"
 				/>
 			</div>
-			<pre className="max-h-[420px] overflow-auto bg-muted/20 p-3 font-mono text-xs leading-5 text-foreground">
-				{json}
-			</pre>
+			<div className="max-h-[420px] overflow-auto bg-muted/20 p-3 font-mono text-xs leading-5">
+				<JsonView
+					src={value}
+					collapsed={false}
+					displaySize="collapsed"
+					enableClipboard={false}
+				/>
+			</div>
 		</div>
 	);
 };
@@ -374,6 +387,11 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 								/>
 								<DetailField label="Priority" value={task.priority} />
 								<DetailField label="Attempt" value={task.attempt} />
+								<DetailField
+									label="Token Usage"
+									value={formatTokenUsage(task.tokenUsage)}
+									copyLabel="Token Usage"
+								/>
 								<DetailField label="Runtime Mode" value={task.runtimeMode} />
 								<DetailField
 									label="Parent Task ID"

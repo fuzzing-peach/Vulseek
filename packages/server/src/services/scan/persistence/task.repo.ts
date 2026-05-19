@@ -111,7 +111,7 @@ export const createTaskRepo = async (input: {
 	forkedFromThreadId?: string | null;
 	input?: typeof tasks.$inferSelect.input;
 	output?: typeof tasks.$inferSelect.output;
-	rawOutput?: string | null;
+	tokenUsage?: number | null;
 	errorMessage?: string | null;
 	exitReason?: typeof tasks.$inferSelect.exitReason;
 	exitNote?: string | null;
@@ -143,7 +143,7 @@ export const createTaskRepo = async (input: {
 					forkedFromThreadId: input.forkedFromThreadId ?? null,
 					input: input.input ?? null,
 					output: input.output ?? null,
-					rawOutput: input.rawOutput ?? null,
+					tokenUsage: input.tokenUsage ?? null,
 					errorMessage: input.errorMessage ?? null,
 					exitReason: input.exitReason ?? null,
 					exitNote: input.exitNote ?? null,
@@ -368,9 +368,6 @@ export const storeTaskOutputRepo = async (
 ) =>
 	await updateTaskRepo(taskId, { output });
 
-export const storeTaskRawOutputRepo = async (taskId: string, rawOutput: string) =>
-	await updateTaskRepo(taskId, { rawOutput });
-
 export const resetFailedTaskForRetryRepo = async (taskId: string) => {
 	const updated = await db
 		.update(tasks)
@@ -381,8 +378,8 @@ export const resetFailedTaskForRetryRepo = async (taskId: string) => {
 			completedAt: null,
 			containerName: null,
 			threadId: null,
-			rawOutput: null,
 			output: null,
+			tokenUsage: null,
 			attempt: sql`${tasks.attempt} + 1`,
 			updatedAt: new Date().toISOString(),
 		})
@@ -409,8 +406,8 @@ export const requeueTaskRepo = async (taskId: string) => {
 			completedAt: null,
 			containerName: null,
 			threadId: null,
-			rawOutput: null,
 			output: null,
+			tokenUsage: null,
 			attempt: sql`${tasks.attempt} + 1`,
 			updatedAt: new Date().toISOString(),
 		})

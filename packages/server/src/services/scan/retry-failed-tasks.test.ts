@@ -58,7 +58,7 @@ const makeTask = (overrides?: Partial<Task>): Task => ({
 	stageGroupInstanceId: null,
 	input: null,
 	output: null,
-	rawOutput: null,
+	tokenUsage: null,
 	errorMessage: null,
 	exitReason: null,
 	exitNote: null,

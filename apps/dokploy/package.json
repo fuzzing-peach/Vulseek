@@ -138,6 +138,7 @@
 		"react-hook-form": "^7.56.4",
 		"react-i18next": "^15.5.2",
 		"react-markdown": "^9.1.0",
+		"react18-json-view": "^0.2.10",
 		"recharts": "^2.15.3",
 		"rotating-file-stream": "3.2.3",
 		"sandbox-agent": "0.4.x",

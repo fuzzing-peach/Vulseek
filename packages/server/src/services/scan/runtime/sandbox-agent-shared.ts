@@ -106,6 +106,74 @@ export const formatSandboxAgentSessionEvent = (
 	event: SandboxAgentSessionEvent,
 ) => `${JSON.stringify(event)}\n`;
 
+const asNumber = (value: unknown) =>
+	typeof value === "number" && Number.isFinite(value) ? value : null;
+
+export type SandboxAgentTokenUsageSummary = {
+	firstUsed: number;
+	latestUsed: number;
+	tokenUsage: number;
+	contextSize: number | null;
+};
+
+export const getUsageUpdateUsedTokens = (
+	update: MaybeSandboxAgentSessionUpdate,
+) => {
+	const record = asRecord(update);
+	if (!record || asString(record.sessionUpdate) !== "usage_update") {
+		return null;
+	}
+	const directUsed = asNumber(record.used);
+	const tokenUsage = asRecord(record.tokenUsage);
+	const total = asRecord(tokenUsage?.total);
+	const nestedUsed = asNumber(total?.totalTokens);
+	const used = directUsed ?? nestedUsed;
+	if (used === null) {
+		return null;
+	}
+	return {
+		used,
+		contextSize:
+			asNumber(record.size) ?? asNumber(tokenUsage?.modelContextWindow),
+	};
+};
+
+export const summarizeSandboxAgentTokenUsage = (
+	content: string,
+): SandboxAgentTokenUsageSummary | null => {
+	let firstUsed: number | null = null;
+	let latestUsed: number | null = null;
+	let contextSize: number | null = null;
+
+	for (const rawLine of content.split("\n")) {
+		const trimmed = rawLine.trim();
+		if (!trimmed) {
+			continue;
+		}
+		try {
+			const parsed = JSON.parse(trimmed) as SandboxAgentSessionEvent;
+			const usage = getUsageUpdateUsedTokens(getEventUpdate(parsed));
+			if (!usage) {
+				continue;
+			}
+			firstUsed ??= usage.used;
+			latestUsed = usage.used;
+			contextSize = usage.contextSize ?? contextSize;
+		} catch {}
+	}
+
+	if (firstUsed === null || latestUsed === null) {
+		return null;
+	}
+
+	return {
+		firstUsed,
+		latestUsed,
+		tokenUsage: Math.max(0, latestUsed - firstUsed),
+		contextSize,
+	};
+};
+
 export const isAgentMessageChunkEvent = (event: SandboxAgentSessionEvent) => {
 	const update = getEventUpdate(event);
 	const payloadRecord = asRecord(update);

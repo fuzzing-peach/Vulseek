@@ -222,7 +222,10 @@ export const runSandboxAgentHeadlessTurnInContainer = async (input: {
     mode: input.provider === "codex" ? "full-access" : undefined,
   } as never);
 
-  const sessionId = asString(session?.agentSessionId) || asString(session?.id) || "";
+  const sessionId = asString(session?.agentSessionId);
+  if (!sessionId) {
+    throw new Error("sandbox-agent session is missing native agentSessionId");
+  }
   if (sessionId) {
     await input.onSessionId?.(sessionId);
   }

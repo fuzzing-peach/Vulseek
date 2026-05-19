@@ -116,11 +116,11 @@ export const tasks = pgTable(
 			},
 		),
 		forkedFromThreadId: text("forkedFromThreadId"),
-		stageGroupInstanceId: text("stageGroupInstanceId"),
-		input: jsonb("input").$type<unknown | null>(),
-		output: jsonb("output").$type<unknown | null>(),
-		rawOutput: text("rawOutput"),
-		errorMessage: text("errorMessage"),
+			stageGroupInstanceId: text("stageGroupInstanceId"),
+			input: jsonb("input").$type<unknown | null>(),
+			output: jsonb("output").$type<unknown | null>(),
+			tokenUsage: integer("token_usage"),
+			errorMessage: text("errorMessage"),
 		exitReason: text("exitReason").$type<
 			"agent_exit" | "leader_exit" | null
 		>(),

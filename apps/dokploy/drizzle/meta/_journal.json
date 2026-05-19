@@ -1191,6 +1191,20 @@
       "when": 1778742200000,
       "tag": "0169_scan_stage_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 170,
+      "version": "7",
+      "when": 1778742300000,
+      "tag": "0170_drop_tasks_raw_output",
+      "breakpoints": true
+    },
+    {
+      "idx": 171,
+      "version": "7",
+      "when": 1778742400000,
+      "tag": "0171_tasks_token_usage",
+      "breakpoints": true
     }
   ]
 }

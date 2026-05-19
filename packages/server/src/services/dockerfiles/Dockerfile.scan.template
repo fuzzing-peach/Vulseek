@@ -30,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssl libssl3t64 \
     openssh-client ripgrep vim nano less rsync tree \
     build-essential cmake ninja-build make autoconf automake libtool pkg-config \
+    patch \
     clang clangd lldb lld gdb \
     python3 python3-pip python3-venv \
     pipx \
@@ -84,8 +85,12 @@ ENV PATH="/opt/vulseek-venv/bin:$PATH"
 # Keep Claude non-fatal to avoid blocking build if registry/network fails.
 RUN npm config set registry https://registry.npmmirror.com \
     && npm config get registry
+COPY sandbox-agent@0.4.2.patch /tmp/dokploy-sandbox-agent.patch
 RUN npm install -g @anthropic-ai/claude-code || true
-RUN npm install -g sandbox-agent@0.4.x
+RUN npm install -g sandbox-agent@0.4.2 \
+    && patch -d "$(npm root -g)/sandbox-agent" -p1 < /tmp/dokploy-sandbox-agent.patch \
+    && grep -R "async loadSession(" "$(npm root -g)/sandbox-agent/dist" >/dev/null \
+    && rm -f /tmp/dokploy-sandbox-agent.patch
 RUN npm install -g @sandbox-agent/cli@0.4.x \
     && sandbox-agent --help >/dev/null
 RUN npm install -g @openai/codex \

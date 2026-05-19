@@ -15,6 +15,16 @@ export type SandboxAgentActivity = {
 	detail?: string;
 	line?: number;
 	timestamp?: string;
+	tokenUsage?: SandboxAgentActivityTokenUsage;
+};
+
+export type SandboxAgentActivityTokenUsage = {
+	firstUsed: number;
+	latestUsed: number;
+	used: number;
+	contextSize?: number | null;
+	line?: number;
+	timestamp?: string;
 };
 
 export type SandboxAgentActivityStreamMessage = {
@@ -49,6 +59,14 @@ const getObjectField = (
 ) =>
 	record && record[key] && typeof record[key] === "object"
 		? (record[key] as Record<string, unknown>)
+		: null;
+
+const getNumberField = (
+	record: Record<string, unknown> | null | undefined,
+	key: string,
+) =>
+	record && typeof record[key] === "number" && Number.isFinite(record[key])
+		? (record[key] as number)
 		: null;
 
 const getTextContent = (value: unknown): string => {
@@ -210,11 +228,49 @@ const normalizeToolTitle = (title: string) => {
 const makeActivity = (
 	entry: SandboxAgentActivityStreamMessage,
 	activity: Omit<SandboxAgentActivity, "line" | "timestamp">,
+	current?: SandboxAgentActivity,
 ): SandboxAgentActivity => ({
 	...activity,
+	tokenUsage: activity.tokenUsage || current?.tokenUsage,
 	line: entry.line,
 	timestamp: entry.timestamp,
 });
+
+const getUsageUpdate = (
+	entry: SandboxAgentActivityStreamMessage,
+	update: Record<string, unknown>,
+	current: SandboxAgentActivity,
+): SandboxAgentActivity | null => {
+	const directUsed = getNumberField(update, "used");
+	const tokenUsage = getObjectField(update, "tokenUsage");
+	const total = getObjectField(tokenUsage, "total");
+	const nestedUsed = getNumberField(total, "totalTokens");
+	const latestUsed = directUsed ?? nestedUsed;
+	if (latestUsed === null) {
+		return null;
+	}
+	const previous = current.tokenUsage;
+	const firstUsed = previous?.firstUsed ?? latestUsed;
+	return makeActivity(
+		entry,
+		{
+			kind: current.kind,
+			label: current.label,
+			detail: current.detail,
+			tokenUsage: {
+				firstUsed,
+				latestUsed,
+				used: Math.max(0, latestUsed - firstUsed),
+				contextSize:
+					getNumberField(update, "size") ??
+					getNumberField(tokenUsage, "modelContextWindow"),
+				line: entry.line,
+				timestamp: entry.timestamp,
+			},
+		},
+		current,
+	);
+};
 
 const getToolActivity = (
 	entry: SandboxAgentActivityStreamMessage,
@@ -285,10 +341,14 @@ export const getSandboxAgentActivityFromMessage = (
 			: {};
 
 	if (method === "session/prompt") {
-		return makeActivity(entry, {
-			kind: "prompt",
-			label: "Prompt",
-		});
+		return makeActivity(
+			entry,
+			{
+				kind: "prompt",
+				label: "Prompt",
+			},
+			current,
+		);
 	}
 
 	if (method === "session/update") {
@@ -298,24 +358,39 @@ export const getSandboxAgentActivityFromMessage = (
 				: {};
 		const sessionUpdate = getStringField(update, "sessionUpdate");
 
-		if (sessionUpdate === "agent_message_chunk") {
-			return makeActivity(entry, {
-				kind: "writing",
-				label: "Writing",
-			});
-		}
+			if (sessionUpdate === "agent_message_chunk") {
+				return makeActivity(
+					entry,
+					{
+						kind: "writing",
+						label: "Writing",
+					},
+					current,
+				);
+			}
 
-		if (sessionUpdate === "tool_call") {
-			return getToolActivity(entry, update);
-		}
+			if (sessionUpdate === "tool_call") {
+				return {
+					...getToolActivity(entry, update),
+					tokenUsage: current.tokenUsage,
+				};
+			}
 
-		if (sessionUpdate === "plan") {
-			return makeActivity(entry, {
-				kind: "planning",
-				label: "Planning",
-				detail: trimSummary(getTextContent(update.content), 120) || undefined,
-			});
-		}
+			if (sessionUpdate === "plan") {
+				return makeActivity(
+					entry,
+					{
+						kind: "planning",
+						label: "Planning",
+						detail: trimSummary(getTextContent(update.content), 120) || undefined,
+					},
+					current,
+				);
+			}
+
+			if (sessionUpdate === "usage_update") {
+				return getUsageUpdate(entry, update, current) || current;
+			}
 
 		return current;
 	}
@@ -327,37 +402,53 @@ export const getSandboxAgentActivityFromMessage = (
 				: {};
 		const itemType = getStringField(item, "type");
 
-		if (itemType === "commandExecution") {
-			return makeActivity(entry, {
-				kind: "command",
-				label: "Command",
-				detail: trimSummary(getStringField(item, "command"), 120) || undefined,
-			});
-		}
+			if (itemType === "commandExecution") {
+				return makeActivity(
+					entry,
+					{
+						kind: "command",
+						label: "Command",
+						detail: trimSummary(getStringField(item, "command"), 120) || undefined,
+					},
+					current,
+				);
+			}
 
-		if (itemType === "reasoning") {
-			return makeActivity(entry, {
-				kind: "reasoning",
-				label: "Reasoning",
-			});
-		}
+			if (itemType === "reasoning") {
+				return makeActivity(
+					entry,
+					{
+						kind: "reasoning",
+						label: "Reasoning",
+					},
+					current,
+				);
+			}
 	}
 
 	if (
 		method === "item/reasoning/textDelta" ||
 		method === "item/reasoning/summaryTextDelta"
 	) {
-		return makeActivity(entry, {
-			kind: "reasoning",
-			label: "Reasoning",
-		});
+		return makeActivity(
+			entry,
+			{
+				kind: "reasoning",
+				label: "Reasoning",
+			},
+			current,
+		);
 	}
 
 	if (method === "item/agentMessage/delta") {
-		return makeActivity(entry, {
-			kind: "writing",
-			label: "Writing",
-		});
+		return makeActivity(
+			entry,
+			{
+				kind: "writing",
+				label: "Writing",
+			},
+			current,
+		);
 	}
 
 	if (method === "error") {
@@ -365,13 +456,19 @@ export const getSandboxAgentActivityFromMessage = (
 			params.error && typeof params.error === "object"
 				? (params.error as Record<string, unknown>)
 				: {};
-		return makeActivity(entry, {
-			kind: "error",
-			label: "Error",
-			detail:
-				trimSummary(getStringField(error, "message") || getStringField(params, "message"), 120) ||
-				undefined,
-		});
+		return makeActivity(
+			entry,
+			{
+				kind: "error",
+				label: "Error",
+				detail:
+					trimSummary(
+						getStringField(error, "message") || getStringField(params, "message"),
+						120,
+					) || undefined,
+			},
+			current,
+		);
 	}
 
 	return current;
@@ -394,4 +491,6 @@ export const areSandboxAgentActivitiesEqual = (
 	left.label === right.label &&
 	left.detail === right.detail &&
 	left.line === right.line &&
-	left.timestamp === right.timestamp;
+	left.timestamp === right.timestamp &&
+	left.tokenUsage?.used === right.tokenUsage?.used &&
+	left.tokenUsage?.latestUsed === right.tokenUsage?.latestUsed;

@@ -35,12 +35,14 @@ import { removeContainer } from "../runtime/run-single-turn-agent";
 import {
 	hasEndTurnInJsonlContent,
 	SANDBOX_AGENT_RUNTIME_FILE_NAMES,
+	summarizeSandboxAgentTokenUsage,
 } from "../runtime/sandbox-agent-shared";
 import {
 	createStageContext,
 	type PipelineContext,
 	type StageContext,
 } from "../stages/full-scan-stage.runtime";
+import { resolveStageTaskName } from "../stage-task-name";
 import {
 	type FirstStageInputOf,
 	getDownstreamEdges,
@@ -126,18 +128,7 @@ const assertScanJobNotCancelled = async (ctx: PipelineContext) => {
 	}
 };
 
-const STAGE_RAW_OUTPUT_FILE_NAME = "raw-output.txt";
 const SANDBOX_AGENT_DRIVER_TASK_DIR_NAME = "sandbox-agent-driver-tasks";
-
-const persistStageRawOutput = async (ctx: StageContext, rawOutput: string) => {
-	const stageDirPath = await ctx.taskDir();
-	await fs.mkdir(stageDirPath, { recursive: true });
-	await fs.writeFile(
-		path.join(stageDirPath, STAGE_RAW_OUTPUT_FILE_NAME),
-		rawOutput,
-		"utf-8",
-	);
-};
 
 const normalizeJsonOutput = (rawOutput: string) => {
 	const trimmed = rawOutput.trim();
@@ -199,14 +190,12 @@ const updateTaskDefault = async (
 		exitNote?: string | null;
 		containerName?: string;
 		threadId?: string;
-		rawOutput?: string;
 		output?: unknown;
 	},
 ) => {
 	const taskPatch = {
 		...(patch.containerName ? { containerName: patch.containerName } : {}),
 		...(patch.threadId ? { threadId: patch.threadId } : {}),
-		...(patch.rawOutput !== undefined ? { rawOutput: patch.rawOutput } : {}),
 		...(patch.output !== undefined ? { output: patch.output } : {}),
 		...(patch.status
 			? {
@@ -399,6 +388,12 @@ const summarizeLastJsonlEvent = (content: string) => {
 	}
 };
 
+const readTaskTokenUsage = async (ctx: StageContext) => {
+	const { jsonlPath } = await getTaskRuntimePaths(ctx);
+	const jsonlContent = await readFileIfExists(jsonlPath);
+	return summarizeSandboxAgentTokenUsage(jsonlContent)?.tokenUsage ?? null;
+};
+
 const readPersistentQueueFailureForTask = async (
 	task: Awaited<ReturnType<typeof findTaskByIdRepo>>,
 	taskDir: string,
@@ -525,6 +520,25 @@ const markTaskExited = async (input: {
 		},
 	}).catch(() => null);
 
+const isStageGroupLeaderTask = async (
+	task: {
+		taskId: string;
+		stageName: string;
+		stageGroupInstanceId?: string | null;
+	} | null,
+) => {
+	if (!task?.stageGroupInstanceId) {
+		return false;
+	}
+	const group = await findStageGroupInstanceByIdRepo(task.stageGroupInstanceId);
+	return (
+		Boolean(group) &&
+		group?.status !== "exited" &&
+		group?.leaderTaskId === task.taskId &&
+		group?.leaderStageName === task.stageName
+	);
+};
+
 const cleanupStageGroupForLeaderExit = async <
 	TPipelineContext extends PipelineContext,
 >(
@@ -539,6 +553,7 @@ const cleanupStageGroupForLeaderExit = async <
 	const group = await findStageGroupInstanceByIdRepo(groupInstanceId);
 	if (
 		!group ||
+		group.leaderTaskId !== leaderTaskId ||
 		leaderTask.stageName !== group.leaderStageName ||
 		group.status === "exited"
 	) {
@@ -1085,51 +1100,6 @@ const resolveStageTaskId = (
 	throw new Error(`Unable to resolve taskId for stage ${stageName}`);
 };
 
-const resolveStageTaskName = <TInput>(
-	stageName: string,
-	input: TInput,
-): string => {
-	const record =
-		(input as Record<string, unknown> | null | undefined) || undefined;
-	switch (stageName) {
-		case "RepositoryScanningStage":
-			return "repository-scanning";
-		case "ModuleScanningStage":
-			return typeof record?.module === "object" &&
-				record.module &&
-				"name" in record.module &&
-				typeof record.module.name === "string"
-				? record.module.name
-				: "module-scanning";
-		case "FunctionScanningStage":
-			return typeof record?.function === "object" &&
-				record.function &&
-				"functionName" in record.function &&
-				typeof record.function.functionName === "string"
-				? record.function.functionName
-				: "function-scanning";
-		case "AnalysisStage":
-			return typeof record?.candidate === "object" &&
-				record.candidate &&
-				"title" in record.candidate &&
-				typeof record.candidate.title === "string"
-				? record.candidate.title
-				: "candidate-analysis";
-		case "VerifyingStage":
-			return typeof record?.analysisResult === "object" &&
-				record.analysisResult &&
-				"candidate" in record.analysisResult &&
-				typeof record.analysisResult.candidate === "object" &&
-				record.analysisResult.candidate &&
-				"title" in record.analysisResult.candidate &&
-				typeof record.analysisResult.candidate.title === "string"
-				? record.analysisResult.candidate.title
-				: "candidate-verification";
-		default:
-			return stageName;
-	}
-};
-
 const createTaskStageContext = <
 	TPipelineContext extends PipelineContext,
 	TInput,
@@ -1321,8 +1291,6 @@ const prepareStageSuccess = async <
 			`Task ${stageCtx.taskId} is no longer running; ignoring stale completion`,
 		);
 	}
-	await persistStageRawOutput(stageCtx, rawOutput);
-	await updateTaskDefault(stageCtx.taskId, { rawOutput });
 	await assertScanJobNotCancelled(stageCtx);
 	const output = stage.validateOutput
 		? await stage.validateOutput(stageCtx, input, rawOutput)
@@ -1363,17 +1331,23 @@ const persistTerminalSuccess = async <
 		});
 		return false;
 	}
+	const tokenUsage = await readTaskTokenUsage(stageCtx).catch(() => null);
+	const shouldMarkTaskExited =
+		Boolean(options?.exitReason) && (await isStageGroupLeaderTask(currentTask));
 	const updated = await transitionTaskStatusRepo({
 		taskId: stageCtx.taskId,
 		from: ["launching", "running"],
-		to: options?.exitReason ? "exited" : "completed",
+		to: shouldMarkTaskExited ? "exited" : "completed",
 		patch: options?.exitReason
 			? {
 					exitReason: options.exitReason,
-					exitNote: "Agent requested exit",
+					exitNote: shouldMarkTaskExited
+						? "Agent requested group leader exit"
+						: "Agent requested lane exit",
 					errorMessage: null,
+					tokenUsage,
 				}
-			: undefined,
+			: { tokenUsage },
 	});
 	if (!updated) {
 		return false;
@@ -1402,6 +1376,7 @@ const persistTerminalSuccess = async <
 			taskId: stageCtx.taskId,
 			taskName: stageCtx.taskName,
 			exitReason: options.exitReason,
+			taskStatus: shouldMarkTaskExited ? "exited" : "completed",
 		});
 	}
 	return true;
@@ -1436,11 +1411,12 @@ const persistTerminalFailure = async <
 		});
 		return false;
 	}
+	const tokenUsage = await readTaskTokenUsage(stageCtx).catch(() => null);
 	const updated = await transitionTaskStatusRepo({
 		taskId: stageCtx.taskId,
 		from: ["launching", "running"],
 		to: "failed",
-		patch: { errorMessage: getErrorMessage(error) },
+		patch: { errorMessage: getErrorMessage(error), tokenUsage },
 	}).catch(() => null);
 	if (!updated) {
 		return false;

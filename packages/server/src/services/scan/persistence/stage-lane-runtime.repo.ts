@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull, or } from "drizzle-orm";
 import { db } from "@dokploy/server/db";
 import {
 	scanStageGroupInstances,
@@ -127,6 +127,28 @@ export const findStageLaneRuntimeByActiveTaskIdRepo = async (taskId: string) =>
 		.select()
 		.from(scanStageLaneRuntimes)
 		.where(eq(scanStageLaneRuntimes.activeTaskId, taskId))
+		.limit(1)
+		.then((rows) => rows[0] || null);
+
+export const findStageLaneRuntimeByTaskIdRepo = async (input: {
+	scanJobId: string;
+	stageName: string;
+	taskId: string;
+}) =>
+	await db
+		.select()
+		.from(scanStageLaneRuntimes)
+		.where(
+			and(
+				eq(scanStageLaneRuntimes.scanJobId, input.scanJobId),
+				eq(scanStageLaneRuntimes.stageName, input.stageName),
+				or(
+					eq(scanStageLaneRuntimes.activeTaskId, input.taskId),
+					eq(scanStageLaneRuntimes.lastExitTaskId, input.taskId),
+				),
+			),
+		)
+		.orderBy(asc(scanStageLaneRuntimes.laneIndex))
 		.limit(1)
 		.then((rows) => rows[0] || null);
 

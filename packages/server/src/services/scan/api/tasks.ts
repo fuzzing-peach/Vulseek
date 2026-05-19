@@ -11,7 +11,6 @@ import {
 	resetFailedTaskForRetryRepo,
 	storeTaskInputRepo,
 	storeTaskOutputRepo,
-	storeTaskRawOutputRepo,
 	updateTaskRepo,
 	updateTaskStatusRepo,
 } from "../persistence/task.repo";
@@ -57,9 +56,6 @@ export const storeTaskInput = async (taskId: string, input: Task["input"]) =>
 
 export const storeTaskOutput = async (taskId: string, output: Task["output"]) =>
 	await storeTaskOutputRepo(taskId, output);
-
-export const storeTaskRawOutput = async (taskId: string, rawOutput: string) =>
-	await storeTaskRawOutputRepo(taskId, rawOutput);
 
 export const resetFailedTaskForRetry = async (taskId: string) =>
 	await resetFailedTaskForRetryRepo(taskId);

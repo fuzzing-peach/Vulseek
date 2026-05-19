@@ -1,4 +1,6 @@
 import "@/styles/globals.css";
+import "react18-json-view/src/style.css";
+import "react18-json-view/src/dark.css";
 
 import type { NextPage } from "next";
 import type { AppProps } from "next/app";

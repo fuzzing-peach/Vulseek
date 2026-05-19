@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { JsonRpcSummaryPanel } from "@/components/dashboard/scanning/jsonrpc-summary";
 import { useSandboxAgentActivity } from "@/components/dashboard/scanning/use-sandbox-agent-activity";
 import { useSandboxAgentSession } from "@/components/dashboard/scanning/use-sandbox-agent-session";
+import type { SandboxAgentActivity } from "@/lib/scan/sandbox-agent-activity";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +33,16 @@ const getActivityBadgeClassName = (kind: string) => {
 	return "border-muted-foreground/20 bg-muted text-muted-foreground";
 };
 
+const formatTokenUsage = (value: number) => {
+	if (value >= 1_000_000) {
+		return `${(value / 1_000_000).toFixed(1)}M`;
+	}
+	if (value >= 1_000) {
+		return `${(value / 1_000).toFixed(1)}k`;
+	}
+	return String(value);
+};
+
 export const LiveTaskActivity = ({
 	taskId,
 	title,
@@ -45,7 +56,7 @@ export const LiveTaskActivity = ({
 	taskId: string;
 	title: string;
 	subtitle?: string | null;
-	activity?: { kind: string; label: string };
+	activity?: SandboxAgentActivity;
 	isConnected?: boolean;
 	viewButtonVariant?: "default" | "secondary" | "outline" | "ghost";
 	viewButtonSize?: "default" | "sm" | "lg" | "icon";
@@ -83,7 +94,7 @@ export const LiveTaskActivityBadge = ({
 	isConnected,
 }: {
 	taskId?: string;
-	activity?: { kind: string; label: string };
+	activity?: SandboxAgentActivity;
 	isConnected?: boolean;
 }) => {
 	const liveActivity = useSandboxAgentActivity({
@@ -102,15 +113,24 @@ export const LiveTaskActivityBadge = ({
 						className="size-1.5 shrink-0 rounded-full bg-emerald-500"
 					/>
 				) : null}
-				<Badge
-					variant="outline"
-					className={getActivityBadgeClassName(resolvedActivity.kind)}
-				>
-					{resolvedActivity.label}
-				</Badge>
+					<Badge
+						variant="outline"
+						className={getActivityBadgeClassName(resolvedActivity.kind)}
+					>
+						{resolvedActivity.label}
+					</Badge>
+					{typeof resolvedActivity.tokenUsage?.used === "number" ? (
+						<Badge
+							variant="outline"
+							className="border-muted-foreground/20 bg-background text-muted-foreground"
+							title={`Token usage: ${resolvedActivity.tokenUsage.used}`}
+						>
+							{formatTokenUsage(resolvedActivity.tokenUsage.used)} tokens
+						</Badge>
+					) : null}
+				</div>
 			</div>
-		</div>
-	);
+		);
 };
 
 export const LiveTaskActivityButton = ({
@@ -125,7 +145,7 @@ export const LiveTaskActivityButton = ({
 	taskId: string;
 	title: string;
 	subtitle?: string | null;
-	activity?: { kind: string; label: string };
+	activity?: SandboxAgentActivity;
 	variant?: "default" | "secondary" | "outline" | "ghost";
 	size?: "default" | "sm" | "lg" | "icon";
 	iconOnly?: boolean;
