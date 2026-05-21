@@ -54,7 +54,7 @@
 	},
 	"pnpm": {
 		"patchedDependencies": {
-			"sandbox-agent@0.4.2": "patches/sandbox-agent@0.4.2.patch"
+			"sandbox-agent@0.4.2": "packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch"
 		}
 	}
 }

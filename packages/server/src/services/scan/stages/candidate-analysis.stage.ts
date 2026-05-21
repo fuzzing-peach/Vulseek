@@ -14,6 +14,7 @@ import {
 	runSingleTurnAgentInContainer,
 	startContainer,
 } from "../runtime/run-single-turn-agent";
+import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import type {
 	CriticResponse,
 	FuzzBuildResult,
@@ -71,6 +72,7 @@ const buildCandidateAnalysisPrompt = (
 
 	return [
 		"You are the analysis agent for one vulnerability candidate.",
+		...NEVER_REUSE_TASK_PROMPT_LINES,
 		"Work only on this candidate and decide whether it is a real issue.",
 		`scan_job_id: ${scanJob.scanJobId}`,
 		`candidate_id: ${stageInput.candidate.id}`,

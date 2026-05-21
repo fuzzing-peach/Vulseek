@@ -13,6 +13,7 @@ import {
 	runSingleTurnAgentInContainer,
 	startContainer,
 } from "../runtime/run-single-turn-agent";
+import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import type { CandidateAnalysisStageInput } from "./candidate-analysis.stage";
 import {
 	type PipelineContext,
@@ -35,6 +36,7 @@ const buildFuzzBuildPrompt = (
 ) =>
 	[
 		"You are the fuzzing-program build agent for one vulnerability candidate.",
+		...NEVER_REUSE_TASK_PROMPT_LINES,
 		"Use the installed skill named libafl-build as your working method.",
 		`candidate_id: ${input.candidate.id}`,
 		`candidate_title: ${input.candidate.title}`,

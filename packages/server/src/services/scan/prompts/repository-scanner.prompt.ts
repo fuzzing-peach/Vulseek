@@ -1,3 +1,5 @@
+import { NEVER_REUSE_TASK_PROMPT_LINES } from "./task-isolation.prompt";
+
 export type PreparedRepositoryStateForPrompt = {
 	currentBranch: string | null;
 	targetRef: string | null;
@@ -19,6 +21,7 @@ export const buildRepositoryScannerPrompt = (input: {
 }) => {
 	return [
 		"You are the repository-scanner for a full scan job.",
+		...NEVER_REUSE_TASK_PROMPT_LINES,
 		"Use the installed skill named repository-scanner as your working method.",
 		"Do not emit candidate or candidate_batch events.",
 		"Analyze the full checked-out repository, not a recent commit window.",

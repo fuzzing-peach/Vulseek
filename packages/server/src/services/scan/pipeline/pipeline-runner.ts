@@ -112,6 +112,7 @@ const logPipelineEvent = (event: string, details: Record<string, unknown>) => {
 const SCAN_JOB_CANCELLED_ERROR_NAME = "ScanJobCancelledError";
 const STALE_RUNNING_TASK_GRACE_MS = 2 * 60 * 1000;
 const STALE_RUNNING_STDOUT_WINDOW_MS = 10 * 60 * 1000;
+const RUNNING_OUTPUT_WITHOUT_END_TURN_LOG_INTERVAL_MS = 5 * 60 * 1000;
 const JOB_LOOP_IDLE_SLEEP_MS = 1000;
 
 class ScanJobCancelledError extends Error {
@@ -884,7 +885,6 @@ const inspectHalfStartedRunningTask = async <
 					outputValidEnvelope: outputSummary.validEnvelope,
 					outputRoute: outputSummary.route,
 					hasEndTurn,
-					lastJsonlEventIndex: lastJsonlEvent?.eventIndex ?? null,
 					activeToolCallIds: stateSummary.activeToolCalls
 						.map((item) =>
 							item && typeof item === "object" && "toolCallId" in item
@@ -906,16 +906,32 @@ const inspectHalfStartedRunningTask = async <
 		].join("\n"),
 	);
 	if (!previousSnapshot || previousSnapshot.hash !== runtimeOutputHash) {
+		const lastRunningOutputWithoutEndTurnLoggedAt =
+			previousSnapshot?.lastRunningOutputWithoutEndTurnLoggedAt;
+		const runningOutputWithoutEndTurnLogIntervalElapsed =
+			!lastRunningOutputWithoutEndTurnLoggedAt ||
+			now - lastRunningOutputWithoutEndTurnLoggedAt >=
+				RUNNING_OUTPUT_WITHOUT_END_TURN_LOG_INTERVAL_MS;
+		const shouldLogRunningOutputWithoutEndTurn =
+			outputSummary.exists &&
+			!hasEndTurn &&
+			(previousSnapshot?.lastRunningOutputWithoutEndTurnDiagnosticKey !==
+				diagnosticKey ||
+				runningOutputWithoutEndTurnLogIntervalElapsed);
 		runtime.runningStdoutSnapshots.set(task.taskId, {
 			hash: runtimeOutputHash,
 			lastChangedAt: now,
 			lastDiagnosticKey: diagnosticKey,
+			lastRunningOutputWithoutEndTurnDiagnosticKey:
+				shouldLogRunningOutputWithoutEndTurn
+					? diagnosticKey
+					: previousSnapshot?.lastRunningOutputWithoutEndTurnDiagnosticKey,
+			lastRunningOutputWithoutEndTurnLoggedAt:
+				shouldLogRunningOutputWithoutEndTurn
+					? now
+					: previousSnapshot?.lastRunningOutputWithoutEndTurnLoggedAt,
 		});
-		if (
-			outputSummary.exists &&
-			!hasEndTurn &&
-			previousSnapshot?.lastDiagnosticKey !== diagnosticKey
-		) {
+		if (shouldLogRunningOutputWithoutEndTurn) {
 			logPipelineEvent("stage.running_output_without_end_turn", {
 				scanJobId: runtime.ctx.scanJobId,
 				pipelineName: runtime.pipeline.name,
@@ -1626,7 +1642,13 @@ type JobRuntime<TPipelineContext extends PipelineContext> = {
 	stageStates: Map<string, RuntimeStageState<TPipelineContext>>;
 	runningStdoutSnapshots: Map<
 		string,
-		{ hash: string; lastChangedAt: number; lastDiagnosticKey?: string }
+		{
+			hash: string;
+			lastChangedAt: number;
+			lastDiagnosticKey?: string;
+			lastRunningOutputWithoutEndTurnDiagnosticKey?: string;
+			lastRunningOutputWithoutEndTurnLoggedAt?: number;
+		}
 	>;
 	wakeSignal: WakeSignal;
 	stopRequested: boolean;

@@ -1,3 +1,5 @@
+import { NEVER_REUSE_TASK_PROMPT_LINES } from "./task-isolation.prompt";
+
 export const buildModuleScannerPrompt = (input: {
 	scanJobId: string;
 	moduleId: string;
@@ -8,6 +10,7 @@ export const buildModuleScannerPrompt = (input: {
 }) => {
 	return [
 		"You are the module-scanner for one full-scan module task.",
+		...NEVER_REUSE_TASK_PROMPT_LINES,
 		"Use the installed skill named module-scanner as your working method.",
 		"Use the installed skill named tree-sitter for function extraction.",
 		"Do not emit candidate or candidate_batch events.",

@@ -22,6 +22,9 @@ export const resolveStageTaskName = <TInput>(
 				? record.function.functionName
 				: "function-scanning";
 		case "AnalysisStage":
+		case "FuzzBuildStage":
+		case "FuzzRunStage":
+		case "AnalysisCriticStage":
 			return typeof record?.candidate === "object" &&
 				record.candidate &&
 				"title" in record.candidate &&

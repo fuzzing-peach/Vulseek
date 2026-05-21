@@ -1,3 +1,5 @@
+import { NEVER_REUSE_TASK_PROMPT_LINES } from "./task-isolation.prompt";
+
 export const buildFunctionScannerPrompt = (input: {
 	scanJobId: string;
 	moduleId: string;
@@ -15,6 +17,7 @@ export const buildFunctionScannerPrompt = (input: {
 }) => {
 	return [
 		"You are the function-scanner for one full-scan function task.",
+		...NEVER_REUSE_TASK_PROMPT_LINES,
 		"Use the installed skill named function-scanner as your working method.",
 		`scan_job_id: ${input.scanJobId}`,
 		`module_id: ${input.moduleId}`,

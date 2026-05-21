@@ -7,7 +7,7 @@ settings:
 patchedDependencies:
   sandbox-agent@0.4.2:
     hash: 7bbd6346d2003b6c42a9805b341f3042b0d964a8aa7493658c0fa979c1f7420e
-    path: patches/sandbox-agent@0.4.2.patch
+    path: packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch
 
 overrides:
   '@types/react': 18.3.5

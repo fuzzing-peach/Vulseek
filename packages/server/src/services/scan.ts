@@ -1023,6 +1023,11 @@ const listQueuePendingCountsByScanJobId = async (
 				),
 			);
 			const matchingTasks = allTasks.filter((task) => task.stageName === stageName);
+			const queuedCount = matchingTasks.filter((task) => task.status === "pending")
+				.length;
+			const launchingCount = matchingTasks.filter(
+				(task) => task.status === "launching",
+			).length;
 			const waitingCount =
 				(counts.waiting || 0) +
 				(counts.prioritized || 0) +
@@ -1040,11 +1045,8 @@ const listQueuePendingCountsByScanJobId = async (
 				title,
 				queueName: queue.name,
 				waitingCount,
-				queuedCount: matchingTasks.filter((task) => task.status === "pending")
-					.length,
-				launchingCount: matchingTasks.filter(
-					(task) => task.status === "launching",
-				).length,
+				queuedCount,
+				launchingCount,
 				runningCount: matchingTasks.filter((task) => task.status === "running")
 					.length,
 				completedCount: matchingTasks.filter(
@@ -1055,7 +1057,7 @@ const listQueuePendingCountsByScanJobId = async (
 				exitedCount: matchingTasks.filter((task) => task.status === "exited")
 					.length,
 				totalCount: matchingTasks.length,
-				pendingCount: waitingCount,
+				pendingCount: queuedCount,
 			};
 		}),
 	);
@@ -1200,33 +1202,20 @@ const buildScanDockerfileTemplate = async () => {
 };
 
 const resolveSandboxAgentPatchPath = async () => {
-	const candidates = [
-		path.resolve(process.cwd(), "patches/sandbox-agent@0.4.2.patch"),
-		path.resolve(process.cwd(), "../../patches/sandbox-agent@0.4.2.patch"),
-		path.resolve(
-			process.cwd(),
-			"packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch",
-		),
-		path.resolve(
-			process.cwd(),
-			"../../packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch",
-		),
-		"/app/patches/sandbox-agent@0.4.2.patch",
-		"/app/packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch",
-		"/data/exp/dkzou/dokploy/patches/sandbox-agent@0.4.2.patch",
-		"/data/exp/dkzou/dokploy/packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch",
-	];
-
-	for (const candidate of candidates) {
-		try {
-			const stat = await fs.stat(candidate);
-			if (stat.isFile()) {
-				return candidate;
-			}
-		} catch {}
+	const workspaceRoot =
+		path.basename(process.cwd()) === "dokploy" &&
+		path.basename(path.dirname(process.cwd())) === "apps"
+			? path.resolve(process.cwd(), "../..")
+			: process.cwd();
+	const patchPath = path.resolve(
+		workspaceRoot,
+		"packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch",
+	);
+	const stat = await fs.stat(patchPath);
+	if (!stat.isFile()) {
+		throw new Error(`sandbox-agent patch path is not a file: ${patchPath}`);
 	}
-
-	throw new Error("Unable to locate sandbox-agent@0.4.2.patch");
+	return patchPath;
 };
 
 type CheckoutStatus = "running" | "completed" | "failed";
@@ -4870,6 +4859,7 @@ const runFullScan = async (
 	);
 	const repositoryStage =
 		createRepositoryScanningStageDefinition<FullScanPipelineContext>({
+			persistent: false,
 			queue: createStageQueueBinding({
 				queue: repositoryScanQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -4906,6 +4896,7 @@ const runFullScan = async (
 
 	const moduleStage =
 		createModuleScanningStageDefinition<FullScanPipelineContext>({
+			persistent: false,
 			queue: createStageQueueBinding({
 				queue: moduleScanQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -4943,6 +4934,7 @@ const runFullScan = async (
 		
 	const functionStage =
 		createFunctionScanningStageDefinition<FullScanPipelineContext>({
+			persistent: false,
 			queue: createStageQueueBinding({
 				queue: functionScanQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -4978,6 +4970,7 @@ const runFullScan = async (
 			}),
 		});
 	const analysisStage = createAnalysisStageDefinition<FullScanPipelineContext>({
+		persistent: false,
 		queue: createStageQueueBinding({
 			queue: analysisQueue,
 			getGroupQueue: (groupInstanceId) =>
@@ -5014,6 +5007,7 @@ const runFullScan = async (
 	});
 	const fuzzBuildStage =
 		createFuzzBuildStageDefinition<FullScanPipelineContext>({
+			persistent: false,
 			queue: createStageQueueBinding({
 				queue: fuzzBuildQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -5053,6 +5047,7 @@ const runFullScan = async (
 			}),
 		});
 	const fuzzRunStage = createFuzzRunStageDefinition<FullScanPipelineContext>({
+		persistent: false,
 		queue: createStageQueueBinding({
 			queue: fuzzRunQueue,
 			getGroupQueue: (groupInstanceId) =>
@@ -5093,6 +5088,7 @@ const runFullScan = async (
 	});
 	const analysisCriticStage =
 		createAnalysisCriticStageDefinition<FullScanPipelineContext>({
+			persistent: false,
 			queue: createStageQueueBinding({
 				queue: analysisCriticQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -5133,6 +5129,7 @@ const runFullScan = async (
 		});
 	const verifyingStage =
 		createVerifyingStageDefinition<FullScanPipelineContext>({
+			persistent: false,
 			queue: createStageQueueBinding({
 				queue: verificationQueue,
 				getGroupQueue: (groupInstanceId) =>

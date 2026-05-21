@@ -15,6 +15,7 @@ import {
 	startContainer,
 } from "../runtime/run-single-turn-agent";
 import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "../runtime/sandbox-agent-shared";
+import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import type {
 	Candidate,
 	FinalAnalysis,
@@ -71,6 +72,7 @@ const buildCandidateVerificationPrompt = (
 
 	return [
 		"You are the verifier agent for one vulnerability candidate.",
+		...NEVER_REUSE_TASK_PROMPT_LINES,
 		"Work only on this candidate and validate the existing analysis result.",
 		`scan_job_id: ${analysisResult.scanJob.scanJobId}`,
 		`candidate_id: ${candidate.id}`,

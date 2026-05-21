@@ -901,8 +901,7 @@ export const ShowScanJobDetail = ({
 			: 0;
 	const getQueueTaskMetrics = (queue: (typeof queuePendingCounts)[number]) => {
 		const queued =
-			(queue.waitingCount ?? queue.pendingCount ?? 0) +
-			(queue.queuedCount ?? 0) +
+			(queue.queuedCount ?? queue.pendingCount ?? 0) +
 			(queue.launchingCount ?? 0);
 		const running = queue.runningCount ?? 0;
 		const failed = queue.failedCount ?? 0;

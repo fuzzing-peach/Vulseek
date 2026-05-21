@@ -15,6 +15,7 @@ import type { AgentProfileLike, ScanJob } from "../types";
 import type { ScanStageSettings } from "@dokploy/server/db/schema";
 
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
+const CONTAINER_TASK_RUNTIME_ROOT = "/task";
 
 export type PipelineContext = {
 	projectName: string;
@@ -322,18 +323,7 @@ export const resolveRepositoryStageRuntime = async (input: {
 
 	return {
 		stageDirPath,
-		stageRootInContainer: path.posix.join(
-			CONTAINER_SCAN_CONTEXT_ROOT,
-			"jobs",
-			input.scanJobId,
-			resolveTaskRootSegment(
-				"RepositoryScanningStage",
-				"repository-scanning",
-				input.scanJobId,
-			)
-				.split(path.sep)
-				.join("/"),
-		),
+		stageRootInContainer: CONTAINER_TASK_RUNTIME_ROOT,
 	};
 };
 
@@ -445,15 +435,7 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 		await fs.mkdir(defaultStageDirPath, { recursive: true });
 		return defaultStageDirPath;
 	},
-	taskDirContainer: async () =>
-		path.posix.join(
-			CONTAINER_SCAN_CONTEXT_ROOT,
-			"jobs",
-			input.scanJob.scanJobId,
-			resolveTaskRootSegment(input.stageName, input.taskName, input.taskId)
-				.split(path.sep)
-				.join("/"),
-		),
+	taskDirContainer: async () => CONTAINER_TASK_RUNTIME_ROOT,
 	laneDir: async () => {
 		if (input.laneIndex === undefined || input.laneIndex === null) {
 			return await (createStageContext({
@@ -471,24 +453,7 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 		await fs.mkdir(laneDirPath, { recursive: true });
 		return laneDirPath;
 	},
-	laneDirContainer: async () =>
-		input.laneIndex === undefined || input.laneIndex === null
-			? path.posix.join(
-					CONTAINER_SCAN_CONTEXT_ROOT,
-					"jobs",
-					input.scanJob.scanJobId,
-					resolveTaskRootSegment(input.stageName, input.taskName, input.taskId)
-						.split(path.sep)
-						.join("/"),
-				)
-			: path.posix.join(
-					CONTAINER_SCAN_CONTEXT_ROOT,
-					"jobs",
-					input.scanJob.scanJobId,
-					resolveStageLaneRootSegment(input.stageName, input.laneIndex)
-						.split(path.sep)
-						.join("/"),
-				),
+	laneDirContainer: async () => CONTAINER_TASK_RUNTIME_ROOT,
 	repositoryArtifactsDir: async () =>
 		await resolveRepositoryArtifactsDir({
 			scanJobId: input.scanJob.scanJobId,

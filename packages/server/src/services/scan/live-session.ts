@@ -354,6 +354,48 @@ const buildSandboxAgentRuntimeFiles = (runtimeDir: string) => ({
 	metadataPath: path.join(runtimeDir, "sandbox-agent-runtime.json"),
 });
 
+const fileExists = async (filePath: string) => {
+	try {
+		await fs.stat(filePath);
+		return true;
+	} catch {
+		return false;
+	}
+};
+
+const resolveLegacyStageNameRuntimeDir = async (input: {
+	baseDir: string;
+	stageName: string;
+	taskId: string;
+	runtimeDir: string;
+}) => {
+	if (
+		!["FuzzBuildStage", "FuzzRunStage", "AnalysisCriticStage"].includes(
+			input.stageName,
+		)
+	) {
+		return input.runtimeDir;
+	}
+	if (
+		await fileExists(
+			path.join(input.runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl),
+		)
+	) {
+		return input.runtimeDir;
+	}
+	const legacyRuntimeDir = resolveScanStageTaskRuntimeDir(
+		input.baseDir,
+		input.stageName,
+		input.stageName,
+		input.taskId,
+	);
+	return (await fileExists(
+		path.join(legacyRuntimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl),
+	))
+		? legacyRuntimeDir
+		: input.runtimeDir;
+};
+
 const toPublicBaseUrl = (containerName: string | null) =>
 	containerName ? `/sandbox-agent/${containerName}` : null;
 
@@ -424,6 +466,12 @@ const buildSandboxAgentTaskRuntime = async (
 				runtimeTaskName,
 				task.taskId,
 			);
+			runtimeDir = await resolveLegacyStageNameRuntimeDir({
+				baseDir,
+				stageName: task.stageName,
+				taskId: task.taskId,
+				runtimeDir,
+			});
 			break;
 		case "FuzzRunStage":
 			taskKind = "fuzzing";
@@ -433,6 +481,12 @@ const buildSandboxAgentTaskRuntime = async (
 				runtimeTaskName,
 				task.taskId,
 			);
+			runtimeDir = await resolveLegacyStageNameRuntimeDir({
+				baseDir,
+				stageName: task.stageName,
+				taskId: task.taskId,
+				runtimeDir,
+			});
 			break;
 		case "AnalysisCriticStage":
 			taskKind = "criticizing";
@@ -442,6 +496,12 @@ const buildSandboxAgentTaskRuntime = async (
 				runtimeTaskName,
 				task.taskId,
 			);
+			runtimeDir = await resolveLegacyStageNameRuntimeDir({
+				baseDir,
+				stageName: task.stageName,
+				taskId: task.taskId,
+				runtimeDir,
+			});
 			break;
 		case "VerifyingStage":
 			taskKind = "verifying";
