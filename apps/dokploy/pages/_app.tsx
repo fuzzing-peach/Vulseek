@@ -1,4 +1,5 @@
 import "@/styles/globals.css";
+import "@xyflow/react/dist/style.css";
 import "react18-json-view/src/style.css";
 import "react18-json-view/src/dark.css";
 

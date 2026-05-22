@@ -10,6 +10,7 @@ import {
 	findScanJobById,
 	findTaskById,
 	findScanJobStatusView,
+	findScanJobStageGraph,
 	cancelScanJob,
 	retryFailedScanJobTasks,
 	rerunScanTask,
@@ -222,7 +223,8 @@ export const scanRouter = createTRPCRouter({
 			) {
 				throw new TRPCError({
 					code: "UNAUTHORIZED",
-					message: "You are not authorized to access scan jobs for this application",
+					message:
+						"You are not authorized to access scan jobs for this application",
 				});
 			}
 
@@ -239,7 +241,8 @@ export const scanRouter = createTRPCRouter({
 			) {
 				throw new TRPCError({
 					code: "UNAUTHORIZED",
-					message: "You are not authorized to access scan jobs for this compose",
+					message:
+						"You are not authorized to access scan jobs for this compose",
 				});
 			}
 
@@ -537,7 +540,8 @@ export const scanRouter = createTRPCRouter({
 			if (organizationId !== ctx.session.activeOrganizationId) {
 				throw new TRPCError({
 					code: "UNAUTHORIZED",
-					message: "You are not authorized to access candidates for this scan job",
+					message:
+						"You are not authorized to access candidates for this scan job",
 				});
 			}
 
@@ -687,7 +691,8 @@ export const scanRouter = createTRPCRouter({
 					candidate.scanJobId,
 				);
 			const enrichedCandidate = candidates.find(
-				(item) => item.vulnerabilityCandidateId === candidate.vulnerabilityCandidateId,
+				(item) =>
+					item.vulnerabilityCandidateId === candidate.vulnerabilityCandidateId,
 			);
 			if (!enrichedCandidate) {
 				throw new TRPCError({
@@ -733,7 +738,9 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 
-			const result = await startCandidateAnalysis(input.vulnerabilityCandidateId);
+			const result = await startCandidateAnalysis(
+				input.vulnerabilityCandidateId,
+			);
 			const queueData: ScanQueueJob = {
 				scanJobId: result.scanJobId,
 				mode: "full",
@@ -995,5 +1002,36 @@ export const scanRouter = createTRPCRouter({
 			}
 
 			return await findScanJobStatusView(input.scanJobId);
+		}),
+
+	stageGraph: protectedProcedure
+		.input(apiFindOneScanJob)
+		.query(async ({ input, ctx }) => {
+			const scanJob = await findScanJobById(input.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message:
+						"You are not authorized to access stage graph for this scan job",
+				});
+			}
+
+			return await findScanJobStageGraph(input.scanJobId);
 		}),
 });

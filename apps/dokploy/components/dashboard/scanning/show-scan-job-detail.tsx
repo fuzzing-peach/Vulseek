@@ -37,6 +37,7 @@ import {
 	LiveTaskActivityBadge,
 	LiveTaskActivityButton,
 } from "@/components/dashboard/scanning/live-task-activity";
+import { ScanStageGraph } from "@/components/dashboard/scanning/scan-stage-graph";
 import { useSandboxAgentActivities } from "@/components/dashboard/scanning/use-sandbox-agent-activity";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
@@ -137,8 +138,11 @@ const formatTaskRuntime = (
 	return `${seconds}s`;
 };
 
-const resolveRequestedTab = (value: string | string[] | undefined): ScanJobTab => {
-	const rawTab = typeof value === "string" ? value : Array.isArray(value) ? value[0] : "";
+const resolveRequestedTab = (
+	value: string | string[] | undefined,
+): ScanJobTab => {
+	const rawTab =
+		typeof value === "string" ? value : Array.isArray(value) ? value[0] : "";
 	if (
 		rawTab === "overview" ||
 		rawTab === "tasks" ||
@@ -285,7 +289,9 @@ const LazyFileTree = ({
 		);
 	}
 
-	return <div className="h-[65vh] overflow-auto p-2">{renderItems(rootItems)}</div>;
+	return (
+		<div className="h-[65vh] overflow-auto p-2">{renderItems(rootItems)}</div>
+	);
 };
 
 const CandidateWorkflowSection = ({
@@ -535,7 +541,9 @@ const getTaskStatusLabel = (status?: string) => {
 	if (!status) {
 		return "-";
 	}
-	return status.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+	return status
+		.replace(/_/g, " ")
+		.replace(/\b\w/g, (char) => char.toUpperCase());
 };
 
 const getTaskStatusBadgeClassName = (status?: string) => {
@@ -602,7 +610,9 @@ export const ShowScanJobDetail = ({
 }: Props) => {
 	const router = useRouter();
 	const utils = api.useUtils();
-	const initialCandidateListQueryState = parseCandidateListQueryState(router.query);
+	const initialCandidateListQueryState = parseCandidateListQueryState(
+		router.query,
+	);
 	const [activeTab, setActiveTab] = useState<ScanJobTab>(() =>
 		resolveRequestedTab(router.query.tab),
 	);
@@ -615,8 +625,9 @@ export const ShowScanJobDetail = ({
 	const [verifyFilters, setVerifyFilters] = useState<string[]>(
 		() => initialCandidateListQueryState.verifyFilters,
 	);
-	const [candidateSortKey, setCandidateSortKey] =
-		useState<CandidateSortKey>(() => initialCandidateListQueryState.candidateSortKey);
+	const [candidateSortKey, setCandidateSortKey] = useState<CandidateSortKey>(
+		() => initialCandidateListQueryState.candidateSortKey,
+	);
 	const [candidateSortDirection, setCandidateSortDirection] =
 		useState<CandidateSortDirection>(
 			() => initialCandidateListQueryState.candidateSortDirection,
@@ -636,9 +647,9 @@ export const ShowScanJobDetail = ({
 	const [finishedTaskPageSize, setFinishedTaskPageSize] = useState(20);
 	const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
 	const [noteDraft, setNoteDraft] = useState("");
-	const [expandedDirectories, setExpandedDirectories] = useState<Record<string, boolean>>(
-		{},
-	);
+	const [expandedDirectories, setExpandedDirectories] = useState<
+		Record<string, boolean>
+	>({});
 	const [directoryCache, setDirectoryCache] = useState<
 		Record<string, DirectoryCacheEntry>
 	>({});
@@ -665,18 +676,15 @@ export const ShowScanJobDetail = ({
 		data: statusView,
 		isLoading: isLoadingStatusView,
 		error: statusViewError,
-	} =
-		api.scan.statusView.useQuery(
-			{ scanJobId },
-			{ enabled: !!scanJobId, refetchInterval: 2000 },
-		);
-	const {
-		activitiesByTaskId,
-		connectedTaskIds: activityConnectedTaskIds,
-	} = useSandboxAgentActivities({
-		scanJobId,
-		enabled: !!scanJobId,
-	});
+	} = api.scan.statusView.useQuery(
+		{ scanJobId },
+		{ enabled: !!scanJobId, refetchInterval: 2000 },
+	);
+	const { activitiesByTaskId, connectedTaskIds: activityConnectedTaskIds } =
+		useSandboxAgentActivities({
+			scanJobId,
+			enabled: !!scanJobId,
+		});
 	const { data: selectedFile, isLoading: isLoadingSelectedFile } =
 		api.scan.readFile.useQuery(
 			{ scanJobId, filePath: selectedFilePath || "" },
@@ -687,8 +695,9 @@ export const ShowScanJobDetail = ({
 	const cancelScanJobMutation = api.scan.cancel.useMutation();
 	const updateNoteMutation = api.scan.updateNote.useMutation();
 	const analyzeCandidateMutation = api.scan.analyzeCandidate.useMutation();
-	const [reanalyzingCandidateId, setReanalyzingCandidateId] =
-		useState<string | null>(null);
+	const [reanalyzingCandidateId, setReanalyzingCandidateId] = useState<
+		string | null
+	>(null);
 	const [rerunningTaskId, setRerunningTaskId] = useState<string | null>(null);
 	const rootDirectoryQuery = api.scan.listDirectory.useQuery(
 		{ scanJobId },
@@ -800,8 +809,7 @@ export const ShowScanJobDetail = ({
 		}
 
 		if (
-			currentCandidateListStateSerialized ===
-			candidateListQueryStateSerialized
+			currentCandidateListStateSerialized === candidateListQueryStateSerialized
 		) {
 			return;
 		}
@@ -826,7 +834,8 @@ export const ShowScanJobDetail = ({
 		router,
 	]);
 	const repositoryScanningProgress = useMemo(() => {
-		const completed = statusView?.scan.repositoryTaskStatus === "completed" ? 1 : 0;
+		const completed =
+			statusView?.scan.repositoryTaskStatus === "completed" ? 1 : 0;
 		return {
 			completed,
 			total: 1,
@@ -841,7 +850,8 @@ export const ShowScanJobDetail = ({
 		return {
 			completed,
 			total,
-			percent: total > 0 ? Math.max(0, Math.min(100, (completed / total) * 100)) : 0,
+			percent:
+				total > 0 ? Math.max(0, Math.min(100, (completed / total) * 100)) : 0,
 			status:
 				total > 0 && completed >= total
 					? "completed"
@@ -863,7 +873,8 @@ export const ShowScanJobDetail = ({
 		return {
 			completed,
 			total,
-			percent: total > 0 ? Math.max(0, Math.min(100, (completed / total) * 100)) : 0,
+			percent:
+				total > 0 ? Math.max(0, Math.min(100, (completed / total) * 100)) : 0,
 			status:
 				total > 0 && completed >= total
 					? "completed"
@@ -893,7 +904,9 @@ export const ShowScanJobDetail = ({
 		scanJob?.status === "finished";
 	const shouldShowRetryFailedTasks = totalFailedTasks > 0;
 	const queuePendingCounts = statusView?.queuePendingCounts ?? [];
-	const getQueueTerminalProgressValue = (queue: (typeof queuePendingCounts)[number]) =>
+	const getQueueTerminalProgressValue = (
+		queue: (typeof queuePendingCounts)[number],
+	) =>
 		queue.totalCount > 0
 			? ((queue.completedCount + queue.failedCount + (queue.exitedCount ?? 0)) /
 					queue.totalCount) *
@@ -1034,12 +1047,7 @@ export const ShowScanJobDetail = ({
 				.toLowerCase()
 				.includes(query);
 		});
-	}, [
-		sortedTerminalTasks,
-		taskSearchQuery,
-		taskStageFilter,
-		taskStatusFilter,
-	]);
+	}, [sortedTerminalTasks, taskSearchQuery, taskStageFilter, taskStatusFilter]);
 	const runningTaskPagination = useMemo(() => {
 		const totalItems = filteredInProgressTasks.length;
 		const totalPages = Math.max(1, Math.ceil(totalItems / runningTaskPageSize));
@@ -1058,7 +1066,10 @@ export const ShowScanJobDetail = ({
 	}, [filteredInProgressTasks, runningTaskPage, runningTaskPageSize]);
 	const finishedTaskPagination = useMemo(() => {
 		const totalItems = filteredTerminalTasks.length;
-		const totalPages = Math.max(1, Math.ceil(totalItems / finishedTaskPageSize));
+		const totalPages = Math.max(
+			1,
+			Math.ceil(totalItems / finishedTaskPageSize),
+		);
 		const page = Math.min(Math.max(1, finishedTaskPage), totalPages);
 		const startIndex = (page - 1) * finishedTaskPageSize;
 		const endIndex = Math.min(totalItems, startIndex + finishedTaskPageSize);
@@ -1111,14 +1122,16 @@ export const ShowScanJobDetail = ({
 	);
 	const analysisCompletedCandidates = useMemo(
 		() =>
-			(candidates || []).filter((candidate) => !!candidate.latestAnalysisResult).length,
+			(candidates || []).filter((candidate) => !!candidate.latestAnalysisResult)
+				.length,
 		[candidates],
 	);
 	const failedAnalysisCandidatesCount = useMemo(
 		() =>
 			(candidates || []).filter(
 				(candidate) =>
-					candidate.status === "failed" && candidate.currentStage === "analyzing",
+					candidate.status === "failed" &&
+					candidate.currentStage === "analyzing",
 			).length,
 		[candidates],
 	);
@@ -1127,23 +1140,24 @@ export const ShowScanJobDetail = ({
 			(candidates || []).filter((candidate) => {
 				const result = candidate.latestAnalysisResult?.result;
 				return (
-					result === "real_vulnerability" ||
-					result === "likely_vulnerability"
+					result === "real_vulnerability" || result === "likely_vulnerability"
 				);
 			}).length,
 		[candidates],
 	);
 	const verifyCompletedCandidates = useMemo(
 		() =>
-			(candidates || []).filter((candidate) => !!candidate.latestVerificationResult)
-				.length,
+			(candidates || []).filter(
+				(candidate) => !!candidate.latestVerificationResult,
+			).length,
 		[candidates],
 	);
 	const failedVerificationCandidatesCount = useMemo(
 		() =>
 			(candidates || []).filter(
 				(candidate) =>
-					candidate.status === "failed" && candidate.currentStage === "verifying",
+					candidate.status === "failed" &&
+					candidate.currentStage === "verifying",
 			).length,
 		[candidates],
 	);
@@ -1210,7 +1224,8 @@ export const ShowScanJobDetail = ({
 		const query = candidateQuery.trim().toLowerCase();
 		return candidates.filter((candidate) => {
 			const latestAnalysisResult = candidate.latestAnalysisResult?.result || "";
-			const latestVerifyResult = candidate.latestVerificationResult?.result || "";
+			const latestVerifyResult =
+				candidate.latestVerificationResult?.result || "";
 			if (
 				analysisFilters.length > 0 &&
 				!analysisFilters.includes(latestAnalysisResult)
@@ -1441,7 +1456,10 @@ export const ShowScanJobDetail = ({
 		if (rootDirectoryQuery.isLoading) {
 			setDirectoryCache((current) => ({
 				...current,
-				[ROOT_DIRECTORY_KEY]: { items: current[ROOT_DIRECTORY_KEY]?.items || [], status: "loading" },
+				[ROOT_DIRECTORY_KEY]: {
+					items: current[ROOT_DIRECTORY_KEY]?.items || [],
+					status: "loading",
+				},
 			}));
 			return;
 		}
@@ -1496,7 +1514,10 @@ export const ShowScanJobDetail = ({
 
 		setDirectoryCache((current) => ({
 			...current,
-			[directoryPath]: { items: current[directoryPath]?.items || [], status: "loading" },
+			[directoryPath]: {
+				items: current[directoryPath]?.items || [],
+				status: "loading",
+			},
 		}));
 
 		try {
@@ -1543,7 +1564,9 @@ export const ShowScanJobDetail = ({
 
 			<Card className="bg-background">
 				<CardHeader>
-					<CardTitle className="text-xl">Scan Job {scanJobId.slice(0, 6)}</CardTitle>
+					<CardTitle className="text-xl">
+						Scan Job {scanJobId.slice(0, 6)}
+					</CardTitle>
 					<CardDescription className="flex items-center gap-2 break-all">
 						<span>{scanJobId}</span>
 						<CopyValueButton
@@ -1588,7 +1611,8 @@ export const ShowScanJobDetail = ({
 											<div>
 												<div className="font-medium">Cancel Running Job</div>
 												<div className="text-sm text-muted-foreground">
-													Stop all running tasks and clear pending work for this job.
+													Stop all running tasks and clear pending work for this
+													job.
 												</div>
 											</div>
 											<Button
@@ -1636,117 +1660,138 @@ export const ShowScanJobDetail = ({
 											</Button>
 										</div>
 									) : null}
-								<div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-									<div className="border rounded-lg p-3">
-										<div className="text-sm text-muted-foreground">Status</div>
-										<div
-											className={`font-medium ${getScanJobStatusClassName(scanJob.status)}`}
-										>
-											{getScanJobStatusLabel(scanJob.status)}
-										</div>
-									</div>
-									<div className="border rounded-lg p-3">
-										<div className="text-sm text-muted-foreground">Scan Type</div>
-										<div className="font-medium">
-											{scanJob.scanType === "delta" ? "Delta Scan" : "Full Scan"}
-										</div>
-									</div>
-									<div className="border rounded-lg p-3">
-										<div className="text-sm text-muted-foreground">Trigger</div>
-										<div className="font-medium">
-											{formatTriggerSourceLabel(scanJob.triggerSource)}
-										</div>
-									</div>
-									{scanJob.scanType === "delta" ? (
+									<ScanStageGraph scanJobId={scanJobId} />
+									<div className="grid grid-cols-1 md:grid-cols-2 gap-3">
 										<div className="border rounded-lg p-3">
-											<div className="text-sm text-muted-foreground">Commit Window</div>
-											<div className="font-medium">k={scanJob.commitWindow}</div>
-										</div>
-									) : null}
-									<div className="border rounded-lg p-3">
-										<div className="text-sm text-muted-foreground">Created</div>
-										<div className="font-medium">
-											<DateTooltip date={scanJob.createdAt} />
-										</div>
-									</div>
-									<div className="border rounded-lg p-3">
-										<div className="text-sm text-muted-foreground">Finished</div>
-										<div className="font-medium">
-											{scanJob.finishedAt ? (
-												<DateTooltip date={scanJob.finishedAt} />
-											) : (
-												"-"
-											)}
-										</div>
-									</div>
-									{scanJob.errorMessage && (
-										<div className="border rounded-lg p-3 md:col-span-2">
-											<div className="text-sm text-muted-foreground">Error</div>
-											<div className="font-medium text-destructive break-all">
-												{scanJob.errorMessage}
+											<div className="text-sm text-muted-foreground">
+												Status
+											</div>
+											<div
+												className={`font-medium ${getScanJobStatusClassName(scanJob.status)}`}
+											>
+												{getScanJobStatusLabel(scanJob.status)}
 											</div>
 										</div>
-									)}
-									<div className="border rounded-lg p-3 md:col-span-2">
-										<div className="flex items-start justify-between gap-3">
-											<div>
-												<div className="text-sm text-muted-foreground">Note</div>
-												<div className="text-xs text-muted-foreground">
-													Internal note for this scan job
+										<div className="border rounded-lg p-3">
+											<div className="text-sm text-muted-foreground">
+												Scan Type
+											</div>
+											<div className="font-medium">
+												{scanJob.scanType === "delta"
+													? "Delta Scan"
+													: "Full Scan"}
+											</div>
+										</div>
+										<div className="border rounded-lg p-3">
+											<div className="text-sm text-muted-foreground">
+												Trigger
+											</div>
+											<div className="font-medium">
+												{formatTriggerSourceLabel(scanJob.triggerSource)}
+											</div>
+										</div>
+										{scanJob.scanType === "delta" ? (
+											<div className="border rounded-lg p-3">
+												<div className="text-sm text-muted-foreground">
+													Commit Window
+												</div>
+												<div className="font-medium">
+													k={scanJob.commitWindow}
 												</div>
 											</div>
-											<Button
-												type="button"
-												size="sm"
-												disabled={
-													updateNoteMutation.isLoading ||
-													!isNoteDirty ||
-													!scanJob
-												}
-												onClick={async () => {
-													try {
-														await updateNoteMutation.mutateAsync({
-															scanJobId,
-															note: noteDraft,
-														});
-														toast.success("Note saved");
-														await Promise.all([
-															utils.scan.one.invalidate({ scanJobId }),
-															serviceType === "application"
-																? utils.scan.allByApplication.invalidate({
-																		applicationId: serviceId,
-																	})
-																: utils.scan.allByCompose.invalidate({
-																		composeId: serviceId,
-																	}),
-														]);
-													} catch (error) {
-														toast.error(
-															error instanceof Error
-																? error.message
-																: "Failed to save note",
-														);
-													}
-												}}
-											>
-												{updateNoteMutation.isLoading ? (
-													<>
-														<Loader2 className="mr-2 size-4 animate-spin" />
-														Saving...
-													</>
-												) : (
-													"Save"
-												)}
-											</Button>
+										) : null}
+										<div className="border rounded-lg p-3">
+											<div className="text-sm text-muted-foreground">
+												Created
+											</div>
+											<div className="font-medium">
+												<DateTooltip date={scanJob.createdAt} />
+											</div>
 										</div>
-										<Textarea
-											value={noteDraft}
-											onChange={(event) => setNoteDraft(event.target.value)}
-											placeholder="Add a note for this scan job..."
-											className="mt-3 min-h-[96px] resize-y"
-										/>
+										<div className="border rounded-lg p-3">
+											<div className="text-sm text-muted-foreground">
+												Finished
+											</div>
+											<div className="font-medium">
+												{scanJob.finishedAt ? (
+													<DateTooltip date={scanJob.finishedAt} />
+												) : (
+													"-"
+												)}
+											</div>
+										</div>
+										{scanJob.errorMessage && (
+											<div className="border rounded-lg p-3 md:col-span-2">
+												<div className="text-sm text-muted-foreground">
+													Error
+												</div>
+												<div className="font-medium text-destructive break-all">
+													{scanJob.errorMessage}
+												</div>
+											</div>
+										)}
+										<div className="border rounded-lg p-3 md:col-span-2">
+											<div className="flex items-start justify-between gap-3">
+												<div>
+													<div className="text-sm text-muted-foreground">
+														Note
+													</div>
+													<div className="text-xs text-muted-foreground">
+														Internal note for this scan job
+													</div>
+												</div>
+												<Button
+													type="button"
+													size="sm"
+													disabled={
+														updateNoteMutation.isLoading ||
+														!isNoteDirty ||
+														!scanJob
+													}
+													onClick={async () => {
+														try {
+															await updateNoteMutation.mutateAsync({
+																scanJobId,
+																note: noteDraft,
+															});
+															toast.success("Note saved");
+															await Promise.all([
+																utils.scan.one.invalidate({ scanJobId }),
+																serviceType === "application"
+																	? utils.scan.allByApplication.invalidate({
+																			applicationId: serviceId,
+																		})
+																	: utils.scan.allByCompose.invalidate({
+																			composeId: serviceId,
+																		}),
+															]);
+														} catch (error) {
+															toast.error(
+																error instanceof Error
+																	? error.message
+																	: "Failed to save note",
+															);
+														}
+													}}
+												>
+													{updateNoteMutation.isLoading ? (
+														<>
+															<Loader2 className="mr-2 size-4 animate-spin" />
+															Saving...
+														</>
+													) : (
+														"Save"
+													)}
+												</Button>
+											</div>
+											<Textarea
+												value={noteDraft}
+												onChange={(event) => setNoteDraft(event.target.value)}
+												placeholder="Add a note for this scan job..."
+												className="mt-3 min-h-[96px] resize-y"
+											/>
+										</div>
 									</div>
-								</div>
 								</div>
 							)}
 						</TabsContent>
@@ -1762,34 +1807,34 @@ export const ShowScanJobDetail = ({
 									<AlertCircle className="size-4" />
 									Status not available
 								</div>
-								) : (
-									<div className="flex flex-col gap-4">
-										{failedAnalysisCandidatesCount > 0 ? (
-											<div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3">
-												<div>
-													<div className="font-medium">Failed Analysis Tasks</div>
-													<div className="text-sm text-muted-foreground">
-														{failedAnalysisCandidatesCount} failed candidate analysis
-														tasks were detected. Retry will requeue every failed task in
-														this job.
-													</div>
+							) : (
+								<div className="flex flex-col gap-4">
+									{failedAnalysisCandidatesCount > 0 ? (
+										<div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3">
+											<div>
+												<div className="font-medium">Failed Analysis Tasks</div>
+												<div className="text-sm text-muted-foreground">
+													{failedAnalysisCandidatesCount} failed candidate
+													analysis tasks were detected. Retry will requeue every
+													failed task in this job.
 												</div>
-												<Button
-													type="button"
-													disabled={retryFailedTasksMutation.isLoading}
-													onClick={handleRetryFailedTasks}
-												>
-													{retryFailedTasksMutation.isLoading ? (
-														<>
-															<Loader2 className="mr-2 size-4 animate-spin" />
-															Retrying...
-														</>
-													) : (
-														`Retry All Failed Tasks (${totalFailedTasks})`
-													)}
-												</Button>
 											</div>
-										) : null}
+											<Button
+												type="button"
+												disabled={retryFailedTasksMutation.isLoading}
+												onClick={handleRetryFailedTasks}
+											>
+												{retryFailedTasksMutation.isLoading ? (
+													<>
+														<Loader2 className="mr-2 size-4 animate-spin" />
+														Retrying...
+													</>
+												) : (
+													`Retry All Failed Tasks (${totalFailedTasks})`
+												)}
+											</Button>
+										</div>
+									) : null}
 									<CandidateWorkflowSection
 										title="Analysis"
 										description="Candidates currently being analyzed and pending analysis."
@@ -1813,7 +1858,9 @@ export const ShowScanJobDetail = ({
 											},
 											{
 												title: "Analysis Likely / Confirmed",
-												value: statusView.summary.analysisLikelyOrConfirmedCandidates,
+												value:
+													statusView.summary
+														.analysisLikelyOrConfirmedCandidates,
 											},
 											{
 												title: "Queued / Running",
@@ -1824,7 +1871,7 @@ export const ShowScanJobDetail = ({
 										activitiesByTaskId={activitiesByTaskId}
 										activityConnectedTaskIds={activityConnectedTaskIds}
 									/>
-									</div>
+								</div>
 							)}
 						</TabsContent>
 
@@ -1844,11 +1891,13 @@ export const ShowScanJobDetail = ({
 									{failedVerificationCandidatesCount > 0 ? (
 										<div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3">
 											<div>
-												<div className="font-medium">Failed Verification Tasks</div>
+												<div className="font-medium">
+													Failed Verification Tasks
+												</div>
 												<div className="text-sm text-muted-foreground">
 													{failedVerificationCandidatesCount} failed candidate
-													verification tasks were detected. Retry will requeue every
-													failed task in this job.
+													verification tasks were detected. Retry will requeue
+													every failed task in this job.
 												</div>
 											</div>
 											<Button
@@ -1867,39 +1916,40 @@ export const ShowScanJobDetail = ({
 											</Button>
 										</div>
 									) : null}
-								<CandidateWorkflowSection
-									title="Verify"
-									description="Candidates currently being verified and pending verification."
-									summaryCards={[
-										{
-											title: "Candidate Verify",
-											value: `${verifyCompletedCandidates} / ${verifyEligibleCandidates}`,
-											progress:
-												verifyEligibleCandidates > 0
-													? Math.max(
-															0,
-															Math.min(
-																100,
-																(verifyCompletedCandidates / verifyEligibleCandidates) *
+									<CandidateWorkflowSection
+										title="Verify"
+										description="Candidates currently being verified and pending verification."
+										summaryCards={[
+											{
+												title: "Candidate Verify",
+												value: `${verifyCompletedCandidates} / ${verifyEligibleCandidates}`,
+												progress:
+													verifyEligibleCandidates > 0
+														? Math.max(
+																0,
+																Math.min(
 																	100,
-															),
-														)
-													: 0,
-											progressClassName: "[&>div]:bg-sky-500",
-										},
-										{
-											title: "Verified 0day",
-											value: statusView.summary.verifiedZeroDayCandidates,
-										},
-										{
-											title: "Queued / Running",
-											value: `${verifyQueuedCount} / ${verifyInProgressCandidates.length}`,
-										},
-									]}
-									inProgressCandidates={verifyInProgressCandidates}
-									activitiesByTaskId={activitiesByTaskId}
-									activityConnectedTaskIds={activityConnectedTaskIds}
-								/>
+																	(verifyCompletedCandidates /
+																		verifyEligibleCandidates) *
+																		100,
+																),
+															)
+														: 0,
+												progressClassName: "[&>div]:bg-sky-500",
+											},
+											{
+												title: "Verified 0day",
+												value: statusView.summary.verifiedZeroDayCandidates,
+											},
+											{
+												title: "Queued / Running",
+												value: `${verifyQueuedCount} / ${verifyInProgressCandidates.length}`,
+											},
+										]}
+										inProgressCandidates={verifyInProgressCandidates}
+										activitiesByTaskId={activitiesByTaskId}
+										activityConnectedTaskIds={activityConnectedTaskIds}
+									/>
 								</div>
 							)}
 						</TabsContent>
@@ -1945,7 +1995,9 @@ export const ShowScanJobDetail = ({
 											</PopoverTrigger>
 											<PopoverContent align="end" className="w-72 p-3">
 												<div className="mb-3 flex items-center justify-between">
-													<div className="text-sm font-medium">Analysis Result</div>
+													<div className="text-sm font-medium">
+														Analysis Result
+													</div>
 													<Button
 														type="button"
 														variant="ghost"
@@ -1964,7 +2016,9 @@ export const ShowScanJobDetail = ({
 														>
 															<Checkbox
 																checked={analysisFilters.includes(value)}
-																onCheckedChange={() => toggleAnalysisFilter(value)}
+																onCheckedChange={() =>
+																	toggleAnalysisFilter(value)
+																}
 															/>
 															<span>{formatResultLabel(value)}</span>
 														</label>
@@ -1986,7 +2040,9 @@ export const ShowScanJobDetail = ({
 											</PopoverTrigger>
 											<PopoverContent align="end" className="w-72 p-3">
 												<div className="mb-3 flex items-center justify-between">
-													<div className="text-sm font-medium">Verify Result</div>
+													<div className="text-sm font-medium">
+														Verify Result
+													</div>
 													<Button
 														type="button"
 														variant="ghost"
@@ -2005,7 +2061,9 @@ export const ShowScanJobDetail = ({
 														>
 															<Checkbox
 																checked={verifyFilters.includes(value)}
-																onCheckedChange={() => toggleVerifyFilter(value)}
+																onCheckedChange={() =>
+																	toggleVerifyFilter(value)
+																}
 															/>
 															<span>{formatResultLabel(value)}</span>
 														</label>
@@ -2052,7 +2110,9 @@ export const ShowScanJobDetail = ({
 														variant="outline"
 														size="sm"
 														onClick={() =>
-															setCandidatePage((current) => Math.max(1, current - 1))
+															setCandidatePage((current) =>
+																Math.max(1, current - 1),
+															)
 														}
 														disabled={candidatePagination.page <= 1}
 													>
@@ -2087,11 +2147,15 @@ export const ShowScanJobDetail = ({
 												<table className="w-full text-sm">
 													<thead className="border-b bg-muted/30 text-left">
 														<tr>
-															<th className="w-[10%] px-4 py-3 font-medium">Status</th>
+															<th className="w-[10%] px-4 py-3 font-medium">
+																Status
+															</th>
 															<th className="w-[38%] px-4 py-3 font-medium">
 																<button
 																	type="button"
-																	onClick={() => toggleCandidateSort("candidate")}
+																	onClick={() =>
+																		toggleCandidateSort("candidate")
+																	}
 																	className="inline-flex items-center gap-1 hover:text-foreground"
 																>
 																	<span>Candidate</span>
@@ -2101,7 +2165,9 @@ export const ShowScanJobDetail = ({
 															<th className="w-[18%] px-4 py-3 font-medium">
 																<button
 																	type="button"
-																	onClick={() => toggleCandidateSort("analysis")}
+																	onClick={() =>
+																		toggleCandidateSort("analysis")
+																	}
 																	className="inline-flex items-center gap-1 hover:text-foreground"
 																>
 																	<span>Analysis Result</span>
@@ -2135,134 +2201,150 @@ export const ShowScanJobDetail = ({
 													</thead>
 													<tbody>
 														{candidatePagination.items.map((candidate) => {
-															const verificationTruthBadge = getVerificationTruthBadge(
-																candidate.latestVerificationResult?.result,
-															);
+															const verificationTruthBadge =
+																getVerificationTruthBadge(
+																	candidate.latestVerificationResult?.result,
+																);
 															const isTerminalCandidate =
-																TERMINAL_CANDIDATE_STATUSES.has(candidate.status);
+																TERMINAL_CANDIDATE_STATUSES.has(
+																	candidate.status,
+																);
 															const isReanalyzingCandidate =
 																reanalyzingCandidateId ===
 																candidate.vulnerabilityCandidateId;
 															return (
-																						<tr
-																							key={candidate.vulnerabilityCandidateId}
-																							className="border-b last:border-b-0 transition-colors hover:bg-muted/40"
-																						>
-																							<td className="px-4 py-3 align-top text-xs text-muted-foreground capitalize">
-																								<Link
-																									href={buildCandidateDetailHref(
-																										candidate.vulnerabilityCandidateId,
-																									)}
-																									onClick={handleCandidateLinkClick}
-																									className="block"
-																								>
-																									{candidate.status}
-																								</Link>
-																							</td>
-																							<td className="px-4 py-3 align-top">
-																								<Link
-																									href={buildCandidateDetailHref(
-																										candidate.vulnerabilityCandidateId,
-																									)}
-																									onClick={handleCandidateLinkClick}
-																									className="block"
-																								>
-																									<div className="font-medium">{candidate.title}</div>
+																<tr
+																	key={candidate.vulnerabilityCandidateId}
+																	className="border-b last:border-b-0 transition-colors hover:bg-muted/40"
+																>
+																	<td className="px-4 py-3 align-top text-xs text-muted-foreground capitalize">
+																		<Link
+																			href={buildCandidateDetailHref(
+																				candidate.vulnerabilityCandidateId,
+																			)}
+																			onClick={handleCandidateLinkClick}
+																			className="block"
+																		>
+																			{candidate.status}
+																		</Link>
+																	</td>
+																	<td className="px-4 py-3 align-top">
+																		<Link
+																			href={buildCandidateDetailHref(
+																				candidate.vulnerabilityCandidateId,
+																			)}
+																			onClick={handleCandidateLinkClick}
+																			className="block"
+																		>
+																			<div className="font-medium">
+																				{candidate.title}
+																			</div>
 																			<div className="mt-1 text-xs text-muted-foreground break-all">
 																				{candidate.filePath || "-"}
-																				{candidate.line ? `:${candidate.line}` : ""}
+																				{candidate.line
+																					? `:${candidate.line}`
+																					: ""}
 																			</div>
 																		</Link>
 																	</td>
-																							<td className="px-4 py-3 align-top">
-																								<Link
-																									href={buildCandidateDetailHref(
-																										candidate.vulnerabilityCandidateId,
-																									)}
-																									onClick={handleCandidateLinkClick}
-																									className="block"
-																								>
-																									{candidate.latestAnalysisResult?.result ? (
+																	<td className="px-4 py-3 align-top">
+																		<Link
+																			href={buildCandidateDetailHref(
+																				candidate.vulnerabilityCandidateId,
+																			)}
+																			onClick={handleCandidateLinkClick}
+																			className="block"
+																		>
+																			{candidate.latestAnalysisResult
+																				?.result ? (
 																				<Badge
 																					variant="outline"
 																					className={getAnalysisResultBadgeClassName(
-																						candidate.latestAnalysisResult.result,
+																						candidate.latestAnalysisResult
+																							.result,
 																					)}
 																				>
 																					{getShortResultLabel(
-																						candidate.latestAnalysisResult.result,
+																						candidate.latestAnalysisResult
+																							.result,
 																					)}
 																				</Badge>
 																			) : (
-																				<span className="text-xs text-muted-foreground">-</span>
+																				<span className="text-xs text-muted-foreground">
+																					-
+																				</span>
 																			)}
 																		</Link>
 																	</td>
-																							<td className="px-4 py-3 align-top">
-																								<Link
-																									href={buildCandidateDetailHref(
-																										candidate.vulnerabilityCandidateId,
-																									)}
-																									onClick={handleCandidateLinkClick}
-																									className="block"
-																								>
-																									{verificationTruthBadge ? (
+																	<td className="px-4 py-3 align-top">
+																		<Link
+																			href={buildCandidateDetailHref(
+																				candidate.vulnerabilityCandidateId,
+																			)}
+																			onClick={handleCandidateLinkClick}
+																			className="block"
+																		>
+																			{verificationTruthBadge ? (
 																				<Badge
 																					variant="outline"
-																					className={verificationTruthBadge.className}
+																					className={
+																						verificationTruthBadge.className
+																					}
 																				>
 																					{verificationTruthBadge.label}
 																				</Badge>
 																			) : (
-																				<span className="text-xs text-muted-foreground">-</span>
+																				<span className="text-xs text-muted-foreground">
+																					-
+																				</span>
 																			)}
 																		</Link>
 																	</td>
-																							<td className="px-4 py-3 align-top text-xs text-muted-foreground">
-																								<Link
-																									href={buildCandidateDetailHref(
-																										candidate.vulnerabilityCandidateId,
-																									)}
-																									onClick={handleCandidateLinkClick}
-																									className="block"
-																								>
-																									{typeof candidate.score === "number"
+																	<td className="px-4 py-3 align-top text-xs text-muted-foreground">
+																		<Link
+																			href={buildCandidateDetailHref(
+																				candidate.vulnerabilityCandidateId,
+																			)}
+																			onClick={handleCandidateLinkClick}
+																			className="block"
+																		>
+																			{typeof candidate.score === "number"
 																				? candidate.score.toFixed(1)
 																				: "-"}
 																		</Link>
 																	</td>
-																							<td className="px-4 py-3 align-top">
-																								<Button
-																									type="button"
-																									variant="outline"
-																									size="icon"
-																									title={
-																										isTerminalCandidate
-																											? "Re-run analysis"
-																											: "Analysis can be re-run after the candidate reaches a terminal state"
-																									}
-																									aria-label={
-																										isTerminalCandidate
-																											? "Re-run analysis"
-																											: "Analysis can be re-run after the candidate reaches a terminal state"
-																									}
-																									disabled={
-																										!isTerminalCandidate ||
-																										isReanalyzingCandidate
-																									}
-																									onClick={() =>
-																										handleAnalyzeCandidate(
-																											candidate.vulnerabilityCandidateId,
-																										)
-																									}
-																								>
-																									{isReanalyzingCandidate ? (
-																										<Loader2 className="size-4 animate-spin" />
-																									) : (
-																										<RefreshCw className="size-4" />
-																									)}
-																								</Button>
-																							</td>
+																	<td className="px-4 py-3 align-top">
+																		<Button
+																			type="button"
+																			variant="outline"
+																			size="icon"
+																			title={
+																				isTerminalCandidate
+																					? "Re-run analysis"
+																					: "Analysis can be re-run after the candidate reaches a terminal state"
+																			}
+																			aria-label={
+																				isTerminalCandidate
+																					? "Re-run analysis"
+																					: "Analysis can be re-run after the candidate reaches a terminal state"
+																			}
+																			disabled={
+																				!isTerminalCandidate ||
+																				isReanalyzingCandidate
+																			}
+																			onClick={() =>
+																				handleAnalyzeCandidate(
+																					candidate.vulnerabilityCandidateId,
+																				)
+																			}
+																		>
+																			{isReanalyzingCandidate ? (
+																				<Loader2 className="size-4 animate-spin" />
+																			) : (
+																				<RefreshCw className="size-4" />
+																			)}
+																		</Button>
+																	</td>
 																</tr>
 															);
 														})}
@@ -2270,11 +2352,10 @@ export const ShowScanJobDetail = ({
 												</table>
 											</div>
 										</div>
-								)}
+									)}
 								</div>
 							)}
 						</TabsContent>
-
 
 						<TabsContent value="files" className="pt-4">
 							<div className="rounded-lg border">
@@ -2287,7 +2368,9 @@ export const ShowScanJobDetail = ({
 								<div className="grid min-h-[65vh] grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]">
 									<div className="border-b lg:border-b-0 lg:border-r">
 										<LazyFileTree
-											rootItems={directoryCache[ROOT_DIRECTORY_KEY]?.items || []}
+											rootItems={
+												directoryCache[ROOT_DIRECTORY_KEY]?.items || []
+											}
 											rootStatus={
 												directoryCache[ROOT_DIRECTORY_KEY]?.status ||
 												(rootDirectoryQuery.isLoading ? "loading" : "idle")
@@ -2305,7 +2388,9 @@ export const ShowScanJobDetail = ({
 											<div className="flex items-center gap-2 text-sm text-muted-foreground">
 												<FileIcon className="size-4" />
 												<span className="truncate">
-													{selectedFile?.relativePath || selectedFilePath || "No file selected"}
+													{selectedFile?.relativePath ||
+														selectedFilePath ||
+														"No file selected"}
 												</span>
 											</div>
 										</div>
@@ -2338,19 +2423,21 @@ export const ShowScanJobDetail = ({
 										<div>
 											<div className="font-medium">Failed Tasks</div>
 											<div className="text-sm text-muted-foreground">
-												{totalFailedTasks} failed tasks were found across scan stages.
+												{totalFailedTasks} failed tasks were found across scan
+												stages.
 											</div>
 											{!canRetryFailedTasks ? (
 												<div className="mt-1 text-xs text-muted-foreground">
-													Retry becomes available after the full scan job finishes and
-													all running tasks stop.
+													Retry becomes available after the full scan job
+													finishes and all running tasks stop.
 												</div>
 											) : null}
 										</div>
 										<Button
 											type="button"
 											disabled={
-												retryFailedTasksMutation.isLoading || !canRetryFailedTasks
+												retryFailedTasksMutation.isLoading ||
+												!canRetryFailedTasks
 											}
 											onClick={handleRetryFailedTasks}
 										>
@@ -2387,72 +2474,93 @@ export const ShowScanJobDetail = ({
 												No task queues
 											</div>
 										) : (
-												<table className="w-full text-sm">
-													<thead className="border-b bg-muted/30 text-left">
-															<tr>
-																<th className="w-[22%] px-4 py-3 font-medium">Queue</th>
-																<th className="w-[30%] px-4 py-3 font-medium">BullMQ Name</th>
-																<th className="w-[26%] px-4 py-3 font-medium">
-																	Tasks
-																</th>
-																<th className="w-[22%] px-4 py-3 font-medium">Progress</th>
+											<table className="w-full text-sm">
+												<thead className="border-b bg-muted/30 text-left">
+													<tr>
+														<th className="w-[22%] px-4 py-3 font-medium">
+															Queue
+														</th>
+														<th className="w-[30%] px-4 py-3 font-medium">
+															BullMQ Name
+														</th>
+														<th className="w-[26%] px-4 py-3 font-medium">
+															Tasks
+														</th>
+														<th className="w-[22%] px-4 py-3 font-medium">
+															Progress
+														</th>
+													</tr>
+												</thead>
+												<tbody>
+													{queuePendingCounts.map((queue) => {
+														const metrics = getQueueTaskMetrics(queue);
+														return (
+															<tr
+																key={queue.id}
+																className="border-b last:border-b-0"
+															>
+																<td className="px-4 py-3 align-top font-medium">
+																	{queue.title}
+																</td>
+																<td className="px-4 py-3 align-top font-mono text-xs text-muted-foreground break-all">
+																	{queue.queueName}
+																</td>
+																<td
+																	className="px-4 py-3 align-top"
+																	title={metrics.title}
+																>
+																	<div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+																		<span className="whitespace-nowrap">
+																			<span className="font-medium tabular-nums text-foreground">
+																				{metrics.queued}
+																			</span>{" "}
+																			<span className="text-muted-foreground">
+																				queued
+																			</span>
+																		</span>
+																		<span className="whitespace-nowrap">
+																			<span className="font-medium tabular-nums text-foreground">
+																				{metrics.running}
+																			</span>{" "}
+																			<span className="text-muted-foreground">
+																				running
+																			</span>
+																		</span>
+																		{metrics.failed > 0 ? (
+																			<span className="whitespace-nowrap">
+																				<span className="font-medium tabular-nums text-red-600">
+																					{metrics.failed}
+																				</span>{" "}
+																				<span className="text-red-600">
+																					failed
+																				</span>
+																			</span>
+																		) : null}
+																	</div>
+																</td>
+																<td
+																	className="px-4 py-3 align-top"
+																	title={metrics.title}
+																>
+																	<div className="flex items-center gap-3">
+																		<Progress
+																			value={getQueueTerminalProgressValue(
+																				queue,
+																			)}
+																			className={getQueueProgressClassName(
+																				queue.id,
+																			)}
+																		/>
+																		<span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+																			{metrics.terminal} / {metrics.total}
+																		</span>
+																	</div>
+																</td>
 															</tr>
-														</thead>
-													<tbody>
-														{queuePendingCounts.map((queue) => {
-															const metrics = getQueueTaskMetrics(queue);
-															return (
-																<tr key={queue.id} className="border-b last:border-b-0">
-																	<td className="px-4 py-3 align-top font-medium">
-																		{queue.title}
-																	</td>
-																	<td className="px-4 py-3 align-top font-mono text-xs text-muted-foreground break-all">
-																		{queue.queueName}
-																	</td>
-																	<td className="px-4 py-3 align-top" title={metrics.title}>
-																		<div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-																			<span className="whitespace-nowrap">
-																				<span className="font-medium tabular-nums text-foreground">
-																					{metrics.queued}
-																				</span>{" "}
-																				<span className="text-muted-foreground">
-																					queued
-																				</span>
-																			</span>
-																			<span className="whitespace-nowrap">
-																				<span className="font-medium tabular-nums text-foreground">
-																					{metrics.running}
-																				</span>{" "}
-																				<span className="text-muted-foreground">
-																					running
-																				</span>
-																			</span>
-																			{metrics.failed > 0 ? (
-																				<span className="whitespace-nowrap">
-																					<span className="font-medium tabular-nums text-red-600">
-																						{metrics.failed}
-																					</span>{" "}
-																					<span className="text-red-600">failed</span>
-																				</span>
-																			) : null}
-																		</div>
-																	</td>
-																	<td className="px-4 py-3 align-top" title={metrics.title}>
-																		<div className="flex items-center gap-3">
-																			<Progress
-																				value={getQueueTerminalProgressValue(queue)}
-																				className={getQueueProgressClassName(queue.id)}
-																			/>
-																			<span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-																				{metrics.terminal} / {metrics.total}
-																			</span>
-																		</div>
-																	</td>
-																</tr>
-															);
-														})}
-													</tbody>
-												</table>
+														);
+													})}
+												</tbody>
+											</table>
 										)}
 									</div>
 								</div>
@@ -2461,7 +2569,8 @@ export const ShowScanJobDetail = ({
 									<div className="border-b px-4 py-3">
 										<div className="font-medium">Running Tasks</div>
 										<div className="text-sm text-muted-foreground">
-											All running scanning, analysis, and verification agents for this job.
+											All running scanning, analysis, and verification agents
+											for this job.
 										</div>
 									</div>
 									{statusView && sortedInProgressTasks.length > 0 ? (
@@ -2576,13 +2685,21 @@ export const ShowScanJobDetail = ({
 											<table className="w-full text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
-														<th className="w-[22%] px-4 py-3 font-medium">Task</th>
-														<th className="w-[10%] px-4 py-3 font-medium">Stage</th>
-														<th className="w-[10%] px-4 py-3 font-medium">Runtime</th>
+														<th className="w-[22%] px-4 py-3 font-medium">
+															Task
+														</th>
+														<th className="w-[10%] px-4 py-3 font-medium">
+															Stage
+														</th>
+														<th className="w-[10%] px-4 py-3 font-medium">
+															Runtime
+														</th>
 														<th className="w-[50%] px-4 py-3 font-medium">
 															Current Activity
 														</th>
-														<th className="w-[8%] px-4 py-3 font-medium">Actions</th>
+														<th className="w-[8%] px-4 py-3 font-medium">
+															Actions
+														</th>
 													</tr>
 												</thead>
 												<tbody>
@@ -2603,7 +2720,10 @@ export const ShowScanJobDetail = ({
 																{getTaskStageLabel(task.stage)}
 															</td>
 															<td className="w-[10%] whitespace-nowrap px-4 py-3 align-top tabular-nums">
-																{formatTaskRuntime(task.startedAt, runtimeNowMs)}
+																{formatTaskRuntime(
+																	task.startedAt,
+																	runtimeNowMs,
+																)}
 															</td>
 															<td className="w-[50%] px-4 py-3 align-top">
 																<LiveTaskActivityBadge
@@ -2772,104 +2892,127 @@ export const ShowScanJobDetail = ({
 											<table className="w-full text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
-														<th className="w-[22%] px-4 py-3 font-medium">Task</th>
-														<th className="w-[9%] px-4 py-3 font-medium">Stage</th>
-														<th className="w-[9%] px-4 py-3 font-medium">Status</th>
-														<th className="w-[11%] px-4 py-3 font-medium">Started</th>
-														<th className="w-[11%] px-4 py-3 font-medium">Finished</th>
-														<th className="w-[30%] px-4 py-3 font-medium">Details</th>
-														<th className="w-[8%] px-4 py-3 font-medium">Actions</th>
+														<th className="w-[22%] px-4 py-3 font-medium">
+															Task
+														</th>
+														<th className="w-[9%] px-4 py-3 font-medium">
+															Stage
+														</th>
+														<th className="w-[9%] px-4 py-3 font-medium">
+															Status
+														</th>
+														<th className="w-[11%] px-4 py-3 font-medium">
+															Started
+														</th>
+														<th className="w-[11%] px-4 py-3 font-medium">
+															Finished
+														</th>
+														<th className="w-[30%] px-4 py-3 font-medium">
+															Details
+														</th>
+														<th className="w-[8%] px-4 py-3 font-medium">
+															Actions
+														</th>
 													</tr>
 												</thead>
 												<tbody>
 													{finishedTaskPagination.items.map((task) => {
-														const canRerunTask = RERUNNABLE_TASK_STATUSES.has(task.status);
-														const isRerunningTask = rerunningTaskId === task.taskId;
+														const canRerunTask = RERUNNABLE_TASK_STATUSES.has(
+															task.status,
+														);
+														const isRerunningTask =
+															rerunningTaskId === task.taskId;
 														return (
 															<tr
 																key={task.id}
 																role="link"
 																tabIndex={0}
 																aria-label={`Open task ${task.title}`}
-																onClick={() => void router.push(buildTaskDetailHref(task.taskId))}
+																onClick={() =>
+																	void router.push(
+																		buildTaskDetailHref(task.taskId),
+																	)
+																}
 																onKeyDown={(event) =>
 																	handleTaskRowKeyDown(event, task.taskId)
 																}
 																className="cursor-pointer border-b transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none last:border-b-0"
 															>
-															<td className="w-[22%] px-4 py-3 align-top">
-																<div className="line-clamp-2 font-medium">
-																	{task.title}
-																</div>
-																<div className="text-xs text-muted-foreground break-all">
-																	{task.subtitle || "-"}
-																</div>
-															</td>
-															<td className="w-[9%] px-4 py-3 align-top capitalize">
-																{getTaskStageLabel(task.stage)}
-															</td>
-															<td className="w-[9%] px-4 py-3 align-top">
-																<Badge
-																	variant="outline"
-																	className={getTaskStatusBadgeClassName(task.status)}
-																>
-																	{getTaskStatusLabel(task.status)}
-																</Badge>
-															</td>
-															<td className="w-[11%] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
-																{task.startedAt ? (
-																	<DateTooltip date={task.startedAt} />
-																) : (
-																	"-"
-																)}
-															</td>
-															<td className="w-[11%] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
-																{task.completedAt ? (
-																	<DateTooltip date={task.completedAt} />
-																) : (
-																	"-"
-																)}
-															</td>
-															<td className="w-[30%] px-4 py-3 align-top text-xs text-muted-foreground">
-																<div className="line-clamp-3 break-words">
-																	{task.errorMessage || "-"}
-																</div>
-															</td>
-															<td className="w-[8%] px-4 py-3 align-top">
-																<div className="flex items-center gap-2">
-																	<Button
-																		type="button"
+																<td className="w-[22%] px-4 py-3 align-top">
+																	<div className="line-clamp-2 font-medium">
+																		{task.title}
+																	</div>
+																	<div className="text-xs text-muted-foreground break-all">
+																		{task.subtitle || "-"}
+																	</div>
+																</td>
+																<td className="w-[9%] px-4 py-3 align-top capitalize">
+																	{getTaskStageLabel(task.stage)}
+																</td>
+																<td className="w-[9%] px-4 py-3 align-top">
+																	<Badge
 																		variant="outline"
-																		size="icon"
-																		title={
-																			canRerunTask
-																				? "Rerun task"
-																				: "Task can be rerun after it reaches a terminal state"
-																		}
-																		aria-label={
-																			canRerunTask
-																				? "Rerun task"
-																				: "Task can be rerun after it reaches a terminal state"
-																		}
-																		disabled={
-																			!canRerunTask ||
-																			isRerunningTask ||
-																			rerunTaskMutation.isLoading
-																		}
-																		onClick={(event) => {
-																			event.stopPropagation();
-																			void handleRerunTask(task.taskId);
-																		}}
-																	>
-																		{isRerunningTask ? (
-																			<Loader2 className="size-4 animate-spin" />
-																		) : (
-																			<RefreshCw className="size-4" />
+																		className={getTaskStatusBadgeClassName(
+																			task.status,
 																		)}
-																	</Button>
-																</div>
-															</td>
-														</tr>
+																	>
+																		{getTaskStatusLabel(task.status)}
+																	</Badge>
+																</td>
+																<td className="w-[11%] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
+																	{task.startedAt ? (
+																		<DateTooltip date={task.startedAt} />
+																	) : (
+																		"-"
+																	)}
+																</td>
+																<td className="w-[11%] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
+																	{task.completedAt ? (
+																		<DateTooltip date={task.completedAt} />
+																	) : (
+																		"-"
+																	)}
+																</td>
+																<td className="w-[30%] px-4 py-3 align-top text-xs text-muted-foreground">
+																	<div className="line-clamp-3 break-words">
+																		{task.errorMessage || "-"}
+																	</div>
+																</td>
+																<td className="w-[8%] px-4 py-3 align-top">
+																	<div className="flex items-center gap-2">
+																		<Button
+																			type="button"
+																			variant="outline"
+																			size="icon"
+																			title={
+																				canRerunTask
+																					? "Rerun task"
+																					: "Task can be rerun after it reaches a terminal state"
+																			}
+																			aria-label={
+																				canRerunTask
+																					? "Rerun task"
+																					: "Task can be rerun after it reaches a terminal state"
+																			}
+																			disabled={
+																				!canRerunTask ||
+																				isRerunningTask ||
+																				rerunTaskMutation.isLoading
+																			}
+																			onClick={(event) => {
+																				event.stopPropagation();
+																				void handleRerunTask(task.taskId);
+																			}}
+																		>
+																			{isRerunningTask ? (
+																				<Loader2 className="size-4 animate-spin" />
+																			) : (
+																				<RefreshCw className="size-4" />
+																			)}
+																		</Button>
+																	</div>
+																</td>
+															</tr>
 														);
 													})}
 												</tbody>
@@ -2890,8 +3033,6 @@ export const ShowScanJobDetail = ({
 					</div>
 				</CardContent>
 			</Card>
-
-
 		</div>
 	);
 };
