@@ -90,6 +90,7 @@ RUN npm install -g @anthropic-ai/claude-code || true
 RUN npm install -g sandbox-agent@0.4.2 \
     && patch -d "$(npm root -g)/sandbox-agent" -p1 < /tmp/dokploy-sandbox-agent.patch \
     && grep -R "async loadSession(" "$(npm root -g)/sandbox-agent/dist" >/dev/null \
+    && grep -R "async forkSession(" "$(npm root -g)/sandbox-agent/dist" >/dev/null \
     && rm -f /tmp/dokploy-sandbox-agent.patch
 RUN npm install -g @sandbox-agent/cli@0.4.x \
     && sandbox-agent --help >/dev/null
@@ -124,11 +125,32 @@ RUN mkdir -p /opt/codeql \
     && ln -sf /opt/codeql/codeql /usr/local/bin/codeql
 RUN codeql pack download codeql/cpp-all
 
+FROM tools AS codex-acp-builder
+
+ARG CODEX_ACP_REPO="https://github.com/zed-industries/codex-acp.git"
+ARG CODEX_ACP_REF="156cb0da12f6c7b1c697f90b5f22d5e14be31165"
+
+COPY codex-acp-fork-0.14.0.patch /tmp/dokploy-codex-acp-fork.patch
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libssl-dev libcap-dev protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone "${CODEX_ACP_REPO}" /tmp/codex-acp \
+    && cd /tmp/codex-acp \
+    && git checkout "${CODEX_ACP_REF}" \
+    && patch -p1 < /tmp/dokploy-codex-acp-fork.patch \
+    && cargo build --release --bin codex-acp \
+    && test -x /tmp/codex-acp/target/release/codex-acp
+
 FROM tools AS final
 
 ARG GIT_URL="<GIT_URL>"
 ARG GIT_BRANCH="<GIT_BRANCH>"
 ARG ENABLE_SUBMODULES="false"
+
+COPY --from=codex-acp-builder /tmp/codex-acp/target/release/codex-acp /usr/local/bin/dokploy-codex-acp
+RUN install -m 0755 /usr/local/bin/dokploy-codex-acp \
+      /root/.local/share/sandbox-agent/bin/agent_processes/codex-acp \
+    && test -x /root/.local/share/sandbox-agent/bin/agent_processes/codex-acp
 
 WORKDIR /workspace
 

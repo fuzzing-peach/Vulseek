@@ -1,5 +1,5 @@
---- a/dist/chunk-TVCDKGSM.js
-+++ b/dist/chunk-TVCDKGSM.js
+--- a/dist/chunk-TVCDKGSM.js	1985-10-26 16:15:00.000000000 +0800
++++ b/dist/chunk-TVCDKGSM.js	2026-05-22 14:18:43.377670159 +0800
 @@ -810,6 +810,15 @@
      this.sessionByLocalId.set(localSessionId, agentSessionId);
      this.localByAgentSessionId.set(agentSessionId, localSessionId);
@@ -16,7 +16,7 @@
    queueReplay(localSessionId, replayText) {
      if (!replayText) {
        this.pendingReplayByLocalSessionId.delete(localSessionId);
-@@ -837,6 +846,29 @@
+@@ -837,6 +846,45 @@
        throw error;
      }
    }
@@ -43,35 +43,62 @@
 +      throw error;
 +    }
 +  }
++  async forkRemoteSession(agentSessionId, sessionInit) {
++    const forkStartedAt = Date.now();
++    try {
++      return await this.acp.unstableForkSession({
++        ...sessionInit,
++        sessionId: agentSessionId
++      });
++    } catch (error) {
++      const adapterExit = this.lastAdapterExit;
++      if (adapterExit && this.lastAdapterExitAt >= forkStartedAt) {
++        const suffix = adapterExit.code == null ? "" : ` (code ${adapterExit.code})`;
++        throw new Error(`Agent process exited while forking session${suffix}`);
++      }
++      throw error;
++    }
++  }
    async sendSessionMethod(localSessionId, method, params, options) {
      const agentSessionId = this.sessionByLocalId.get(localSessionId);
      if (!agentSessionId) {
-@@ -1284,14 +1316,71 @@
+@@ -904,6 +952,9 @@
+         }
+         return localSessionId;
+       }
++      if (method === "session/fork") {
++        return this.localFromEnvelopeParams(envelope);
++      }
+       const localFromParams = this.localFromEnvelopeParams(envelope);
+       if (id && localFromParams) {
+         this.pendingRequestSessionById.set(id, localFromParams);
+@@ -1284,14 +1335,19 @@
      if (!request.agent.trim()) {
        throw new Error("createSession requires a non-empty agent");
      }
 -    const localSessionId = request.id?.trim() || randomId();
 +    const requestedLocalSessionId = request.id?.trim() || randomId();
-+    const live = await this.getLiveConnection(request.agent.trim());
-+    const sessionInit = normalizeSessionInit(request.sessionInit, request.cwd, this.sandboxProvider?.defaultCwd);
+     const live = await this.getLiveConnection(request.agent.trim());
+     const sessionInit = normalizeSessionInit(request.sessionInit, request.cwd, this.sandboxProvider?.defaultCwd);
+-    const response = await live.createRemoteSession(localSessionId, sessionInit);
 +    const response = await live.createRemoteSession(requestedLocalSessionId, sessionInit);
 +    const agentSessionId = response.sessionId;
 +    const localSessionId = agentSessionId || requestedLocalSessionId;
 +    if (agentSessionId && requestedLocalSessionId !== localSessionId && typeof this.persist.renameSessionId === "function") {
 +      await this.persist.renameSessionId(requestedLocalSessionId, localSessionId);
 +    }
-+    const record = {
-+      id: localSessionId,
-+      agent: request.agent.trim(),
+     const record = {
+       id: localSessionId,
+       agent: request.agent.trim(),
+-      agentSessionId: response.sessionId,
 +      agentSessionId,
-+      lastConnectionId: live.connectionId,
-+      createdAt: nowMs(),
-+      sandboxId: this.sandboxProviderId,
-+      sessionInit,
-+      configOptions: cloneConfigOptions(response.configOptions),
-+      modes: cloneModes(response.modes)
-+    };
-+    await this.persist.updateSession(record);
+       lastConnectionId: live.connectionId,
+       createdAt: nowMs(),
+       sandboxId: this.sandboxProviderId,
+@@ -1300,6 +1356,110 @@
+       modes: cloneModes(response.modes)
+     };
+     await this.persist.updateSession(record);
 +    if (requestedLocalSessionId !== record.id) {
 +      live.unbindSession(requestedLocalSessionId, record.agentSessionId);
 +    }
@@ -109,31 +136,88 @@
 +    if (existing?.agentSessionId && existing.agentSessionId !== agentSessionId) {
 +      throw new Error(`session '${localSessionId}' already exists for a different agentSessionId`);
 +    }
-     const live = await this.getLiveConnection(request.agent.trim());
-     const sessionInit = normalizeSessionInit(request.sessionInit, request.cwd, this.sandboxProvider?.defaultCwd);
--    const response = await live.createRemoteSession(localSessionId, sessionInit);
++    const live = await this.getLiveConnection(request.agent.trim());
++    const sessionInit = normalizeSessionInit(request.sessionInit, request.cwd, this.sandboxProvider?.defaultCwd);
 +    const response = await live.loadRemoteSession(localSessionId, agentSessionId, sessionInit);
-     const record = {
-       id: localSessionId,
-       agent: request.agent.trim(),
--      agentSessionId: response.sessionId,
++    const record = {
++      id: localSessionId,
++      agent: request.agent.trim(),
 +      agentSessionId: response.sessionId || agentSessionId,
-       lastConnectionId: live.connectionId,
--      createdAt: nowMs(),
++      lastConnectionId: live.connectionId,
 +      createdAt: existing?.createdAt ?? nowMs(),
-       sandboxId: this.sandboxProviderId,
-@@ -3026,4 +3115,4 @@
++      sandboxId: this.sandboxProviderId,
++      sessionInit,
++      configOptions: cloneConfigOptions(response.configOptions),
++      modes: cloneModes(response.modes)
++    };
++    await this.persist.updateSession(record);
++    live.bindSession(record.id, record.agentSessionId);
++    let session = this.upsertSessionHandle(record);
++    try {
++      if (request.mode) {
++        session = (await this.setSessionMode(session.id, request.mode)).session;
++      }
++      if (request.model) {
++        session = (await this.setSessionModel(session.id, request.model)).session;
++      }
++      if (request.thoughtLevel) {
++        session = (await this.setSessionThoughtLevel(session.id, request.thoughtLevel)).session;
++      }
++    } catch (err) {
++      try {
++        await this.destroySession(session.id);
++      } catch {
++      }
++      throw err;
++    }
++    return session;
++  }
++  async forkSession(request) {
++    if (!request.agent.trim()) {
++      throw new Error("forkSession requires a non-empty agent");
++    }
++    const parentAgentSessionId = request.agentSessionId?.trim();
++    if (!parentAgentSessionId) {
++      throw new Error("forkSession requires a non-empty agentSessionId");
++    }
++    const live = await this.getLiveConnection(request.agent.trim());
++    const sessionInit = normalizeSessionInit(request.sessionInit, request.cwd, this.sandboxProvider?.defaultCwd);
++    const response = await live.forkRemoteSession(parentAgentSessionId, sessionInit);
++    const childAgentSessionId = response.sessionId;
++    if (!childAgentSessionId) {
++      throw new Error("forkSession response is missing child sessionId");
++    }
++    const existing = await this.persist.getSession(childAgentSessionId);
++    if (existing?.agentSessionId && existing.agentSessionId !== childAgentSessionId) {
++      throw new Error(`session '${childAgentSessionId}' already exists for a different agentSessionId`);
++    }
++    const record = {
++      id: childAgentSessionId,
++      agent: request.agent.trim(),
++      agentSessionId: childAgentSessionId,
++      lastConnectionId: live.connectionId,
++      createdAt: existing?.createdAt ?? nowMs(),
++      sandboxId: this.sandboxProviderId,
++      sessionInit,
++      configOptions: cloneConfigOptions(response.configOptions),
++      modes: cloneModes(response.modes)
++    };
++    await this.persist.updateSession(record);
+     live.bindSession(record.id, record.agentSessionId);
+     let session = this.upsertSessionHandle(record);
+     try {
+@@ -3026,4 +3186,4 @@
    ProcessTerminalSession,
    SandboxAgent
  };
 -//# sourceMappingURL=chunk-TVCDKGSM.js.map
 \ No newline at end of file
 +//# sourceMappingURL=chunk-TVCDKGSM.js.map
---- a/dist/index.d.ts
-+++ b/dist/index.d.ts
+--- a/dist/index.d.ts	1985-10-26 16:15:00.000000000 +0800
++++ b/dist/index.d.ts	2026-05-22 14:20:21.350739495 +0800
 @@ -1,4 +1,4 @@
 -import { NewSessionRequest, SessionConfigOption, SessionModeState, AnyMessage, AcpEnvelopeDirection, RequestPermissionRequest, RequestPermissionResponse, NewSessionResponse, PermissionOptionKind, PromptRequest, PromptResponse, SetSessionModeResponse, SetSessionConfigOptionResponse } from 'acp-http-client';
-+import { NewSessionRequest, LoadSessionRequest, LoadSessionResponse, SessionConfigOption, SessionModeState, AnyMessage, AcpEnvelopeDirection, RequestPermissionRequest, RequestPermissionResponse, NewSessionResponse, PermissionOptionKind, PromptRequest, PromptResponse, SetSessionModeResponse, SetSessionConfigOptionResponse } from 'acp-http-client';
++import { NewSessionRequest, LoadSessionRequest, LoadSessionResponse, ForkSessionRequest, ForkSessionResponse, SessionConfigOption, SessionModeState, AnyMessage, AcpEnvelopeDirection, RequestPermissionRequest, RequestPermissionResponse, NewSessionResponse, PermissionOptionKind, PromptRequest, PromptResponse, SetSessionModeResponse, SetSessionConfigOptionResponse } from 'acp-http-client';
  export { AcpRpcError } from 'acp-http-client';
  import { S as SandboxProvider } from './types-DdcvY5CI.js';
  export { S as SandboxAgentSpawnLogMode, a as SandboxAgentSpawnOptions } from './spawn-76JDF5d3.js';
@@ -145,7 +229,7 @@
  }
  interface InMemorySessionPersistDriverOptions {
      maxSessions?: number;
-@@ -2958,6 +2959,19 @@
+@@ -2958,6 +2959,31 @@
      mode?: string;
      thoughtLevel?: string;
  }
@@ -162,20 +246,33 @@
 +    mode?: string;
 +    thoughtLevel?: string;
 +}
++interface SessionForkRequest {
++    agent: string;
++    /** ACP adapter-native parent session id to pass as `session/fork` `sessionId`. */
++    agentSessionId: string;
++    /** Shorthand for `sessionInit.cwd`. Ignored when `sessionInit` is provided. */
++    cwd?: string;
++    /** Full fork init. When omitted, built from `cwd` (or default) with empty `mcpServers`. */
++    sessionInit?: Omit<ForkSessionRequest, "sessionId" | "_meta">;
++    model?: string;
++    mode?: string;
++    thoughtLevel?: string;
++}
  interface SessionResumeOrCreateRequest {
      id: string;
      agent: string;
-@@ -3172,6 +3186,7 @@
+@@ -3172,6 +3198,8 @@
      getSession(id: string): Promise<Session | null>;
      getEvents(request: ListEventsRequest): Promise<ListPage<SessionEvent>>;
      createSession(request: SessionCreateRequest): Promise<Session>;
 +    loadSession(request: SessionLoadRequest): Promise<Session>;
++    forkSession(request: SessionForkRequest): Promise<Session>;
      resumeSession(id: string): Promise<Session>;
      resumeOrCreateSession(request: SessionResumeOrCreateRequest): Promise<Session>;
      destroySession(id: string): Promise<Session>;
-@@ -3322,4 +3337,4 @@
+@@ -3322,4 +3350,4 @@
   */
  declare function buildInspectorUrl(options: InspectorUrlOptions): string;
  
 -export { type AcpEnvelope, type AcpServerInfo, type AcpServerListResponse, type AgentInfo, type AgentInstallRequest, type AgentInstallResponse, type AgentListResponse, type AgentQuery, type AgentQueryOptions, type DesktopActionResponse, type DesktopDisplayInfoResponse, type DesktopErrorInfo, type DesktopKeyModifiers, type DesktopKeyboardDownRequest, type DesktopKeyboardPressRequest, type DesktopKeyboardTypeRequest, type DesktopKeyboardUpRequest, type DesktopMouseButton, type DesktopMouseClickRequest, type DesktopMouseDownRequest, type DesktopMouseDragRequest, type DesktopMouseMoveRequest, type DesktopMousePositionResponse, type DesktopMouseScrollRequest, type DesktopMouseUpRequest, type DesktopProcessInfo, type DesktopRecordingInfo, type DesktopRecordingListResponse, type DesktopRecordingStartRequest, type DesktopRecordingStatus, type DesktopRegionScreenshotQuery, type DesktopResolution, type DesktopScreenshotFormat, type DesktopScreenshotQuery, type DesktopStartRequest, type DesktopState, type DesktopStatusResponse, type DesktopStreamConnectOptions, type DesktopStreamErrorStatus, type DesktopStreamReadyStatus, DesktopStreamSession, type DesktopStreamSessionOptions, type DesktopStreamStatusMessage, type DesktopStreamStatusResponse, type DesktopWindowInfo, type DesktopWindowListResponse, type FsActionResponse, type FsDeleteQuery, type FsEntriesQuery, type FsEntry, type FsMoveRequest, type FsMoveResponse, type FsPathQuery, type FsStat, type FsUploadBatchQuery, type FsUploadBatchResponse, type FsWriteResponse, type HealthResponse, InMemorySessionPersistDriver, type InMemorySessionPersistDriverOptions, type InspectorUrlOptions, type ListEventsRequest, type ListPage, type ListPageRequest, LiveAcpConnection, type McpConfigQuery, type McpServerConfig, type PermissionReply, type PermissionRequestListener, type ProblemDetails, type ProcessConfig, type ProcessCreateRequest, type ProcessInfo, type ProcessInputRequest, type ProcessInputResponse, type ProcessListQuery, type ProcessListResponse, type ProcessLogEntry, type ProcessLogFollowQuery, type ProcessLogListener, type ProcessLogSubscription, type ProcessLogsQuery, type ProcessLogsResponse, type ProcessLogsStream, type ProcessOwner, type ProcessRunRequest, type ProcessRunResponse, type ProcessSignalQuery, type ProcessState, type ProcessTerminalClientFrame, type ProcessTerminalConnectOptions, type ProcessTerminalErrorFrame, type ProcessTerminalExitFrame, type ProcessTerminalReadyFrame, type ProcessTerminalResizeRequest, type ProcessTerminalResizeResponse, type ProcessTerminalServerFrame, ProcessTerminalSession, type ProcessTerminalSessionOptions, type ProcessTerminalWebSocketUrlOptions, SandboxAgent, type SandboxAgentConnectOptions, SandboxAgentError, type SandboxAgentHealthWaitOptions, type SandboxAgentStartOptions, SandboxDestroyedError, SandboxProvider, Session, type SessionCreateRequest, type SessionEvent, type SessionEventListener, type SessionPermissionRequest, type SessionPermissionRequestOption, type SessionPersistDriver, type SessionRecord, type SessionResumeOrCreateRequest, type SessionSendOptions, type SkillsConfig, type SkillsConfigQuery, type TerminalErrorStatus, type TerminalExitStatus, type TerminalReadyStatus, type TerminalResizePayload, type TerminalStatusMessage, UnsupportedPermissionReplyError, UnsupportedSessionCategoryError, UnsupportedSessionConfigOptionError, UnsupportedSessionValueError, buildInspectorUrl };
-+export { type AcpEnvelope, type AcpServerInfo, type AcpServerListResponse, type AgentInfo, type AgentInstallRequest, type AgentInstallResponse, type AgentListResponse, type AgentQuery, type AgentQueryOptions, type DesktopActionResponse, type DesktopDisplayInfoResponse, type DesktopErrorInfo, type DesktopKeyModifiers, type DesktopKeyboardDownRequest, type DesktopKeyboardPressRequest, type DesktopKeyboardTypeRequest, type DesktopKeyboardUpRequest, type DesktopMouseButton, type DesktopMouseClickRequest, type DesktopMouseDownRequest, type DesktopMouseDragRequest, type DesktopMouseMoveRequest, type DesktopMousePositionResponse, type DesktopMouseScrollRequest, type DesktopMouseUpRequest, type DesktopProcessInfo, type DesktopRecordingInfo, type DesktopRecordingListResponse, type DesktopRecordingStartRequest, type DesktopRecordingStatus, type DesktopRegionScreenshotQuery, type DesktopResolution, type DesktopScreenshotFormat, type DesktopScreenshotQuery, type DesktopStartRequest, type DesktopState, type DesktopStatusResponse, type DesktopStreamConnectOptions, type DesktopStreamErrorStatus, type DesktopStreamReadyStatus, DesktopStreamSession, type DesktopStreamSessionOptions, type DesktopStreamStatusMessage, type DesktopStreamStatusResponse, type DesktopWindowInfo, type DesktopWindowListResponse, type FsActionResponse, type FsDeleteQuery, type FsEntriesQuery, type FsEntry, type FsMoveRequest, type FsMoveResponse, type FsPathQuery, type FsStat, type FsUploadBatchQuery, type FsUploadBatchResponse, type FsWriteResponse, type HealthResponse, InMemorySessionPersistDriver, type InMemorySessionPersistDriverOptions, type InspectorUrlOptions, type ListEventsRequest, type ListPage, type ListPageRequest, LiveAcpConnection, type McpConfigQuery, type McpServerConfig, type PermissionReply, type PermissionRequestListener, type ProblemDetails, type ProcessConfig, type ProcessCreateRequest, type ProcessInfo, type ProcessInputRequest, type ProcessInputResponse, type ProcessListQuery, type ProcessListResponse, type ProcessLogEntry, type ProcessLogFollowQuery, type ProcessLogListener, type ProcessLogSubscription, type ProcessLogsQuery, type ProcessLogsResponse, type ProcessLogsStream, type ProcessOwner, type ProcessRunRequest, type ProcessRunResponse, type ProcessSignalQuery, type ProcessState, type ProcessTerminalClientFrame, type ProcessTerminalConnectOptions, type ProcessTerminalErrorFrame, type ProcessTerminalExitFrame, type ProcessTerminalReadyFrame, type ProcessTerminalResizeRequest, type ProcessTerminalResizeResponse, type ProcessTerminalServerFrame, ProcessTerminalSession, type ProcessTerminalSessionOptions, type ProcessTerminalWebSocketUrlOptions, SandboxAgent, type SandboxAgentConnectOptions, SandboxAgentError, type SandboxAgentHealthWaitOptions, type SandboxAgentStartOptions, SandboxDestroyedError, SandboxProvider, Session, type SessionCreateRequest, type SessionEvent, type SessionEventListener, type SessionPermissionRequest, type SessionPermissionRequestOption, type SessionPersistDriver, type SessionRecord, type SessionLoadRequest, type SessionResumeOrCreateRequest, type SessionSendOptions, type SkillsConfig, type SkillsConfigQuery, type TerminalErrorStatus, type TerminalExitStatus, type TerminalReadyStatus, type TerminalResizePayload, type TerminalStatusMessage, UnsupportedPermissionReplyError, UnsupportedSessionCategoryError, UnsupportedSessionConfigOptionError, UnsupportedSessionValueError, buildInspectorUrl };
++export { type AcpEnvelope, type AcpServerInfo, type AcpServerListResponse, type AgentInfo, type AgentInstallRequest, type AgentInstallResponse, type AgentListResponse, type AgentQuery, type AgentQueryOptions, type DesktopActionResponse, type DesktopDisplayInfoResponse, type DesktopErrorInfo, type DesktopKeyModifiers, type DesktopKeyboardDownRequest, type DesktopKeyboardPressRequest, type DesktopKeyboardTypeRequest, type DesktopKeyboardUpRequest, type DesktopMouseButton, type DesktopMouseClickRequest, type DesktopMouseDownRequest, type DesktopMouseDragRequest, type DesktopMouseMoveRequest, type DesktopMousePositionResponse, type DesktopMouseScrollRequest, type DesktopMouseUpRequest, type DesktopProcessInfo, type DesktopRecordingInfo, type DesktopRecordingListResponse, type DesktopRecordingStartRequest, type DesktopRecordingStatus, type DesktopRegionScreenshotQuery, type DesktopResolution, type DesktopScreenshotFormat, type DesktopScreenshotQuery, type DesktopStartRequest, type DesktopState, type DesktopStatusResponse, type DesktopStreamConnectOptions, type DesktopStreamErrorStatus, type DesktopStreamReadyStatus, DesktopStreamSession, type DesktopStreamSessionOptions, type DesktopStreamStatusMessage, type DesktopStreamStatusResponse, type DesktopWindowInfo, type DesktopWindowListResponse, type FsActionResponse, type FsDeleteQuery, type FsEntriesQuery, type FsEntry, type FsMoveRequest, type FsMoveResponse, type FsPathQuery, type FsStat, type FsUploadBatchQuery, type FsUploadBatchResponse, type FsWriteResponse, type HealthResponse, InMemorySessionPersistDriver, type InMemorySessionPersistDriverOptions, type InspectorUrlOptions, type ListEventsRequest, type ListPage, type ListPageRequest, LiveAcpConnection, type McpConfigQuery, type McpServerConfig, type PermissionReply, type PermissionRequestListener, type ProblemDetails, type ProcessConfig, type ProcessCreateRequest, type ProcessInfo, type ProcessInputRequest, type ProcessInputResponse, type ProcessListQuery, type ProcessListResponse, type ProcessLogEntry, type ProcessLogFollowQuery, type ProcessLogListener, type ProcessLogSubscription, type ProcessLogsQuery, type ProcessLogsResponse, type ProcessLogsStream, type ProcessOwner, type ProcessRunRequest, type ProcessRunResponse, type ProcessSignalQuery, type ProcessState, type ProcessTerminalClientFrame, type ProcessTerminalConnectOptions, type ProcessTerminalErrorFrame, type ProcessTerminalExitFrame, type ProcessTerminalReadyFrame, type ProcessTerminalResizeRequest, type ProcessTerminalResizeResponse, type ProcessTerminalServerFrame, ProcessTerminalSession, type ProcessTerminalSessionOptions, type ProcessTerminalWebSocketUrlOptions, SandboxAgent, type SandboxAgentConnectOptions, SandboxAgentError, type SandboxAgentHealthWaitOptions, type SandboxAgentStartOptions, SandboxDestroyedError, SandboxProvider, Session, type SessionCreateRequest, type SessionEvent, type SessionEventListener, type SessionForkRequest, type SessionPermissionRequest, type SessionPermissionRequestOption, type SessionPersistDriver, type SessionRecord, type SessionLoadRequest, type SessionResumeOrCreateRequest, type SessionSendOptions, type SkillsConfig, type SkillsConfigQuery, type TerminalErrorStatus, type TerminalExitStatus, type TerminalReadyStatus, type TerminalResizePayload, type TerminalStatusMessage, UnsupportedPermissionReplyError, UnsupportedSessionCategoryError, UnsupportedSessionConfigOptionError, UnsupportedSessionValueError, buildInspectorUrl };

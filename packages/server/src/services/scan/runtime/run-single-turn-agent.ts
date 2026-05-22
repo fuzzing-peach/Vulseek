@@ -1983,17 +1983,17 @@ const resolveParentAgentSessionId = (input) => {
   return parentSessionId;
 };
 
-const loadParentSessionAsChild = async (client, input) => {
-  if (typeof client.loadSession !== "function") {
-    throw new Error("sandbox-agent client does not support loadSession");
+const forkParentSessionAsChild = async (client, input) => {
+  if (typeof client.forkSession !== "function") {
+    throw new Error("sandbox-agent client does not support forkSession");
   }
   const parentAgentSessionId = resolveParentAgentSessionId(input);
   await appendDriverLog(
     input.stderrPath,
-    "loading parent native session parent_agent_session_id=" +
+    "forking parent native session parent_agent_session_id=" +
       parentAgentSessionId,
   );
-  const session = await client.loadSession({
+  const session = await client.forkSession({
     agent: input.provider,
     agentSessionId: parentAgentSessionId,
     cwd: input.cwd,
@@ -2003,9 +2003,9 @@ const loadParentSessionAsChild = async (client, input) => {
   });
   await appendDriverLog(
     input.stderrPath,
-    "loaded parent native session parent_agent_session_id=" +
+    "forked parent native session parent_agent_session_id=" +
       parentAgentSessionId +
-      " session_handle_agent_session_id=" +
+      " child_agent_session_id=" +
       getAgentSessionId(session),
   );
   return { session };
@@ -2026,17 +2026,21 @@ const createDriverSession = async (client, input, persist, parentPersist = null)
   if (!persist) {
     throw new Error("fork session requested but sessionPersistPath is missing");
   }
+  const parentAgentSessionId = resolveParentAgentSessionId(input);
+  const { session: childSession } = await forkParentSessionAsChild(client, input);
+  const childAgentSessionId = getAgentSessionId(childSession);
   if (parentPersist) {
-    const parentAgentSessionId = resolveParentAgentSessionId(input);
     const importResult = await persist.importEventsFrom(
       parentPersist,
       parentAgentSessionId,
-      parentAgentSessionId,
+      childAgentSessionId,
     );
     await appendDriverLog(
       input.stderrPath,
       "fork event inheritance persist_import parent_agent_session_id=" +
         parentAgentSessionId +
+        " child_agent_session_id=" +
+        childAgentSessionId +
         " imported=" +
         String(Boolean(importResult.imported)) +
         " count=" +
@@ -2045,7 +2049,6 @@ const createDriverSession = async (client, input, persist, parentPersist = null)
         String(importResult.reason || ""),
     );
   }
-  const { session: childSession } = await loadParentSessionAsChild(client, input);
   return {
     session: childSession,
   };

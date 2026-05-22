@@ -1218,6 +1218,23 @@ const resolveSandboxAgentPatchPath = async () => {
 	return patchPath;
 };
 
+const resolveCodexAcpForkPatchPath = async () => {
+	const workspaceRoot =
+		path.basename(process.cwd()) === "dokploy" &&
+		path.basename(path.dirname(process.cwd())) === "apps"
+			? path.resolve(process.cwd(), "../..")
+			: process.cwd();
+	const patchPath = path.resolve(
+		workspaceRoot,
+		"packages/server/src/services/dockerfiles/codex-acp-fork-0.14.0.patch",
+	);
+	const stat = await fs.stat(patchPath);
+	if (!stat.isFile()) {
+		throw new Error(`codex-acp fork patch path is not a file: ${patchPath}`);
+	}
+	return patchPath;
+};
+
 type CheckoutStatus = "running" | "completed" | "failed";
 
 type CheckoutTask = {
@@ -1452,6 +1469,10 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 		tempDir,
 		"sandbox-agent@0.4.2.patch",
 	);
+	const tempCodexAcpForkPatchPath = path.join(
+		tempDir,
+		"codex-acp-fork-0.14.0.patch",
+	);
 	const args = [
 		"build",
 		"-f",
@@ -1488,6 +1509,10 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 		await fs.copyFile(
 			await resolveSandboxAgentPatchPath(),
 			tempSandboxAgentPatchPath,
+		);
+		await fs.copyFile(
+			await resolveCodexAcpForkPatchPath(),
+			tempCodexAcpForkPatchPath,
 		);
 		await fs.writeFile(dockerfilePath, task.dockerfileTemplate, "utf-8");
 		await new Promise<void>((resolve, reject) => {
