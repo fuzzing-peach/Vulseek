@@ -197,15 +197,15 @@ const listDerivedCandidatesByScanJobId = async (
 	const [functionTasks, analysisTasks, verificationTasks] = await Promise.all([
 		listTasksByScanJobAndStageRepo({
 			scanJobId,
-			stageName: "FunctionScanningStage",
+			stageName: "function-scan",
 		}),
 		listTasksByScanJobAndStageRepo({
 			scanJobId,
-			stageName: "AnalysisStage",
+			stageName: "analyze",
 		}),
 		listTasksByScanJobAndStageRepo({
 			scanJobId,
-			stageName: "VerifyingStage",
+			stageName: "verify",
 		}),
 	]);
 
@@ -230,19 +230,19 @@ const findDerivedCandidateById = async (
 		.from(tasks)
 		.where(
 			or(
-				eq(tasks.stageName, "FunctionScanningStage"),
-				eq(tasks.stageName, "AnalysisStage"),
-				eq(tasks.stageName, "VerifyingStage"),
+				eq(tasks.stageName, "function-scan"),
+				eq(tasks.stageName, "analyze"),
+				eq(tasks.stageName, "verify"),
 			),
 		)
 		.orderBy(desc(tasks.createdAt));
 
 	const functionTasks = stageTasks.filter(
-		(task) => task.stageName === "FunctionScanningStage",
+		(task) => task.stageName === "function-scan",
 	);
-	const analysisTasks = stageTasks.filter((task) => task.stageName === "AnalysisStage");
+	const analysisTasks = stageTasks.filter((task) => task.stageName === "analyze");
 	const verificationTasks = stageTasks.filter(
-		(task) => task.stageName === "VerifyingStage",
+		(task) => task.stageName === "verify",
 	);
 
 	return (

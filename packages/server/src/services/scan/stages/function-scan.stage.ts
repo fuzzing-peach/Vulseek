@@ -115,7 +115,8 @@ export const createFunctionScanningStageDefinition = <
 		executionContext?: { fullScanFunctionConcurrency?: number };
 	},
 >(input: {
-	name?: string;
+	id: string;
+	name: string;
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
 	queue?: StageQueueBinding<TPipelineContext, FunctionScanningStageInput>;
@@ -126,14 +127,15 @@ export const createFunctionScanningStageDefinition = <
 	FunctionStageContext
 > =>
 	createStageDefinition({
-		name: input.name || "FunctionScanningStage",
+		id: input.id,
+		name: input.name,
 		mode: input.mode || "fanout",
 		persistent: input.persistent,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
 			await resolveStageConcurrencySetting(
 				ctx.scanJobId,
-				"FunctionScanningStage",
+				input.id,
 				(settings) => settings.fullScanFunctionConcurrency,
 			),
 		run: async (ctx, stageInput) => {

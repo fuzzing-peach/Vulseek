@@ -5,11 +5,11 @@ import type {
 } from "./types";
 
 export const RETRYABLE_TASK_STAGE_NAMES = [
-	"RepositoryScanningStage",
-	"ModuleScanningStage",
-	"FunctionScanningStage",
-	"AnalysisStage",
-	"VerifyingStage",
+	"repository-scan",
+	"module-scan",
+	"function-scan",
+	"analyze",
+	"verify",
 ] as const;
 
 export type RetryableTaskStageName =
@@ -35,19 +35,19 @@ type RetryFailedTasksDeps = {
 };
 
 const RETRY_STAGE_ORDER: Record<RetryableTaskStageName, number> = {
-	RepositoryScanningStage: 0,
-	ModuleScanningStage: 1,
-	FunctionScanningStage: 2,
-	AnalysisStage: 3,
-	VerifyingStage: 4,
+	"repository-scan": 0,
+	"module-scan": 1,
+	"function-scan": 2,
+	analyze: 3,
+	verify: 4,
 };
 
 const createEmptyRetryCounts = (): RetryFailedTasksByStage => ({
-	RepositoryScanningStage: 0,
-	ModuleScanningStage: 0,
-	FunctionScanningStage: 0,
-	AnalysisStage: 0,
-	VerifyingStage: 0,
+	"repository-scan": 0,
+	"module-scan": 0,
+	"function-scan": 0,
+	analyze: 0,
+	verify: 0,
 });
 
 export const isRetryableTaskStageName = (

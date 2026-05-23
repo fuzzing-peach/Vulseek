@@ -175,7 +175,8 @@ const executeRepositoryScanStage = async (
 export const createRepositoryScanningStageDefinition = <
 	TPipelineContext extends PipelineContext,
 >(input: {
-	name?: string;
+	id: string;
+	name: string;
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
 	queue?: StageQueueBinding<TPipelineContext, RepositoryScanningStageInput>;
@@ -186,14 +187,15 @@ export const createRepositoryScanningStageDefinition = <
 	StageContext
 > =>
 	createStageDefinition({
-		name: input.name || "RepositoryScanningStage",
+		id: input.id,
+		name: input.name,
 		mode: input.mode || "serial",
 		persistent: input.persistent,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
 			await resolveStageConcurrencySetting(
 				ctx.scanJobId,
-				"RepositoryScanningStage",
+				input.id,
 				() => 1,
 			),
 		run: async (ctx, stageInput) => {

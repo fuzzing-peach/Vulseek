@@ -135,6 +135,10 @@ import { prepareSandboxAgentRuntime } from "./sandbox-agent/runtime";
 import { findApplicationById } from "./application";
 import { findComposeById } from "./compose";
 import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "./scan/runtime/sandbox-agent-shared";
+import {
+	SCAN_STAGE_METADATA,
+	SCAN_STAGE_IDS,
+} from "./scan/stage-metadata";
 
 const DEFAULT_FULL_SCAN_MODULE_CONCURRENCY = 4;
 const DEFAULT_FULL_SCAN_FUNCTION_CONCURRENCY = 4;
@@ -614,7 +618,7 @@ const readNumber = (
 };
 
 const readModuleTaskView = (task: Task): UnifiedModuleTaskView | null => {
-	if (task.stageName !== "ModuleScanningStage") {
+	if (task.stageName !== SCAN_STAGE_IDS.moduleScan) {
 		return null;
 	}
 	const input = asTaskRecord(task.input);
@@ -638,7 +642,7 @@ const readModuleTaskView = (task: Task): UnifiedModuleTaskView | null => {
 };
 
 const readFunctionTaskView = (task: Task): UnifiedFunctionTaskView | null => {
-	if (task.stageName !== "FunctionScanningStage") {
+	if (task.stageName !== SCAN_STAGE_IDS.functionScan) {
 		return null;
 	}
 	const input = asTaskRecord(task.input);
@@ -681,7 +685,7 @@ const listUnifiedModuleTaskViewsByScanJobId = async (scanJobId: string) =>
 	(
 		await listTasksByScanJobAndStageRepo({
 			scanJobId,
-			stageName: "ModuleScanningStage",
+			stageName: SCAN_STAGE_IDS.moduleScan,
 		})
 	)
 		.map(readModuleTaskView)
@@ -691,7 +695,7 @@ const listUnifiedFunctionTaskViewsByScanJobId = async (scanJobId: string) =>
 	(
 		await listTasksByScanJobAndStageRepo({
 			scanJobId,
-			stageName: "FunctionScanningStage",
+			stageName: SCAN_STAGE_IDS.functionScan,
 		})
 	)
 		.map(readFunctionTaskView)
@@ -703,7 +707,7 @@ const listUnifiedFunctionTaskViewsByModuleTaskId = async (
 	(
 		await listChildTasksByParentTaskIdAndStageRepo({
 			parentTaskId: moduleTaskId,
-			stageName: "FunctionScanningStage",
+			stageName: SCAN_STAGE_IDS.functionScan,
 		})
 	)
 		.map(readFunctionTaskView)
@@ -725,17 +729,17 @@ const readCandidateRecordFromTaskInput = (
 	task: Task,
 ): Record<string, unknown> | null => {
 	const input = asTaskRecord(task.input);
-	if (task.stageName === "AnalysisStage") {
+	if (task.stageName === SCAN_STAGE_IDS.analysis) {
 		return asTaskRecord(input?.candidate);
 	}
 	if (
-		task.stageName === "FuzzBuildStage" ||
-		task.stageName === "FuzzRunStage" ||
-		task.stageName === "AnalysisCriticStage"
+		task.stageName === SCAN_STAGE_IDS.fuzzBuild ||
+		task.stageName === SCAN_STAGE_IDS.fuzzRun ||
+		task.stageName === SCAN_STAGE_IDS.analysisCritic
 	) {
 		return asTaskRecord(input?.candidate);
 	}
-	if (task.stageName === "VerifyingStage") {
+	if (task.stageName === SCAN_STAGE_IDS.verification) {
 		return asTaskRecord(asTaskRecord(input?.analysisResult)?.candidate);
 	}
 	return null;
@@ -744,7 +748,7 @@ const readCandidateRecordFromTaskInput = (
 const buildInProgressTaskView = (task: Task): InProgressTaskView | null => {
 	const input = asTaskRecord(task.input);
 	switch (task.stageName) {
-		case "RepositoryScanningStage":
+		case SCAN_STAGE_IDS.repositoryScan:
 			return {
 				id: `repository-${task.taskId}`,
 				taskId: task.taskId,
@@ -754,7 +758,7 @@ const buildInProgressTaskView = (task: Task): InProgressTaskView | null => {
 				startedAt: task.startedAt,
 				updatedAt: task.updatedAt,
 			};
-		case "ModuleScanningStage": {
+		case SCAN_STAGE_IDS.moduleScan: {
 			const module = asTaskRecord(input?.module);
 			return {
 				id: `module-${task.taskId}`,
@@ -766,7 +770,7 @@ const buildInProgressTaskView = (task: Task): InProgressTaskView | null => {
 				updatedAt: task.updatedAt,
 			};
 		}
-		case "FunctionScanningStage": {
+		case SCAN_STAGE_IDS.functionScan: {
 			const func = asTaskRecord(input?.function);
 			const module = asTaskRecord(input?.module);
 			return {
@@ -789,7 +793,7 @@ const buildInProgressTaskView = (task: Task): InProgressTaskView | null => {
 				updatedAt: task.updatedAt,
 			};
 		}
-		case "AnalysisStage": {
+		case SCAN_STAGE_IDS.analysis: {
 			const candidate = readCandidateRecordFromTaskInput(task);
 			return {
 				id: `analysis-${task.taskId}`,
@@ -808,7 +812,7 @@ const buildInProgressTaskView = (task: Task): InProgressTaskView | null => {
 				updatedAt: task.updatedAt,
 			};
 		}
-		case "FuzzBuildStage": {
+		case SCAN_STAGE_IDS.fuzzBuild: {
 			const candidate = readCandidateRecordFromTaskInput(task);
 			return {
 				id: `fuzz-build-${task.taskId}`,
@@ -827,7 +831,7 @@ const buildInProgressTaskView = (task: Task): InProgressTaskView | null => {
 				updatedAt: task.updatedAt,
 			};
 		}
-		case "FuzzRunStage": {
+		case SCAN_STAGE_IDS.fuzzRun: {
 			const candidate = readCandidateRecordFromTaskInput(task);
 			return {
 				id: `fuzz-run-${task.taskId}`,
@@ -846,7 +850,7 @@ const buildInProgressTaskView = (task: Task): InProgressTaskView | null => {
 				updatedAt: task.updatedAt,
 			};
 		}
-		case "AnalysisCriticStage": {
+		case SCAN_STAGE_IDS.analysisCritic: {
 			const candidate = readCandidateRecordFromTaskInput(task);
 			return {
 				id: `analysis-critic-${task.taskId}`,
@@ -865,7 +869,7 @@ const buildInProgressTaskView = (task: Task): InProgressTaskView | null => {
 				updatedAt: task.updatedAt,
 			};
 		}
-		case "VerifyingStage": {
+		case SCAN_STAGE_IDS.verification: {
 			const candidate = readCandidateRecordFromTaskInput(task);
 			return {
 				id: `verification-${task.taskId}`,
@@ -926,50 +930,50 @@ const listQueuePendingCountsByScanJobId = async (
 	}> = [
 		{
 			id: "repository",
-			title: "Repository Scanning",
-			stageName: "RepositoryScanningStage",
+			title: SCAN_STAGE_METADATA.repositoryScan.name,
+			stageName: SCAN_STAGE_IDS.repositoryScan,
 			queue: getRepositoryScanQueue(scanJobId),
 		},
 		{
 			id: "module",
-			title: "Module Scanning",
-			stageName: "ModuleScanningStage",
+			title: SCAN_STAGE_METADATA.moduleScan.name,
+			stageName: SCAN_STAGE_IDS.moduleScan,
 			queue: getModuleScanQueue(scanJobId),
 		},
 		{
 			id: "function",
-			title: "Function Scanning",
-			stageName: "FunctionScanningStage",
+			title: SCAN_STAGE_METADATA.functionScan.name,
+			stageName: SCAN_STAGE_IDS.functionScan,
 			queue: getFunctionScanQueue(scanJobId),
 		},
 		{
 			id: "analysis",
-			title: "Analysis",
-			stageName: "AnalysisStage",
+			title: SCAN_STAGE_METADATA.analysis.name,
+			stageName: SCAN_STAGE_IDS.analysis,
 			queue: getAnalysisQueue(scanJobId),
 		},
 		{
 			id: "fuzz-build",
-			title: "Fuzz Build",
-			stageName: "FuzzBuildStage",
+			title: SCAN_STAGE_METADATA.fuzzBuild.name,
+			stageName: SCAN_STAGE_IDS.fuzzBuild,
 			queue: getFuzzBuildQueue(scanJobId),
 		},
 		{
 			id: "fuzz-run",
-			title: "Fuzz Run",
-			stageName: "FuzzRunStage",
+			title: SCAN_STAGE_METADATA.fuzzRun.name,
+			stageName: SCAN_STAGE_IDS.fuzzRun,
 			queue: getFuzzRunQueue(scanJobId),
 		},
 		{
 			id: "analysis-critic",
-			title: "Analysis Critic",
-			stageName: "AnalysisCriticStage",
+			title: SCAN_STAGE_METADATA.analysisCritic.name,
+			stageName: SCAN_STAGE_IDS.analysisCritic,
 			queue: getAnalysisCriticQueue(scanJobId),
 		},
 		{
 			id: "verification",
-			title: "Verification",
-			stageName: "VerifyingStage",
+			title: SCAN_STAGE_METADATA.verification.name,
+			stageName: SCAN_STAGE_IDS.verification,
 			queue: getVerificationQueue(scanJobId),
 		},
 	];
@@ -1071,14 +1075,14 @@ const RERUNNABLE_TASK_STATUSES = new Set<Task["status"]>([
 ]);
 
 const RERUNNABLE_TASK_STAGE_NAMES = new Set<Task["stageName"]>([
-	"RepositoryScanningStage",
-	"ModuleScanningStage",
-	"FunctionScanningStage",
-	"AnalysisStage",
-	"FuzzBuildStage",
-	"FuzzRunStage",
-	"AnalysisCriticStage",
-	"VerifyingStage",
+	SCAN_STAGE_IDS.repositoryScan,
+	SCAN_STAGE_IDS.moduleScan,
+	SCAN_STAGE_IDS.functionScan,
+	SCAN_STAGE_IDS.analysis,
+	SCAN_STAGE_IDS.fuzzBuild,
+	SCAN_STAGE_IDS.fuzzRun,
+	SCAN_STAGE_IDS.analysisCritic,
+	SCAN_STAGE_IDS.verification,
 ]);
 
 export const rerunScanTask = async (taskId: string) => {
@@ -2142,7 +2146,9 @@ const resolveTaskArtifactsDir = async (input: {
 const resolveCandidateTaskRuntimeDir = async (
 	scanJobId: string,
 	candidateId: string,
-	stageName: "AnalysisStage" | "VerifyingStage",
+	stageName:
+		| typeof SCAN_STAGE_IDS.analysis
+		| typeof SCAN_STAGE_IDS.verification,
 ) => {
 	const task = await findCandidateTaskByStage(
 		scanJobId,
@@ -2181,7 +2187,7 @@ export const getCandidateAnalysisAppServerJsonlPath = async (
 	const runtimeDir = await resolveCandidateTaskRuntimeDir(
 		scanJobId,
 		candidateId,
-		"AnalysisStage",
+		SCAN_STAGE_IDS.analysis,
 	);
 	return runtimeDir
 		? path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl)
@@ -2192,7 +2198,7 @@ export const getCandidateAnalysisAppServerTextPath = (
 	scanJobId: string,
 	candidateId: string,
 ) =>
-	resolveCandidateTaskRuntimeDir(scanJobId, candidateId, "AnalysisStage").then(
+	resolveCandidateTaskRuntimeDir(scanJobId, candidateId, SCAN_STAGE_IDS.analysis).then(
 		(runtimeDir) =>
 			runtimeDir
 				? path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.text)
@@ -2203,7 +2209,7 @@ export const getCandidateAnalysisAppServerStderrPath = (
 	scanJobId: string,
 	candidateId: string,
 ) =>
-	resolveCandidateTaskRuntimeDir(scanJobId, candidateId, "AnalysisStage").then(
+	resolveCandidateTaskRuntimeDir(scanJobId, candidateId, SCAN_STAGE_IDS.analysis).then(
 		(runtimeDir) =>
 			runtimeDir
 				? path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.stderr)
@@ -2217,7 +2223,7 @@ export const getCandidateVerifierAppServerJsonlPath = async (
 	const runtimeDir = await resolveCandidateTaskRuntimeDir(
 		scanJobId,
 		candidateId,
-		"VerifyingStage",
+		SCAN_STAGE_IDS.verification,
 	);
 	return runtimeDir
 		? path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl)
@@ -2228,7 +2234,7 @@ export const getCandidateVerifierAppServerTextPath = (
 	scanJobId: string,
 	candidateId: string,
 ) =>
-	resolveCandidateTaskRuntimeDir(scanJobId, candidateId, "VerifyingStage").then(
+	resolveCandidateTaskRuntimeDir(scanJobId, candidateId, SCAN_STAGE_IDS.verification).then(
 		(runtimeDir) =>
 			runtimeDir
 				? path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.text)
@@ -2239,7 +2245,7 @@ export const getCandidateVerifierAppServerStderrPath = (
 	scanJobId: string,
 	candidateId: string,
 ) =>
-	resolveCandidateTaskRuntimeDir(scanJobId, candidateId, "VerifyingStage").then(
+	resolveCandidateTaskRuntimeDir(scanJobId, candidateId, SCAN_STAGE_IDS.verification).then(
 		(runtimeDir) =>
 			runtimeDir
 				? path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.stderr)
@@ -3399,7 +3405,7 @@ const readCandidateAnalysisAppServerMessagesWithLineNumbers = async (
 		const runtimeDir = await resolveCandidateTaskRuntimeDir(
 			scanJobId,
 			candidateId,
-			"AnalysisStage",
+			SCAN_STAGE_IDS.analysis,
 		);
 		if (!runtimeDir) {
 			return [];
@@ -3433,7 +3439,7 @@ const readCandidateVerifierAppServerMessagesWithLineNumbers = async (
 		const runtimeDir = await resolveCandidateTaskRuntimeDir(
 			scanJobId,
 			candidateId,
-			"VerifyingStage",
+			SCAN_STAGE_IDS.verification,
 		);
 		if (!runtimeDir) {
 			return [];
@@ -3513,7 +3519,7 @@ const readCandidateAnalysisAppServerMessagesTailWithLineNumbers = async (
 	const runtimeDir = await resolveCandidateTaskRuntimeDir(
 		scanJobId,
 		candidateId,
-		"AnalysisStage",
+		SCAN_STAGE_IDS.analysis,
 	);
 	if (!runtimeDir) {
 		return [];
@@ -3530,7 +3536,7 @@ const readCandidateVerifierAppServerMessagesTailWithLineNumbers = async (
 	const runtimeDir = await resolveCandidateTaskRuntimeDir(
 		scanJobId,
 		candidateId,
-		"VerifyingStage",
+		SCAN_STAGE_IDS.verification,
 	);
 	if (!runtimeDir) {
 		return [];
@@ -3585,7 +3591,7 @@ export const readCandidateAnalysisAppServerText = async (
 		const runtimeDir = await resolveCandidateTaskRuntimeDir(
 			scanJobId,
 			candidateId,
-			"AnalysisStage",
+			SCAN_STAGE_IDS.analysis,
 		);
 		if (!runtimeDir) {
 			return "";
@@ -3607,7 +3613,7 @@ export const readCandidateVerifierAppServerText = async (
 		const runtimeDir = await resolveCandidateTaskRuntimeDir(
 			scanJobId,
 			candidateId,
-			"VerifyingStage",
+			SCAN_STAGE_IDS.verification,
 		);
 		if (!runtimeDir) {
 			return "";
@@ -4171,7 +4177,7 @@ const deriveStageGraphStatus = (
 	counts: ScanStageGraphCounts,
 	scanJob: ScanJob,
 ): ScanStageGraphNodeStatus => {
-	if (stageName === "RepositoryScanningStage") {
+	if (stageName === SCAN_STAGE_IDS.repositoryScan) {
 		const repositoryStatus = scanJob.repositoryTaskStatus;
 		if (
 			repositoryStatus === "pending" ||
@@ -4199,12 +4205,6 @@ const deriveStageGraphStatus = (
 	return "pending";
 };
 
-const formatStageGraphTitle = (stageName: string) =>
-	stageName
-		.replace(/Stage$/, "")
-		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-		.replace(/^Verifying$/, "Verification");
-
 export const findScanJobStageGraph = async (scanJobId: string) => {
 	const context = await buildFullScanPipelineContext(scanJobId);
 	const pipeline = buildFullScanPipeline(context);
@@ -4218,39 +4218,41 @@ export const findScanJobStageGraph = async (scanJobId: string) => {
 	);
 	const groupNameByStageName = new Map<string, string>();
 	for (const group of pipeline.groups ?? []) {
-		groupNameByStageName.set(group.leader.name, group.name);
+		groupNameByStageName.set(group.leader.id, group.name);
 		for (const member of group.members) {
-			groupNameByStageName.set(member.name, group.name);
+			groupNameByStageName.set(member.id, group.name);
 		}
 	}
 
 	return {
 		pipelineName: pipeline.name,
 		nodes: await Promise.all(pipeline.stages.map(async (stage, index) => {
-			const queue = queueByStageName.get(stage.name);
+			const queue = queueByStageName.get(stage.id);
 			const counts = toStageGraphCounts(queue);
 			const concurrencyLimit = Math.max(
 				1,
 				(await stage.getDesiredConcurrency?.(context)) ?? 1,
 			);
 			return {
-				id: stage.name,
-				stageName: stage.name,
-				title: queue?.title || formatStageGraphTitle(stage.name),
+				id: stage.id,
+				stageId: stage.id,
+				stageName: stage.id,
+				name: stage.name,
+				title: stage.name,
 				queueId: queue?.id ?? null,
 				queueName: queue?.queueName ?? null,
-				status: deriveStageGraphStatus(stage.name, counts, context.scanJob),
+				status: deriveStageGraphStatus(stage.id, counts, context.scanJob),
 				counts,
 				concurrencyLimit,
-				groupId: groupNameByStageName.get(stage.name) ?? null,
+				groupId: groupNameByStageName.get(stage.id) ?? null,
 				order: index,
 			};
 		})),
 		edges: pipeline.edges.map((edge) => ({
 			id: edge.name,
 			name: edge.name,
-			source: edge.from.name,
-			target: edge.to.name,
+			source: edge.from.id,
+			target: edge.to.id,
 			fork: Boolean(edge.fork),
 			routeKey: edge.route?.key ?? null,
 			isDefaultRoute: Boolean(edge.route?.default),
@@ -4258,11 +4260,11 @@ export const findScanJobStageGraph = async (scanJobId: string) => {
 		groups: (pipeline.groups ?? []).map((group) => ({
 			id: group.name,
 			name: group.name,
-			leaderStageName: group.leader.name,
-			memberStageNames: group.members.map((stage) => stage.name),
+			leaderStageName: group.leader.id,
+			memberStageNames: group.members.map((stage) => stage.id),
 			stageNames: [
-				group.leader.name,
-				...group.members.map((stage) => stage.name),
+				group.leader.id,
+				...group.members.map((stage) => stage.id),
 			],
 		})),
 	};
@@ -4428,7 +4430,7 @@ const persistFunctionResultCandidates = async (input: {
 			scanJobId: input.scanJob.scanJobId,
 			parentTaskId: null,
 			name: syntheticFunction.functionName,
-			stageName: "FunctionScanningStage",
+			stageName: SCAN_STAGE_IDS.functionScan,
 			status: "completed",
 			priority: syntheticFunction.priority,
 			input: {
@@ -4446,7 +4448,7 @@ const persistFunctionResultCandidates = async (input: {
 			scanJobId: input.scanJob.scanJobId,
 			parentTaskId: functionTaskId,
 			name: `Candidate Analysis: ${normalizedCandidate.title}`,
-			stageName: "AnalysisStage",
+			stageName: SCAN_STAGE_IDS.analysis,
 			input: buildCandidateAnalysisStageInput({
 				scanJob: input.scanJob,
 				module: syntheticModule,
@@ -5088,6 +5090,8 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 	const verificationQueue = getVerificationQueue(scanJob.scanJobId);
 	const repositoryStage =
 		createRepositoryScanningStageDefinition<FullScanPipelineContext>({
+			id: SCAN_STAGE_METADATA.repositoryScan.id,
+			name: SCAN_STAGE_METADATA.repositoryScan.name,
 			persistent: false,
 			queue: createStageQueueBinding({
 				queue: repositoryScanQueue,
@@ -5108,7 +5112,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					return Boolean(
 						task &&
 							task.scanJobId === ctx.scanJob.scanJobId &&
-							task.stageName === "RepositoryScanningStage" &&
+							task.stageName === SCAN_STAGE_IDS.repositoryScan &&
 							(await taskMatchesStageQueueScope(task, scope?.groupInstanceId)),
 					);
 				},
@@ -5117,7 +5121,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					if (
 						!task ||
 						task.scanJobId !== ctx.scanJob.scanJobId ||
-						task.stageName !== "RepositoryScanningStage" ||
+						task.stageName !== SCAN_STAGE_IDS.repositoryScan ||
 						task.status !== "pending"
 					) {
 						return undefined;
@@ -5129,6 +5133,8 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 
 	const moduleStage =
 		createModuleScanningStageDefinition<FullScanPipelineContext>({
+			id: SCAN_STAGE_METADATA.moduleScan.id,
+			name: SCAN_STAGE_METADATA.moduleScan.name,
 			persistent: false,
 			queue: createStageQueueBinding({
 				queue: moduleScanQueue,
@@ -5145,7 +5151,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					return Boolean(
 						task &&
 							task.scanJobId === ctx.scanJob.scanJobId &&
-							task.stageName === "ModuleScanningStage" &&
+							task.stageName === SCAN_STAGE_IDS.moduleScan &&
 							(await taskMatchesStageQueueScope(task, scope?.groupInstanceId)),
 					);
 				},
@@ -5154,7 +5160,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					if (
 						!task ||
 						task.scanJobId !== ctx.scanJob.scanJobId ||
-						task.stageName !== "ModuleScanningStage" ||
+						task.stageName !== SCAN_STAGE_IDS.moduleScan ||
 						task.status !== "pending" ||
 						!task.input
 					) {
@@ -5167,6 +5173,8 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 
 	const functionStage =
 		createFunctionScanningStageDefinition<FullScanPipelineContext>({
+			id: SCAN_STAGE_METADATA.functionScan.id,
+			name: SCAN_STAGE_METADATA.functionScan.name,
 			persistent: false,
 			queue: createStageQueueBinding({
 				queue: functionScanQueue,
@@ -5187,7 +5195,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					return Boolean(
 						task &&
 							task.scanJobId === ctx.scanJob.scanJobId &&
-							task.stageName === "FunctionScanningStage" &&
+							task.stageName === SCAN_STAGE_IDS.functionScan &&
 							(await taskMatchesStageQueueScope(task, scope?.groupInstanceId)),
 					);
 				},
@@ -5196,7 +5204,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					if (
 						!task ||
 						task.scanJobId !== ctx.scanJob.scanJobId ||
-						task.stageName !== "FunctionScanningStage" ||
+						task.stageName !== SCAN_STAGE_IDS.functionScan ||
 						task.status !== "pending" ||
 						!task.input
 					) {
@@ -5207,6 +5215,8 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			}),
 		});
 	const analysisStage = createAnalysisStageDefinition<FullScanPipelineContext>({
+		id: SCAN_STAGE_METADATA.analysis.id,
+		name: SCAN_STAGE_METADATA.analysis.name,
 		persistent: false,
 		queue: createStageQueueBinding({
 			queue: analysisQueue,
@@ -5223,7 +5233,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 				return Boolean(
 					task &&
 						task.scanJobId === ctx.scanJob.scanJobId &&
-						task.stageName === "AnalysisStage" &&
+						task.stageName === SCAN_STAGE_IDS.analysis &&
 						(await taskMatchesStageQueueScope(task, scope?.groupInstanceId)),
 				);
 			},
@@ -5232,7 +5242,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 				if (
 					!task ||
 					task.scanJobId !== ctx.scanJob.scanJobId ||
-					task.stageName !== "AnalysisStage" ||
+					task.stageName !== SCAN_STAGE_IDS.analysis ||
 					task.status !== "pending" ||
 					!task.input
 				) {
@@ -5244,6 +5254,8 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 	});
 	const fuzzBuildStage =
 		createFuzzBuildStageDefinition<FullScanPipelineContext>({
+			id: SCAN_STAGE_METADATA.fuzzBuild.id,
+			name: SCAN_STAGE_METADATA.fuzzBuild.name,
 			persistent: false,
 			queue: createStageQueueBinding({
 				queue: fuzzBuildQueue,
@@ -5264,7 +5276,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					return Boolean(
 						task &&
 							task.scanJobId === ctx.scanJob.scanJobId &&
-							task.stageName === "FuzzBuildStage" &&
+							task.stageName === SCAN_STAGE_IDS.fuzzBuild &&
 							(await taskMatchesStageQueueScope(task, scope?.groupInstanceId)),
 					);
 				},
@@ -5273,7 +5285,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					if (
 						!task ||
 						task.scanJobId !== ctx.scanJob.scanJobId ||
-						task.stageName !== "FuzzBuildStage" ||
+						task.stageName !== SCAN_STAGE_IDS.fuzzBuild ||
 						task.status !== "pending" ||
 						!task.input
 					) {
@@ -5284,6 +5296,8 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			}),
 		});
 	const fuzzRunStage = createFuzzRunStageDefinition<FullScanPipelineContext>({
+		id: SCAN_STAGE_METADATA.fuzzRun.id,
+		name: SCAN_STAGE_METADATA.fuzzRun.name,
 		persistent: false,
 		queue: createStageQueueBinding({
 			queue: fuzzRunQueue,
@@ -5300,7 +5314,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 				return Boolean(
 					task &&
 						task.scanJobId === ctx.scanJob.scanJobId &&
-						task.stageName === "FuzzRunStage" &&
+						task.stageName === SCAN_STAGE_IDS.fuzzRun &&
 						(await taskMatchesStageQueueScope(task, scope?.groupInstanceId)),
 				);
 			},
@@ -5309,7 +5323,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 				if (
 					!task ||
 					task.scanJobId !== ctx.scanJob.scanJobId ||
-					task.stageName !== "FuzzRunStage" ||
+					task.stageName !== SCAN_STAGE_IDS.fuzzRun ||
 					task.status !== "pending" ||
 					!task.input
 				) {
@@ -5321,6 +5335,8 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 	});
 	const analysisCriticStage =
 		createAnalysisCriticStageDefinition<FullScanPipelineContext>({
+			id: SCAN_STAGE_METADATA.analysisCritic.id,
+			name: SCAN_STAGE_METADATA.analysisCritic.name,
 			persistent: false,
 			queue: createStageQueueBinding({
 				queue: analysisCriticQueue,
@@ -5341,7 +5357,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					return Boolean(
 						task &&
 							task.scanJobId === ctx.scanJob.scanJobId &&
-							task.stageName === "AnalysisCriticStage" &&
+							task.stageName === SCAN_STAGE_IDS.analysisCritic &&
 							(await taskMatchesStageQueueScope(task, scope?.groupInstanceId)),
 					);
 				},
@@ -5350,7 +5366,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					if (
 						!task ||
 						task.scanJobId !== ctx.scanJob.scanJobId ||
-						task.stageName !== "AnalysisCriticStage" ||
+						task.stageName !== SCAN_STAGE_IDS.analysisCritic ||
 						task.status !== "pending" ||
 						!task.input
 					) {
@@ -5362,6 +5378,8 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 		});
 	const verifyingStage =
 		createVerifyingStageDefinition<FullScanPipelineContext>({
+			id: SCAN_STAGE_METADATA.verification.id,
+			name: SCAN_STAGE_METADATA.verification.name,
 			persistent: false,
 			queue: createStageQueueBinding({
 				queue: verificationQueue,
@@ -5382,7 +5400,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					return Boolean(
 						task &&
 							task.scanJobId === ctx.scanJob.scanJobId &&
-							task.stageName === "VerifyingStage" &&
+							task.stageName === SCAN_STAGE_IDS.verification &&
 							(await taskMatchesStageQueueScope(task, scope?.groupInstanceId)),
 					);
 				},
@@ -5391,7 +5409,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					if (
 						!task ||
 						task.scanJobId !== ctx.scanJob.scanJobId ||
-						task.stageName !== "VerifyingStage" ||
+						task.stageName !== SCAN_STAGE_IDS.verification ||
 						task.status !== "pending" ||
 						!task.input
 					) {
@@ -5438,7 +5456,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						scanJobId: context.scanJob.scanJobId,
 						parentTaskId: fromTaskId,
 						name: downstreamInput.module.name,
-						stageName: "ModuleScanningStage",
+						stageName: SCAN_STAGE_IDS.moduleScan,
 						priority: downstreamInput.module.priority,
 						input: downstreamInput,
 					});
@@ -5476,7 +5494,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						scanJobId: context.scanJob.scanJobId,
 						parentTaskId: fromTaskId,
 						name: downstreamInput.function.functionName,
-						stageName: "FunctionScanningStage",
+						stageName: SCAN_STAGE_IDS.functionScan,
 						priority: downstreamInput.function.priority,
 						input: downstreamInput,
 					});
@@ -5519,7 +5537,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						scanJobId: context.scanJob.scanJobId,
 						parentTaskId: fromTaskId,
 						name: `Candidate Analysis: ${downstreamInput.candidate.title}`,
-						stageName: "AnalysisStage",
+						stageName: SCAN_STAGE_IDS.analysis,
 						input: analysisInput,
 					});
 					taskIds.push(task.taskId);
@@ -5557,7 +5575,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						scanJobId: stageInput.candidate.scanJob.scanJobId,
 						parentTaskId: fromTaskId,
 						name: `Fuzz Build: ${stageInput.candidate.title}`,
-						stageName: "FuzzBuildStage",
+						stageName: SCAN_STAGE_IDS.fuzzBuild,
 						input: downstreamInput,
 					});
 					taskIds.push(task.taskId);
@@ -5595,7 +5613,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						scanJobId: stageInput.candidate.scanJob.scanJobId,
 						parentTaskId: fromTaskId,
 						name: `Analysis Critic: ${stageInput.candidate.title}`,
-						stageName: "AnalysisCriticStage",
+						stageName: SCAN_STAGE_IDS.analysisCritic,
 						input: downstreamInput,
 					});
 					taskIds.push(task.taskId);
@@ -5658,7 +5676,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						scanJobId: stageInput.candidate.scanJob.scanJobId,
 						parentTaskId: fromTaskId,
 						name: `Candidate Verification: ${stageInput.candidate.title}`,
-						stageName: "VerifyingStage",
+						stageName: SCAN_STAGE_IDS.verification,
 						input: downstreamInput,
 					});
 					taskIds.push(task.taskId);
@@ -5695,7 +5713,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						scanJobId: stageInput.candidate.scanJob.scanJobId,
 						parentTaskId: fromTaskId,
 						name: `Fuzz Run: ${stageInput.candidate.title}`,
-						stageName: "FuzzRunStage",
+						stageName: SCAN_STAGE_IDS.fuzzRun,
 						input: downstreamInput,
 					});
 					taskIds.push(task.taskId);
@@ -5734,7 +5752,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						scanJobId: stageInput.candidate.scanJob.scanJobId,
 						parentTaskId: fromTaskId,
 						name: `Candidate Analysis: ${stageInput.candidate.title}`,
-						stageName: "AnalysisStage",
+						stageName: SCAN_STAGE_IDS.analysis,
 						input: downstreamInput,
 					});
 					taskIds.push(task.taskId);
@@ -5773,7 +5791,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						scanJobId: stageInput.candidate.scanJob.scanJobId,
 						parentTaskId: fromTaskId,
 						name: `Candidate Analysis: ${stageInput.candidate.title}`,
-						stageName: "AnalysisStage",
+						stageName: SCAN_STAGE_IDS.analysis,
 						input: downstreamInput,
 					});
 					taskIds.push(task.taskId);
@@ -5812,7 +5830,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						scanJobId: stageInput.candidate.scanJob.scanJobId,
 						parentTaskId: fromTaskId,
 						name: `Candidate Analysis: ${stageInput.candidate.title}`,
-						stageName: "AnalysisStage",
+						stageName: SCAN_STAGE_IDS.analysis,
 						input: downstreamInput,
 					});
 					taskIds.push(task.taskId);
@@ -6347,7 +6365,9 @@ const readCandidateIdFromTask = (task: Task): string | null => {
 const findCandidateTaskByStage = async (
 	scanJobId: string,
 	vulnerabilityCandidateId: string,
-	stageName: "AnalysisStage" | "VerifyingStage",
+	stageName:
+		| typeof SCAN_STAGE_IDS.analysis
+		| typeof SCAN_STAGE_IDS.verification,
 ) =>
 	(
 		await listTasksByScanJobAndStageRepo({
@@ -6464,28 +6484,28 @@ const enqueueAnalysisCriticTask = async (
 
 const enqueueRetriedTask = async (scanJobId: string, task: Task) => {
 	switch (task.stageName) {
-		case "RepositoryScanningStage":
+		case SCAN_STAGE_IDS.repositoryScan:
 			await enqueueRepositoryTask(scanJobId, task.taskId);
 			return;
-		case "ModuleScanningStage":
+		case SCAN_STAGE_IDS.moduleScan:
 			await enqueueModuleScanWork(scanJobId, task.taskId);
 			return;
-		case "FunctionScanningStage":
+		case SCAN_STAGE_IDS.functionScan:
 			await enqueueFunctionScanWork(scanJobId, task.taskId);
 			return;
-		case "AnalysisStage":
+		case SCAN_STAGE_IDS.analysis:
 			await enqueueAnalysisTask(scanJobId, task.taskId);
 			return;
-		case "FuzzBuildStage":
+		case SCAN_STAGE_IDS.fuzzBuild:
 			await enqueueFuzzBuildTask(scanJobId, task.taskId);
 			return;
-		case "FuzzRunStage":
+		case SCAN_STAGE_IDS.fuzzRun:
 			await enqueueFuzzRunTask(scanJobId, task.taskId);
 			return;
-		case "AnalysisCriticStage":
+		case SCAN_STAGE_IDS.analysisCritic:
 			await enqueueAnalysisCriticTask(scanJobId, task.taskId);
 			return;
-		case "VerifyingStage":
+		case SCAN_STAGE_IDS.verification:
 			await enqueueVerificationTask(scanJobId, task.taskId);
 			return;
 		default:
@@ -6530,7 +6550,7 @@ const forceRemoveStageQueueJob = async (
 
 const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
 	switch (task.stageName) {
-		case "RepositoryScanningStage":
+		case SCAN_STAGE_IDS.repositoryScan:
 			await Promise.all(
 				buildKnownQueueJobIdsForTask(
 					getRepositoryScanQueue(scanJobId),
@@ -6543,7 +6563,7 @@ const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
 				),
 			);
 			return;
-		case "ModuleScanningStage":
+		case SCAN_STAGE_IDS.moduleScan:
 			await Promise.all(
 				buildKnownQueueJobIdsForTask(getModuleScanQueue(scanJobId), task).map(
 					(jobId) =>
@@ -6554,7 +6574,7 @@ const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
 				),
 			);
 			return;
-		case "FunctionScanningStage":
+		case SCAN_STAGE_IDS.functionScan:
 			await Promise.all(
 				buildKnownQueueJobIdsForTask(getFunctionScanQueue(scanJobId), task).map(
 					(jobId) =>
@@ -6565,7 +6585,7 @@ const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
 				),
 			);
 			return;
-		case "AnalysisStage":
+		case SCAN_STAGE_IDS.analysis:
 			await Promise.all(
 				buildKnownQueueJobIdsForTask(getAnalysisQueue(scanJobId), task).map(
 					(jobId) =>
@@ -6575,7 +6595,7 @@ const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
 				),
 			);
 			return;
-		case "FuzzBuildStage":
+		case SCAN_STAGE_IDS.fuzzBuild:
 			await Promise.all(
 				buildKnownQueueJobIdsForTask(getFuzzBuildQueue(scanJobId), task).map(
 					(jobId) =>
@@ -6585,7 +6605,7 @@ const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
 				),
 			);
 			return;
-		case "FuzzRunStage":
+		case SCAN_STAGE_IDS.fuzzRun:
 			await Promise.all(
 				buildKnownQueueJobIdsForTask(getFuzzRunQueue(scanJobId), task).map(
 					(jobId) =>
@@ -6595,7 +6615,7 @@ const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
 				),
 			);
 			return;
-		case "AnalysisCriticStage":
+		case SCAN_STAGE_IDS.analysisCritic:
 			await Promise.all(
 				buildKnownQueueJobIdsForTask(
 					getAnalysisCriticQueue(scanJobId),
@@ -6608,7 +6628,7 @@ const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
 				),
 			);
 			return;
-		case "VerifyingStage":
+		case SCAN_STAGE_IDS.verification:
 			await Promise.all(
 				buildKnownQueueJobIdsForTask(getVerificationQueue(scanJobId), task).map(
 					(jobId) =>
@@ -6645,7 +6665,7 @@ const removeQueuedAnalysisTask = async (
 	const analysisQueue = getAnalysisQueue(scanJobId);
 	await Promise.all(
 		buildKnownQueueJobIdsForTask(analysisQueue, {
-			stageName: "AnalysisStage",
+			stageName: SCAN_STAGE_IDS.analysis,
 			taskId: analysisTaskId,
 			scanJobId,
 		} as Task).map((jobId) =>
@@ -6661,7 +6681,7 @@ const removeQueuedVerificationTask = async (
 	const verificationQueue = getVerificationQueue(scanJobId);
 	await Promise.all(
 		buildKnownQueueJobIdsForTask(verificationQueue, {
-			stageName: "VerifyingStage",
+			stageName: SCAN_STAGE_IDS.verification,
 			taskId: verificationTaskId,
 			scanJobId,
 		} as Task).map((jobId) =>
@@ -6699,10 +6719,10 @@ export const cancelScanJob = async (scanJobId: string) => {
 			listStageGroupInstancesByScanJobIdRepo(scanJobId),
 		]);
 	const moduleTasks = allTasks.filter(
-		(task) => task.stageName === "ModuleScanningStage",
+		(task) => task.stageName === SCAN_STAGE_IDS.moduleScan,
 	);
 	const functionTasks = allTasks.filter(
-		(task) => task.stageName === "FunctionScanningStage",
+		(task) => task.stageName === SCAN_STAGE_IDS.functionScan,
 	);
 	const tasksToCancelById = new Map<string, Task>();
 	for (const task of allTasks) {
@@ -6729,7 +6749,7 @@ export const cancelScanJob = async (scanJobId: string) => {
 
 	await Promise.all([
 		...buildKnownQueueJobIdsForTask(repositoryScanQueue, {
-			stageName: "RepositoryScanningStage",
+			stageName: SCAN_STAGE_IDS.repositoryScan,
 			taskId: scanJob.repositoryTaskId || scanJobId,
 			scanJobId,
 		} as Task).map((jobId) =>
@@ -6889,7 +6909,7 @@ const buildJoinedCandidateInput = async (vulnerabilityCandidateId: string) => {
 	]);
 	if (
 		functionTask.scanJobId !== candidate.scanJobId ||
-		functionTask.stageName !== "FunctionScanningStage"
+		functionTask.stageName !== SCAN_STAGE_IDS.functionScan
 	) {
 		throw new Error(
 			`Candidate ${vulnerabilityCandidateId} references non-function task ${candidate.scanFunctionTaskId}`,
@@ -7060,7 +7080,7 @@ export const startCandidateVerification = async (
 		findCandidateTaskByStage(
 			scanJob.scanJobId,
 			vulnerabilityCandidateId,
-			"VerifyingStage",
+			SCAN_STAGE_IDS.verification,
 		),
 	]);
 
@@ -7105,7 +7125,7 @@ export const startCandidateVerification = async (
 			scanJobId: scanJob.scanJobId,
 			parentTaskId: latestAnalysisResult.taskId,
 			name: `Candidate Verification: ${candidate.title}`,
-			stageName: "VerifyingStage",
+			stageName: SCAN_STAGE_IDS.verification,
 			runtimeMode: latestAnalysisResult.threadId
 				? "fork_session"
 				: "new_session",
@@ -7164,7 +7184,7 @@ export const startCandidateAnalysis = async (
 	const functionTask = await findTaskByIdRepo(candidate.scanFunctionTaskId);
 	if (
 		functionTask.scanJobId !== scanJob.scanJobId ||
-		functionTask.stageName !== "FunctionScanningStage" ||
+		functionTask.stageName !== SCAN_STAGE_IDS.functionScan ||
 		!functionTask.input
 	) {
 		throw new TRPCError({
@@ -7192,7 +7212,7 @@ export const startCandidateAnalysis = async (
 	const existingActiveAnalysisTask = (
 		await listTasksByScanJobAndStageRepo({
 			scanJobId: scanJob.scanJobId,
-			stageName: "AnalysisStage",
+			stageName: SCAN_STAGE_IDS.analysis,
 		})
 	).find((task) => {
 		if (!["pending", "launching", "running"].includes(task.status)) {
@@ -7214,7 +7234,7 @@ export const startCandidateAnalysis = async (
 		scanJobId: scanJob.scanJobId,
 		parentTaskId: functionTask.taskId,
 		name: `Candidate Analysis: ${sourceCandidate.data.title}`,
-		stageName: "AnalysisStage",
+		stageName: SCAN_STAGE_IDS.analysis,
 		runtimeMode: "new_session",
 		input: buildCandidateAnalysisStageInput({
 			scanJob,

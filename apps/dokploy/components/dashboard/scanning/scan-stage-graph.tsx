@@ -135,23 +135,14 @@ const EDGE_TYPES = {
 	elkSection: ElkSectionEdgeComponent,
 } satisfies EdgeTypes;
 
-const getStatusClassName = (status: string) => {
-	if (status === "completed") {
-		return "border-emerald-300 bg-emerald-50 text-emerald-900";
-	}
-	if (status === "failed") {
-		return "border-red-300 bg-red-50 text-red-900";
-	}
-	if (status === "running") {
+const getStatusClassName = (node: StageGraphNode) => {
+	if (node.counts.running > 0) {
 		return "border-sky-300 bg-sky-50 text-sky-900";
 	}
-	if (status === "launching") {
+	if (node.counts.launching > 0) {
 		return "border-amber-300 bg-amber-50 text-amber-900";
 	}
-	if (status === "exited") {
-		return "border-zinc-300 bg-zinc-50 text-zinc-700";
-	}
-	return "border-border bg-background text-foreground";
+	return "border-zinc-300 bg-zinc-50 text-zinc-700";
 };
 
 const StageLabel = ({ node }: { node: StageGraphNode }) => {
@@ -168,7 +159,7 @@ const StageLabel = ({ node }: { node: StageGraphNode }) => {
 	return (
 		<div className="flex min-h-full flex-col justify-center gap-2 px-4 py-3">
 			<div className="text-left text-[13px] font-semibold leading-snug tracking-normal">
-				{node.title}
+				{node.name || node.title}
 			</div>
 			<div className="h-px bg-border/80" />
 			<div className="flex min-h-3 flex-wrap items-center gap-1">
@@ -364,7 +355,7 @@ const buildFlowElements = async (graph: StageGraph) => {
 						? { x: childNode.x ?? 0, y: childNode.y ?? 0 }
 						: { x: rootNode?.x ?? 0, y: rootNode?.y ?? 0 },
 				data: { label: <StageLabel node={node} /> },
-				className: `rounded-md border-2 shadow-md backdrop-blur-sm ${getStatusClassName(node.status)}`,
+				className: `rounded-md border-2 shadow-md backdrop-blur-sm ${getStatusClassName(node)}`,
 				style: {
 					width: NODE_WIDTH,
 					minHeight: NODE_HEIGHT,
@@ -411,7 +402,7 @@ export const ScanStageGraph = ({ scanJobId }: { scanJobId: string }) => {
 		error,
 	} = api.scan.stageGraph.useQuery(
 		{ scanJobId },
-		{ enabled: !!scanJobId, refetchInterval: 2000 },
+		{ enabled: !!scanJobId, refetchInterval: 1000 },
 	);
 	const isLayoutLoading = Boolean(
 		graph &&

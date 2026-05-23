@@ -200,24 +200,24 @@ const resolveTaskRuntimeName = (
 ): string => {
 	const inputRecord = getTaskInputRecord(taskInput);
 	switch (stageName) {
-		case "RepositoryScanningStage":
+		case "repository-scan":
 			return "repository-scanning";
-		case "ModuleScanningStage":
+		case "module-scan":
 			return getNestedString(getNestedRecord(inputRecord, "module"), ["name"]) || taskName;
-		case "FunctionScanningStage":
+		case "function-scan":
 			return (
 				getNestedString(getNestedRecord(inputRecord, "function"), ["functionName"]) ||
 				taskName
 			);
-		case "AnalysisStage":
-		case "FuzzBuildStage":
-		case "FuzzRunStage":
-		case "AnalysisCriticStage":
+		case "analyze":
+		case "build-fuzzer":
+		case "run-fuzzer":
+		case "criticize":
 			return (
 				getNestedString(getNestedRecord(inputRecord, "candidate"), ["title"]) ||
-				(stageName === "AnalysisStage" ? taskName : stageName)
+				(stageName === "analyze" ? taskName : stageName)
 			);
-		case "VerifyingStage":
+		case "verify":
 			return (
 				getNestedString(
 					getNestedRecord(
@@ -369,11 +369,13 @@ const resolveLegacyStageNameRuntimeDir = async (input: {
 	taskId: string;
 	runtimeDir: string;
 }) => {
-	if (
-		!["FuzzBuildStage", "FuzzRunStage", "AnalysisCriticStage"].includes(
-			input.stageName,
-		)
-	) {
+	const legacyStageNameByStageName: Record<string, string> = {
+		"build-fuzzer": "build-fuzzer",
+		"run-fuzzer": "run-fuzzer",
+		criticize: "criticize",
+	};
+	const legacyStageName = legacyStageNameByStageName[input.stageName];
+	if (!legacyStageName) {
 		return input.runtimeDir;
 	}
 	if (
@@ -385,8 +387,8 @@ const resolveLegacyStageNameRuntimeDir = async (input: {
 	}
 	const legacyRuntimeDir = resolveScanStageTaskRuntimeDir(
 		input.baseDir,
-		input.stageName,
-		input.stageName,
+		legacyStageName,
+		legacyStageName,
 		input.taskId,
 	);
 	return (await fileExists(
@@ -422,7 +424,7 @@ const buildSandboxAgentTaskRuntime = async (
 	let taskKind: SandboxAgentTaskRuntime["taskKind"] = "repository_scanning";
 
 	switch (task.stageName) {
-		case "RepositoryScanningStage":
+		case "repository-scan":
 			taskKind = "repository_scanning";
 			runtimeDir = resolveScanStageTaskRuntimeDir(
 				baseDir,
@@ -431,7 +433,7 @@ const buildSandboxAgentTaskRuntime = async (
 				task.taskId,
 			);
 			break;
-		case "ModuleScanningStage":
+		case "module-scan":
 			taskKind = "module_scanning";
 			runtimeDir = resolveScanStageTaskRuntimeDir(
 				baseDir,
@@ -440,7 +442,7 @@ const buildSandboxAgentTaskRuntime = async (
 				task.taskId,
 			);
 			break;
-		case "FunctionScanningStage":
+		case "function-scan":
 			taskKind = "function_scanning";
 			runtimeDir = resolveScanStageTaskRuntimeDir(
 				baseDir,
@@ -449,7 +451,7 @@ const buildSandboxAgentTaskRuntime = async (
 				task.taskId,
 			);
 			break;
-		case "AnalysisStage":
+		case "analyze":
 			taskKind = "analyzing";
 			runtimeDir = resolveScanStageTaskRuntimeDir(
 				baseDir,
@@ -458,7 +460,7 @@ const buildSandboxAgentTaskRuntime = async (
 				task.taskId,
 			);
 			break;
-		case "FuzzBuildStage":
+		case "build-fuzzer":
 			taskKind = "fuzz_building";
 			runtimeDir = resolveScanStageTaskRuntimeDir(
 				baseDir,
@@ -473,7 +475,7 @@ const buildSandboxAgentTaskRuntime = async (
 				runtimeDir,
 			});
 			break;
-		case "FuzzRunStage":
+		case "run-fuzzer":
 			taskKind = "fuzzing";
 			runtimeDir = resolveScanStageTaskRuntimeDir(
 				baseDir,
@@ -488,7 +490,7 @@ const buildSandboxAgentTaskRuntime = async (
 				runtimeDir,
 			});
 			break;
-		case "AnalysisCriticStage":
+		case "criticize":
 			taskKind = "criticizing";
 			runtimeDir = resolveScanStageTaskRuntimeDir(
 				baseDir,
@@ -503,7 +505,7 @@ const buildSandboxAgentTaskRuntime = async (
 				runtimeDir,
 			});
 			break;
-		case "VerifyingStage":
+		case "verify":
 			taskKind = "verifying";
 			runtimeDir = resolveScanStageTaskRuntimeDir(
 				baseDir,
@@ -542,7 +544,7 @@ export const findCandidateSandboxAgentSession = async (input: {
 }): Promise<SandboxAgentLiveSession | null> => {
 	const candidate = await findVulnerabilityCandidateByIdRepo(input.candidateId);
 	const stageName =
-		input.stage === "verifying" ? "VerifyingStage" : "AnalysisStage";
+		input.stage === "verifying" ? "verify" : "analyze";
 	const task = (
 		await listTasksByScanJobAndStageRepo({
 			scanJobId: candidate.scanJobId,

@@ -45,7 +45,7 @@ const makeTask = (overrides?: Partial<Task>): Task => ({
 	scanJobId: "scan-job-1",
 	parentTaskId: null,
 	name: "task",
-	stageName: "ModuleScanningStage",
+	stageName: "module-scan",
 	status: "pending",
 	priority: null,
 	attempt: 0,
@@ -73,35 +73,35 @@ test("retryFailedScanJobTasksWithDeps retries every failed task type in stage or
 	const tasks: Task[] = [
 		makeTask({
 			taskId: "verify-1",
-			stageName: "VerifyingStage",
+			stageName: "verify",
 			status: "failed",
 			name: "verify task",
 			createdAt: "2026-05-04T00:05:00.000Z",
 		}),
 		makeTask({
 			taskId: "function-1",
-			stageName: "FunctionScanningStage",
+			stageName: "function-scan",
 			status: "failed",
 			name: "function task",
 			createdAt: "2026-05-04T00:03:00.000Z",
 		}),
 		makeTask({
 			taskId: "repo-1",
-			stageName: "RepositoryScanningStage",
+			stageName: "repository-scan",
 			status: "failed",
 			name: "repository-scanning",
 			createdAt: "2026-05-04T00:01:00.000Z",
 		}),
 		makeTask({
 			taskId: "analysis-1",
-			stageName: "AnalysisStage",
+			stageName: "analyze",
 			status: "failed",
 			name: "analysis task",
 			createdAt: "2026-05-04T00:04:00.000Z",
 		}),
 		makeTask({
 			taskId: "module-1",
-			stageName: "ModuleScanningStage",
+			stageName: "module-scan",
 			status: "failed",
 			name: "module task",
 			createdAt: "2026-05-04T00:02:00.000Z",
@@ -139,11 +139,11 @@ test("retryFailedScanJobTasksWithDeps retries every failed task type in stage or
 	});
 
 	assert.deepEqual(result.retriedTasksByStage, {
-		RepositoryScanningStage: 1,
-		ModuleScanningStage: 1,
-		FunctionScanningStage: 1,
-		AnalysisStage: 1,
-		VerifyingStage: 1,
+		"repository-scan": 1,
+		"module-scan": 1,
+		"function-scan": 1,
+		analyze: 1,
+		verify: 1,
 	});
 	assert.equal(result.retriedTaskCount, 5);
 	assert.deepEqual(removed, [
@@ -170,12 +170,12 @@ test("retryFailedScanJobTasksWithDeps retries failed tasks without phase bookkee
 		listTasks: async () => [
 			makeTask({
 				taskId: "verify-1",
-				stageName: "VerifyingStage",
+				stageName: "verify",
 				status: "failed",
 			}),
 			makeTask({
 				taskId: "function-1",
-				stageName: "FunctionScanningStage",
+				stageName: "function-scan",
 				status: "failed",
 			}),
 		],
@@ -197,12 +197,12 @@ test("retryFailedScanJobTasksWithDeps rejects when the job still has running tas
 			listTasks: async () => [
 				makeTask({
 					taskId: "failed-1",
-					stageName: "ModuleScanningStage",
+					stageName: "module-scan",
 					status: "failed",
 				}),
 				makeTask({
 					taskId: "running-1",
-					stageName: "AnalysisStage",
+					stageName: "analyze",
 					status: "running",
 				}),
 			],
@@ -227,7 +227,7 @@ test("retryFailedScanJobTasksWithDeps rejects when there are no failed tasks", a
 			listTasks: async () => [
 				makeTask({
 					taskId: "completed-1",
-					stageName: "FunctionScanningStage",
+					stageName: "function-scan",
 					status: "completed",
 				}),
 			],

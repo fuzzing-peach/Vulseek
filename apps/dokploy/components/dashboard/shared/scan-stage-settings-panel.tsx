@@ -87,64 +87,64 @@ type StageDefinition = {
 
 const STAGES: StageDefinition[] = [
 	{
-		stageName: "RepositoryScanningStage",
-		label: "Repository",
+		stageName: "repository-scan",
+		label: "Scan Repository",
 		role: "scan",
 		defaultConcurrency: 1,
 		maxConcurrency: 8,
 		description: "Repository-wide planner and module partitioning.",
 	},
 	{
-		stageName: "ModuleScanningStage",
-		label: "Module",
+		stageName: "module-scan",
+		label: "Scan Module",
 		role: "scan",
 		defaultConcurrency: 4,
 		maxConcurrency: 32,
 		description: "Module-level source review and function discovery.",
 	},
 	{
-		stageName: "FunctionScanningStage",
-		label: "Function",
+		stageName: "function-scan",
+		label: "Scan Function",
 		role: "scan",
 		defaultConcurrency: 4,
 		maxConcurrency: 64,
 		description: "Function-level candidate discovery.",
 	},
 	{
-		stageName: "AnalysisStage",
-		label: "Analysis",
+		stageName: "analyze",
+		label: "Analyze",
 		role: "analysis",
 		defaultConcurrency: 2,
 		maxConcurrency: 16,
 		description: "Candidate analysis and routing decisions.",
 	},
 	{
-		stageName: "FuzzBuildStage",
-		label: "Fuzz Build",
+		stageName: "build-fuzzer",
+		label: "Build Fuzzer",
 		role: "analysis",
 		defaultConcurrency: 2,
 		maxConcurrency: 16,
 		description: "Builds per-candidate LibAFL fuzzers.",
 	},
 	{
-		stageName: "FuzzRunStage",
-		label: "Fuzz Run",
+		stageName: "run-fuzzer",
+		label: "Run Fuzzer",
 		role: "analysis",
 		defaultConcurrency: 2,
 		maxConcurrency: 16,
 		description: "Runs fuzzing campaigns and reports evidence.",
 	},
 	{
-		stageName: "AnalysisCriticStage",
-		label: "Critic",
+		stageName: "criticize",
+		label: "Criticize",
 		role: "analysis",
 		defaultConcurrency: 2,
 		maxConcurrency: 16,
 		description: "Challenges analysis results before verification.",
 	},
 	{
-		stageName: "VerifyingStage",
-		label: "Verification",
+		stageName: "verify",
+		label: "Verify",
 		role: "verification",
 		defaultConcurrency: 1,
 		maxConcurrency: 16,
@@ -176,21 +176,21 @@ const getLegacyConcurrency = (
 	target: ScanStageSettingsTarget,
 	stage: StageDefinition,
 ) => {
-	if (stage.stageName === "ModuleScanningStage") {
+	if (stage.stageName === "module-scan") {
 		return target.fullScanModuleConcurrency ?? stage.defaultConcurrency;
 	}
-	if (stage.stageName === "FunctionScanningStage") {
+	if (stage.stageName === "function-scan") {
 		return target.fullScanFunctionConcurrency ?? stage.defaultConcurrency;
 	}
 	if (
-		stage.stageName === "AnalysisStage" ||
-		stage.stageName === "FuzzBuildStage" ||
-		stage.stageName === "FuzzRunStage" ||
-		stage.stageName === "AnalysisCriticStage"
+		stage.stageName === "analyze" ||
+		stage.stageName === "build-fuzzer" ||
+		stage.stageName === "run-fuzzer" ||
+		stage.stageName === "criticize"
 	) {
 		return target.analysisConcurrency ?? stage.defaultConcurrency;
 	}
-	if (stage.stageName === "VerifyingStage") {
+	if (stage.stageName === "verify") {
 		return target.verifyConcurrency ?? stage.defaultConcurrency;
 	}
 	return stage.defaultConcurrency;
@@ -214,30 +214,30 @@ const getStageConcurrency = (
 	getLegacyConcurrency(target, stage);
 
 const getLegacyPatch = (stage: StageDefinition, values: StageSettingsForm) => {
-	if (stage.stageName === "ModuleScanningStage") {
+	if (stage.stageName === "module-scan") {
 		return {
 			scanAgentProfileId: values.agentProfileId,
 			fullScanModuleConcurrency: values.concurrency,
 		};
 	}
-	if (stage.stageName === "FunctionScanningStage") {
+	if (stage.stageName === "function-scan") {
 		return {
 			scanAgentProfileId: values.agentProfileId,
 			fullScanFunctionConcurrency: values.concurrency,
 		};
 	}
-	if (stage.stageName === "RepositoryScanningStage") {
+	if (stage.stageName === "repository-scan") {
 		return {
 			scanAgentProfileId: values.agentProfileId,
 		};
 	}
-	if (stage.stageName === "AnalysisStage") {
+	if (stage.stageName === "analyze") {
 		return {
 			analysisAgentProfileId: values.agentProfileId,
 			analysisConcurrency: values.concurrency,
 		};
 	}
-	if (stage.stageName === "VerifyingStage") {
+	if (stage.stageName === "verify") {
 		return {
 			verifierAgentProfileId: values.agentProfileId,
 			verifyConcurrency: values.concurrency,

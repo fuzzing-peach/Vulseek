@@ -13,6 +13,7 @@ import { createStageDefinition } from "./stage-definition";
 
 const makeStage = (name: string) =>
 	createStageDefinition<PipelineContext, unknown, unknown>({
+		id: name,
 		name,
 		mode: "serial",
 		run: async () => ({

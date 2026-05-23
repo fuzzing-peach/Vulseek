@@ -10,10 +10,10 @@ const candidateInput = {
 
 test("resolveStageTaskName uses candidate title for analysis-adjacent stages", () => {
 	for (const stageName of [
-		"AnalysisStage",
-		"FuzzBuildStage",
-		"FuzzRunStage",
-		"AnalysisCriticStage",
+		"analyze",
+		"build-fuzzer",
+		"run-fuzzer",
+		"criticize",
 	]) {
 		assert.equal(
 			resolveStageTaskName(stageName, candidateInput),

@@ -64,6 +64,7 @@ export type StageDefinition<
 	TOutput = void,
 	TStageContext extends StageContext = StageContext,
 > = {
+	id: string;
 	name: string;
 	mode: StageRunMode;
 	persistent?: boolean;

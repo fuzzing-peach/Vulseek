@@ -28,29 +28,49 @@ const ACTIVE_TASK_STATUSES = new Set(["pending", "launching", "running"]);
 const RERUNNABLE_TASK_STATUSES = new Set(["completed", "failed", "exited"]);
 
 const getTaskStageLabel = (stage?: string | null) => {
-	if (stage === "repository_scanning") {
-		return "Repository";
+	if (
+		stage === "Scan Repository" ||
+		stage === "repository-scan" ||
+		stage === "repository_scanning"
+	) {
+		return "Scan Repository";
 	}
-	if (stage === "module_scanning") {
-		return "Module";
+	if (
+		stage === "Scan Module" ||
+		stage === "module-scan" ||
+		stage === "module_scanning"
+	) {
+		return "Scan Module";
 	}
-	if (stage === "function_scanning") {
-		return "Function";
+	if (
+		stage === "Scan Function" ||
+		stage === "function-scan" ||
+		stage === "function_scanning"
+	) {
+		return "Scan Function";
 	}
-	if (stage === "analyzing") {
-		return "Analysis";
+	if (stage === "Analyze" || stage === "analyze" || stage === "analyzing") {
+		return "Analyze";
 	}
-	if (stage === "fuzz_building") {
-		return "Fuzz Build";
+	if (
+		stage === "Build Fuzzer" ||
+		stage === "build-fuzzer" ||
+		stage === "fuzz_building"
+	) {
+		return "Build Fuzzer";
 	}
-	if (stage === "fuzzing") {
-		return "Fuzz";
+	if (stage === "Run Fuzzer" || stage === "run-fuzzer" || stage === "fuzzing") {
+		return "Run Fuzzer";
 	}
-	if (stage === "criticizing") {
-		return "Critic";
+	if (
+		stage === "Criticize" ||
+		stage === "criticize" ||
+		stage === "criticizing"
+	) {
+		return "Criticize";
 	}
-	if (stage === "verifying") {
-		return "Verification";
+	if (stage === "Verify" || stage === "verify" || stage === "verifying") {
+		return "Verify";
 	}
 	return stage || "-";
 };

@@ -13,6 +13,7 @@ import { findApplicationById } from "../../application";
 import { findComposeById } from "../../compose";
 import type { AgentProfileLike, ScanJob } from "../types";
 import type { ScanStageSettings } from "@dokploy/server/db/schema";
+import { SCAN_STAGE_IDS } from "../stage-metadata";
 
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
 const CONTAINER_TASK_RUNTIME_ROOT = "/task";
@@ -44,12 +45,12 @@ const sanitizeContainerNamePart = (value: string) =>
 
 const resolveStageAgentKindFromStageName = (stageName: string): StageAgentKind => {
 	switch (stageName) {
-		case "AnalysisStage":
-		case "FuzzBuildStage":
-		case "FuzzRunStage":
-		case "AnalysisCriticStage":
+		case SCAN_STAGE_IDS.analysis:
+		case SCAN_STAGE_IDS.fuzzBuild:
+		case SCAN_STAGE_IDS.fuzzRun:
+		case SCAN_STAGE_IDS.analysisCritic:
 			return "analysis";
-		case "VerifyingStage":
+		case SCAN_STAGE_IDS.verification:
 			return "verification";
 		default:
 			return "scan";
@@ -58,21 +59,21 @@ const resolveStageAgentKindFromStageName = (stageName: string): StageAgentKind =
 
 const resolveStageContainerPrefix = (stageName: string) => {
 	switch (stageName) {
-		case "RepositoryScanningStage":
+		case SCAN_STAGE_IDS.repositoryScan:
 			return "repository-scan";
-		case "ModuleScanningStage":
+		case SCAN_STAGE_IDS.moduleScan:
 			return "module-scan";
-		case "FunctionScanningStage":
+		case SCAN_STAGE_IDS.functionScan:
 			return "function-scan";
-		case "AnalysisStage":
+		case SCAN_STAGE_IDS.analysis:
 			return "analysis";
-		case "FuzzBuildStage":
+		case SCAN_STAGE_IDS.fuzzBuild:
 			return "fuzz-build";
-		case "FuzzRunStage":
+		case SCAN_STAGE_IDS.fuzzRun:
 			return "fuzz-run";
-		case "AnalysisCriticStage":
+		case SCAN_STAGE_IDS.analysisCritic:
 			return "analysis-critic";
-		case "VerifyingStage":
+		case SCAN_STAGE_IDS.verification:
 			return "verify";
 		default:
 			return sanitizeContainerNamePart(stageName);
@@ -293,7 +294,7 @@ export const resolveRepositoryArtifactsDir = async (input: {
 		"jobs",
 		input.scanJobId,
 		resolveTaskRootSegment(
-			"RepositoryScanningStage",
+			SCAN_STAGE_IDS.repositoryScan,
 			"repository-scanning",
 			input.scanJobId,
 		),
@@ -314,7 +315,7 @@ export const resolveRepositoryStageRuntime = async (input: {
 		"jobs",
 		input.scanJobId,
 		resolveTaskRootSegment(
-			"RepositoryScanningStage",
+			SCAN_STAGE_IDS.repositoryScan,
 			"repository-scanning",
 			input.scanJobId,
 		),

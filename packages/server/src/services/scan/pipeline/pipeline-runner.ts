@@ -43,6 +43,7 @@ import {
 	type StageContext,
 } from "../stages/full-scan-stage.runtime";
 import { resolveStageTaskName } from "../stage-task-name";
+import { SCAN_STAGE_IDS } from "../stage-metadata";
 import {
 	type FirstStageInputOf,
 	getDownstreamEdges,
@@ -1107,7 +1108,7 @@ const resolveStageTaskId = (
 
 	const pipelineScanJob = (ctx as PipelineScanJobContext).scanJob;
 	if (pipelineScanJob?.scanJobId) {
-		if (stageName === "RepositoryScanningStage") {
+		if (stageName === SCAN_STAGE_IDS.repositoryScan) {
 			return pipelineScanJob.repositoryTaskId || pipelineScanJob.scanJobId;
 		}
 		return pipelineScanJob.scanJobId;
@@ -1134,15 +1135,15 @@ const createTaskStageContext = <
 		routeOutputSchemas?: StageContext["routeOutputSchemas"];
 	} | null,
 ) => {
-	const taskId = resolveStageTaskId(stage.name, ctx, input, taskIdOverride);
+	const taskId = resolveStageTaskId(stage.id, ctx, input, taskIdOverride);
 	const scanJob = resolveStageScanJob(
 		(input as Record<string, unknown> | null | undefined) || undefined,
 		ctx,
 	);
-	const taskName = resolveStageTaskName(stage.name, input);
+	const taskName = resolveStageTaskName(stage.id, input);
 	const stageCtx = createStageContext({
 		base: ctx,
-		stageName: stage.name,
+		stageName: stage.id,
 		scanJob,
 		taskId,
 		taskName,
@@ -1298,7 +1299,7 @@ const prepareStageSuccess = async <
 	) {
 		logPipelineEvent("stage.stale_completion_ignored", {
 			scanJobId: stageCtx.scanJobId,
-			stageName: stage.name,
+			stageName: stage.id,
 			taskId: stageCtx.taskId,
 			taskName: stageCtx.taskName,
 			currentStatus: currentTask.status,
@@ -1310,7 +1311,7 @@ const prepareStageSuccess = async <
 	await assertScanJobNotCancelled(stageCtx);
 	const output = stage.validateOutput
 		? await stage.validateOutput(stageCtx, input, rawOutput)
-		: await defaultValidateOutput<TOutput>(stage.name, rawOutput);
+		: await defaultValidateOutput<TOutput>(stage.id, rawOutput);
 	await updateTaskDefault(stageCtx.taskId, { output });
 	await stage.onSuccess?.(stageCtx, input, output);
 	return output;
@@ -1340,7 +1341,7 @@ const persistTerminalSuccess = async <
 	) {
 		logPipelineEvent("stage.stale_completion_ignored", {
 			scanJobId: stageCtx.scanJobId,
-			stageName: stage.name,
+			stageName: stage.id,
 			taskId: stageCtx.taskId,
 			taskName: stageCtx.taskName,
 			currentStatus: currentTask.status,
@@ -1380,7 +1381,7 @@ const persistTerminalSuccess = async <
 	}
 	logPipelineEvent("loop.task_completed", {
 		scanJobId: stageCtx.scanJobId,
-		stageName: stage.name,
+		stageName: stage.id,
 		taskId: stageCtx.taskId,
 		taskName: stageCtx.taskName,
 		rawOutputLength: rawOutput.length,
@@ -1388,7 +1389,7 @@ const persistTerminalSuccess = async <
 	if (options?.exitReason) {
 		logPipelineEvent("loop.task_exited", {
 			scanJobId: stageCtx.scanJobId,
-			stageName: stage.name,
+			stageName: stage.id,
 			taskId: stageCtx.taskId,
 			taskName: stageCtx.taskName,
 			exitReason: options.exitReason,
@@ -1419,7 +1420,7 @@ const persistTerminalFailure = async <
 	) {
 		logPipelineEvent("stage.stale_failure_ignored", {
 			scanJobId: stageCtx.scanJobId,
-			stageName: stage.name,
+			stageName: stage.id,
 			taskId: stageCtx.taskId,
 			taskName: stageCtx.taskName,
 			currentStatus: currentTask.status,
@@ -1442,14 +1443,14 @@ const persistTerminalFailure = async <
 	await stage.onFailure?.(stageCtx, input, error);
 	logPipelineEvent("stage.failed", {
 		scanJobId: stageCtx.scanJobId,
-		stageName: stage.name,
+		stageName: stage.id,
 		taskId: stageCtx.taskId,
 		taskName: stageCtx.taskName,
 		errorMessage: getErrorMessage(error),
 	});
 	logPipelineEvent("loop.task_failed", {
 		scanJobId: stageCtx.scanJobId,
-		stageName: stage.name,
+		stageName: stage.id,
 		taskId: stageCtx.taskId,
 		taskName: stageCtx.taskName,
 		errorMessage: getErrorMessage(error),
@@ -1477,12 +1478,12 @@ const runStageTaskLifecycle = async <
 		input,
 		options?.taskIdOverride,
 		await findTaskByIdRepo(
-			resolveStageTaskId(stage.name, ctx, input, options?.taskIdOverride),
+			resolveStageTaskId(stage.id, ctx, input, options?.taskIdOverride),
 		).catch(() => null),
 	);
 	logPipelineEvent(options?.resumeOnly ? "stage.resume" : "stage.start", {
 		scanJobId: stageCtx.scanJobId,
-		stageName: stage.name,
+		stageName: stage.id,
 		taskId,
 		taskName,
 	});
@@ -1493,7 +1494,7 @@ const runStageTaskLifecycle = async <
 		if (!options?.resumeOnly && stage.validateInput) {
 			const isValid = await stage.validateInput(stageCtx, input);
 			if (!isValid) {
-				throw new Error(`Stage ${stage.name} rejected input ${taskId}`);
+				throw new Error(`Stage ${stage.id} rejected input ${taskId}`);
 			}
 		}
 
@@ -1544,7 +1545,7 @@ export const runPipeline = async <
 	ctx: TPipelineContext,
 	firstStageInput?: FirstStageInputOf<TPipelineStages>,
 ) => {
-	const stageNames = pipeline.stages.map((stage) => stage.name);
+	const stageNames = pipeline.stages.map((stage) => stage.id);
 	if (stageNames.length === 0) {
 		return;
 	}
@@ -1564,7 +1565,7 @@ export const runPipeline = async <
 			if (!firstStage) {
 				return;
 			}
-			const firstStageState = runtime.stageStates.get(firstStage.name);
+			const firstStageState = runtime.stageStates.get(firstStage.id);
 			if (!firstStageState) {
 				throw new Error(`Runtime state missing for stage ${firstStage.name}`);
 			}
@@ -1576,7 +1577,7 @@ export const runPipeline = async <
 					unknown
 				>,
 				{
-					taskId: resolveStageTaskId(firstStage.name, ctx, firstStageInput),
+					taskId: resolveStageTaskId(firstStage.id, ctx, firstStageInput),
 					input: firstStageInput,
 				},
 			);
@@ -1903,7 +1904,7 @@ const launchStageExecution = async <
 			);
 			if (!isValid) {
 				throw new Error(
-					`Stage ${stageState.stage.name} rejected input ${execution.taskId}`,
+					`Stage ${stageState.stage.id} rejected input ${execution.taskId}`,
 				);
 			}
 		}
@@ -2499,8 +2500,8 @@ const ensureJobRuntime = <TPipelineContext extends PipelineContext>(
 
 	const stageStates = new Map<string, RuntimeStageState<TPipelineContext>>();
 	for (const stage of pipeline.stages) {
-		stageStates.set(stage.name, {
-			stageName: stage.name,
+		stageStates.set(stage.id, {
+			stageName: stage.id,
 			stage: stage as StageDefinition<
 				TPipelineContext,
 				unknown,
@@ -2565,7 +2566,7 @@ const dispatchPipelineDownstream = async <
 			routeKey: routeKey ?? null,
 			selectedRouteKey: selectedDownstream.selectedRouteKey,
 			edgeName: selectedDownstream.edges[0]?.name ?? null,
-			toStageName: selectedDownstream.edges[0]?.to.name ?? null,
+			toStageName: selectedDownstream.edges[0]?.to.id ?? null,
 			fallback: selectedDownstream.fallback,
 		});
 	}
@@ -2604,7 +2605,7 @@ const dispatchPipelineDownstream = async <
 				(group) =>
 					group.name === fromGroup.groupName &&
 					isStageInGroup(group, stageName) &&
-					isStageInGroup(group, edge.to.name),
+					isStageInGroup(group, edge.to.id),
 			)
 				? fromGroup.groupInstanceId
 				: null;
@@ -2633,12 +2634,12 @@ const dispatchPipelineDownstream = async <
 			pipelineName: runtime.pipeline.name,
 			edgeName: edge.name,
 			fromStageName: stageName,
-			toStageName: edge.to.name,
+			toStageName: edge.to.id,
 			taskCount: taskIds.length,
 		});
 		await refreshPipelineState(runtime.ctx);
 
-		const downstreamStageState = runtime.stageStates.get(edge.to.name);
+		const downstreamStageState = runtime.stageStates.get(edge.to.id);
 		const downstreamQueue = edge.to.queue;
 		if (!downstreamStageState || !downstreamQueue) {
 			continue;
@@ -2655,7 +2656,7 @@ const dispatchPipelineDownstream = async <
 				pipelineName: runtime.pipeline.name,
 				edgeName: edge.name,
 				fromStageName: stageName,
-				toStageName: edge.to.name,
+				toStageName: edge.to.id,
 				taskId,
 				queueName: queue.name,
 				queueScope: downstreamGroupInstanceId ? "group" : "global",

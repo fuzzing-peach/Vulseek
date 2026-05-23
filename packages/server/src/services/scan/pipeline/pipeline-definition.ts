@@ -143,7 +143,7 @@ export const createPipelineDefinition = <
 export const getPipelineStage = <TPipelineContext extends PipelineContext>(
 	pipeline: PipelineDefinition<TPipelineContext>,
 	stageName: PipelineStageName,
-) => pipeline.stages.find((stage) => stage.name === stageName);
+) => pipeline.stages.find((stage) => stage.id === stageName);
 
 export const getDownstreamEdges = <
 	TPipelineContext extends PipelineContext,
@@ -158,7 +158,7 @@ export const getDownstreamEdges = <
 >(
 	pipeline: PipelineDefinition<TPipelineContext, TStages, TEdges>,
 	stageName: PipelineStageName,
-) => pipeline.edges.filter((edge) => edge.from.name === stageName);
+) => pipeline.edges.filter((edge) => edge.from.id === stageName);
 
 export const getStageGroup = <TPipelineContext extends PipelineContext>(
 	pipeline: PipelineDefinition<TPipelineContext>,
@@ -166,21 +166,21 @@ export const getStageGroup = <TPipelineContext extends PipelineContext>(
 ) =>
 	pipeline.groups?.find(
 		(group) =>
-			group.leader.name === stageName ||
-			group.members.some((stage) => stage.name === stageName),
+			group.leader.id === stageName ||
+			group.members.some((stage) => stage.id === stageName),
 	) || null;
 
 export const getStageLeaderGroup = <TPipelineContext extends PipelineContext>(
 	pipeline: PipelineDefinition<TPipelineContext>,
 	stageName: PipelineStageName,
-) => pipeline.groups?.find((group) => group.leader.name === stageName) || null;
+) => pipeline.groups?.find((group) => group.leader.id === stageName) || null;
 
 export const isStageInGroup = <TPipelineContext extends PipelineContext>(
 	group: PipelineStageGroup<TPipelineContext>,
 	stageName: PipelineStageName,
 ) =>
-	group.leader.name === stageName ||
-	group.members.some((stage) => stage.name === stageName);
+	group.leader.id === stageName ||
+	group.members.some((stage) => stage.id === stageName);
 
 export const getStageRouteOutputSchemas = <
 	TPipelineContext extends PipelineContext,
@@ -209,7 +209,7 @@ export const validatePipelineRouteConfiguration = <
 	pipeline: PipelineDefinition<TPipelineContext>,
 ) => {
 	for (const stage of pipeline.stages) {
-		const edges = getDownstreamEdges(pipeline, stage.name);
+		const edges = getDownstreamEdges(pipeline, stage.id);
 		if (!edges.some((edge) => edge.route)) {
 			continue;
 		}

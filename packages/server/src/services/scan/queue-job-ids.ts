@@ -15,15 +15,15 @@ export const buildKnownStageQueueJobIds = (input: {
 	const currentJobId = buildQueueTaskJobId(input.queueName, input.taskId);
 
 	switch (input.stageName) {
-		case "RepositoryScanningStage":
+		case "repository-scan":
 			return dedupe([currentJobId, `repository:${input.scanJobId}`]);
-		case "ModuleScanningStage":
+		case "module-scan":
 			return dedupe([currentJobId, `module:${input.taskId}`]);
-		case "FunctionScanningStage":
+		case "function-scan":
 			return dedupe([currentJobId, `function:${input.taskId}`]);
-		case "AnalysisStage":
+		case "analyze":
 			return dedupe([currentJobId, `analysis:${input.taskId}`]);
-		case "VerifyingStage":
+		case "verify":
 			return dedupe([currentJobId, `verification:${input.taskId}`]);
 		default:
 			return [currentJobId];

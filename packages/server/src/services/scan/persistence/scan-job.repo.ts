@@ -46,7 +46,7 @@ export const findScanJobByIdRepo = async (scanJobId: string) => {
       tasks,
       and(
         eq(tasks.scanJobId, scanJobs.scanJobId),
-        eq(tasks.stageName, "RepositoryScanningStage"),
+        eq(tasks.stageName, "repository-scan"),
       ),
     )
     .where(eq(scanJobs.scanJobId, scanJobId))
@@ -67,7 +67,7 @@ export const listScanJobsByApplicationIdRepo = async (applicationId: string) =>
       tasks,
       and(
         eq(tasks.scanJobId, scanJobs.scanJobId),
-        eq(tasks.stageName, "RepositoryScanningStage"),
+        eq(tasks.stageName, "repository-scan"),
       ),
     )
     .where(eq(scanJobs.applicationId, applicationId))
@@ -81,7 +81,7 @@ export const listScanJobsByComposeIdRepo = async (composeId: string) =>
       tasks,
       and(
         eq(tasks.scanJobId, scanJobs.scanJobId),
-        eq(tasks.stageName, "RepositoryScanningStage"),
+        eq(tasks.stageName, "repository-scan"),
       ),
     )
     .where(eq(scanJobs.composeId, composeId))
@@ -95,7 +95,7 @@ export const listUnfinishedScanJobsRepo = async () =>
       tasks,
       and(
         eq(tasks.scanJobId, scanJobs.scanJobId),
-        eq(tasks.stageName, "RepositoryScanningStage"),
+        eq(tasks.stageName, "repository-scan"),
       ),
     )
     .where(
@@ -146,7 +146,7 @@ export const createScanJobRepo = async (input: {
   await createTaskRepo({
     scanJobId: created[0].scanJobId,
     name: "repository-scanning",
-    stageName: "RepositoryScanningStage",
+    stageName: "repository-scan",
     status: "pending",
   });
 
@@ -333,12 +333,12 @@ export const recalculateScanTaskCountsRepo = async (scanJobId: string) => {
   const updated = await db
     .update(scanJobs)
     .set({
-      moduleTasksTotal: countBy("ModuleScanningStage"),
-      moduleTasksCompleted: countBy("ModuleScanningStage", "completed"),
-      moduleTasksFailed: countBy("ModuleScanningStage", "failed"),
-      functionTasksTotal: countBy("FunctionScanningStage"),
-      functionTasksCompleted: countBy("FunctionScanningStage", "completed"),
-      functionTasksFailed: countBy("FunctionScanningStage", "failed"),
+      moduleTasksTotal: countBy("module-scan"),
+      moduleTasksCompleted: countBy("module-scan", "completed"),
+      moduleTasksFailed: countBy("module-scan", "failed"),
+      functionTasksTotal: countBy("function-scan"),
+      functionTasksCompleted: countBy("function-scan", "completed"),
+      functionTasksFailed: countBy("function-scan", "failed"),
     })
     .where(eq(scanJobs.scanJobId, scanJobId))
     .returning();

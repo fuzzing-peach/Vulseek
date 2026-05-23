@@ -17,7 +17,7 @@ test("buildKnownQueueJobIdsForTask includes legacy and canonical ids for retry c
 		buildKnownQueueJobIdsForTask(
 			{ name: "scan:job-1:analysis" },
 			{
-				stageName: "AnalysisStage",
+				stageName: "analyze",
 				taskId: "analysis-1",
 				scanJobId: "job-1",
 			},
@@ -29,7 +29,7 @@ test("buildKnownQueueJobIdsForTask includes legacy and canonical ids for retry c
 		buildKnownQueueJobIdsForTask(
 			{ name: "scan:job-1:repository" },
 			{
-				stageName: "RepositoryScanningStage",
+				stageName: "repository-scan",
 				taskId: "job-1",
 				scanJobId: "job-1",
 			},

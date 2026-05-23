@@ -430,7 +430,7 @@ export const listAnalysisResultsByScanJobIdRepo = async (
 	(
 		await listTasksByScanJobAndStageRepo({
 			scanJobId,
-			stageName: "AnalysisStage",
+			stageName: "analyze",
 		})
 	)
 		.map(buildAnalysisTaskResultView)
@@ -442,7 +442,7 @@ export const listVerificationResultsByScanJobIdRepo = async (
 	(
 		await listTasksByScanJobAndStageRepo({
 			scanJobId,
-			stageName: "VerifyingStage",
+			stageName: "verify",
 		})
 	)
 		.map(buildVerificationTaskResultView)

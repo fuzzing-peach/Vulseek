@@ -180,7 +180,8 @@ export const createAnalysisStageDefinition = <
 		executionContext?: { analysisConcurrency?: number };
 	},
 >(input: {
-	name?: string;
+	id: string;
+	name: string;
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
 	queue?: StageQueueBinding<TPipelineContext, CandidateAnalysisStageInput>;
@@ -191,14 +192,15 @@ export const createAnalysisStageDefinition = <
 	AnalysisStageContext
 > =>
 	createStageDefinition({
-		name: input.name || "AnalysisStage",
+		id: input.id,
+		name: input.name,
 		mode: input.mode || "fanout",
 		persistent: input.persistent,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
 			await resolveStageConcurrencySetting(
 				ctx.scanJobId,
-				"AnalysisStage",
+				input.id,
 				(settings) => settings.analysisConcurrency,
 			),
 		run: async (ctx, stageInput) =>

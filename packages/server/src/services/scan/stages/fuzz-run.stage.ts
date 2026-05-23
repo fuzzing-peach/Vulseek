@@ -118,7 +118,8 @@ const executeFuzzRunStage = async (
 export const createFuzzRunStageDefinition = <
 	TPipelineContext extends PipelineContext,
 >(input: {
-	name?: string;
+	id: string;
+	name: string;
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
 	queue?: StageQueueBinding<TPipelineContext, FuzzRunStageInput>;
@@ -129,14 +130,15 @@ export const createFuzzRunStageDefinition = <
 	StageContext
 > =>
 	createStageDefinition({
-		name: input.name || "FuzzRunStage",
+		id: input.id,
+		name: input.name,
 		mode: input.mode || "fanout",
 		persistent: input.persistent,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
 			await resolveStageConcurrencySetting(
 				ctx.scanJobId,
-				"FuzzRunStage",
+				input.id,
 				(settings) => settings.analysisConcurrency,
 			),
 		run: async (ctx, stageInput) => ({
