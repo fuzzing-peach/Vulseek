@@ -161,7 +161,9 @@ const executeRepositoryScanStage = async (
 			repositoryStatePath: `${repositoryRoot}/00_repository_state.json`,
 			repository,
 			agentProvider: scanAgentProfile?.provider || "codex",
-			thinkingLevel: scanAgentProfile?.thinkingLevel || "medium",
+			thinkingLevel: scanAgentProfile?.thinkingLevelEnabled
+				? scanAgentProfile.thinkingLevel
+				: null,
 		}),
 		outputSchema: repositoryScanSchema,
 		onThreadId: async (threadId) => {

@@ -13,7 +13,7 @@ export const buildFunctionScannerPrompt = (input: {
 	repositoryJson: string;
 	moduleJson: string;
 	functionJson: string;
-	thinkingLevel: string;
+	thinkingLevel?: string | null;
 }) => {
 	return [
 		"You are the function-scanner for one full-scan function task.",
@@ -28,13 +28,15 @@ export const buildFunctionScannerPrompt = (input: {
 		`function_line: ${input.line ?? "-"}`,
 		`function_summary: ${input.summary || "-"}`,
 		`function_vulnerability_type: ${input.vulnerabilityType || "-"}`,
-		`use_reasoning_effort: ${input.thinkingLevel}`,
+		...(input.thinkingLevel
+			? [`use_reasoning_effort: ${input.thinkingLevel}`]
+			: []),
 		`repository_json: ${input.repositoryJson}`,
 		`module_json: ${input.moduleJson}`,
 		`function_json: ${input.functionJson}`,
 		"Return an object with a `candidates` array field.",
 		"Each candidate object must match the canonical candidate schema, including: id, functionId, title, description, filePath, line, vulnerabilityType, confidence, score. Include status/currentStage when available.",
-		"Always return an object, even when there are no candidates; use `{ \"candidates\": [] }` in that case.",
+		'Always return an object, even when there are no candidates; use `{ "candidates": [] }` in that case.',
 		"Before returning, validate the structured JSON against the runtime-provided output.schema.json.",
 	].join("\n");
 };

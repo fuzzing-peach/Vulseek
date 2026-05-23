@@ -6,7 +6,7 @@ export const buildModuleScannerPrompt = (input: {
 	moduleName: string;
 	repositoryJson: string;
 	moduleJson: string;
-	thinkingLevel: string;
+	thinkingLevel?: string | null;
 }) => {
 	return [
 		"You are the module-scanner for one full-scan module task.",
@@ -17,7 +17,9 @@ export const buildModuleScannerPrompt = (input: {
 		`scan_job_id: ${input.scanJobId}`,
 		`module_id: ${input.moduleId}`,
 		`module_name: ${input.moduleName}`,
-		`use_reasoning_effort: ${input.thinkingLevel}`,
+		...(input.thinkingLevel
+			? [`use_reasoning_effort: ${input.thinkingLevel}`]
+			: []),
 		`repository_json: ${input.repositoryJson}`,
 		`module_json: ${input.moduleJson}`,
 		"Use the provided module_json.files array as the source file set for this module scan.",

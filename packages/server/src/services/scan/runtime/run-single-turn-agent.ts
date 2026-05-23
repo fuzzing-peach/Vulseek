@@ -152,10 +152,13 @@ const withCodexAutoApproveConfigToml = (configToml: string) => {
 
 const buildCodexConfigToml = (agentProfile: AgentProfileLike) => {
 	const providerName = sanitizeProviderName(agentProfile.agentProfileId);
+	const reasoningConfig = agentProfile.thinkingLevelEnabled
+		? [`model_reasoning_effort = "${agentProfile.thinkingLevel}"`]
+		: [];
 
 	return withCodexAutoApproveConfigToml([
 		`model = "${agentProfile.model}"`,
-		`model_reasoning_effort = "${agentProfile.thinkingLevel}"`,
+		...reasoningConfig,
 		`model_provider = "${providerName}"`,
 		`preferred_auth_method = "apikey"`,
 		"",
@@ -3201,7 +3204,9 @@ export const runSingleTurnAgentInContainer = async (
 		taskAliasRootInContainer: TASK_ALIAS_ROOT_IN_CONTAINER,
 		structuredOutputResultPathInContainer,
 		model: input.agentProfile?.model || null,
-		thinkingLevel: input.agentProfile?.thinkingLevel || null,
+		thinkingLevel: input.agentProfile?.thinkingLevelEnabled
+			? input.agentProfile.thinkingLevel
+			: null,
 		sessionMode: input.laneThreadId ? "persistent" : input.sessionMode || "new",
 		parentSessionId: input.parentSessionId || null,
 		parentRuntimeRootPath: parentTaskRootInContainer,

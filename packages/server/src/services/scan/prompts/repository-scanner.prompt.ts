@@ -17,7 +17,7 @@ export const buildRepositoryScannerPrompt = (input: {
 	repositoryState: PreparedRepositoryStateForPrompt;
 	repositoryStatePath: string;
 	agentProvider: string;
-	thinkingLevel: string;
+	thinkingLevel?: string | null;
 }) => {
 	return [
 		"You are the repository-scanner for a full scan job.",
@@ -30,7 +30,9 @@ export const buildRepositoryScannerPrompt = (input: {
 		`Target ref: ${input.repositoryState.currentBranch || input.repositoryState.targetRef || "<none>"}.`,
 		`Target tag: ${input.repositoryState.currentExactTag || input.repositoryState.targetTag || "<none>"}.`,
 		`Target commit: ${input.repositoryState.resolvedTargetSha}.`,
-		`Use ${input.agentProvider} with reasoning effort around ${input.thinkingLevel}.`,
+		input.thinkingLevel
+			? `Use ${input.agentProvider} with reasoning effort around ${input.thinkingLevel}.`
+			: `Use ${input.agentProvider}.`,
 		`Repository state JSON: ${input.repositoryStatePath}.`,
 		"Produce at least 10 functional modules by default.",
 		"Only produce fewer than 10 modules if the repository is genuinely too small or too tightly coupled to support a defensible split, and explain that decision explicitly in notes.",

@@ -105,6 +105,7 @@ export type AgentProfileLike = {
 	apiKey: string;
 	model: string;
 	thinkingLevel: string;
+	thinkingLevelEnabled: boolean;
 	envs: string;
 	isEnabled: boolean;
 };

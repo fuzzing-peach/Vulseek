@@ -99,7 +99,9 @@ const executeFunctionScanStage = async (
 			repositoryJson: JSON.stringify(stageInput.repository),
 			moduleJson: JSON.stringify(stageInput.module),
 			functionJson: JSON.stringify(stageInput.function),
-			thinkingLevel: scanAgentProfile?.thinkingLevel || "medium",
+			thinkingLevel: scanAgentProfile?.thinkingLevelEnabled
+				? scanAgentProfile.thinkingLevel
+				: null,
 		}),
 		outputSchema: functionScanningOutputSchema,
 		onThreadId: async (threadId) => {

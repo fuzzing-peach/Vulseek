@@ -43,6 +43,7 @@ export const agentProfiles = pgTable("agent_profiles", {
 	apiKey: text("apiKey").notNull(),
 	model: text("model").notNull(),
 	thinkingLevel: text("thinkingLevel").notNull().default("medium"),
+	thinkingLevelEnabled: boolean("thinkingLevelEnabled").notNull().default(true),
 	envs: text("envs").notNull().default(""),
 	isEnabled: boolean("isEnabled").notNull().default(true),
 	organizationId: text("organizationId")
@@ -92,6 +93,7 @@ const createAgentProfileSchema = createInsertSchema(agentProfiles, {
 	apiKey: z.string(),
 	model: z.string().min(1, { message: "Model is required" }),
 	thinkingLevel: z.string().min(1, { message: "Thinking level is required" }),
+	thinkingLevelEnabled: z.boolean().default(true),
 	envs: z.string().optional().default(""),
 	isEnabled: z.boolean().optional(),
 });
@@ -104,6 +106,7 @@ export const apiCreateAgentProfile = createAgentProfileSchema
 		apiKey: true,
 		model: true,
 		thinkingLevel: true,
+		thinkingLevelEnabled: true,
 		envs: true,
 		isEnabled: true,
 	})

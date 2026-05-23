@@ -13,5 +13,6 @@ export const buildTaskAgentProfileSnapshot = (
 					baseUrl: agentProfile.baseUrl,
 					model: agentProfile.model,
 					thinkingLevel: agentProfile.thinkingLevel,
+					thinkingLevelEnabled: agentProfile.thinkingLevelEnabled,
 				},
 });

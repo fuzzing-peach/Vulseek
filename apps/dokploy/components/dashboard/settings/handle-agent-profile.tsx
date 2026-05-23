@@ -43,6 +43,7 @@ const Schema = z.object({
 	apiKey: z.string(),
 	model: z.string().min(1, { message: "Model is required" }),
 	thinkingLevel: z.string().min(1, { message: "Thinking level is required" }),
+	thinkingLevelEnabled: z.boolean(),
 	envs: z.string(),
 	isEnabled: z.boolean(),
 });
@@ -109,6 +110,7 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 			apiKey: "",
 			model: "gpt-5.4",
 			thinkingLevel: "medium",
+			thinkingLevelEnabled: true,
 			envs: "",
 			isEnabled: true,
 		},
@@ -121,6 +123,10 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 	const envsValue = useWatch({
 		control: form.control,
 		name: "envs",
+	});
+	const thinkingLevelEnabled = useWatch({
+		control: form.control,
+		name: "thinkingLevelEnabled",
 	});
 	const envHighlight = useMemo(
 		() => renderEnvHighlight(envsValue || ""),
@@ -136,6 +142,7 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 			apiKey: data?.apiKey ?? "",
 			model: data?.model ?? "gpt-5.4",
 			thinkingLevel: data?.thinkingLevel ?? "medium",
+			thinkingLevelEnabled: data?.thinkingLevelEnabled ?? true,
 			envs: data?.envs ?? "",
 			isEnabled: data?.isEnabled ?? true,
 		});
@@ -309,15 +316,42 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 
 						<FormField
 							control={form.control}
+							name="thinkingLevelEnabled"
+							render={({ field }) => (
+								<FormItem className="flex flex-row items-center justify-between rounded-lg border p-3">
+									<div className="space-y-0.5">
+										<FormLabel>Send Thinking Level</FormLabel>
+										<FormDescription>
+											Pass this value to the agent runtime when the selected
+											agent supports it
+										</FormDescription>
+									</div>
+									<FormControl>
+										<Switch
+											checked={field.value}
+											onCheckedChange={field.onChange}
+										/>
+									</FormControl>
+								</FormItem>
+							)}
+						/>
+
+						<FormField
+							control={form.control}
 							name="thinkingLevel"
 							render={({ field }) => (
 								<FormItem>
 									<FormLabel>Thinking Level</FormLabel>
 									<FormControl>
-										<Input placeholder="medium" {...field} />
+										<Input
+											placeholder="medium"
+											disabled={!thinkingLevelEnabled}
+											{...field}
+										/>
 									</FormControl>
 									<FormDescription>
-										Examples: low, medium, high
+										Examples: low, medium, high. Saved with the profile even
+										when disabled.
 									</FormDescription>
 									<FormMessage />
 								</FormItem>

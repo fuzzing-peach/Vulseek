@@ -22,6 +22,7 @@ type TaskAgentProfileSnapshot = {
 	baseUrl: string | null;
 	model: string | null;
 	thinkingLevel: string | null;
+	thinkingLevelEnabled?: boolean | null;
 };
 
 export const scanTypeEnum = pgEnum("scanType", ["delta", "full"]);

@@ -1725,11 +1725,14 @@ const withCodexAutoApproveConfigToml = (configToml: string) => {
 
 const buildCodexConfigToml = (agentProfile: AgentProfileLike) => {
 	const providerName = sanitizeProviderName(agentProfile.agentProfileId);
+	const reasoningConfig = agentProfile.thinkingLevelEnabled
+		? [`model_reasoning_effort = "${agentProfile.thinkingLevel}"`]
+		: [];
 
 	return withCodexAutoApproveConfigToml(
 		[
 			`model = "${agentProfile.model}"`,
-			`model_reasoning_effort = "${agentProfile.thinkingLevel}"`,
+			...reasoningConfig,
 			`model_provider = "${providerName}"`,
 			`preferred_auth_method = "apikey"`,
 			"",
@@ -6109,7 +6112,9 @@ export const runScanJobInContainer = async (
 							"Do not bias the scan toward recent commits or recent diffs.",
 							"Do not use recent commit windows as the main search strategy for full scan.",
 						]),
-				`Use ${agentProvider} as the runtime agent and keep reasoning effort around ${scanAgentProfile?.thinkingLevel || "medium"}.`,
+				scanAgentProfile?.thinkingLevelEnabled
+					? `Use ${agentProvider} as the runtime agent and keep reasoning effort around ${scanAgentProfile.thinkingLevel}.`
+					: `Use ${agentProvider} as the runtime agent.`,
 				`Before analyzing, use the repository state already prepared in ${toAgentVisiblePath(`${scanRootDir}/00_repository_state.md`)} and work from the checked out target revision in /workspace/repo.`,
 				`Use the installed skill named ${scanJob.scanType === "delta" ? "delta-scan" : "full-scan"} as your working method.`,
 				"Persist final candidate output only to the required JSON result file.",
@@ -6169,7 +6174,9 @@ export const runScanJobInContainer = async (
 				cwd: "/workspace/repo",
 				prompt: codexPrompt,
 				model: scanAgentProfile?.model,
-				thinkingLevel: scanAgentProfile?.thinkingLevel,
+				thinkingLevel: scanAgentProfile?.thinkingLevelEnabled
+					? scanAgentProfile.thinkingLevel
+					: undefined,
 				jsonlPath: appServerJsonlPath,
 				textPath: appServerTextPath,
 				stderrPath: appServerStderrPath,

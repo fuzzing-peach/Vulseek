@@ -72,7 +72,9 @@ export const AgentProfilesForm = () => {
 													{" · "}
 													{profile.model}
 													{" · "}
-													{profile.thinkingLevel}
+													{profile.thinkingLevelEnabled
+														? profile.thinkingLevel
+														: "thinking off"}
 													{" · "}
 													{profile.baseUrl}
 												</CardDescription>
