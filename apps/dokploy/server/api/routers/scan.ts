@@ -1,50 +1,53 @@
 import {
-	findCheckoutStatus,
-	findCheckoutImageStatus,
-	findRunningCheckoutTask,
+	cancelScanJob,
 	createScanJob,
 	findAllScanJobsByApplicationId,
 	findAllScanJobsByComposeId,
 	findApplicationById,
+	findCandidateSandboxAgentSession,
+	findCandidateTaskLineage,
+	findCheckoutImageStatus,
+	findCheckoutStatus,
 	findComposeById,
+	findRunningCheckoutTask,
 	findScanJobById,
-	findTaskById,
-	findScanJobStatusView,
+	findScanJobSandboxAgentSession,
 	findScanJobStageGraph,
-	cancelScanJob,
-	retryFailedScanJobTasks,
-	rerunScanTask,
-	startCandidateAnalysis,
-	startCandidateVerification,
-	syncFullScanTasksFromArtifacts,
+	findScanJobStatusView,
+	findTaskById,
 	findVulnerabilityCandidateById,
 	findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId,
 	listScanJobDirectory,
+	listScanTaskDirectory,
 	readCandidateFileContent,
 	readCandidateFilesTree,
 	readScanJobAppServerText,
 	readScanJobFileContent,
+	readScanTaskFileContent,
+	rerunScanTask,
+	retryFailedScanJobTasks,
+	startCandidateAnalysis,
+	startCandidateVerification,
 	startCheckoutScanEnvironment,
+	syncFullScanTasksFromArtifacts,
 	updateScanJobNote,
-	findScanJobSandboxAgentSession,
-	findCandidateSandboxAgentSession,
 } from "@dokploy/server";
 import { TRPCError } from "@trpc/server";
+import { z } from "zod";
 import {
 	apiCheckoutScanEnvironment,
 	apiCreateScanJob,
 	apiFindCheckoutStatus,
-	apiFindRunningCheckout,
 	apiFindOneScanJob,
+	apiFindRunningCheckout,
 	apiFindScanJobsByApplication,
 	apiFindScanJobsByCompose,
-	apiUpdateScanJobNote,
 	apiFindVulnerabilityCandidatesByScanJob,
+	apiUpdateScanJobNote,
 } from "@/server/db/schema";
 import type { ScanQueueJob } from "@/server/queues/queue-types";
 import { scansQueue } from "@/server/queues/queueSetup";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
-import { z } from "zod";
 
 export const scanRouter = createTRPCRouter({
 	checkout: protectedProcedure
@@ -652,6 +655,92 @@ export const scanRouter = createTRPCRouter({
 			return await readScanJobFileContent(input);
 		}),
 
+	listTaskDirectory: protectedProcedure
+		.input(
+			z.object({
+				scanJobId: z.string().min(1),
+				taskId: z.string().min(1),
+				directoryPath: z.string().optional(),
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			const task = await findTaskById(input.taskId);
+			if (task.scanJobId !== input.scanJobId) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Task not found for this scan job",
+				});
+			}
+			const scanJob = await findScanJobById(task.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to access files for this scan task",
+				});
+			}
+
+			return await listScanTaskDirectory(input);
+		}),
+
+	readTaskFile: protectedProcedure
+		.input(
+			z.object({
+				scanJobId: z.string().min(1),
+				taskId: z.string().min(1),
+				filePath: z.string().min(1),
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			const task = await findTaskById(input.taskId);
+			if (task.scanJobId !== input.scanJobId) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Task not found for this scan job",
+				});
+			}
+			const scanJob = await findScanJobById(task.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to access files for this scan task",
+				});
+			}
+
+			return await readScanTaskFileContent(input);
+		}),
+
 	candidate: protectedProcedure
 		.input(
 			z.object({
@@ -702,6 +791,43 @@ export const scanRouter = createTRPCRouter({
 			}
 
 			return enrichedCandidate;
+		}),
+
+	candidateTaskLineage: protectedProcedure
+		.input(
+			z.object({
+				vulnerabilityCandidateId: z.string().min(1),
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			const candidate = await findVulnerabilityCandidateById(
+				input.vulnerabilityCandidateId,
+			);
+			const scanJob = await findScanJobById(candidate.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to access this candidate",
+				});
+			}
+
+			return await findCandidateTaskLineage(input.vulnerabilityCandidateId);
 		}),
 
 	analyzeCandidate: protectedProcedure

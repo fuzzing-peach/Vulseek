@@ -1,6 +1,9 @@
 import {
+	Activity,
 	AlertCircle,
+	ExternalLink,
 	FileIcon,
+	FileText,
 	Folder,
 	Loader2,
 	ShieldCheck,
@@ -9,12 +12,13 @@ import {
 import Head from "next/head";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
 	buildCandidateListStateHref,
 	parseCandidateListQueryState,
 } from "@/components/dashboard/scanning/candidate-list-query-state";
 import { JsonRpcSummaryPanel } from "@/components/dashboard/scanning/jsonrpc-summary";
+import { useSandboxAgentText } from "@/components/dashboard/scanning/live-task-activity";
 import { useSandboxAgentSession } from "@/components/dashboard/scanning/use-sandbox-agent-session";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
@@ -36,6 +40,7 @@ import {
 } from "@/components/ui/dialog";
 import { Tree } from "@/components/ui/file-tree";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
 
 interface Props {
@@ -87,24 +92,405 @@ const getVerificationTruthBadge = (
 	};
 };
 
+type CandidateTaskLineageTask = {
+	taskId: string;
+	scanJobId: string;
+	parentTaskId: string | null;
+	stageName: string;
+	status: string;
+	name: string;
+	attempt: number;
+	runtimeMode: string | null;
+	createdAt: string;
+	startedAt: string | null;
+	completedAt: string | null;
+	relation: "repository" | "module" | "function" | "candidate";
+};
+
+const getTaskStageLabel = (stage?: string | null) => {
+	if (stage === "repository-scan") {
+		return "Repository";
+	}
+	if (stage === "module-scan") {
+		return "Module";
+	}
+	if (stage === "function-scan") {
+		return "Function";
+	}
+	if (stage === "analyze") {
+		return "Analyze";
+	}
+	if (stage === "criticize") {
+		return "Criticize";
+	}
+	if (stage === "build-fuzzer") {
+		return "Build Fuzzer";
+	}
+	if (stage === "run-fuzzer") {
+		return "Run Fuzzer";
+	}
+	if (stage === "verify") {
+		return "Verify";
+	}
+	return stage || "-";
+};
+
+const getTaskStatusBadgeClassName = (status?: string | null) => {
+	if (status === "completed") {
+		return "border-emerald-200 bg-emerald-100 text-emerald-700";
+	}
+	if (status === "failed") {
+		return "border-red-200 bg-red-100 text-red-700";
+	}
+	if (status === "running" || status === "launching") {
+		return "border-sky-200 bg-sky-100 text-sky-700";
+	}
+	if (status === "pending") {
+		return "border-amber-200 bg-amber-100 text-amber-700";
+	}
+	return "border-muted-foreground/20 bg-muted text-muted-foreground";
+};
+
+const isContainerNearBottom = (container: HTMLElement) =>
+	container.scrollHeight - container.scrollTop - container.clientHeight <= 16;
+
+const CandidateTaskLineagePanel = ({
+	candidateId,
+	projectId,
+	environmentId,
+	serviceType,
+	routeSegment,
+	serviceId,
+	scanJobId,
+}: {
+	candidateId: string;
+	projectId: string;
+	environmentId: string;
+	serviceType: "application" | "compose";
+	routeSegment: "profiles" | "services";
+	serviceId: string;
+	scanJobId: string;
+}) => {
+	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+	const [taskOutputView, setTaskOutputView] = useState<"activities" | "text">(
+		"activities",
+	);
+	const textContainerRef = useRef<HTMLPreElement | null>(null);
+	const textAutoScrollRef = useRef(true);
+	const { data, isLoading, isError, error } =
+		api.scan.candidateTaskLineage.useQuery(
+			{ vulnerabilityCandidateId: candidateId },
+			{ enabled: !!candidateId, refetchInterval: 4000 },
+		);
+	const tasks = (data?.tasks || []) as CandidateTaskLineageTask[];
+	const selectedTask =
+		tasks.find((task) => task.taskId === selectedTaskId) || tasks[0] || null;
+	const activityState = useSandboxAgentSession({
+		taskId: selectedTask?.taskId || "",
+		enabled: !!selectedTask?.taskId && taskOutputView === "activities",
+	});
+	const textState = useSandboxAgentText({
+		taskId: selectedTask?.taskId || "",
+		enabled: !!selectedTask?.taskId && taskOutputView === "text",
+	});
+	const upstreamTasks = tasks.filter((task) => task.relation !== "candidate");
+	const downstreamTasks = tasks.filter((task) => task.relation === "candidate");
+	const taskHref = (taskId: string) =>
+		`/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}/tasks/${encodeURIComponent(taskId)}`;
+
+	useEffect(() => {
+		if (!tasks.length) {
+			setSelectedTaskId(null);
+			return;
+		}
+		setSelectedTaskId((current) =>
+			current && tasks.some((task) => task.taskId === current)
+				? current
+				: tasks[0]?.taskId || null,
+		);
+	}, [tasks]);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keep text output pinned to the bottom as new chunks append.
+	useEffect(() => {
+		if (taskOutputView !== "text") {
+			textAutoScrollRef.current = true;
+			return;
+		}
+		const container = textContainerRef.current;
+		if (!container || !textAutoScrollRef.current) {
+			return;
+		}
+		container.scrollTop = container.scrollHeight;
+	}, [taskOutputView, textState.text]);
+
+	const renderTaskGroup = (
+		label: string,
+		groupTasks: CandidateTaskLineageTask[],
+	) => (
+		<div className="space-y-2">
+			<div className="px-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+				{label}
+			</div>
+			{groupTasks.length === 0 ? (
+				<div className="rounded-md border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+					No tasks.
+				</div>
+			) : (
+				groupTasks.map((task) => (
+					<div
+						key={task.taskId}
+						className={cn(
+							"flex items-start gap-2 rounded-md border p-2 transition-colors hover:bg-muted/40",
+							selectedTask?.taskId === task.taskId &&
+								"border-foreground/30 bg-muted/50",
+						)}
+					>
+						<button
+							type="button"
+							onClick={() => setSelectedTaskId(task.taskId)}
+							className="min-w-0 flex-1 text-left"
+						>
+							<div className="min-w-0">
+								<div className="truncate text-sm font-medium">{task.name}</div>
+								<div className="mt-1 flex flex-wrap items-center gap-2">
+									<Badge variant="outline">
+										{getTaskStageLabel(task.stageName)}
+									</Badge>
+									<Badge
+										variant="outline"
+										className={getTaskStatusBadgeClassName(task.status)}
+									>
+										{task.status}
+									</Badge>
+								</div>
+							</div>
+						</button>
+						<Button
+							asChild
+							variant="ghost"
+							size="icon"
+							className="size-8 shrink-0"
+							title="Open task detail"
+						>
+							<Link href={taskHref(task.taskId)}>
+								<ExternalLink className="size-4" />
+							</Link>
+						</Button>
+					</div>
+				))
+			)}
+		</div>
+	);
+
+	if (isLoading) {
+		return (
+			<div className="flex items-center gap-2 text-muted-foreground">
+				<Loader2 className="size-4 animate-spin" />
+				Loading task lineage...
+			</div>
+		);
+	}
+
+	if (isError) {
+		return (
+			<div className="flex items-center gap-2 text-muted-foreground">
+				<AlertCircle className="size-4" />
+				{error?.message || "Unable to load task lineage"}
+			</div>
+		);
+	}
+
+	return (
+		<div className="grid min-h-[65vh] grid-cols-1 overflow-hidden rounded-lg border lg:grid-cols-[360px_minmax(0,1fr)]">
+			<div className="border-b bg-muted/10 lg:border-b-0 lg:border-r">
+				<div className="border-b px-4 py-3">
+					<div className="font-medium">Task Lineage</div>
+					<div className="text-sm text-muted-foreground">
+						Repository to candidate-specific tasks.
+					</div>
+				</div>
+				<div className="max-h-[65vh] space-y-4 overflow-auto p-3">
+					{tasks.length === 0 ? (
+						<div className="flex min-h-[280px] flex-col items-center justify-center gap-2 text-muted-foreground">
+							<Workflow className="size-6" />
+							No lineage tasks found
+						</div>
+					) : (
+						<>
+							{renderTaskGroup("Upstream", upstreamTasks)}
+							{renderTaskGroup("Candidate Tasks", downstreamTasks)}
+						</>
+					)}
+				</div>
+			</div>
+
+			<div className="min-w-0">
+				<div className="border-b px-4 py-3">
+					{selectedTask ? (
+						<div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+							<div className="min-w-0">
+								<div className="truncate font-medium">{selectedTask.name}</div>
+								<div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+									<Badge variant="outline">
+										{getTaskStageLabel(selectedTask.stageName)}
+									</Badge>
+									<Badge
+										variant="outline"
+										className={getTaskStatusBadgeClassName(selectedTask.status)}
+									>
+										{selectedTask.status}
+									</Badge>
+									<span>{selectedTask.taskId}</span>
+								</div>
+							</div>
+							<Button asChild variant="outline" size="sm">
+								<Link href={taskHref(selectedTask.taskId)}>
+									<ExternalLink className="mr-2 size-4" />
+									Task Detail
+								</Link>
+							</Button>
+						</div>
+					) : (
+						<div className="text-sm text-muted-foreground">
+							No task selected
+						</div>
+					)}
+				</div>
+
+				{selectedTask ? (
+					<div className="p-4">
+						<Tabs
+							value={taskOutputView}
+							onValueChange={(value) =>
+								setTaskOutputView(value as "activities" | "text")
+							}
+						>
+							<TabsList>
+								<TabsTrigger value="activities">
+									<Activity className="mr-2 size-4" />
+									Activities
+								</TabsTrigger>
+								<TabsTrigger value="text">
+									<FileText className="mr-2 size-4" />
+									Text
+								</TabsTrigger>
+							</TabsList>
+
+							<TabsContent value="activities" className="pt-4">
+								{activityState.errorMessage ? (
+									<div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+										{activityState.errorMessage}
+									</div>
+								) : null}
+								{activityState.metadata &&
+								activityState.messages.length === 0 ? (
+									<div className="mb-3 rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+										<div>status: {activityState.metadata.status || "-"}</div>
+										<div>
+											jsonl:{" "}
+											{activityState.metadata.jsonlExists === false
+												? "missing"
+												: "visible"}
+										</div>
+										{activityState.metadata.jsonlStatError ? (
+											<div className="break-all">
+												error: {activityState.metadata.jsonlStatError}
+											</div>
+										) : null}
+									</div>
+								) : null}
+								<JsonRpcSummaryPanel
+									messages={activityState.messages}
+									maxHeightClassName="max-h-[58vh]"
+									className="min-w-0"
+									debugTaskId={selectedTask.taskId}
+								/>
+							</TabsContent>
+
+							<TabsContent value="text" className="pt-4">
+								<div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+									{textState.isConnected ? (
+										<span className="flex items-center gap-1">
+											<span className="size-1.5 rounded-full bg-emerald-500" />
+											connected
+										</span>
+									) : (
+										<span className="flex items-center gap-1">
+											<Loader2 className="size-3 animate-spin" />
+											connecting
+										</span>
+									)}
+									<span>{textState.text.length.toLocaleString()} chars</span>
+								</div>
+								{textState.errorMessage ? (
+									<div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+										{textState.errorMessage}
+									</div>
+								) : null}
+								{textState.metadata && !textState.text ? (
+									<div className="mb-3 rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+										<div>status: {textState.metadata.status || "-"}</div>
+										<div>
+											text:{" "}
+											{textState.metadata.textExists === false
+												? "missing"
+												: "visible"}
+										</div>
+										{textState.metadata.textStatError ? (
+											<div className="break-all">
+												error: {textState.metadata.textStatError}
+											</div>
+										) : null}
+									</div>
+								) : null}
+								<pre
+									ref={textContainerRef}
+									onScroll={(event) => {
+										textAutoScrollRef.current = isContainerNearBottom(
+											event.currentTarget,
+										);
+									}}
+									className="max-h-[58vh] min-h-[360px] w-full overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-md border bg-muted/20 p-3 text-xs leading-relaxed text-foreground"
+								>
+									{textState.text || "No text output yet."}
+								</pre>
+							</TabsContent>
+						</Tabs>
+					</div>
+				) : (
+					<div className="flex min-h-[360px] items-center justify-center text-muted-foreground">
+						Select a task to inspect output.
+					</div>
+				)}
+			</div>
+		</div>
+	);
+};
+
 export const ShowScanCandidateDetail = ({
 	serviceType,
 	routeSegment,
 }: Props) => {
 	const router = useRouter();
 	const utils = api.useUtils();
-	const projectId = typeof router.query.projectId === "string" ? router.query.projectId : "";
+	const projectId =
+		typeof router.query.projectId === "string" ? router.query.projectId : "";
 	const environmentId =
-		typeof router.query.environmentId === "string" ? router.query.environmentId : "";
+		typeof router.query.environmentId === "string"
+			? router.query.environmentId
+			: "";
 	const serviceId =
 		typeof router.query.applicationId === "string"
 			? router.query.applicationId
 			: typeof router.query.composeId === "string"
 				? router.query.composeId
 				: "";
-	const scanJobId = typeof router.query.scanJobId === "string" ? router.query.scanJobId : "";
+	const scanJobId =
+		typeof router.query.scanJobId === "string" ? router.query.scanJobId : "";
 	const candidateId =
-		typeof router.query.candidateId === "string" ? router.query.candidateId : "";
+		typeof router.query.candidateId === "string"
+			? router.query.candidateId
+			: "";
 	const candidateListQueryState = useMemo(
 		() => parseCandidateListQueryState(router.query),
 		[router.query],
@@ -118,16 +504,22 @@ export const ShowScanCandidateDetail = ({
 		"candidates",
 	);
 
-	const serviceQuery =
-		serviceType === "application"
-			? api.application.one.useQuery({ applicationId: serviceId })
-			: api.compose.one.useQuery({ composeId: serviceId });
-	const serviceData = serviceQuery.data;
-
-	const { data: candidate, isLoading: isLoadingCandidate } = api.scan.candidate.useQuery(
-		{ vulnerabilityCandidateId: candidateId },
-		{ enabled: !!candidateId, refetchInterval: 2000 },
+	const applicationQuery = api.application.one.useQuery(
+		{ applicationId: serviceId },
+		{ enabled: serviceType === "application" && !!serviceId },
 	);
+	const composeQuery = api.compose.one.useQuery(
+		{ composeId: serviceId },
+		{ enabled: serviceType === "compose" && !!serviceId },
+	);
+	const serviceData =
+		serviceType === "application" ? applicationQuery.data : composeQuery.data;
+
+	const { data: candidate, isLoading: isLoadingCandidate } =
+		api.scan.candidate.useQuery(
+			{ vulnerabilityCandidateId: candidateId },
+			{ enabled: !!candidateId, refetchInterval: 2000 },
+		);
 	const { data: fileTree, isLoading: isLoadingFileTree } =
 		api.scan.candidateFilesTree.useQuery(
 			{ vulnerabilityCandidateId: candidateId },
@@ -135,12 +527,18 @@ export const ShowScanCandidateDetail = ({
 		);
 	const { data: selectedFile, isLoading: isLoadingSelectedFile } =
 		api.scan.readCandidateFile.useQuery(
-			{ vulnerabilityCandidateId: candidateId, filePath: selectedFilePath || "" },
+			{
+				vulnerabilityCandidateId: candidateId,
+				filePath: selectedFilePath || "",
+			},
 			{ enabled: !!candidateId && !!selectedFilePath },
 		);
 	const { data: previewFile, isLoading: isLoadingPreviewFile } =
 		api.scan.readCandidateFile.useQuery(
-			{ vulnerabilityCandidateId: candidateId, filePath: previewFilePath || "" },
+			{
+				vulnerabilityCandidateId: candidateId,
+				filePath: previewFilePath || "",
+			},
 			{ enabled: !!candidateId && !!previewFilePath },
 		);
 	const verifyCandidateMutation = api.scan.verifyCandidate.useMutation();
@@ -166,11 +564,14 @@ export const ShowScanCandidateDetail = ({
 			return null;
 		};
 
-		setSelectedFilePath((current) => current || walk(fileTree as Array<Record<string, unknown>>));
+		setSelectedFilePath(
+			(current) => current || walk(fileTree as Array<Record<string, unknown>>),
+		);
 	}, [fileTree]);
 
 	const verificationTruthBadge = useMemo(
-		() => getVerificationTruthBadge(candidate?.latestVerificationResult?.result),
+		() =>
+			getVerificationTruthBadge(candidate?.latestVerificationResult?.result),
 		[candidate?.latestVerificationResult?.result],
 	);
 	const candidateStreamStage =
@@ -179,37 +580,48 @@ export const ShowScanCandidateDetail = ({
 		candidateStreamStage === "verifying"
 			? candidate?.latestVerificationResult?.taskId || ""
 			: candidate?.latestAnalysisResult?.taskId || "";
-	const {
-		messages: liveJsonRpcMessages,
-	} = useSandboxAgentSession({
+	const { messages: liveJsonRpcMessages } = useSandboxAgentSession({
 		taskId: candidateTaskId,
 		enabled: !!candidateTaskId && candidate?.status === "running",
 	});
 	const canVerify =
 		candidate?.latestAnalysisResult?.result === "real_vulnerability" ||
 		candidate?.latestAnalysisResult?.result === "likely_vulnerability";
-	const verifyButtonLabel = candidate?.latestVerificationResult ? "Reverify" : "Verify";
-	const renderPathCard = (label: string, value?: string | null, copyLabel?: string) => (
-		<button
-			type="button"
-			disabled={!value}
-			onClick={() => value && setPreviewFilePath(value)}
-			className="rounded-md border p-3 text-left transition-colors enabled:hover:border-foreground/20 enabled:hover:bg-muted/40 disabled:cursor-default"
-		>
-			<div className="text-xs text-muted-foreground">{label}</div>
+	const verifyButtonLabel = candidate?.latestVerificationResult
+		? "Reverify"
+		: "Verify";
+	const renderPathCard = (
+		label: string,
+		value?: string | null,
+		copyLabel?: string,
+	) => (
+		<div className="rounded-md border p-3 transition-colors hover:border-foreground/20 hover:bg-muted/40">
+			<button
+				type="button"
+				disabled={!value}
+				onClick={() => value && setPreviewFilePath(value)}
+				className="w-full text-left disabled:cursor-default"
+			>
+				<div className="text-xs text-muted-foreground">{label}</div>
+			</button>
 			<div className="mt-1 flex items-start gap-2 break-all text-sm">
-				<span className="min-w-0 flex-1">{value || "-"}</span>
+				<button
+					type="button"
+					disabled={!value}
+					onClick={() => value && setPreviewFilePath(value)}
+					className="min-w-0 flex-1 text-left disabled:cursor-default"
+				>
+					{value || "-"}
+				</button>
 				{value ? (
-					<div onClick={(event) => event.stopPropagation()}>
-						<CopyValueButton
-							value={value}
-							label={copyLabel || label}
-							className="size-6 shrink-0"
-						/>
-					</div>
+					<CopyValueButton
+						value={value}
+						label={copyLabel || label}
+						className="size-6 shrink-0"
+					/>
 				) : null}
 			</div>
-		</button>
+		</div>
 	);
 
 	return (
@@ -244,7 +656,10 @@ export const ShowScanCandidateDetail = ({
 			<Head>
 				<title>Candidate {candidateId.slice(0, 6)} | Dokploy</title>
 			</Head>
-			<Dialog open={!!previewFilePath} onOpenChange={(open) => !open && setPreviewFilePath(null)}>
+			<Dialog
+				open={!!previewFilePath}
+				onOpenChange={(open) => !open && setPreviewFilePath(null)}
+			>
 				<DialogContent className="max-w-5xl">
 					<DialogHeader>
 						<DialogTitle>File Preview</DialogTitle>
@@ -252,7 +667,9 @@ export const ShowScanCandidateDetail = ({
 					<div className="rounded-md border">
 						<div className="flex items-start justify-between gap-3 border-b px-4 py-3 text-sm text-muted-foreground">
 							<span className="break-all">
-								{previewFile?.relativePath || previewFilePath || "No file selected"}
+								{previewFile?.relativePath ||
+									previewFilePath ||
+									"No file selected"}
 							</span>
 							{previewFile?.content ? (
 								<CopyValueButton
@@ -333,6 +750,7 @@ export const ShowScanCandidateDetail = ({
 					<Tabs defaultValue="overview" className="w-full">
 						<TabsList className="flex gap-4 justify-start">
 							<TabsTrigger value="overview">Overview</TabsTrigger>
+							<TabsTrigger value="task-lineage">Task Lineage</TabsTrigger>
 							<TabsTrigger value="files">Files</TabsTrigger>
 						</TabsList>
 
@@ -351,25 +769,38 @@ export const ShowScanCandidateDetail = ({
 								<div className="grid gap-6">
 									<div className="grid gap-3 md:grid-cols-2">
 										<div className="rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">Status</div>
-											<div className="mt-1 font-medium capitalize">{candidate.status}</div>
+											<div className="text-sm text-muted-foreground">
+												Status
+											</div>
+											<div className="mt-1 font-medium capitalize">
+												{candidate.status}
+											</div>
 										</div>
 										<div className="rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">Current Stage</div>
-											<div className="mt-1 font-medium capitalize">{candidate.currentStage}</div>
+											<div className="text-sm text-muted-foreground">
+												Current Stage
+											</div>
+											<div className="mt-1 font-medium capitalize">
+												{candidate.currentStage}
+											</div>
 										</div>
 										<div className="rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">Verified</div>
+											<div className="text-sm text-muted-foreground">
+												Verified
+											</div>
 											<div className="mt-1 font-medium">
 												{candidate.latestVerificationResult
-													? candidate.latestVerificationResult.result === "real_vulnerability"
+													? candidate.latestVerificationResult.result ===
+														"real_vulnerability"
 														? "Yes"
 														: "No"
 													: "-"}
 											</div>
 										</div>
 										<div className="rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">Location</div>
+											<div className="text-sm text-muted-foreground">
+												Location
+											</div>
 											<div className="mt-1 break-all font-medium">
 												{candidate.filePath || "-"}
 												{candidate.line ? `:${candidate.line}` : ""}
@@ -384,23 +815,37 @@ export const ShowScanCandidateDetail = ({
 											</div>
 										</div>
 										<div className="rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">Confidence</div>
+											<div className="text-sm text-muted-foreground">
+												Confidence
+											</div>
 											<div className="mt-1 font-medium">
-												{typeof candidate.confidence === "number" ? candidate.confidence : "-"}
+												{typeof candidate.confidence === "number"
+													? candidate.confidence
+													: "-"}
 											</div>
 										</div>
 										<div className="rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">Created</div>
-											<div className="mt-1 font-medium"><DateTooltip date={candidate.createdAt} /></div>
+											<div className="text-sm text-muted-foreground">
+												Created
+											</div>
+											<div className="mt-1 font-medium">
+												<DateTooltip date={candidate.createdAt} />
+											</div>
 										</div>
 										<div className="rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">Updated</div>
-											<div className="mt-1 font-medium"><DateTooltip date={candidate.updatedAt} /></div>
+											<div className="text-sm text-muted-foreground">
+												Updated
+											</div>
+											<div className="mt-1 font-medium">
+												<DateTooltip date={candidate.updatedAt} />
+											</div>
 										</div>
 									</div>
 
 									<div className="rounded-lg border p-3">
-										<div className="text-sm text-muted-foreground">Description</div>
+										<div className="text-sm text-muted-foreground">
+											Description
+										</div>
 										<div className="mt-1 whitespace-pre-wrap break-words text-sm">
 											{candidate.description || "-"}
 										</div>
@@ -425,20 +870,29 @@ export const ShowScanCandidateDetail = ({
 
 									<div className="rounded-lg border p-3">
 										<div className="mb-3 flex items-center justify-between gap-3">
-											<div className="text-sm text-muted-foreground">Latest Analysis Result</div>
+											<div className="text-sm text-muted-foreground">
+												Latest Analysis Result
+											</div>
 											{candidate.latestAnalysisResult?.result ? (
 												<Badge
 													variant="outline"
 													className={`capitalize ${getAnalysisResultBadgeClassName(candidate.latestAnalysisResult.result)}`}
 												>
-													{candidate.latestAnalysisResult.result.replace(/_/g, " ")}
+													{candidate.latestAnalysisResult.result.replace(
+														/_/g,
+														" ",
+													)}
 												</Badge>
 											) : null}
 										</div>
 										<div className="grid gap-3 md:grid-cols-2">
 											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">Summary</div>
-												<div className="mt-1 whitespace-pre-wrap break-words text-sm">{candidate.latestAnalysisResult?.summary || "-"}</div>
+												<div className="text-xs text-muted-foreground">
+													Summary
+												</div>
+												<div className="mt-1 whitespace-pre-wrap break-words text-sm">
+													{candidate.latestAnalysisResult?.summary || "-"}
+												</div>
 											</div>
 											{renderPathCard(
 												"Report Path",
@@ -446,29 +900,44 @@ export const ShowScanCandidateDetail = ({
 												"Analysis Report Path",
 											)}
 											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">Score</div>
+												<div className="text-xs text-muted-foreground">
+													Score
+												</div>
 												<div className="mt-1 text-sm">
-													{typeof candidate.latestAnalysisResult?.score === "number"
+													{typeof candidate.latestAnalysisResult?.score ===
+													"number"
 														? candidate.latestAnalysisResult.score.toFixed(1)
 														: "-"}
 												</div>
 											</div>
 											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">Confidence</div>
+												<div className="text-xs text-muted-foreground">
+													Confidence
+												</div>
 												<div className="mt-1 text-sm">
-													{typeof candidate.latestAnalysisResult?.confidence === "number"
+													{typeof candidate.latestAnalysisResult?.confidence ===
+													"number"
 														? candidate.latestAnalysisResult.confidence
 														: "-"}
 												</div>
 											</div>
 											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">Runtime Seconds</div>
-												<div className="mt-1 text-sm">{candidate.latestAnalysisResult?.runtimeSeconds ?? "-"}</div>
+												<div className="text-xs text-muted-foreground">
+													Runtime Seconds
+												</div>
+												<div className="mt-1 text-sm">
+													{candidate.latestAnalysisResult?.runtimeSeconds ??
+														"-"}
+												</div>
 											</div>
 											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">Thread ID</div>
+												<div className="text-xs text-muted-foreground">
+													Thread ID
+												</div>
 												<div className="mt-1 flex items-center gap-2 break-all text-sm">
-													<span>{candidate.latestAnalysisResult?.threadId || "-"}</span>
+													<span>
+														{candidate.latestAnalysisResult?.threadId || "-"}
+													</span>
 													{candidate.latestAnalysisResult?.threadId ? (
 														<CopyValueButton
 															value={candidate.latestAnalysisResult.threadId}
@@ -483,30 +952,47 @@ export const ShowScanCandidateDetail = ({
 
 									<div className="rounded-lg border p-3">
 										<div className="mb-3 flex items-center justify-between gap-3">
-											<div className="text-sm text-muted-foreground">Latest Verification Result</div>
+											<div className="text-sm text-muted-foreground">
+												Latest Verification Result
+											</div>
 											{verificationTruthBadge ? (
-												<Badge variant="outline" className={verificationTruthBadge.className}>
+												<Badge
+													variant="outline"
+													className={verificationTruthBadge.className}
+												>
 													{verificationTruthBadge.label}
 												</Badge>
 											) : null}
 										</div>
 										<div className="grid gap-3 md:grid-cols-2">
 											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">Result</div>
-												<div className="mt-1 text-sm">{candidate.latestVerificationResult?.result || "-"}</div>
+												<div className="text-xs text-muted-foreground">
+													Result
+												</div>
+												<div className="mt-1 text-sm">
+													{candidate.latestVerificationResult?.result || "-"}
+												</div>
 											</div>
 											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">Score</div>
+												<div className="text-xs text-muted-foreground">
+													Score
+												</div>
 												<div className="mt-1 text-sm">
-													{typeof candidate.latestVerificationResult?.score === "number"
-														? candidate.latestVerificationResult.score.toFixed(1)
+													{typeof candidate.latestVerificationResult?.score ===
+													"number"
+														? candidate.latestVerificationResult.score.toFixed(
+																1,
+															)
 														: "-"}
 												</div>
 											</div>
 											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">Confidence</div>
+												<div className="text-xs text-muted-foreground">
+													Confidence
+												</div>
 												<div className="mt-1 text-sm">
-													{typeof candidate.latestVerificationResult?.confidence === "number"
+													{typeof candidate.latestVerificationResult
+														?.confidence === "number"
 														? candidate.latestVerificationResult.confidence
 														: "-"}
 												</div>
@@ -530,6 +1016,18 @@ export const ShowScanCandidateDetail = ({
 									</div>
 								</div>
 							)}
+						</TabsContent>
+
+						<TabsContent value="task-lineage" className="pt-4">
+							<CandidateTaskLineagePanel
+								candidateId={candidateId}
+								projectId={projectId}
+								environmentId={environmentId}
+								serviceType={serviceType}
+								routeSegment={routeSegment}
+								serviceId={serviceId}
+								scanJobId={scanJobId}
+							/>
 						</TabsContent>
 
 						<TabsContent value="files" className="pt-4">
@@ -556,7 +1054,9 @@ export const ShowScanCandidateDetail = ({
 											<Tree
 												data={fileTree}
 												className="h-[65vh] w-full rounded-none border-0"
-												onSelectChange={(item) => setSelectedFilePath(item?.id || null)}
+												onSelectChange={(item) =>
+													setSelectedFilePath(item?.id || null)
+												}
 												folderIcon={Folder}
 												itemIcon={Workflow}
 											/>
@@ -568,7 +1068,9 @@ export const ShowScanCandidateDetail = ({
 												<div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
 													<FileIcon className="size-4 shrink-0" />
 													<span className="truncate">
-														{selectedFile?.relativePath || selectedFilePath || "No file selected"}
+														{selectedFile?.relativePath ||
+															selectedFilePath ||
+															"No file selected"}
 													</span>
 												</div>
 												{selectedFile?.content ? (
