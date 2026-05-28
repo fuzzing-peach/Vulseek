@@ -56,6 +56,24 @@ const trimMultiline = (value: string, max = 220) => {
 		: normalized;
 };
 
+const formatCompactNumber = (value: number) => {
+	if (value >= 1_000_000) {
+		return `${(value / 1_000_000).toFixed(1)}M`;
+	}
+	if (value >= 1_000) {
+		return `${(value / 1_000).toFixed(1)}k`;
+	}
+	return String(value);
+};
+
+const getNumberField = (
+	record: Record<string, unknown> | null | undefined,
+	key: string,
+) =>
+	record && typeof record[key] === "number" && Number.isFinite(record[key])
+		? (record[key] as number)
+		: null;
+
 const summarizeCommandResult = (input: string, command: string) => {
 	const summary = trimSummary(input, 240);
 	if (!summary) {
@@ -105,7 +123,10 @@ const extractWebToolDetail = (update: Record<string, unknown>): string => {
 			? (rawInput.arguments as Record<string, unknown>)
 			: null;
 
-	const firstStringFromArray = (value: unknown, preferredKeys: string[] = []) => {
+	const firstStringFromArray = (
+		value: unknown,
+		preferredKeys: string[] = [],
+	) => {
 		if (!Array.isArray(value)) {
 			return "";
 		}
@@ -134,7 +155,10 @@ const extractWebToolDetail = (update: Record<string, unknown>): string => {
 		getStringField(argumentsRecord, "query") ||
 		getStringField(argumentsRecord, "q") ||
 		getStringField(rawInput, "query") ||
-		firstStringFromArray(getObjectField(argumentsRecord, "action")?.queries, ["q", "query"]) ||
+		firstStringFromArray(getObjectField(argumentsRecord, "action")?.queries, [
+			"q",
+			"query",
+		]) ||
 		firstStringFromArray(argumentsRecord?.queries, ["q", "query"]) ||
 		(Array.isArray(action?.queries)
 			? action?.queries.find((entry) => typeof entry === "string") || ""
@@ -217,7 +241,8 @@ export const extractJsonRpcSummaryLines = (
 	for (const entry of messages) {
 		const message = entry.message;
 		const method = typeof message.method === "string" ? message.method : "";
-		const params = (message.params as Record<string, unknown> | undefined) || {};
+		const params =
+			(message.params as Record<string, unknown> | undefined) || {};
 
 		if (method === "session/prompt") {
 			const sessionId =
@@ -284,52 +309,58 @@ export const extractJsonRpcSummaryLines = (
 					typeof update.toolCallId === "string"
 						? update.toolCallId
 						: `tool-${entry.line}`;
-					const title =
-						typeof update.title === "string"
-							? update.title
-							: typeof update.rawInput === "object" && update.rawInput
-								? trimSummary(
-										`${String((update.rawInput as Record<string, unknown>).server || "tool")}/${String((update.rawInput as Record<string, unknown>).tool || "call")}`,
-										240,
-									)
-								: "tool";
-						const normalizedToolTitle =
-							title === "Terminal" ? "Command" : title;
-						if (title === "Terminal") {
-							pendingTerminalToolCallIds.add(toolCallId);
-							continue;
-						}
-						const normalizedTitle = normalizedToolTitle.toLowerCase();
-						const text = normalizedTitle.includes("skill")
-							? "Skill"
-							: normalizedToolTitle.startsWith("mcp_")
-								? "MCP"
-								: normalizedToolTitle;
-						lines.push({
-							id: toolCallId,
-							kind: "command",
-						text,
-					});
+				const title =
+					typeof update.title === "string"
+						? update.title
+						: typeof update.rawInput === "object" && update.rawInput
+							? trimSummary(
+									`${String((update.rawInput as Record<string, unknown>).server || "tool")}/${String((update.rawInput as Record<string, unknown>).tool || "call")}`,
+									240,
+								)
+							: "tool";
+				const normalizedToolTitle = title === "Terminal" ? "Command" : title;
+				if (title === "Terminal") {
+					pendingTerminalToolCallIds.add(toolCallId);
+					continue;
+				}
+				const normalizedTitle = normalizedToolTitle.toLowerCase();
+				const text = normalizedTitle.includes("skill")
+					? "Skill"
+					: normalizedToolTitle.startsWith("mcp_")
+						? "MCP"
+						: normalizedToolTitle;
+				lines.push({
+					id: toolCallId,
+					kind: "command",
+					text,
+				});
 				continue;
 			}
 
-				if (sessionUpdate === "tool_call_update") {
-					const toolCallId =
-						typeof update.toolCallId === "string" ? update.toolCallId : "";
-					if (toolCallId && pendingTerminalToolCallIds.has(toolCallId)) {
-						continue;
-				}
-					const output = trimSummary(
-						getTextContent(update.content) ||
-								getTextContent(update.rawOutput),
-							240,
-						);
-						if (output) {
-							lines.push({
-								id: `${toolCallId || "tool"}-output-${entry.line}`,
-								kind: "command_output",
-							text: output,
+			if (sessionUpdate === "tool_call_update") {
+				const toolCallId =
+					typeof update.toolCallId === "string" ? update.toolCallId : "";
+				const output = trimSummary(
+					getTextContent(update.content) || getTextContent(update.rawOutput),
+					240,
+				);
+				if (output) {
+					lines.push({
+						id: `${toolCallId || "tool"}-output-${entry.line}`,
+						kind: "command_output",
+						text: output,
 					});
+				} else {
+					const status =
+						typeof update.status === "string" ? update.status : "updated";
+					lines.push({
+						id: `${toolCallId || "tool"}-status-${entry.line}`,
+						kind: status === "failed" ? "error" : "command_output",
+						text: `Tool ${status}`,
+					});
+				}
+				if (toolCallId) {
+					pendingTerminalToolCallIds.delete(toolCallId);
 				}
 				continue;
 			}
@@ -343,6 +374,39 @@ export const extractJsonRpcSummaryLines = (
 						text,
 					});
 				}
+				continue;
+			}
+
+			if (sessionUpdate === "usage_update") {
+				const tokenUsage = getObjectField(update, "tokenUsage");
+				const last = getObjectField(tokenUsage, "last");
+				const used =
+					getNumberField(last, "totalTokens") ?? getNumberField(update, "used");
+				const contextSize =
+					getNumberField(update, "size") ??
+					getNumberField(tokenUsage, "modelContextWindow");
+				const detail =
+					used === null
+						? "Usage update"
+						: `Usage ${formatCompactNumber(used)} tokens${
+								contextSize
+									? ` / ${formatCompactNumber(contextSize)} context`
+									: ""
+							}`;
+				lines.push({
+					id: `usage-${entry.line}`,
+					kind: "system",
+					text: detail,
+				});
+				continue;
+			}
+
+			if (sessionUpdate) {
+				lines.push({
+					id: `session-update-${entry.line}`,
+					kind: "system",
+					text: `session/update ${sessionUpdate}`,
+				});
 				continue;
 			}
 		}
@@ -402,26 +466,26 @@ export const extractJsonRpcSummaryLines = (
 			continue;
 		}
 
-			if (method === "item/started") {
-				const item = (params.item as Record<string, unknown> | undefined) || {};
-				const itemType = typeof item.type === "string" ? item.type : "";
-				const itemId = typeof item.id === "string" ? item.id : "";
-				if (itemType === "commandExecution") {
-					const rawCommand =
-						typeof item.command === "string" ? trimSummary(item.command) : "";
-					if (itemId && rawCommand) {
-						commandByItemId.set(itemId, rawCommand);
-						pendingTerminalToolCallIds.delete(itemId);
-					}
-					if (rawCommand) {
-						lines.push({
-							id: `line-${entry.line}`,
-							kind: "command",
-							text: `$ ${rawCommand}`,
-						});
-					}
-					continue;
+		if (method === "item/started") {
+			const item = (params.item as Record<string, unknown> | undefined) || {};
+			const itemType = typeof item.type === "string" ? item.type : "";
+			const itemId = typeof item.id === "string" ? item.id : "";
+			if (itemType === "commandExecution") {
+				const rawCommand =
+					typeof item.command === "string" ? trimSummary(item.command) : "";
+				if (itemId && rawCommand) {
+					commandByItemId.set(itemId, rawCommand);
+					pendingTerminalToolCallIds.delete(itemId);
 				}
+				if (rawCommand) {
+					lines.push({
+						id: `line-${entry.line}`,
+						kind: "command",
+						text: `$ ${rawCommand}`,
+					});
+				}
+				continue;
+			}
 			if (itemType === "reasoning") {
 				const lineId = itemId || `line-${entry.line}`;
 				reasoningLineIndexByItemId.set(lineId, lines.length);
@@ -434,29 +498,31 @@ export const extractJsonRpcSummaryLines = (
 			}
 		}
 
-			if (method === "item/completed") {
-				const item = (params.item as Record<string, unknown> | undefined) || {};
-				const itemType = typeof item.type === "string" ? item.type : "";
-				const itemId = typeof item.id === "string" ? item.id : "";
+		if (method === "item/completed") {
+			const item = (params.item as Record<string, unknown> | undefined) || {};
+			const itemType = typeof item.type === "string" ? item.type : "";
+			const itemId = typeof item.id === "string" ? item.id : "";
 
-				if (itemType === "commandExecution") {
-					const aggregatedOutput =
-						typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : "";
-					const hadConcreteCommand = commandByItemId.has(itemId);
-					const command = commandByItemId.get(itemId) || "Command";
-					if (!hadConcreteCommand) {
-						lines.push({
-							id: `${itemId || "command"}-fallback-${entry.line}`,
-							kind: "command",
-							text: "$ Command",
-						});
-					}
-					if (itemId) {
-						pendingTerminalToolCallIds.delete(itemId);
-					}
-					const output = summarizeCommandResult(
-						aggregatedOutput || commandOutputByItemId.get(itemId) || "",
-						command,
+			if (itemType === "commandExecution") {
+				const aggregatedOutput =
+					typeof item.aggregatedOutput === "string"
+						? item.aggregatedOutput
+						: "";
+				const hadConcreteCommand = commandByItemId.has(itemId);
+				const command = commandByItemId.get(itemId) || "Command";
+				if (!hadConcreteCommand) {
+					lines.push({
+						id: `${itemId || "command"}-fallback-${entry.line}`,
+						kind: "command",
+						text: "$ Command",
+					});
+				}
+				if (itemId) {
+					pendingTerminalToolCallIds.delete(itemId);
+				}
+				const output = summarizeCommandResult(
+					aggregatedOutput || commandOutputByItemId.get(itemId) || "",
+					command,
 				);
 				if (output) {
 					lines.push({
@@ -466,7 +532,9 @@ export const extractJsonRpcSummaryLines = (
 					});
 				} else {
 					const status =
-						typeof item.status === "string" ? item.status.toLowerCase() : "completed";
+						typeof item.status === "string"
+							? item.status.toLowerCase()
+							: "completed";
 					lines.push({
 						id: `${itemId}-done-${entry.line}`,
 						kind: status === "failed" ? "error" : "command_output",
@@ -545,6 +613,26 @@ export const extractJsonRpcSummaryLines = (
 				id: `line-${entry.line}`,
 				kind: "error",
 				text: `[error] ${trimSummary(errorMessage, 240)}`,
+			});
+			continue;
+		}
+
+		const result = getObjectField(message, "result");
+		if (result) {
+			const stopReason = getStringField(result, "stopReason");
+			lines.push({
+				id: `result-${entry.line}`,
+				kind: "system",
+				text: stopReason ? `result ${stopReason}` : "result",
+			});
+			continue;
+		}
+
+		if (method) {
+			lines.push({
+				id: `event-${entry.line}`,
+				kind: "system",
+				text: `event ${method}`,
 			});
 		}
 	}
@@ -656,11 +744,16 @@ export const JsonRpcSummaryPanel = ({
 	const summaryLines = extractJsonRpcSummaryLines(messages);
 
 	useEffect(() => {
-		if (!debugTaskId || firstMessagesRenderedRef.current || messages.length === 0) {
+		if (
+			!debugTaskId ||
+			firstMessagesRenderedRef.current ||
+			messages.length === 0
+		) {
 			return;
 		}
 		firstMessagesRenderedRef.current = true;
-		const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+		const now =
+			typeof performance !== "undefined" ? performance.now() : Date.now();
 		console.info("[sandbox-agent-output]", {
 			taskId: debugTaskId,
 			event: "summary_panel.first_messages_rendered",

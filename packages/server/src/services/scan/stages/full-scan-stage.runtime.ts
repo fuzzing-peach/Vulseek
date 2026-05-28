@@ -328,6 +328,27 @@ export const resolveRepositoryStageRuntime = async (input: {
 	};
 };
 
+export const resolveTaskRuntimeDirForTask = async (input: {
+	scanJobId: string;
+	projectName: string;
+	serviceName: string;
+	stageName: string;
+	taskName: string;
+	taskId: string;
+}) => {
+	await resolveScanContextMount(input);
+	const taskDirPath = path.join(
+		resolveMountedProfileDir(input),
+		"jobs",
+		input.scanJobId,
+		resolveTaskRootSegment(input.stageName, input.taskName, input.taskId),
+	);
+	await fs.mkdir(taskDirPath, { recursive: true });
+	return taskDirPath;
+};
+
+export const taskRootInContainer = () => CONTAINER_TASK_RUNTIME_ROOT;
+
 export type StageContext = PipelineContext & {
 	stageName: string;
 	taskId: string;

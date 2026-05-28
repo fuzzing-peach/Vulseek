@@ -10,6 +10,8 @@ export const buildTaskAgentProfileSnapshot = (
 					agentProfileId: agentProfile.agentProfileId,
 					name: agentProfile.name,
 					provider: agentProfile.provider,
+					codexAuthMode: agentProfile.codexAuthMode,
+					codexHomePath: agentProfile.codexHomePath,
 					baseUrl: agentProfile.baseUrl,
 					model: agentProfile.model,
 					thinkingLevel: agentProfile.thinkingLevel,

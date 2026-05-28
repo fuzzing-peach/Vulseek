@@ -1212,6 +1212,20 @@
       "when": 1778742500000,
       "tag": "0172_agent_profile_thinking_level_enabled",
       "breakpoints": true
+    },
+    {
+      "idx": 173,
+      "version": "7",
+      "when": 1779742600000,
+      "tag": "0173_agent_profile_codex_auth_mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 174,
+      "version": "7",
+      "when": 1779742700000,
+      "tag": "0174_agent_profile_codex_home_path",
+      "breakpoints": true
     }
   ]
 }

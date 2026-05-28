@@ -1,7 +1,9 @@
 ---
-name: libafl-fuzz
+name: run-fuzzer
 description: Run a built LibAFL fuzzing program within a budget, collect corpus/crash/log artifacts, and report fuzzing evidence back to analysis.
 ---
+
+# Run Fuzzer
 
 Run a built LibAFL fuzzing program within the budget provided by the prompt.
 
@@ -25,6 +27,15 @@ candidate.
 7. Decide whether a triggering input was found.
 8. Return the structured result and route requested by the stage prompt.
 
+Treat fuzzing as both evidence collection and path/state exploration.
+
+For evidence-oriented fuzzing, report whether the expected trigger condition was
+observed and what negative evidence was collected.
+
+For exploration-oriented fuzzing, report newly reached paths or states, input
+classes discovered, coverage or proximity observations, and any unexpected
+behavior that should become a new analysis hypothesis.
+
 ## Progress Metrics
 
 The task directory must contain `fuzz-progress.jsonl`. Each line should be a
@@ -43,3 +54,8 @@ LibAFL user stats so they appear under `userStats`.
 Always send the result back to analysis, whether a triggering input was found or
 not. The useful output is evidence: trigger path, corpus location, crash
 artifacts, logs, coverage notes, and remaining blockers.
+
+Populate structured fields such as `commandRun`, `exitStatus`, `crashSignal`,
+`observedBehavior`, `negativeEvidence`, `coverageProximity`,
+`newPathsOrStatesReached`, `inputClassesDiscovered`, `confidenceImpact`, and
+artifact paths when available.

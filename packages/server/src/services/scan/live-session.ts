@@ -193,45 +193,6 @@ const getNestedString = (
 	return null;
 };
 
-const resolveTaskRuntimeName = (
-	stageName: string,
-	taskName: string,
-	taskInput: unknown,
-): string => {
-	const inputRecord = getTaskInputRecord(taskInput);
-	switch (stageName) {
-		case "repository-scan":
-			return "repository-scanning";
-		case "module-scan":
-			return getNestedString(getNestedRecord(inputRecord, "module"), ["name"]) || taskName;
-		case "function-scan":
-			return (
-				getNestedString(getNestedRecord(inputRecord, "function"), ["functionName"]) ||
-				taskName
-			);
-		case "analyze":
-		case "build-fuzzer":
-		case "run-fuzzer":
-		case "criticize":
-			return (
-				getNestedString(getNestedRecord(inputRecord, "candidate"), ["title"]) ||
-				(stageName === "analyze" ? taskName : stageName)
-			);
-		case "verify":
-			return (
-				getNestedString(
-					getNestedRecord(
-						getNestedRecord(inputRecord, "analysisResult"),
-						"candidate",
-					),
-					["title"],
-				) || taskName
-			);
-		default:
-			return taskName;
-	}
-};
-
 export type SandboxAgentLiveSession = {
 	scanJobId: string;
 	sessionId: string;
@@ -354,50 +315,6 @@ const buildSandboxAgentRuntimeFiles = (runtimeDir: string) => ({
 	metadataPath: path.join(runtimeDir, "sandbox-agent-runtime.json"),
 });
 
-const fileExists = async (filePath: string) => {
-	try {
-		await fs.stat(filePath);
-		return true;
-	} catch {
-		return false;
-	}
-};
-
-const resolveLegacyStageNameRuntimeDir = async (input: {
-	baseDir: string;
-	stageName: string;
-	taskId: string;
-	runtimeDir: string;
-}) => {
-	const legacyStageNameByStageName: Record<string, string> = {
-		"build-fuzzer": "build-fuzzer",
-		"run-fuzzer": "run-fuzzer",
-		criticize: "criticize",
-	};
-	const legacyStageName = legacyStageNameByStageName[input.stageName];
-	if (!legacyStageName) {
-		return input.runtimeDir;
-	}
-	if (
-		await fileExists(
-			path.join(input.runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl),
-		)
-	) {
-		return input.runtimeDir;
-	}
-	const legacyRuntimeDir = resolveScanStageTaskRuntimeDir(
-		input.baseDir,
-		legacyStageName,
-		legacyStageName,
-		input.taskId,
-	);
-	return (await fileExists(
-		path.join(legacyRuntimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl),
-	))
-		? legacyRuntimeDir
-		: input.runtimeDir;
-};
-
 const toPublicBaseUrl = (containerName: string | null) =>
 	containerName ? `/sandbox-agent/${containerName}` : null;
 
@@ -415,104 +332,38 @@ const buildSandboxAgentTaskRuntime = async (
 	task: Task,
 ): Promise<SandboxAgentTaskRuntime> => {
 	const baseDir = await resolveScanJobBaseDir(task.scanJobId);
-	const runtimeTaskName = resolveTaskRuntimeName(
+	const runtimeDir = resolveScanStageTaskRuntimeDir(
+		baseDir,
 		task.stageName,
 		task.name,
-		task.input,
+		task.taskId,
 	);
-	let runtimeDir = path.join(baseDir, sanitizePathPart(runtimeTaskName));
 	let taskKind: SandboxAgentTaskRuntime["taskKind"] = "repository_scanning";
 
 	switch (task.stageName) {
 		case "repository-scan":
 			taskKind = "repository_scanning";
-			runtimeDir = resolveScanStageTaskRuntimeDir(
-				baseDir,
-				task.stageName,
-				runtimeTaskName,
-				task.taskId,
-			);
 			break;
 		case "module-scan":
 			taskKind = "module_scanning";
-			runtimeDir = resolveScanStageTaskRuntimeDir(
-				baseDir,
-				task.stageName,
-				runtimeTaskName,
-				task.taskId,
-			);
 			break;
 		case "function-scan":
 			taskKind = "function_scanning";
-			runtimeDir = resolveScanStageTaskRuntimeDir(
-				baseDir,
-				task.stageName,
-				runtimeTaskName,
-				task.taskId,
-			);
 			break;
 		case "analyze":
 			taskKind = "analyzing";
-			runtimeDir = resolveScanStageTaskRuntimeDir(
-				baseDir,
-				task.stageName,
-				runtimeTaskName,
-				task.taskId,
-			);
 			break;
 		case "build-fuzzer":
 			taskKind = "fuzz_building";
-			runtimeDir = resolveScanStageTaskRuntimeDir(
-				baseDir,
-				task.stageName,
-				runtimeTaskName,
-				task.taskId,
-			);
-			runtimeDir = await resolveLegacyStageNameRuntimeDir({
-				baseDir,
-				stageName: task.stageName,
-				taskId: task.taskId,
-				runtimeDir,
-			});
 			break;
 		case "run-fuzzer":
 			taskKind = "fuzzing";
-			runtimeDir = resolveScanStageTaskRuntimeDir(
-				baseDir,
-				task.stageName,
-				runtimeTaskName,
-				task.taskId,
-			);
-			runtimeDir = await resolveLegacyStageNameRuntimeDir({
-				baseDir,
-				stageName: task.stageName,
-				taskId: task.taskId,
-				runtimeDir,
-			});
 			break;
 		case "criticize":
 			taskKind = "criticizing";
-			runtimeDir = resolveScanStageTaskRuntimeDir(
-				baseDir,
-				task.stageName,
-				runtimeTaskName,
-				task.taskId,
-			);
-			runtimeDir = await resolveLegacyStageNameRuntimeDir({
-				baseDir,
-				stageName: task.stageName,
-				taskId: task.taskId,
-				runtimeDir,
-			});
 			break;
 		case "verify":
 			taskKind = "verifying";
-			runtimeDir = resolveScanStageTaskRuntimeDir(
-				baseDir,
-				task.stageName,
-				runtimeTaskName,
-				task.taskId,
-			);
 			break;
 	}
 
@@ -561,15 +412,10 @@ export const findCandidateSandboxAgentSession = async (input: {
 		return null;
 	}
 	const baseDir = await resolveScanJobBaseDir(candidate.scanJobId);
-	const runtimeTaskName = resolveTaskRuntimeName(
-		stageName,
-		task.name,
-		task.input,
-	);
 	const runtimeDir = resolveScanStageTaskRuntimeDir(
 		baseDir,
 		stageName,
-		runtimeTaskName,
+		task.name,
 		task.taskId,
 	);
 	const liveBaseUrl = resolveCandidateSessionBaseUrl(task.containerName);

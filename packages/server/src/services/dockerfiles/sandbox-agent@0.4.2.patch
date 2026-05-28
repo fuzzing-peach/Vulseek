@@ -1,6 +1,8 @@
---- a/dist/chunk-TVCDKGSM.js	1985-10-26 16:15:00.000000000 +0800
-+++ b/dist/chunk-TVCDKGSM.js	2026-05-22 14:18:43.377670159 +0800
-@@ -810,6 +810,15 @@
+diff --git a/dist/chunk-TVCDKGSM.js b/dist/chunk-TVCDKGSM.js
+index 29a0a22210d39ae9d886c0ccd7059cd9af0e26f0..3cd5a4965c2417bd13db7f1b3cbec586408cd485 100644
+--- a/dist/chunk-TVCDKGSM.js
++++ b/dist/chunk-TVCDKGSM.js
+@@ -810,6 +810,15 @@ var LiveAcpConnection = class _LiveAcpConnection {
      this.sessionByLocalId.set(localSessionId, agentSessionId);
      this.localByAgentSessionId.set(agentSessionId, localSessionId);
    }
@@ -16,7 +18,7 @@
    queueReplay(localSessionId, replayText) {
      if (!replayText) {
        this.pendingReplayByLocalSessionId.delete(localSessionId);
-@@ -837,6 +846,45 @@
+@@ -837,6 +846,45 @@ var LiveAcpConnection = class _LiveAcpConnection {
        throw error;
      }
    }
@@ -62,7 +64,7 @@
    async sendSessionMethod(localSessionId, method, params, options) {
      const agentSessionId = this.sessionByLocalId.get(localSessionId);
      if (!agentSessionId) {
-@@ -904,6 +952,9 @@
+@@ -904,6 +952,9 @@ var LiveAcpConnection = class _LiveAcpConnection {
          }
          return localSessionId;
        }
@@ -72,7 +74,7 @@
        const localFromParams = this.localFromEnvelopeParams(envelope);
        if (id && localFromParams) {
          this.pendingRequestSessionById.set(id, localFromParams);
-@@ -1284,14 +1335,19 @@
+@@ -1284,14 +1335,19 @@ var SandboxAgent = class _SandboxAgent {
      if (!request.agent.trim()) {
        throw new Error("createSession requires a non-empty agent");
      }
@@ -95,7 +97,7 @@
        lastConnectionId: live.connectionId,
        createdAt: nowMs(),
        sandboxId: this.sandboxProviderId,
-@@ -1300,6 +1356,110 @@
+@@ -1300,6 +1356,110 @@ var SandboxAgent = class _SandboxAgent {
        modes: cloneModes(response.modes)
      };
      await this.persist.updateSession(record);
@@ -206,22 +208,17 @@
      live.bindSession(record.id, record.agentSessionId);
      let session = this.upsertSessionHandle(record);
      try {
-@@ -3026,4 +3186,4 @@
-   ProcessTerminalSession,
-   SandboxAgent
- };
--//# sourceMappingURL=chunk-TVCDKGSM.js.map
-\ No newline at end of file
-+//# sourceMappingURL=chunk-TVCDKGSM.js.map
---- a/dist/index.d.ts	1985-10-26 16:15:00.000000000 +0800
-+++ b/dist/index.d.ts	2026-05-22 14:20:21.350739495 +0800
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index e67d588032a085d28adc82252199e389722b86d2..ef11f95fe2ffa0b720904644b794a9409e13e724 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
 @@ -1,4 +1,4 @@
 -import { NewSessionRequest, SessionConfigOption, SessionModeState, AnyMessage, AcpEnvelopeDirection, RequestPermissionRequest, RequestPermissionResponse, NewSessionResponse, PermissionOptionKind, PromptRequest, PromptResponse, SetSessionModeResponse, SetSessionConfigOptionResponse } from 'acp-http-client';
 +import { NewSessionRequest, LoadSessionRequest, LoadSessionResponse, ForkSessionRequest, ForkSessionResponse, SessionConfigOption, SessionModeState, AnyMessage, AcpEnvelopeDirection, RequestPermissionRequest, RequestPermissionResponse, NewSessionResponse, PermissionOptionKind, PromptRequest, PromptResponse, SetSessionModeResponse, SetSessionConfigOptionResponse } from 'acp-http-client';
  export { AcpRpcError } from 'acp-http-client';
  import { S as SandboxProvider } from './types-DdcvY5CI.js';
  export { S as SandboxAgentSpawnLogMode, a as SandboxAgentSpawnOptions } from './spawn-76JDF5d3.js';
-@@ -2806,6 +2806,7 @@
+@@ -2806,6 +2806,7 @@ interface SessionPersistDriver {
      updateSession(session: SessionRecord): Promise<void>;
      listEvents(request: ListEventsRequest): Promise<ListPage<SessionEvent>>;
      insertEvent(sessionId: string, event: SessionEvent): Promise<void>;
@@ -229,7 +226,7 @@
  }
  interface InMemorySessionPersistDriverOptions {
      maxSessions?: number;
-@@ -2958,6 +2959,31 @@
+@@ -2958,6 +2959,31 @@ interface SessionCreateRequest {
      mode?: string;
      thoughtLevel?: string;
  }
@@ -261,7 +258,7 @@
  interface SessionResumeOrCreateRequest {
      id: string;
      agent: string;
-@@ -3172,6 +3198,8 @@
+@@ -3172,6 +3198,8 @@ declare class SandboxAgent {
      getSession(id: string): Promise<Session | null>;
      getEvents(request: ListEventsRequest): Promise<ListPage<SessionEvent>>;
      createSession(request: SessionCreateRequest): Promise<Session>;
@@ -270,7 +267,7 @@
      resumeSession(id: string): Promise<Session>;
      resumeOrCreateSession(request: SessionResumeOrCreateRequest): Promise<Session>;
      destroySession(id: string): Promise<Session>;
-@@ -3322,4 +3350,4 @@
+@@ -3322,4 +3350,4 @@ interface InspectorUrlOptions {
   */
  declare function buildInspectorUrl(options: InspectorUrlOptions): string;
  

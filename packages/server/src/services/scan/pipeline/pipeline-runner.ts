@@ -114,7 +114,9 @@ const SCAN_JOB_CANCELLED_ERROR_NAME = "ScanJobCancelledError";
 const STALE_RUNNING_TASK_GRACE_MS = 2 * 60 * 1000;
 const STALE_RUNNING_STDOUT_WINDOW_MS = 10 * 60 * 1000;
 const RUNNING_OUTPUT_WITHOUT_END_TURN_LOG_INTERVAL_MS = 5 * 60 * 1000;
+const LOOP_TICK_LOG_INTERVAL_MS = 60 * 1000;
 const JOB_LOOP_IDLE_SLEEP_MS = 1000;
+const lastLoopTickLogAtByJob = new Map<string, number>();
 
 class ScanJobCancelledError extends Error {
 	constructor(scanJobId: string) {
@@ -792,7 +794,7 @@ const createStageContextForTask = <TPipelineContext extends PipelineContext>(
 			composeId: null,
 		},
 		taskId: task.taskId,
-		taskName: resolveStageTaskName(task.stageName, task.input) || task.name,
+		taskName: task.name || resolveStageTaskName(task.stageName, task.input),
 		persistent: false,
 		sessionMode: task.runtimeMode === "fork_session" ? "fork" : "new",
 		parentSessionId: task.forkedFromThreadId ?? null,
@@ -916,9 +918,7 @@ const inspectHalfStartedRunningTask = async <
 		const shouldLogRunningOutputWithoutEndTurn =
 			outputSummary.exists &&
 			!hasEndTurn &&
-			(previousSnapshot?.lastRunningOutputWithoutEndTurnDiagnosticKey !==
-				diagnosticKey ||
-				runningOutputWithoutEndTurnLogIntervalElapsed);
+			runningOutputWithoutEndTurnLogIntervalElapsed;
 		runtime.runningStdoutSnapshots.set(task.taskId, {
 			hash: runtimeOutputHash,
 			lastChangedAt: now,
@@ -1133,6 +1133,7 @@ const createTaskStageContext = <
 		forkedFromThreadId?: string | null;
 		laneRuntime?: StageLaneRuntime | null;
 		routeOutputSchemas?: StageContext["routeOutputSchemas"];
+		taskName?: string | null;
 	} | null,
 ) => {
 	const taskId = resolveStageTaskId(stage.id, ctx, input, taskIdOverride);
@@ -1140,7 +1141,7 @@ const createTaskStageContext = <
 		(input as Record<string, unknown> | null | undefined) || undefined,
 		ctx,
 	);
-	const taskName = resolveStageTaskName(stage.id, input);
+	const taskName = taskRuntime?.taskName || resolveStageTaskName(stage.id, input);
 	const stageCtx = createStageContext({
 		base: ctx,
 		stageName: stage.id,
@@ -1892,6 +1893,7 @@ const launchStageExecution = async <
 				runtime.pipeline,
 				stageState.stageName,
 			),
+			taskName: launched.name,
 		},
 	).stageCtx;
 	try {
@@ -2436,10 +2438,16 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 		if (runtime.failure) {
 			throw runtime.failure;
 		}
-		logPipelineEvent("loop.tick", {
-			scanJobId: runtime.ctx.scanJobId,
-			pipelineName: runtime.pipeline.name,
-		});
+		const lastLoopTickLogAt =
+			lastLoopTickLogAtByJob.get(runtime.ctx.scanJobId) ?? 0;
+		const now = Date.now();
+		if (now - lastLoopTickLogAt >= LOOP_TICK_LOG_INTERVAL_MS) {
+			lastLoopTickLogAtByJob.set(runtime.ctx.scanJobId, now);
+			logPipelineEvent("loop.tick", {
+				scanJobId: runtime.ctx.scanJobId,
+				pipelineName: runtime.pipeline.name,
+			});
+		}
 
 		let progressed = await inspectActiveTasks(runtime);
 		progressed = (await reenqueueMissingPendingTasks(runtime)) || progressed;

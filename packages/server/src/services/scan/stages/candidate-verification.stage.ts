@@ -1,29 +1,20 @@
-import {
-	verificationSchema,
-} from "../artifacts/contracts/domain-object.contract";
+import { buildTaskAgentProfileSnapshot } from "../agent-profile-snapshot";
+import { verificationSchema } from "../artifacts/contracts/domain-object.contract";
+import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";
+import { bindTaskRuntimeRepo } from "../persistence/task.repo";
 import {
 	createStageDefinition,
-	type StageQueueBinding,
 	type StageDefinition,
+	type StageQueueBinding,
 } from "../pipeline/stage-definition";
-import {
-	buildTaskAgentProfileSnapshot,
-} from "../agent-profile-snapshot";
-import { bindTaskRuntimeRepo } from "../persistence/task.repo";
+import { renderPromptTemplate } from "../prompts/prompt-template";
+import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import {
 	runSingleTurnAgentInContainer,
 	startContainer,
 } from "../runtime/run-single-turn-agent";
 import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "../runtime/sandbox-agent-shared";
-import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
-import type {
-	Candidate,
-	FinalAnalysis,
-	Function,
-	Module,
-	ScanJob,
-	Verification,
-} from "../types";
+import type { Candidate, FinalAnalysis, ScanJob, Verification } from "../types";
 import {
 	type PipelineContext,
 	resolveStageConcurrencySetting,
@@ -31,22 +22,12 @@ import {
 } from "./full-scan-stage.runtime";
 
 export type CandidateVerificationStageInput = {
-	analysisResult: FinalAnalysis & {
-		scanJob: ScanJob;
-		module: Module & { scanJob: ScanJob };
-		function: Function & {
-			scanJob: ScanJob;
-			module: Module & { scanJob: ScanJob };
-		};
-		candidate: Candidate & {
-			scanJob: ScanJob;
-			module: Module & { scanJob: ScanJob };
-			function: Function & {
-				scanJob: ScanJob;
-				module: Module & { scanJob: ScanJob };
-			};
-		};
-	};
+	scanJob: ScanJob;
+	repositoryPath: string;
+	modulePath: string;
+	functionPath: string;
+	candidatePath: string;
+	analysisResultPath: string;
 };
 
 export type CandidateVerificationStageOutput = Verification;
@@ -58,6 +39,8 @@ type VerificationStageContext = StageContext & {
 const buildCandidateVerificationPrompt = (
 	stageInput: CandidateVerificationStageInput,
 	input: {
+		analysisResult: FinalAnalysis;
+		candidate: Candidate;
 		taskDirContainer: string;
 		reportPath: string;
 		issueDraftPath: string;
@@ -67,54 +50,42 @@ const buildCandidateVerificationPrompt = (
 		taskId: string;
 	},
 ) => {
-	const { analysisResult } = stageInput;
-	const candidate = analysisResult.candidate;
+	const { analysisResult, candidate } = input;
 
-	return [
-		"You are the verifier agent for one vulnerability candidate.",
-		...NEVER_REUSE_TASK_PROMPT_LINES,
-		"Work only on this candidate and validate the existing analysis result.",
-		`scan_job_id: ${analysisResult.scanJob.scanJobId}`,
-		`candidate_id: ${candidate.id}`,
-		`candidate_title: ${candidate.title}`,
-		`candidate_description: ${candidate.description || "-"}`,
-		`candidate_file: ${candidate.filePath || "-"}`,
-		`candidate_line: ${typeof candidate.line === "number" ? candidate.line : "-"}`,
-		`analysis_result: ${analysisResult.result}`,
-		`analysis_summary: ${analysisResult.summary || "-"}`,
-		`analysis_fingerprint: ${analysisResult.analysisFingerprint || "-"}`,
-		`critic_approval: ${analysisResult.criticApproval?.summary || "-"}`,
-		`critic_task_id: ${analysisResult.criticApproval?.criticTaskId || "-"}`,
-		`analysis_report_path: ${analysisResult.reportPath || "-"}`,
-		`task_dir: ${input.taskDirContainer}`,
-		`write_verify_report_to: ${input.reportPath}`,
-		`write_issue_draft_to: ${input.issueDraftPath}`,
-		`write_poc_to: ${input.pocPath}`,
-		`write_repro_dockerfile_to: ${input.dockerfilePath}`,
-		`write_repro_run_script_to: ${input.runScriptPath}`,
-		"",
-		"Use the installed skill named verify as your working method.",
-		"Strictly follow the skill workflow and produce the required markdown artifacts.",
-		"Write every task artifact only under task_dir.",
-		"Before returning, validate the structured JSON against the runtime-provided output.schema.json.",
-		`Set id to ${input.taskId}.`,
-		`Set reportPath to ${input.reportPath}.`,
-		`Set issueDraftPath to ${input.issueDraftPath}.`,
-		`Set pocPath to ${input.pocPath}.`,
-		`Set dockerfilePath to ${input.dockerfilePath}.`,
-		`Set runScriptPath to ${input.runScriptPath}.`,
-		"Set runtimeSeconds to null if unknown.",
-		"Set status to completed when the run succeeds.",
-		"Keep result aligned with the verification conclusion, not the prior analysis guess.",
-	].join("\n");
+	return renderPromptTemplate(new URL("./verify.prompt.md", import.meta.url), {
+		taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
+		scanJobId: stageInput.scanJob.scanJobId,
+		candidateId: candidate.id,
+		candidateTitle: candidate.title,
+		candidateDescription: candidate.description || "-",
+		candidateFile: candidate.filePath || "-",
+		candidateLine: typeof candidate.line === "number" ? candidate.line : "-",
+		analysisResult: analysisResult.result,
+		analysisSummary: analysisResult.summary || "-",
+		analysisFingerprint: analysisResult.analysisFingerprint || "-",
+		criticApproval: analysisResult.criticApproval?.summary || "-",
+		criticTaskId: analysisResult.criticApproval?.criticTaskId || "-",
+		analysisReportPath: analysisResult.reportPath || "-",
+		repositoryJsonPath: stageInput.repositoryPath,
+		moduleJsonPath: stageInput.modulePath,
+		functionJsonPath: stageInput.functionPath,
+		candidateJsonPath: stageInput.candidatePath,
+		analysisResultJsonPath: stageInput.analysisResultPath,
+		taskDir: input.taskDirContainer,
+		reportPath: input.reportPath,
+		issueDraftPath: input.issueDraftPath,
+		pocPath: input.pocPath,
+		dockerfilePath: input.dockerfilePath,
+		runScriptPath: input.runScriptPath,
+		taskId: input.taskId,
+	});
 };
 
 const executeCandidateVerificationStage = async (
 	ctx: StageContext,
 	stageInput: CandidateVerificationStageInput,
 ) => {
-	const candidateId = stageInput.analysisResult.candidate.id;
-	const scanJob = stageInput.analysisResult.scanJob;
+	const scanJob = stageInput.scanJob;
 	const verifierAgentProfile = await ctx.agentProfile();
 	const taskStageDirPath = await ctx.taskDir();
 	const taskStageRootInContainer = await ctx.taskDirContainer();
@@ -127,13 +98,22 @@ const executeCandidateVerificationStage = async (
 	const pocPath = `${taskStageRootInContainer}/03_poc/poc.txt`;
 	const dockerfilePath = `${taskStageRootInContainer}/04_repro/Dockerfile`;
 	const runScriptPath = `${taskStageRootInContainer}/04_repro/run.sh`;
-	const containerName = ctx.containerName(
-		candidateId.slice(0, 8),
-	);
+	const [candidate, analysisResult] = await Promise.all([
+		readTaskJsonArtifact<Candidate>({
+			taskDir: taskStageDirPath,
+			containerPath: stageInput.candidatePath,
+		}),
+		readTaskJsonArtifact<FinalAnalysis>({
+			taskDir: taskStageDirPath,
+			containerPath: stageInput.analysisResultPath,
+		}),
+	]);
+	const containerName = ctx.containerName(candidate.id.slice(0, 8));
 	await bindTaskRuntimeRepo({
 		taskId: ctx.taskId,
 		containerName,
-		agentProfile: buildTaskAgentProfileSnapshot(verifierAgentProfile).agentProfile,
+		agentProfile:
+			buildTaskAgentProfileSnapshot(verifierAgentProfile).agentProfile,
 	});
 	await startContainer({
 		scanJob,
@@ -165,6 +145,8 @@ const executeCandidateVerificationStage = async (
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
 		prompt: buildCandidateVerificationPrompt(stageInput, {
+			analysisResult,
+			candidate,
 			taskDirContainer: taskStageRootInContainer,
 			reportPath,
 			issueDraftPath,
@@ -208,14 +190,13 @@ export const createVerifyingStageDefinition = <
 				input.id,
 				(settings) => settings.verifyConcurrency,
 			),
-		run: async (ctx, stageInput) =>
-			({
-				completion: "deferred",
-				threadId: (
-					await executeCandidateVerificationStage(
-						ctx as unknown as StageContext,
-						stageInput,
-					)
-				).threadId,
-			}),
+		run: async (ctx, stageInput) => ({
+			completion: "deferred",
+			threadId: (
+				await executeCandidateVerificationStage(
+					ctx as unknown as StageContext,
+					stageInput,
+				)
+			).threadId,
+		}),
 	});

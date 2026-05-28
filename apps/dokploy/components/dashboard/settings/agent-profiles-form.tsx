@@ -72,6 +72,11 @@ export const AgentProfilesForm = () => {
 													{" · "}
 													{profile.model}
 													{" · "}
+													{profile.provider === "codex" &&
+													profile.codexAuthMode === "codex_home"
+														? `codex home: ${profile.codexHomePath || "env"}`
+														: "api key"}
+													{" · "}
 													{profile.thinkingLevelEnabled
 														? profile.thinkingLevel
 														: "thinking off"}

@@ -1,11 +1,11 @@
 ---
-name: deep-analysis
+name: analyze
 description: Analyze a vulnerability candidate in depth, establish reachability and constraints, decide whether fuzzing or critic review is needed, and prepare final analysis for verification.
 ---
 
 Analyze a given vulnerability candidate in depth and decide whether it is a real vulnerability, under what trigger conditions it can be reached, and which paths are worth prioritizing for further runtime validation.
 
-# Deep Analysis
+# Analyze
 
 Use this skill when Vulseek asks an analysis agent to investigate one specific `VulnerabilityCandidate` in depth.
 
@@ -17,7 +17,7 @@ prompt defines the exact schema and route markers for each decision.
 
 Allowed decisions:
 
-- Need fuzzing evidence: request fuzzer construction.
+- Need fuzzing evidence or dynamic exploration: request fuzzer construction.
 - Current draft analysis appears established: submit a draft analysis to the critic.
 - The latest critic response is `convinced` for the same analysis fingerprint: finalize the analysis for verification.
 
@@ -31,6 +31,23 @@ When your current decision is to submit a draft analysis to the critic or to
 return a final critic-approved analysis, include the classification, score,
 summary, confidence when supported, report path, and runtime status requested by
 the stage prompt.
+
+Also keep the structured analysis object evidence-oriented. Populate:
+
+- `hypothesis`: the current vulnerability claim or false-positive hypothesis
+- `evidenceTable`: code, negative, runtime, fuzz, and critic evidence collected
+  so far
+- `attackPath`: entry-to-candidate path, source-to-sink path, and control-flow
+  constraints
+- `blockers`: missing data, failed tooling, unknown preconditions, or blocked
+  dynamic exploration
+- `rulingRationale`: why the current result follows from the evidence
+- `missingEvidenceRequest`: what would most efficiently change confidence
+- `feedbackHistory`: relevant fuzz-build, fuzz-run, critic, and manual feedback
+
+For final critic-approved analysis, include the critic approval, the analysis
+fingerprint, the evidence bundle, any fuzz evidence, verified attack path
+details available so far, reproduction hints, and residual uncertainty.
 
 Recommended result enum values:
 
@@ -70,6 +87,38 @@ Optional helpful inputs:
 - codeql database path
 - semgrep rules or semgrep skill path
 - fuzzing-related code, harnesses, corpora, or build scripts
+
+## Fuzzing Decision
+
+Actively consider fuzzing. Fuzzing is useful for two reasons:
+
+- evidence: validate or disprove a concrete hypothesis and expected trigger
+  condition
+- exploration: explore complex control flow, parser boundaries, state machines,
+  protocol interaction, input classes, unexpected states, or hard-to-enumerate
+  preconditions
+
+Do not reserve fuzzing only for strong vulnerability claims. If static analysis
+cannot reliably cover a path or state space, request a fuzzer even when the
+current goal is path discovery or negative evidence.
+
+When requesting a fuzzer, populate the build request with:
+
+- `candidateId`
+- `analysisFingerprint`
+- `fuzzGoal` as `evidence` or `exploration`
+- `entryToCandidatePath`
+- `harnessRequirements`
+- `harnessEntry`
+- `inputModel`
+- `expectedOracle`
+- `seedCorpusHints`
+- `buildCommandHints`
+- `sanitizerRuntimeAssumptions`
+- `expectedTriggerCondition`
+- `targetFunction`
+- `targetFilePath`
+- `notes`
 
 ## High-Level Objective
 

@@ -7,6 +7,9 @@ export type SandboxAgentActivityKind =
 	| "tool"
 	| "web"
 	| "command"
+	| "completed"
+	| "usage"
+	| "result"
 	| "error";
 
 export type SandboxAgentActivity = {
@@ -68,6 +71,16 @@ const getNumberField = (
 	record && typeof record[key] === "number" && Number.isFinite(record[key])
 		? (record[key] as number)
 		: null;
+
+const formatCompactNumber = (value: number) => {
+	if (value >= 1_000_000) {
+		return `${(value / 1_000_000).toFixed(1)}M`;
+	}
+	if (value >= 1_000) {
+		return `${(value / 1_000).toFixed(1)}k`;
+	}
+	return String(value);
+};
 
 const getTextContent = (value: unknown): string => {
 	if (!value) {
@@ -243,30 +256,82 @@ const getUsageUpdate = (
 ): SandboxAgentActivity | null => {
 	const directUsed = getNumberField(update, "used");
 	const tokenUsage = getObjectField(update, "tokenUsage");
+	const last = getObjectField(tokenUsage, "last");
 	const total = getObjectField(tokenUsage, "total");
-	const nestedUsed = getNumberField(total, "totalTokens");
-	const latestUsed = directUsed ?? nestedUsed;
-	if (latestUsed === null) {
+	const lastUsed = getNumberField(last, "totalTokens") ?? directUsed;
+	if (lastUsed === null) {
 		return null;
 	}
-	const previous = current.tokenUsage;
-	const firstUsed = previous?.firstUsed ?? latestUsed;
+	const latestUsed = getNumberField(total, "totalTokens") ?? lastUsed;
+	const contextSize =
+		getNumberField(update, "size") ??
+		getNumberField(tokenUsage, "modelContextWindow");
 	return makeActivity(
 		entry,
 		{
-			kind: current.kind,
-			label: current.label,
-			detail: current.detail,
+			kind: "usage",
+			label: "Usage",
+			detail:
+				`used ${formatCompactNumber(lastUsed)}` +
+				(contextSize ? ` / ${formatCompactNumber(contextSize)} context` : ""),
 			tokenUsage: {
-				firstUsed,
+				firstUsed: 0,
 				latestUsed,
-				used: Math.max(0, latestUsed - firstUsed),
-				contextSize:
-					getNumberField(update, "size") ??
-					getNumberField(tokenUsage, "modelContextWindow"),
+				used: lastUsed,
+				contextSize,
 				line: entry.line,
 				timestamp: entry.timestamp,
 			},
+		},
+		current,
+	);
+};
+
+const getToolCallUpdateActivity = (
+	entry: SandboxAgentActivityStreamMessage,
+	update: Record<string, unknown>,
+	current: SandboxAgentActivity,
+): SandboxAgentActivity => {
+	const status = getStringField(update, "status");
+	const output =
+		trimSummary(getTextContent(update.content), 120) ||
+		trimSummary(getTextContent(update.rawOutput), 120) ||
+		trimSummary(
+			getStringField(getObjectField(update, "rawOutput"), "stdout"),
+			120,
+		) ||
+		trimSummary(
+			getStringField(getObjectField(update, "rawOutput"), "formatted_output"),
+			120,
+		);
+	if (status === "failed") {
+		return makeActivity(
+			entry,
+			{
+				kind: "error",
+				label: "Tool failed",
+				detail: output || undefined,
+			},
+			current,
+		);
+	}
+	if (status === "completed") {
+		return makeActivity(
+			entry,
+			{
+				kind: "completed",
+				label: "Tool completed",
+				detail: output || undefined,
+			},
+			current,
+		);
+	}
+	return makeActivity(
+		entry,
+		{
+			kind: "tool",
+			label: status ? `Tool ${status}` : "Tool update",
+			detail: output || undefined,
 		},
 		current,
 	);
@@ -304,8 +369,7 @@ const getToolActivity = (
 		combined.includes("search_query") ||
 		combined.includes("image_query")
 	) {
-		const isSearch =
-			combined.includes("search") || combined.includes("query");
+		const isSearch = combined.includes("search") || combined.includes("query");
 		return makeActivity(entry, {
 			kind: "web",
 			label: isSearch ? "Web Search" : "Web",
@@ -358,39 +422,43 @@ export const getSandboxAgentActivityFromMessage = (
 				: {};
 		const sessionUpdate = getStringField(update, "sessionUpdate");
 
-			if (sessionUpdate === "agent_message_chunk") {
-				return makeActivity(
-					entry,
-					{
-						kind: "writing",
-						label: "Writing",
-					},
-					current,
-				);
-			}
+		if (sessionUpdate === "agent_message_chunk") {
+			return makeActivity(
+				entry,
+				{
+					kind: "writing",
+					label: "Writing",
+				},
+				current,
+			);
+		}
 
-			if (sessionUpdate === "tool_call") {
-				return {
-					...getToolActivity(entry, update),
-					tokenUsage: current.tokenUsage,
-				};
-			}
+		if (sessionUpdate === "tool_call") {
+			return {
+				...getToolActivity(entry, update),
+				tokenUsage: current.tokenUsage,
+			};
+		}
 
-			if (sessionUpdate === "plan") {
-				return makeActivity(
-					entry,
-					{
-						kind: "planning",
-						label: "Planning",
-						detail: trimSummary(getTextContent(update.content), 120) || undefined,
-					},
-					current,
-				);
-			}
+		if (sessionUpdate === "tool_call_update") {
+			return getToolCallUpdateActivity(entry, update, current);
+		}
 
-			if (sessionUpdate === "usage_update") {
-				return getUsageUpdate(entry, update, current) || current;
-			}
+		if (sessionUpdate === "plan") {
+			return makeActivity(
+				entry,
+				{
+					kind: "planning",
+					label: "Planning",
+					detail: trimSummary(getTextContent(update.content), 120) || undefined,
+				},
+				current,
+			);
+		}
+
+		if (sessionUpdate === "usage_update") {
+			return getUsageUpdate(entry, update, current) || current;
+		}
 
 		return current;
 	}
@@ -402,28 +470,58 @@ export const getSandboxAgentActivityFromMessage = (
 				: {};
 		const itemType = getStringField(item, "type");
 
-			if (itemType === "commandExecution") {
-				return makeActivity(
-					entry,
-					{
-						kind: "command",
-						label: "Command",
-						detail: trimSummary(getStringField(item, "command"), 120) || undefined,
-					},
-					current,
-				);
-			}
+		if (itemType === "commandExecution") {
+			return makeActivity(
+				entry,
+				{
+					kind: "command",
+					label: "Command",
+					detail:
+						trimSummary(getStringField(item, "command"), 120) || undefined,
+				},
+				current,
+			);
+		}
 
-			if (itemType === "reasoning") {
-				return makeActivity(
-					entry,
-					{
-						kind: "reasoning",
-						label: "Reasoning",
-					},
-					current,
-				);
-			}
+		if (itemType === "reasoning") {
+			return makeActivity(
+				entry,
+				{
+					kind: "reasoning",
+					label: "Reasoning",
+				},
+				current,
+			);
+		}
+	}
+
+	if (method === "item/completed") {
+		const item =
+			params.item && typeof params.item === "object"
+				? (params.item as Record<string, unknown>)
+				: {};
+		const itemType = getStringField(item, "type");
+		const status = getStringField(item, "status");
+		if (status === "failed") {
+			return makeActivity(
+				entry,
+				{
+					kind: "error",
+					label: `${itemType || "Item"} failed`,
+					detail: trimSummary(getTextContent(item), 120) || undefined,
+				},
+				current,
+			);
+		}
+		return makeActivity(
+			entry,
+			{
+				kind: "completed",
+				label: `${itemType || "Item"} completed`,
+				detail: trimSummary(getTextContent(item), 120) || undefined,
+			},
+			current,
+		);
 	}
 
 	if (
@@ -463,9 +561,24 @@ export const getSandboxAgentActivityFromMessage = (
 				label: "Error",
 				detail:
 					trimSummary(
-						getStringField(error, "message") || getStringField(params, "message"),
+						getStringField(error, "message") ||
+							getStringField(params, "message"),
 						120,
 					) || undefined,
+			},
+			current,
+		);
+	}
+
+	const result = getObjectField(message, "result");
+	if (result) {
+		const stopReason = getStringField(result, "stopReason");
+		return makeActivity(
+			entry,
+			{
+				kind: "result",
+				label: stopReason === "end_turn" ? "End turn" : "Result",
+				detail: stopReason || undefined,
 			},
 			current,
 		);

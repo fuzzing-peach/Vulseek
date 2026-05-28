@@ -77,6 +77,9 @@ services:
       
       # 挂载 Docker socket，允许容器内管理 Docker
       - /var/run/docker.sock:/var/run/docker.sock
+
+      # 挂载 scan runtime 上下文；容器内服务也会把这个宿主机路径传给 task 容器
+      - ${DOKPLOY_SCAN_CONTEXT_HOST_PATH:-/data/exp/dkzou/dokploy-data}:/scan-context
       
       # 持久化配置和数据目录
       - dokploy_data:/etc/dokploy
@@ -88,13 +91,14 @@ services:
       - WATCHPACK_POLLING=true
       
       # 数据库配置
-      - DATABASE_URL=postgresql://dokploy:dokploy_dev_password@postgres:5432/dokploy
+      - DATABASE_URL=postgresql://dokploy:dokploy_dev_password@dokploy-postgres-dev:5432/dokploy
       
       # Redis 配置
-      - REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://dokploy-redis-dev:6379
       
       # Dokploy 配置（参考生产环境）
       - ADVERTISE_ADDR=${ADVERTISE_ADDR:-127.0.0.1}
+      - DOKPLOY_SCAN_CONTEXT_HOST_PATH=${DOKPLOY_SCAN_CONTEXT_HOST_PATH:-/data/exp/dkzou/dokploy-data}
     privileged: true  # 需要访问 Docker socket
     networks:
       - dokploy-dev-network
@@ -154,5 +158,5 @@ volumes:
 
 networks:
   dokploy-dev-network:
-    driver: bridge
+    external: true
     name: dokploy-dev-network

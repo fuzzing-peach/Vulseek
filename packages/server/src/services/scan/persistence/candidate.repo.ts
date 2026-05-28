@@ -10,6 +10,10 @@ import {
 	candidateSchema,
 	verificationSchema,
 } from "../artifacts/contracts/domain-object.contract";
+import {
+	readCandidateIdFromTaskInputArtifact,
+	readTaskJsonArtifactForTask,
+} from "./task-artifact-resolver";
 import { listTasksByScanJobAndStageRepo } from "./task.repo";
 
 type DerivedCandidateRecord = {
@@ -32,41 +36,12 @@ type DerivedCandidateRecord = {
 const asRecord = (value: unknown): Record<string, unknown> | null =>
 	value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 
-const readString = (
-	record: Record<string, unknown> | null,
-	key: string,
-): string | null => {
-	const value = record?.[key];
-	return typeof value === "string" && value.length > 0 ? value : null;
-};
-
-const readNumber = (
-	record: Record<string, unknown> | null,
-	key: string,
-): number | null => {
-	const value = record?.[key];
-	return typeof value === "number" ? value : null;
-};
-
 const shouldVerifyFromAnalysisResult = (
 	result: string | null | undefined,
 ) =>
 	result === "real_vulnerability" || result === "likely_vulnerability";
 
-const readCandidateIdFromTaskInput = (
-	task: typeof tasks.$inferSelect,
-): string | null => {
-	const input = asRecord(task.input);
-	const directCandidate = asRecord(input?.candidate);
-	if (directCandidate) {
-		return readString(directCandidate, "id");
-	}
-	const analysisResult = asRecord(input?.analysisResult);
-	const nestedCandidate = asRecord(analysisResult?.candidate);
-	return readString(nestedCandidate, "id");
-};
-
-const parseFunctionTaskCandidates = (task: typeof tasks.$inferSelect) => {
+const parseFunctionTaskCandidates = async (task: typeof tasks.$inferSelect) => {
 	const output = asRecord(task.output);
 	const rawCandidates = output?.candidates;
 	if (!Array.isArray(rawCandidates)) {
@@ -75,7 +50,11 @@ const parseFunctionTaskCandidates = (task: typeof tasks.$inferSelect) => {
 
 	const parsedCandidates: Array<(typeof candidateSchema)["_type"]> = [];
 	for (const rawCandidate of rawCandidates) {
-		const parsed = candidateSchema.safeParse(rawCandidate);
+		const candidate =
+			typeof rawCandidate === "string"
+				? await readTaskJsonArtifactForTask(task, rawCandidate).catch(() => null)
+				: rawCandidate;
+		const parsed = candidateSchema.safeParse(candidate);
 		if (parsed.success) {
 			parsedCandidates.push(parsed.data);
 		}
@@ -89,14 +68,14 @@ const maxTimestamp = (...values: Array<string | null | undefined>) =>
 		.sort()
 		.at(-1) || new Date(0).toISOString();
 
-const buildDerivedCandidatesFromTasks = (input: {
+const buildDerivedCandidatesFromTasks = async (input: {
 	functionTasks: typeof tasks.$inferSelect[];
 	analysisTasks: typeof tasks.$inferSelect[];
 	verificationTasks: typeof tasks.$inferSelect[];
 }) => {
 	const latestAnalysisTaskByCandidateId = new Map<string, typeof tasks.$inferSelect>();
 	for (const task of input.analysisTasks) {
-		const candidateId = readCandidateIdFromTaskInput(task);
+		const candidateId = await readCandidateIdFromTaskInputArtifact(task);
 		if (candidateId && !latestAnalysisTaskByCandidateId.has(candidateId)) {
 			latestAnalysisTaskByCandidateId.set(candidateId, task);
 		}
@@ -107,7 +86,7 @@ const buildDerivedCandidatesFromTasks = (input: {
 		typeof tasks.$inferSelect
 	>();
 	for (const task of input.verificationTasks) {
-		const candidateId = readCandidateIdFromTaskInput(task);
+		const candidateId = await readCandidateIdFromTaskInputArtifact(task);
 		if (candidateId && !latestVerificationTaskByCandidateId.has(candidateId)) {
 			latestVerificationTaskByCandidateId.set(candidateId, task);
 		}
@@ -115,7 +94,7 @@ const buildDerivedCandidatesFromTasks = (input: {
 
 	const candidates: DerivedCandidateRecord[] = [];
 	for (const functionTask of input.functionTasks) {
-		const functionCandidates = parseFunctionTaskCandidates(functionTask);
+		const functionCandidates = await parseFunctionTaskCandidates(functionTask);
 		for (const candidate of functionCandidates) {
 			const analysisTask = latestAnalysisTaskByCandidateId.get(candidate.id);
 			const verificationTask = latestVerificationTaskByCandidateId.get(candidate.id);
@@ -245,12 +224,13 @@ const findDerivedCandidateById = async (
 		(task) => task.stageName === "verify",
 	);
 
+	const candidates = await buildDerivedCandidatesFromTasks({
+		functionTasks,
+		analysisTasks,
+		verificationTasks,
+	});
 	return (
-		buildDerivedCandidatesFromTasks({
-			functionTasks,
-			analysisTasks,
-			verificationTasks,
-		}).find(
+		candidates.find(
 			(candidate) =>
 				candidate.vulnerabilityCandidateId === vulnerabilityCandidateId,
 		) || null

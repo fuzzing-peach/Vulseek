@@ -24,6 +24,7 @@ import {
 	resolveTaskRootSegment,
 } from "../stages/full-scan-stage.runtime";
 import { resolveStageTaskName } from "../stage-task-name";
+import { getArtifactSchemaAnnotations } from "../artifacts/artifact-schema-annotations";
 
 const RUNTIME_CUSTOM_SKILLS = [
 	"codeql",
@@ -31,16 +32,16 @@ const RUNTIME_CUSTOM_SKILLS = [
 	"delta-scan",
 	"full-scan",
 	"full-scan-subagent",
-	"repository-scanner",
-	"module-scanner",
-	"function-scanner",
-	"deep-analysis",
+	"scan-repository",
+	"scan-module",
+	"scan-function",
+	"analyze",
 	"libafl",
-	"libafl-build",
-	"libafl-fuzz",
+	"build-fuzzer",
+	"run-fuzzer",
 	"address-sanitizer",
 	"coverage-analysis",
-	"analysis-critic",
+	"criticize",
 	"verify",
 	"search-registries",
 	"tree-sitter",
@@ -135,6 +136,30 @@ const CODEX_AUTO_APPROVE_CONFIG_TOML = [
 	`sandbox_mode = "danger-full-access"`,
 	"",
 ].join("\n");
+const CODEX_HOME_HOST_MOUNT_PATH = "/host-codex-home";
+
+const resolveCodexAuthMode = (agentProfile: AgentProfileLike | null | undefined) =>
+	agentProfile?.codexAuthMode === "codex_home" ? "codex_home" : "api_key";
+
+const resolveCodexHomeHostPath = (
+	agentProfile: AgentProfileLike | null | undefined,
+) => agentProfile?.codexHomePath?.trim() || "";
+
+const buildCodexHomeHostMountArg = (
+	agentProfile: AgentProfileLike | null | undefined,
+) => {
+	if (agentProfile?.provider !== "codex") {
+		return "";
+	}
+	if (resolveCodexAuthMode(agentProfile) !== "codex_home") {
+		return "";
+	}
+	const hostPath = resolveCodexHomeHostPath(agentProfile);
+	if (!hostPath) {
+		return "";
+	}
+	return `-v '${escapeSingleQuotes(hostPath)}:${CODEX_HOME_HOST_MOUNT_PATH}:ro'`;
+};
 
 const withCodexAutoApproveConfigToml = (configToml: string) => {
 	const defaults: string[] = [];
@@ -148,6 +173,44 @@ const withCodexAutoApproveConfigToml = (configToml: string) => {
 		return configToml;
 	}
 	return joinTomlBlocks(`${defaults.join("\n")}\n`, configToml);
+};
+
+const stripProfileControlledCodexConfigToml = (configToml: string) => {
+	let seenTable = false;
+	return configToml
+		.split(/\r?\n/)
+		.filter((line) => {
+			const trimmed = line.trim();
+			if (/^\[.*\]\s*$/.test(trimmed)) {
+				seenTable = true;
+			}
+			return (
+				seenTable ||
+				!/^\s*(approval_policy|sandbox_mode|model|model_reasoning_effort)\s*=/.test(
+					line,
+				)
+			);
+		})
+		.join("\n");
+};
+
+const withCodexProfileRuntimeConfig = (
+	configToml: string,
+	agentProfile: AgentProfileLike,
+) => {
+	const profileConfig = [
+		`approval_policy = "never"`,
+		`sandbox_mode = "danger-full-access"`,
+		`model = "${agentProfile.model}"`,
+		...(agentProfile.thinkingLevelEnabled
+			? [`model_reasoning_effort = "${agentProfile.thinkingLevel}"`]
+			: []),
+	].join("\n");
+
+	return joinTomlBlocks(
+		profileConfig,
+		stripProfileControlledCodexConfigToml(configToml),
+	);
 };
 
 const buildCodexConfigToml = (agentProfile: AgentProfileLike) => {
@@ -216,6 +279,77 @@ const buildCodexAuthJson = (agentProfile: AgentProfileLike) =>
 		null,
 		2,
 	);
+
+const resolveCodexHomeSource = async (
+	agentProfile: AgentProfileLike | null | undefined,
+) => {
+	const source =
+		process.env.DOKPLOY_CODEX_HOME_SOURCE?.trim() ||
+		process.env.CODEX_HOME?.trim() ||
+		"/home/dkzou/.codex";
+	const stat = await fs.stat(source).catch(() => null);
+	if (!stat?.isDirectory()) {
+		throw new Error(
+			`Codex home auth mode is enabled but the source directory was not found: ${source}. Set Codex Home Path on the agent profile, or set DOKPLOY_CODEX_HOME_SOURCE to a path visible to dokploy-dev.`,
+		);
+	}
+	return source;
+};
+
+const copyMountedCodexHomeCredentialFilesToContainer = async (input: {
+	containerName: string;
+	sourceDir: string;
+	targetDir: string;
+}) => {
+	await execAsync(
+		`docker exec ${input.containerName} bash -lc "test -d '${escapeSingleQuotes(
+			input.sourceDir,
+		)}' && test -f '${escapeSingleQuotes(
+			path.posix.join(input.sourceDir, "auth.json"),
+		)}' && mkdir -p '${escapeSingleQuotes(
+			input.targetDir,
+		)}' && cp -a '${escapeSingleQuotes(
+			path.posix.join(input.sourceDir, "auth.json"),
+		)}' '${escapeSingleQuotes(path.posix.join(input.targetDir, "auth.json"))}'"`,
+	);
+};
+
+const copyCodexHomeCredentialFilesToContainer = async (input: {
+	containerName: string;
+	sourceDir: string;
+	targetDir: string;
+}) => {
+	await fs.stat(path.join(input.sourceDir, "auth.json"));
+	await execAsync(
+		`docker exec ${input.containerName} bash -lc "mkdir -p '${escapeSingleQuotes(
+			input.targetDir,
+		)}'"`,
+	);
+	await execAsync(
+		`docker cp '${escapeSingleQuotes(
+			path.join(input.sourceDir, "auth.json"),
+		)}' ${input.containerName}:'${escapeSingleQuotes(
+			path.posix.join(input.targetDir, "auth.json"),
+		)}'`,
+	);
+};
+
+const loadCodexHomeSourceConfigToml = async (sourceDir: string) =>
+	await fs
+		.readFile(path.join(sourceDir, "config.toml"), "utf-8")
+		.catch(() => "");
+
+const loadMountedCodexHomeSourceConfigToml = async (
+	containerName: string,
+	sourceDir: string,
+) => {
+	const { stdout } = await execAsync(
+		`docker exec ${containerName} bash -lc "cat '${escapeSingleQuotes(
+			path.posix.join(sourceDir, "config.toml"),
+		)}' 2>/dev/null || true"`,
+	);
+	return stdout;
+};
 
 const parseAgentProfileEnvPairs = (agentProfile: AgentProfileLike) =>
 	(agentProfile.envs || "")
@@ -312,6 +446,51 @@ const sleep = async (ms: number) =>
 	await new Promise<void>((resolve) => {
 		setTimeout(resolve, ms);
 	});
+
+const appendHostBootstrapLog = async (
+	logPath: string | null | undefined,
+	message: string,
+) => {
+	if (!logPath) {
+		return;
+	}
+	await fs
+		.appendFile(
+			logPath,
+			`[sandbox-agent-bootstrap] ${new Date().toISOString()} ${message}\n`,
+			"utf-8",
+		)
+		.catch(() => {});
+};
+
+const withHostBootstrapLog = async <T>(
+	logPath: string | null | undefined,
+	label: string,
+	details: string,
+	action: () => Promise<T>,
+) => {
+	const startedAt = Date.now();
+	await appendHostBootstrapLog(
+		logPath,
+		`${label}_start${details ? ` ${details}` : ""}`,
+	);
+	try {
+		const result = await action();
+		await appendHostBootstrapLog(
+			logPath,
+			`${label}_done elapsed_ms=${Date.now() - startedAt}`,
+		);
+		return result;
+	} catch (error) {
+		await appendHostBootstrapLog(
+			logPath,
+			`${label}_error elapsed_ms=${Date.now() - startedAt} error=${JSON.stringify(
+				getErrorMessage(error),
+			)}`,
+		);
+		throw error;
+	}
+};
 
 const getErrorMessage = (error: unknown) =>
 	error instanceof Error ? error.message : String(error);
@@ -482,6 +661,39 @@ const copyCodexAssetsToContainerHome = async (
 
 	if (agentProfile) {
 		if (agentProfile.provider === "codex") {
+			if (resolveCodexAuthMode(agentProfile) === "codex_home") {
+				const hostPath = resolveCodexHomeHostPath(agentProfile);
+				const sourceConfigToml = hostPath
+					? await loadMountedCodexHomeSourceConfigToml(
+							containerName,
+							CODEX_HOME_HOST_MOUNT_PATH,
+						)
+					: await (async () => {
+							const sourceDir = await resolveCodexHomeSource(agentProfile);
+							await copyCodexHomeCredentialFilesToContainer({
+								containerName,
+								sourceDir,
+								targetDir: codexHome,
+							});
+							return await loadCodexHomeSourceConfigToml(sourceDir);
+						})();
+				if (hostPath) {
+					await copyMountedCodexHomeCredentialFilesToContainer({
+						containerName,
+						sourceDir: CODEX_HOME_HOST_MOUNT_PATH,
+						targetDir: codexHome,
+					});
+				}
+				await writeContainerFile(
+					containerName,
+					`${codexHome}/config.toml`,
+					joinTomlBlocks(
+						withCodexProfileRuntimeConfig(sourceConfigToml, agentProfile),
+						mcpConfigToml,
+					),
+				);
+				return;
+			}
 			await writeContainerFile(
 				containerName,
 				`${codexHome}/config.toml`,
@@ -670,6 +882,43 @@ const buildStructuredOutputEnvelopeJsonSchema = (
 		: buildEnvelopeSchema({ route: null, outputSchema: schema });
 };
 
+const buildArtifactSchemaPromptLines = (
+	schema: ZodTypeAny,
+	routeOutputSchemas?: Array<{
+		routeKey: string;
+		description?: string;
+		schema: ZodTypeAny;
+		default?: boolean;
+	}>,
+) => {
+	const entries = routeOutputSchemas?.length
+		? routeOutputSchemas.flatMap((route) =>
+				getArtifactSchemaAnnotations(route.schema).map((annotation) => ({
+					routeKey: route.routeKey,
+					...annotation,
+				})),
+			)
+		: getArtifactSchemaAnnotations(schema).map((annotation) => ({
+				routeKey: null,
+				...annotation,
+			}));
+	if (entries.length === 0) {
+		return [];
+	}
+	return [
+		"",
+		"Task artifact JSON schemas:",
+		"- Some output fields are task artifact paths. For each such path, write a JSON file at that path whose content matches the schema below.",
+		"- Validate both output.json and every referenced task artifact JSON file before ending your turn.",
+		...entries.flatMap((entry, index) => [
+			`- ${entry.routeKey ? `route ${entry.routeKey} ` : ""}${entry.path} points to ${entry.kind === "path_list" ? "JSON files" : "a JSON file"} matching artifact schema ${index + 1}:`,
+			"```json",
+			JSON.stringify(entry.jsonSchema, null, 2),
+			"```",
+		]),
+	];
+};
+
 export const buildStructuredOutputPromptSuffix = (
 	schema: ZodTypeAny,
 	schemaFilePath: string,
@@ -682,6 +931,10 @@ export const buildStructuredOutputPromptSuffix = (
 	}>,
 ) => {
 	const jsonSchema = buildStructuredOutputEnvelopeJsonSchema(
+		schema,
+		routeOutputSchemas,
+	);
+	const artifactSchemaLines = buildArtifactSchemaPromptLines(
 		schema,
 		routeOutputSchemas,
 	);
@@ -702,6 +955,7 @@ export const buildStructuredOutputPromptSuffix = (
 		"- The output.json envelope must conform exactly to that JSON Schema.",
 		"- Do not add extra fields outside the schema.",
 		"- Use null for nullable fields instead of omitting them unless the schema explicitly allows omission.",
+		...artifactSchemaLines,
 		...(routeOutputSchemas?.length
 			? [
 					"",
@@ -781,6 +1035,7 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 			mountDescription: `host_path:${runtimeMountSource}`,
 			dockerMountArg: `-v '${escapeSingleQuotes(runtimeMountSource)}':${input.stageRootInContainer}`,
 		},
+		codexHomeHostMountArg: buildCodexHomeHostMountArg(input.agentProfile),
 		agentHome: {
 			codexContainerDir: CODEX_HOME_IN_CONTAINER,
 			claudeContainerDir: CLAUDE_HOME_IN_CONTAINER,
@@ -797,6 +1052,15 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 
 export const startContainer = async (input: StageContainerInput) => {
 	const runtime = await resolveStageContainerRuntime(input);
+	const logPath = runtime.stderrPath;
+	await appendHostBootstrapLog(
+		logPath,
+		`start_container task_id=${input.taskId || ""} container=${input.containerName} persistent=${String(
+			Boolean(input.persistent),
+		)} stage_dir=${JSON.stringify(input.stageDirPath)} stage_root=${JSON.stringify(
+			input.stageRootInContainer,
+		)}`,
+	);
 
 	if (input.persistent) {
 		const running = await execAsync(
@@ -805,8 +1069,10 @@ export const startContainer = async (input: StageContainerInput) => {
 			.then(({ stdout }) => stdout.trim() === "true")
 			.catch(() => false);
 		if (running) {
-			await execAsync(
-				`docker exec ${input.containerName} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}'"`,
+			await withHostBootstrapLog(logPath, "persistent_container_reuse", "", () =>
+				execAsync(
+					`docker exec ${input.containerName} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}'"`,
+				),
 			);
 			return;
 		}
@@ -824,46 +1090,67 @@ export const startContainer = async (input: StageContainerInput) => {
 		stderrPath: runtime.stderrPath,
 		stdoutPath: runtime.stdoutPath,
 	});
+	await appendHostBootstrapLog(logPath, "runtime_files_initialized_on_host");
 	await initializeCodexRuntimeMetadataFiles({
 		cursorPath: runtime.runtimeArtifacts.cursorPath,
 		statePath: runtime.runtimeArtifacts.statePath,
 	});
-	await execDockerRunWithRetry({
-		containerName: input.containerName,
-		taskId: input.taskId,
-		command: `docker run -d --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
-	});
+	await withHostBootstrapLog(
+		logPath,
+		"docker_run",
+		`image=${JSON.stringify(runtime.imageTag)} mount=${JSON.stringify(
+			runtime.taskRuntimeMount.mountDescription,
+		)}`,
+		() =>
+			execDockerRunWithRetry({
+				containerName: input.containerName,
+				taskId: input.taskId,
+				command: `docker run -d --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.codexHomeHostMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
+			}),
+	);
 
-	await initializeRuntimeFilesInContainer({
-		containerName: input.containerName,
-		runtimeDirInContainer: input.stageRootInContainer,
-		jsonlFileName: runtime.runtimeArtifacts.jsonlFileName,
-		textFileName: runtime.runtimeArtifacts.textFileName,
-		stderrFileName: runtime.runtimeArtifacts.stderrFileName,
-		stdoutFileName: runtime.runtimeArtifacts.stdoutFileName,
-	});
-	await initializeCodexRuntimeMetadataFilesInContainer({
-		containerName: input.containerName,
-		runtimeDirInContainer: input.stageRootInContainer,
-		cursorFileName: runtime.runtimeArtifacts.cursorFileName,
-		stateFileName: runtime.runtimeArtifacts.stateFileName,
-		writeContainerFile,
-	});
-	await copyCodexAssetsToContainerHome(
-		input.containerName,
-		runtime.agentHome.codexContainerDir,
-		runtime.agentsDir,
-		input.agentProfile,
+	await withHostBootstrapLog(logPath, "runtime_files_initialized_in_container", "", () =>
+		initializeRuntimeFilesInContainer({
+			containerName: input.containerName,
+			runtimeDirInContainer: input.stageRootInContainer,
+			jsonlFileName: runtime.runtimeArtifacts.jsonlFileName,
+			textFileName: runtime.runtimeArtifacts.textFileName,
+			stderrFileName: runtime.runtimeArtifacts.stderrFileName,
+			stdoutFileName: runtime.runtimeArtifacts.stdoutFileName,
+		}),
 	);
-	await initializeClaudeHomeInContainer(
-		input.containerName,
-		runtime.agentHome.claudeContainerDir,
+	await withHostBootstrapLog(logPath, "metadata_files_initialized_in_container", "", () =>
+		initializeCodexRuntimeMetadataFilesInContainer({
+			containerName: input.containerName,
+			runtimeDirInContainer: input.stageRootInContainer,
+			cursorFileName: runtime.runtimeArtifacts.cursorFileName,
+			stateFileName: runtime.runtimeArtifacts.stateFileName,
+			writeContainerFile,
+		}),
 	);
-	await installRuntimeSkillsInContainer({
-		containerName: input.containerName,
-		agentsDir: runtime.agentsDir,
-		skillNames: RUNTIME_CUSTOM_SKILLS,
-	});
+	await withHostBootstrapLog(logPath, "copy_codex_assets", "", () =>
+		copyCodexAssetsToContainerHome(
+			input.containerName,
+			runtime.agentHome.codexContainerDir,
+			runtime.agentsDir,
+			input.agentProfile,
+		),
+	);
+	await withHostBootstrapLog(logPath, "initialize_claude_home", "", () =>
+		initializeClaudeHomeInContainer(
+			input.containerName,
+			runtime.agentHome.claudeContainerDir,
+		),
+	);
+	await withHostBootstrapLog(logPath, "install_runtime_skills", "", () =>
+		installRuntimeSkillsInContainer({
+			containerName: input.containerName,
+			agentsDir: runtime.agentsDir,
+			skillNames: RUNTIME_CUSTOM_SKILLS,
+			logPath,
+		}),
+	);
+	await appendHostBootstrapLog(logPath, "start_container_done");
 };
 
 export const stopContainer = async (containerName: string) => {
@@ -1321,7 +1608,7 @@ const fileSizeOrZero = async (filePath) => {
   return stat ? Number(stat.size || 0) : 0;
 };
 
-const copyParentRuntimeFileOnce = async (input, parentPath, childPath) => {
+const copyParentRuntimeFileOnce = async (input, parentPath, childPath, suffix = "") => {
   if (!parentPath || !childPath) {
     return { copied: false, bytes: 0, reason: "missing_path" };
   }
@@ -1335,8 +1622,15 @@ const copyParentRuntimeFileOnce = async (input, parentPath, childPath) => {
   }
   await fs.mkdir(path.dirname(childPath), { recursive: true });
   const content = await fs.readFile(parentPath, "utf-8");
-  await fs.writeFile(childPath, content, "utf-8");
-  return { copied: true, bytes: Buffer.byteLength(content, "utf-8"), reason: "copied" };
+  const written = content + suffix;
+  await fs.writeFile(childPath, written, "utf-8");
+  return {
+    copied: true,
+    bytes: Buffer.byteLength(written, "utf-8"),
+    parentBytes: Buffer.byteLength(content, "utf-8"),
+    suffixBytes: Buffer.byteLength(suffix, "utf-8"),
+    reason: suffix ? "copied_with_suffix" : "copied",
+  };
 };
 
 const deriveParentRuntimePath = (parentSessionPersistPath, filePath, parentRuntimeRootPath) => {
@@ -1386,6 +1680,15 @@ const inheritForkRuntimeArtifactsOnce = async (taskInput, sessionId) => {
       taskInput.parentRuntimeRootPath,
     ),
     taskInput.textPath,
+    "\n\n" +
+      "----- forked child task output starts here -----\n" +
+      "parent_agent_session_id: " +
+      parentSessionId +
+      "\nchild_agent_session_id: " +
+      sessionId +
+      "\nchild_task_id: " +
+      String(taskInput.taskId || "") +
+      "\n------------------------------------------------\n\n",
   );
   if (markerPath) {
     await fs.writeFile(
@@ -2677,9 +2980,7 @@ const resolveParentTaskRootInContainer = async (
 	return buildTaskRootInContainer({
 		scanJobId: input.scanJob.scanJobId,
 		stageName: parentTask.stageName,
-		name:
-			resolveStageTaskName(parentTask.stageName, parentTask.input) ||
-			parentTask.name,
+		name: parentTask.name || resolveStageTaskName(parentTask.stageName, parentTask.input),
 		taskId: parentTask.taskId,
 	});
 };
@@ -2725,9 +3026,7 @@ const resolveParentRuntimeRootOnHost = async (
 	return buildTaskRootOnHost({
 		jobRootOnHost,
 		stageName: parentTask.stageName,
-		name:
-			resolveStageTaskName(parentTask.stageName, parentTask.input) ||
-			parentTask.name,
+		name: parentTask.name || resolveStageTaskName(parentTask.stageName, parentTask.input),
 		taskId: parentTask.taskId,
 	});
 };
@@ -2942,6 +3241,7 @@ const prepareTaskAgentHomeInContainer = async (input: {
 	sessionMode?: "new" | "fork";
 	parentAgentHomePathInContainer: string | null;
 	reuseExistingAgentHome?: boolean;
+	logPath?: string | null;
 }) => {
 	const agentHomePathInContainer = buildTaskAgentHomePathInContainer(
 		input.agentHomeRootInContainer,
@@ -2979,21 +3279,35 @@ const prepareTaskAgentHomeInContainer = async (input: {
 		"mkdir -p \"$agent_home/skills\"",
 	].join("\n");
 
-	await execAsync(
-		`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(setupScript)}'`,
+	await withHostBootstrapLog(
+		input.logPath,
+		"agent_home_setup",
+		`provider=${input.agentProvider} session_mode=${input.sessionMode || ""} reuse_existing=${String(
+			Boolean(input.reuseExistingAgentHome),
+		)} target=${JSON.stringify(agentHomePathInContainer)} parent=${JSON.stringify(
+			input.parentAgentHomePathInContainer || "",
+		)}`,
+		() =>
+			execAsync(
+				`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(setupScript)}'`,
+			),
 	);
 
 	if (input.agentProvider === "claude_code") {
-		await initializeClaudeHomeInContainer(
-			input.containerName,
-			agentHomePathInContainer,
+		await withHostBootstrapLog(input.logPath, "agent_home_initialize_claude", "", () =>
+			initializeClaudeHomeInContainer(
+				input.containerName,
+				agentHomePathInContainer,
+			),
 		);
 	} else {
-		await copyCodexAssetsToContainerHome(
-			input.containerName,
-			agentHomePathInContainer,
-			input.agentsDir,
-			input.agentProfile,
+		await withHostBootstrapLog(input.logPath, "agent_home_copy_codex_assets", "", () =>
+			copyCodexAssetsToContainerHome(
+				input.containerName,
+				agentHomePathInContainer,
+				input.agentsDir,
+				input.agentProfile,
+			),
 		);
 	}
 
@@ -3055,6 +3369,7 @@ export const runSingleTurnAgentInContainer = async (
 	const runtimeFileNames = input.runtimeFileNames || {
 		...SANDBOX_AGENT_RUNTIME_FILE_NAMES,
 	};
+	const taskStderrPath = path.join(taskStageDirPath, runtimeFileNames.stderr);
 	const taskRuntimeArtifacts = createCodexRuntimeArtifacts({
 		runtimeDir: taskStageDirPath,
 		jsonlFileName: runtimeFileNames.jsonl,
@@ -3069,30 +3384,50 @@ export const runSingleTurnAgentInContainer = async (
 		stderrPath: path.join(taskStageDirPath, runtimeFileNames.stderr),
 		stdoutPath: path.join(taskStageDirPath, runtimeFileNames.stdout),
 	});
+	await appendHostBootstrapLog(
+		taskStderrPath,
+		`run_single_turn_start task_id=${input.taskId || ""} container=${input.containerName} persistent=${String(
+			Boolean(input.persistent),
+		)} lane_thread_id=${input.laneThreadId || ""} session_mode=${input.sessionMode || ""} task_dir=${JSON.stringify(
+			taskStageDirPath,
+		)} task_root=${JSON.stringify(taskStageRootInContainer)} stage_root=${JSON.stringify(
+			input.stageRootInContainer,
+		)}`,
+	);
 	await initializeCodexRuntimeMetadataFiles({
 		cursorPath: taskRuntimeArtifacts.cursorPath,
 		statePath: taskRuntimeArtifacts.statePath,
 	});
-	await initializeRuntimeFilesInContainer({
-		containerName: input.containerName,
-		runtimeDirInContainer: taskStageRootInContainer,
-		jsonlFileName: runtimeFileNames.jsonl,
-		textFileName: runtimeFileNames.text,
-		stderrFileName: runtimeFileNames.stderr,
-		stdoutFileName: runtimeFileNames.stdout,
-	});
-	await initializeCodexRuntimeMetadataFilesInContainer({
-		containerName: input.containerName,
-		runtimeDirInContainer: taskStageRootInContainer,
-		cursorFileName: taskRuntimeArtifacts.cursorFileName,
-		stateFileName: taskRuntimeArtifacts.stateFileName,
-		writeContainerFile,
-	});
-	const forkRuntimeArtifacts = await prepareForkRuntimeArtifactsOnHost({
-		runInput: input,
-		taskStageDirPath,
-		runtimeFileNames,
-	});
+	await withHostBootstrapLog(taskStderrPath, "task_runtime_files_initialized_in_container", "", () =>
+		initializeRuntimeFilesInContainer({
+			containerName: input.containerName,
+			runtimeDirInContainer: taskStageRootInContainer,
+			jsonlFileName: runtimeFileNames.jsonl,
+			textFileName: runtimeFileNames.text,
+			stderrFileName: runtimeFileNames.stderr,
+			stdoutFileName: runtimeFileNames.stdout,
+		}),
+	);
+	await withHostBootstrapLog(taskStderrPath, "task_metadata_files_initialized_in_container", "", () =>
+		initializeCodexRuntimeMetadataFilesInContainer({
+			containerName: input.containerName,
+			runtimeDirInContainer: taskStageRootInContainer,
+			cursorFileName: taskRuntimeArtifacts.cursorFileName,
+			stateFileName: taskRuntimeArtifacts.stateFileName,
+			writeContainerFile,
+		}),
+	);
+	const forkRuntimeArtifacts = await withHostBootstrapLog(
+		taskStderrPath,
+		"prepare_fork_runtime_artifacts",
+		`session_mode=${input.sessionMode || ""} parent_task_id=${input.parentTaskId || ""}`,
+		() =>
+			prepareForkRuntimeArtifactsOnHost({
+				runInput: input,
+				taskStageDirPath,
+				runtimeFileNames,
+			}),
+	);
 	const agentProvider = input.agentProfile?.provider || "codex";
 	const driverScriptPath = path.posix.join(
 		input.stageRootInContainer,
@@ -3124,12 +3459,26 @@ export const runSingleTurnAgentInContainer = async (
 	);
 
 	const persistentDriverHealth = input.persistent
-		? await inspectDriverHealth({
-				containerName: input.containerName,
-				driverPidPath,
-				driverLifecyclePath,
-			})
+		? await withHostBootstrapLog(taskStderrPath, "inspect_persistent_driver_health", "", () =>
+				inspectDriverHealth({
+					containerName: input.containerName,
+					driverPidPath,
+					driverLifecyclePath,
+				}),
+			)
 		: null;
+	if (persistentDriverHealth) {
+		await appendHostBootstrapLog(
+			taskStderrPath,
+			`persistent_driver_health alive=${String(
+				persistentDriverHealth.alive,
+			)} reason=${JSON.stringify(persistentDriverHealth.reason || "")} pid=${JSON.stringify(
+				persistentDriverHealth.pid || "",
+			)} state=${JSON.stringify(persistentDriverHealth.state || "")} lifecycle_age_ms=${
+				persistentDriverHealth.lifecycleAgeMs ?? ""
+			}`,
+		);
+	}
 	const persistentDriverAlive = Boolean(
 		input.persistent && persistentDriverHealth?.alive,
 	);
@@ -3167,25 +3516,41 @@ export const runSingleTurnAgentInContainer = async (
 				sessionMode: input.sessionMode,
 				parentAgentHomePathInContainer,
 				reuseExistingAgentHome: Boolean(input.persistent),
+				logPath: taskStderrPath,
 		  });
 
-	const sandboxRuntime = await prepareSandboxAgentRuntime({
-		containerName: input.containerName,
-		stageDirPath: input.stageDirPath,
-		stageDirInContainer: input.stageRootInContainer,
-		provider: input.agentProfile?.provider || "codex",
-		homeDir: "/root",
-		envPairs:
-			agentProvider === "claude_code" && input.agentProfile
-				? buildClaudeEnvPairs(input.agentProfile)
-					: [
-						`CODEX_HOME=${CODEX_HOME_IN_CONTAINER}`,
-						...(input.agentProfile
-							? parseAgentProfileEnvPairs(input.agentProfile)
-							: []),
-					],
-		reuseExisting: input.persistent,
-	});
+	await appendHostBootstrapLog(
+		taskStderrPath,
+		`agent_home_ready path=${JSON.stringify(
+			taskAgentHome.agentHomePathInContainer,
+		)} link=${JSON.stringify(taskAgentHome.agentHomeLinkPathInContainer)} copied_from_parent=${String(
+			taskAgentHome.agentHomeCopiedFromParent,
+		)}`,
+	);
+
+	const sandboxRuntime = await withHostBootstrapLog(
+		taskStderrPath,
+		"prepare_sandbox_agent_runtime",
+		`provider=${agentProvider} reuse_existing=${String(Boolean(input.persistent))}`,
+		() =>
+			prepareSandboxAgentRuntime({
+				containerName: input.containerName,
+				stageDirPath: input.stageDirPath,
+				stageDirInContainer: input.stageRootInContainer,
+				provider: input.agentProfile?.provider || "codex",
+				homeDir: "/root",
+				envPairs:
+					agentProvider === "claude_code" && input.agentProfile
+						? buildClaudeEnvPairs(input.agentProfile)
+						: [
+								`CODEX_HOME=${CODEX_HOME_IN_CONTAINER}`,
+								...(input.agentProfile
+									? parseAgentProfileEnvPairs(input.agentProfile)
+									: []),
+							],
+				reuseExisting: input.persistent,
+			}),
+	);
 	const sessionPersistPathInContainer = buildTaskSessionPersistPathInContainer(
 		input.stageRootInContainer,
 	);
@@ -3243,15 +3608,21 @@ export const runSingleTurnAgentInContainer = async (
 			taskQueueDir,
 			`${Date.now()}-${input.scanJob.scanJobId}-${Math.random().toString(16).slice(2)}.json`,
 		);
+		await appendHostBootstrapLog(
+			taskStderrPath,
+			`persistent_driver_enqueue request_path=${JSON.stringify(requestPath)} lane_thread_id=${input.laneThreadId || ""}`,
+		);
 		await appendContainerFile(
 			input.containerName,
 			driverLifecyclePath,
 			`[sandbox-agent-driver-lifecycle] ${new Date().toISOString()} host_enqueue task_id=${input.taskId || ""} request_path=${requestPath} lane_thread_id=${input.laneThreadId || ""}\n`,
 		).catch(() => {});
-		await writeContainerFileAtomically(
-			input.containerName,
-			requestPath,
-			JSON.stringify(driverTaskInput, null, 2),
+		await withHostBootstrapLog(taskStderrPath, "persistent_driver_write_queue_entry", "", () =>
+			writeContainerFileAtomically(
+				input.containerName,
+				requestPath,
+				JSON.stringify(driverTaskInput, null, 2),
+			),
 		);
 		return {
 			threadId: input.laneThreadId || null,
@@ -3273,50 +3644,61 @@ export const runSingleTurnAgentInContainer = async (
 		});
 	}
 
-	await writeContainerFile(
-		input.containerName,
-		driverScriptPath,
-		buildSandboxAgentDriverScript(),
-	);
-	await writeContainerFile(
-		input.containerName,
-		driverInputPath,
-		JSON.stringify(
-			{
-				...driverTaskInput,
-				persistent: input.persistent || false,
-				taskQueueDir,
-			},
-			null,
-			2,
+	await withHostBootstrapLog(taskStderrPath, "write_driver_script", "", () =>
+		writeContainerFile(
+			input.containerName,
+			driverScriptPath,
+			buildSandboxAgentDriverScript(),
 		),
 	);
-	await writeContainerFile(
-		input.containerName,
-		driverLaunchPath,
-		buildSandboxAgentDriverLaunchScript({
-			driverScriptPath,
+	await withHostBootstrapLog(taskStderrPath, "write_driver_input", "", () =>
+		writeContainerFile(
+			input.containerName,
 			driverInputPath,
-			driverStdoutPath,
-			driverPidPath,
-			driverLifecyclePath,
-			taskStdoutPath: path.posix.join(
-				taskStageRootInContainer,
-				runtimeFileNames.stdout,
+			JSON.stringify(
+				{
+					...driverTaskInput,
+					persistent: input.persistent || false,
+					taskQueueDir,
+				},
+				null,
+				2,
 			),
-			stderrPath: path.posix.join(
-				taskStageRootInContainer,
-				runtimeFileNames.stderr,
-			),
+		),
+	);
+	await withHostBootstrapLog(taskStderrPath, "write_driver_launch_script", "", () =>
+		writeContainerFile(
+			input.containerName,
+			driverLaunchPath,
+			buildSandboxAgentDriverLaunchScript({
+				driverScriptPath,
+				driverInputPath,
+				driverStdoutPath,
+				driverPidPath,
+				driverLifecyclePath,
+				taskStdoutPath: path.posix.join(
+					taskStageRootInContainer,
+					runtimeFileNames.stdout,
+				),
+				stderrPath: path.posix.join(
+					taskStageRootInContainer,
+					runtimeFileNames.stderr,
+				),
+			}),
+		),
+	);
+	await withHostBootstrapLog(taskStderrPath, "chmod_driver_launch_script", "", () =>
+		execAsync(
+			`docker exec ${input.containerName} bash -lc "chmod +x '${driverLaunchPath}'"`,
+		),
+	);
+	await withHostBootstrapLog(taskStderrPath, "launch_driver", "", () =>
+		launchDriver({
+			containerName: input.containerName,
+			driverLaunchPath,
 		}),
 	);
-	await execAsync(
-		`docker exec ${input.containerName} bash -lc "chmod +x '${driverLaunchPath}'"`,
-	);
-	await launchDriver({
-		containerName: input.containerName,
-		driverLaunchPath,
-	});
+	await appendHostBootstrapLog(taskStderrPath, "run_single_turn_driver_launched");
 
 	return {
 		threadId: null,

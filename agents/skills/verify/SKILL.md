@@ -56,6 +56,17 @@ After the verification artifacts are written, return the final classification,
 bug/security booleans, score, summary, confidence when supported, artifact paths,
 runtime status, and any other fields requested by the stage prompt.
 
+Also populate verification evidence fields:
+
+- `evidenceBundle`: concise evidence that supports or contradicts the final
+  conclusion
+- `verifiedAttackPath`: the final entry-to-candidate path if verified, or the
+  reason it could not be verified
+- `reproductionSteps`: commands, inputs, harnesses, or manual steps that
+  reproduce the behavior, when available
+- `residualUncertainty`: remaining unknowns, blocked checks, or reasons the
+  conclusion is still limited
+
 Do not write a separate machine-readable result file unless the stage prompt
 explicitly requires it.
 

@@ -1,10 +1,10 @@
+import { promises as fs } from "node:fs";
 import {
-	findScanJobOrganizationId,
 	findSandboxAgentTaskRuntimeByTaskId,
+	findScanJobOrganizationId,
 	validateRequest,
 } from "@dokploy/server";
 import type { NextApiRequest, NextApiResponse } from "next";
-import { promises as fs } from "node:fs";
 import {
 	areSandboxAgentActivitiesEqual,
 	deriveSandboxAgentActivity,
@@ -29,7 +29,9 @@ const sendEvent = (
 };
 
 const asRecord = (value: unknown) =>
-	value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+	value && typeof value === "object"
+		? (value as Record<string, unknown>)
+		: null;
 
 const toStreamMessage = (
 	line: number,
@@ -143,7 +145,7 @@ export default async function handler(
 	};
 
 	if (!jsonlExists) {
-		sendEvent(res, "error", {
+		sendEvent(res, "activity_error", {
 			message: "Sandbox agent event file is not visible to this API process",
 			taskId: runtime.taskId,
 			jsonlExists,
@@ -202,8 +204,9 @@ export default async function handler(
 				deriveSandboxAgentActivity(messages, idleSandboxAgentActivity),
 			);
 		} catch (error) {
-			sendEvent(res, "error", {
-				message: error instanceof Error ? error.message : "Unknown stream error",
+			sendEvent(res, "activity_error", {
+				message:
+					error instanceof Error ? error.message : "Unknown stream error",
 			});
 			cleanup();
 			res.end();
@@ -227,8 +230,9 @@ export default async function handler(
 				res.end();
 			}
 		} catch (error) {
-			sendEvent(res, "error", {
-				message: error instanceof Error ? error.message : "Unknown stream error",
+			sendEvent(res, "activity_error", {
+				message:
+					error instanceof Error ? error.message : "Unknown stream error",
 			});
 			cleanup();
 			res.end();

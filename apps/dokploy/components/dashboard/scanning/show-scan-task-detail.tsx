@@ -1,10 +1,21 @@
-import { AlertCircle, ArrowLeft, Loader2, RefreshCw } from "lucide-react";
+import {
+	AlertCircle,
+	ArrowLeft,
+	ChevronRight,
+	FileIcon,
+	Folder,
+	Loader2,
+	RefreshCw,
+} from "lucide-react";
 import { format } from "date-fns";
 import Head from "next/head";
 import Link from "next/link";
 import { useRouter } from "next/router";
+import { type ReactNode, useEffect, useState } from "react";
 import JsonView from "react18-json-view";
 import { toast } from "sonner";
+import { FuzzingStatusPanel } from "@/components/dashboard/scanning/fuzzing-status-panel";
+import { ScanMonitoring } from "@/components/dashboard/scanning/scan-monitoring";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +27,7 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
 
@@ -26,6 +38,21 @@ interface Props {
 
 const ACTIVE_TASK_STATUSES = new Set(["pending", "launching", "running"]);
 const RERUNNABLE_TASK_STATUSES = new Set(["completed", "failed", "exited"]);
+const ROOT_DIRECTORY_KEY = "__root__";
+
+type ScanTaskTab = "details" | "monitoring" | "fuzzing" | "files";
+
+type DirectoryListItem = {
+	id: string;
+	name: string;
+	type: "file" | "directory";
+	hasChildren?: boolean;
+};
+
+type DirectoryCacheEntry = {
+	items: DirectoryListItem[];
+	status: "idle" | "loading" | "loaded" | "error";
+};
 
 const getTaskStageLabel = (stage?: string | null) => {
 	if (
@@ -74,6 +101,9 @@ const getTaskStageLabel = (stage?: string | null) => {
 	}
 	return stage || "-";
 };
+
+const isRunFuzzerStage = (stage?: string | null) =>
+	stage === "Run Fuzzer" || stage === "run-fuzzer" || stage === "fuzzing";
 
 const getTaskStatusLabel = (status?: string | null) => {
 	if (!status) {
@@ -232,6 +262,131 @@ const JsonBlock = ({ label, value }: { label: string; value: unknown }) => {
 	);
 };
 
+type LazyFileTreeProps = {
+	rootItems: DirectoryListItem[];
+	rootStatus: DirectoryCacheEntry["status"];
+	expandedDirectories: Record<string, boolean>;
+	selectedFilePath: string | null;
+	directoryCache: Record<string, DirectoryCacheEntry>;
+	onToggleDirectory: (directoryPath: string) => void;
+	onSelectFile: (filePath: string) => void;
+};
+
+const LazyFileTree = ({
+	rootItems,
+	rootStatus,
+	expandedDirectories,
+	selectedFilePath,
+	directoryCache,
+	onToggleDirectory,
+	onSelectFile,
+}: LazyFileTreeProps) => {
+	const renderItems = (items: DirectoryListItem[], depth = 0): ReactNode =>
+		items.map((item) => {
+			const isDirectory = item.type === "directory";
+			const isExpanded = !!expandedDirectories[item.id];
+			const cacheEntry = directoryCache[item.id];
+			const childStatus = cacheEntry?.status || "idle";
+			const childItems = cacheEntry?.items || [];
+
+			return (
+				<div key={item.id}>
+					<button
+						type="button"
+						onClick={() =>
+							isDirectory ? onToggleDirectory(item.id) : onSelectFile(item.id)
+						}
+						className={cn(
+							"flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
+							!isDirectory && selectedFilePath === item.id
+								? "bg-accent text-accent-foreground"
+								: "hover:bg-muted/70",
+						)}
+						style={{ paddingLeft: `${depth * 14 + 10}px` }}
+					>
+						{isDirectory ? (
+							<ChevronRight
+								className={cn(
+									"size-4 shrink-0 text-muted-foreground transition-transform",
+									isExpanded && "rotate-90",
+								)}
+							/>
+						) : (
+							<span className="block size-4 shrink-0" />
+						)}
+						{isDirectory ? (
+							<Folder className="size-4 shrink-0 text-muted-foreground" />
+						) : (
+							<FileIcon className="size-4 shrink-0 text-muted-foreground" />
+						)}
+						<span className="min-w-0 truncate font-mono text-sm">
+							{item.name}
+						</span>
+					</button>
+					{isDirectory && isExpanded ? (
+						<div>
+							{childStatus === "loading" ? (
+								<div
+									className="flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground"
+									style={{ paddingLeft: `${(depth + 1) * 14 + 10}px` }}
+								>
+									<Loader2 className="size-4 animate-spin" />
+									Loading...
+								</div>
+							) : childStatus === "error" ? (
+								<div
+									className="px-2 py-1.5 text-sm text-destructive"
+									style={{ paddingLeft: `${(depth + 1) * 14 + 10}px` }}
+								>
+									Failed to load directory
+								</div>
+							) : childStatus === "loaded" && childItems.length === 0 ? (
+								<div
+									className="px-2 py-1.5 text-sm text-muted-foreground"
+									style={{ paddingLeft: `${(depth + 1) * 14 + 10}px` }}
+								>
+									Empty
+								</div>
+							) : (
+								renderItems(childItems, depth + 1)
+							)}
+						</div>
+					) : null}
+				</div>
+			);
+		});
+
+	if (rootStatus === "loading") {
+		return (
+			<div className="flex h-full min-h-[320px] items-center justify-center gap-2 text-muted-foreground">
+				<Loader2 className="size-4 animate-spin" />
+				Loading files...
+			</div>
+		);
+	}
+
+	if (rootStatus === "error") {
+		return (
+			<div className="flex h-full min-h-[320px] items-center justify-center text-destructive">
+				Failed to load files
+			</div>
+		);
+	}
+
+	if (rootItems.length === 0) {
+		return (
+			<div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-2 text-muted-foreground">
+				<Folder className="size-6" />
+				No files available
+			</div>
+		);
+	}
+
+	return (
+		<div className="h-[65vh] overflow-auto p-2">{renderItems(rootItems)}</div>
+	);
+};
+
 export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 	const router = useRouter();
 	const utils = api.useUtils();
@@ -266,8 +421,29 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 		},
 	);
 	const rerunTaskMutation = api.scan.rerunTask.useMutation();
+	const [activeTab, setActiveTab] = useState<ScanTaskTab>("details");
+	const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+	const [expandedDirectories, setExpandedDirectories] = useState<
+		Record<string, boolean>
+	>({});
+	const [directoryCache, setDirectoryCache] = useState<
+		Record<string, DirectoryCacheEntry>
+	>({});
+	const rootDirectoryQuery = api.scan.listTaskDirectory.useQuery(
+		{ scanJobId, taskId },
+		{
+			enabled: !!scanJobId && !!taskId && activeTab === "files",
+			refetchInterval: activeTab === "files" ? 4000 : false,
+		},
+	);
+	const { data: selectedFile, isLoading: isLoadingSelectedFile } =
+		api.scan.readTaskFile.useQuery(
+			{ scanJobId, taskId, filePath: selectedFilePath || "" },
+			{ enabled: !!scanJobId && !!taskId && !!selectedFilePath },
+		);
 
 	const task = data?.task;
+	const showFuzzingStatus = isRunFuzzerStage(task?.stageName);
 	const title = task?.name || `Task ${taskId.slice(0, 6)}`;
 	const canRerunTask = task ? RERUNNABLE_TASK_STATUSES.has(task.status) : false;
 	const buildTaskHref = (targetTaskId?: string | null) =>
@@ -285,11 +461,107 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 				utils.scan.task.invalidate({ taskId, scanJobId }),
 				utils.scan.one.invalidate({ scanJobId }),
 				utils.scan.statusView.invalidate({ scanJobId }),
+				utils.scan.listTaskDirectory.invalidate({ taskId, scanJobId }),
 			]);
 		} catch (error) {
 			toast.error(
 				error instanceof Error ? error.message : "Failed to rerun task",
 			);
+		}
+	};
+
+	useEffect(() => {
+		setSelectedFilePath(null);
+		setExpandedDirectories({});
+		setDirectoryCache({});
+	}, [taskId, scanJobId]);
+
+	useEffect(() => {
+		if (activeTab === "fuzzing" && task && !showFuzzingStatus) {
+			setActiveTab("details");
+		}
+	}, [activeTab, showFuzzingStatus, task]);
+
+	useEffect(() => {
+		if (activeTab !== "files") {
+			return;
+		}
+
+		if (rootDirectoryQuery.isLoading) {
+			setDirectoryCache((current) => ({
+				...current,
+				[ROOT_DIRECTORY_KEY]: {
+					items: current[ROOT_DIRECTORY_KEY]?.items || [],
+					status: "loading",
+				},
+			}));
+			return;
+		}
+
+		if (rootDirectoryQuery.isError) {
+			setDirectoryCache((current) => ({
+				...current,
+				[ROOT_DIRECTORY_KEY]: { items: [], status: "error" },
+			}));
+			setSelectedFilePath(null);
+			return;
+		}
+
+		const items = rootDirectoryQuery.data || [];
+		setDirectoryCache((current) => ({
+			...current,
+			[ROOT_DIRECTORY_KEY]: { items, status: "loaded" },
+		}));
+
+		if (!items.length) {
+			setSelectedFilePath(null);
+		}
+	}, [
+		activeTab,
+		rootDirectoryQuery.data,
+		rootDirectoryQuery.isError,
+		rootDirectoryQuery.isLoading,
+	]);
+
+	const handleToggleDirectory = async (directoryPath: string) => {
+		const nextExpanded = !expandedDirectories[directoryPath];
+		setExpandedDirectories((current) => ({
+			...current,
+			[directoryPath]: nextExpanded,
+		}));
+
+		if (!nextExpanded) {
+			return;
+		}
+
+		const existing = directoryCache[directoryPath];
+		if (existing?.status === "loading" || existing?.status === "loaded") {
+			return;
+		}
+
+		setDirectoryCache((current) => ({
+			...current,
+			[directoryPath]: {
+				items: current[directoryPath]?.items || [],
+				status: "loading",
+			},
+		}));
+
+		try {
+			const items = await utils.scan.listTaskDirectory.fetch({
+				scanJobId,
+				taskId,
+				directoryPath,
+			});
+			setDirectoryCache((current) => ({
+				...current,
+				[directoryPath]: { items, status: "loaded" },
+			}));
+		} catch {
+			setDirectoryCache((current) => ({
+				...current,
+				[directoryPath]: { items: [], status: "error" },
+			}));
 		}
 	};
 
@@ -380,83 +652,198 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 							Task not found
 						</div>
 					) : (
-						<div className="grid gap-6">
-							<div className="flex flex-wrap items-center gap-2">
-								<Badge
-									variant="outline"
-									className={getTaskStatusBadgeClassName(task.status)}
-								>
-									{getTaskStatusLabel(task.status)}
-								</Badge>
-								<Badge variant="outline">{getTaskStageLabel(task.stageName)}</Badge>
-							</div>
+						<Tabs
+							value={activeTab}
+							onValueChange={(value) => setActiveTab(value as ScanTaskTab)}
+							className="w-full"
+						>
+							<TabsList className="flex gap-4 justify-start">
+								<TabsTrigger value="details">Details</TabsTrigger>
+								<TabsTrigger value="monitoring">Monitoring</TabsTrigger>
+								{showFuzzingStatus ? (
+									<TabsTrigger value="fuzzing">Fuzzing Status</TabsTrigger>
+								) : null}
+								<TabsTrigger value="files">Files</TabsTrigger>
+							</TabsList>
 
-							<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-								<DetailField label="Task ID" value={task.taskId} />
-								<DetailField
-									label="Scan Job ID"
-									value={task.scanJobId}
-									href={jobTasksHref}
-								/>
-								<DetailField label="Name" value={task.name} />
-								<DetailField label="Stage" value={getTaskStageLabel(task.stageName)} />
-								<DetailField
-									label="Status"
-									value={getTaskStatusLabel(task.status)}
-									badgeClassName={getTaskStatusBadgeClassName(task.status)}
-								/>
-								<DetailField label="Priority" value={task.priority} />
-								<DetailField label="Attempt" value={task.attempt} />
-								<DetailField
-									label="Token Usage"
-									value={formatTokenUsage(task.tokenUsage)}
-									copyLabel="Token Usage"
-								/>
-								<DetailField label="Runtime Mode" value={task.runtimeMode} />
-								<DetailField
-									label="Parent Task ID"
-									value={task.parentTaskId}
-									href={buildTaskHref(task.parentTaskId)}
-								/>
-								<DetailField
-									label="Forked From Task ID"
-									value={task.forkedFromTaskId}
-									href={buildTaskHref(task.forkedFromTaskId)}
-								/>
-								<DetailField label="Forked From Thread ID" value={task.forkedFromThreadId} />
-								<DetailField
-									label="Stage Group Instance ID"
-									value={task.stageGroupInstanceId}
-								/>
-								<DetailField label="Thread ID" value={task.threadId} />
-								<DetailField label="Container Name" value={task.containerName} />
-								<DetailField label="Exit Reason" value={task.exitReason} />
-								<DetailField label="Exit Note" value={task.exitNote} />
-								<DetailField label="Created" value={task.createdAt} date={task.createdAt} />
-								<DetailField label="Updated" value={task.updatedAt} date={task.updatedAt} />
-								<DetailField label="Started" value={task.startedAt} date={task.startedAt} />
-								<DetailField
-									label="Completed"
-									value={task.completedAt}
-									date={task.completedAt}
-								/>
-							</div>
+							<TabsContent value="details" className="pt-4">
+								<div className="grid gap-6">
+									<div className="flex flex-wrap items-center gap-2">
+										<Badge
+											variant="outline"
+											className={getTaskStatusBadgeClassName(task.status)}
+										>
+											{getTaskStatusLabel(task.status)}
+										</Badge>
+										<Badge variant="outline">
+											{getTaskStageLabel(task.stageName)}
+										</Badge>
+									</div>
 
-							{task.errorMessage ? (
-								<div className="rounded-lg border p-3">
-									<div className="text-sm text-muted-foreground">Error Message</div>
-									<div className="mt-1 whitespace-pre-wrap break-words text-sm">
-										{task.errorMessage}
+									<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+										<DetailField label="Task ID" value={task.taskId} />
+										<DetailField
+											label="Scan Job ID"
+											value={task.scanJobId}
+											href={jobTasksHref}
+										/>
+										<DetailField label="Name" value={task.name} />
+										<DetailField
+											label="Stage"
+											value={getTaskStageLabel(task.stageName)}
+										/>
+										<DetailField
+											label="Status"
+											value={getTaskStatusLabel(task.status)}
+											badgeClassName={getTaskStatusBadgeClassName(task.status)}
+										/>
+										<DetailField label="Priority" value={task.priority} />
+										<DetailField label="Attempt" value={task.attempt} />
+										<DetailField
+											label="Token Usage"
+											value={formatTokenUsage(task.tokenUsage)}
+											copyLabel="Token Usage"
+										/>
+										<DetailField label="Runtime Mode" value={task.runtimeMode} />
+										<DetailField
+											label="Parent Task ID"
+											value={task.parentTaskId}
+											href={buildTaskHref(task.parentTaskId)}
+										/>
+										<DetailField
+											label="Forked From Task ID"
+											value={task.forkedFromTaskId}
+											href={buildTaskHref(task.forkedFromTaskId)}
+										/>
+										<DetailField
+											label="Forked From Thread ID"
+											value={task.forkedFromThreadId}
+										/>
+										<DetailField
+											label="Stage Group Instance ID"
+											value={task.stageGroupInstanceId}
+										/>
+										<DetailField label="Thread ID" value={task.threadId} />
+										<DetailField
+											label="Container Name"
+											value={task.containerName}
+										/>
+										<DetailField label="Exit Reason" value={task.exitReason} />
+										<DetailField label="Exit Note" value={task.exitNote} />
+										<DetailField
+											label="Created"
+											value={task.createdAt}
+											date={task.createdAt}
+										/>
+										<DetailField
+											label="Updated"
+											value={task.updatedAt}
+											date={task.updatedAt}
+										/>
+										<DetailField
+											label="Started"
+											value={task.startedAt}
+											date={task.startedAt}
+										/>
+										<DetailField
+											label="Completed"
+											value={task.completedAt}
+											date={task.completedAt}
+										/>
+									</div>
+
+									{task.errorMessage ? (
+										<div className="rounded-lg border p-3">
+											<div className="text-sm text-muted-foreground">
+												Error Message
+											</div>
+											<div className="mt-1 whitespace-pre-wrap break-words text-sm">
+												{task.errorMessage}
+											</div>
+										</div>
+									) : null}
+
+									<div className="grid gap-4 xl:grid-cols-2">
+										<JsonBlock label="Agent Profile" value={task.agentProfile} />
+										<JsonBlock label="Input" value={task.input} />
+										<JsonBlock label="Output" value={task.output} />
 									</div>
 								</div>
+							</TabsContent>
+
+							<TabsContent value="monitoring" className="pt-4">
+								<ScanMonitoring
+									mode="task"
+									scanJobId={scanJobId}
+									taskId={task.taskId}
+								/>
+							</TabsContent>
+
+							{showFuzzingStatus ? (
+								<TabsContent value="fuzzing" className="pt-4">
+									<FuzzingStatusPanel taskId={task.taskId} />
+								</TabsContent>
 							) : null}
 
-							<div className="grid gap-4 xl:grid-cols-2">
-								<JsonBlock label="Agent Profile" value={task.agentProfile} />
-								<JsonBlock label="Input" value={task.input} />
-								<JsonBlock label="Output" value={task.output} />
-							</div>
-						</div>
+							<TabsContent value="files" className="pt-4">
+								<div className="rounded-lg border">
+									<div className="border-b px-4 py-3">
+										<div className="font-medium">Files</div>
+										<div className="text-sm text-muted-foreground">
+											Browse this task runtime directory.
+										</div>
+									</div>
+									<div className="grid min-h-[65vh] grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]">
+										<div className="border-b lg:border-b-0 lg:border-r">
+											<LazyFileTree
+												rootItems={
+													directoryCache[ROOT_DIRECTORY_KEY]?.items || []
+												}
+												rootStatus={
+													directoryCache[ROOT_DIRECTORY_KEY]?.status ||
+													(rootDirectoryQuery.isLoading ? "loading" : "idle")
+												}
+												expandedDirectories={expandedDirectories}
+												selectedFilePath={selectedFilePath}
+												directoryCache={directoryCache}
+												onToggleDirectory={handleToggleDirectory}
+												onSelectFile={setSelectedFilePath}
+											/>
+										</div>
+
+										<div className="min-w-0">
+											<div className="border-b px-4 py-3">
+												<div className="flex items-center gap-2 text-sm text-muted-foreground">
+													<FileIcon className="size-4" />
+													<span className="truncate">
+														{selectedFile?.relativePath ||
+															selectedFilePath ||
+															"No file selected"}
+													</span>
+												</div>
+											</div>
+											<div className="max-h-[calc(65vh-49px)] overflow-auto px-4 py-3">
+												{!selectedFilePath ? (
+													<div className="flex min-h-[280px] flex-col items-center justify-center gap-2 text-muted-foreground">
+														<FileIcon className="size-6" />
+														No file selected
+													</div>
+												) : isLoadingSelectedFile ? (
+													<div className="flex min-h-[280px] items-center justify-center gap-2 text-muted-foreground">
+														<Loader2 className="size-4 animate-spin" />
+														Loading file...
+													</div>
+												) : (
+													<pre className="whitespace-pre-wrap break-words font-mono text-sm">
+														{selectedFile?.content || "(empty)"}
+													</pre>
+												)}
+											</div>
+										</div>
+									</div>
+								</div>
+							</TabsContent>
+						</Tabs>
 					)}
 				</CardContent>
 			</Card>

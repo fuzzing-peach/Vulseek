@@ -1,34 +1,25 @@
-import { z } from "zod";
+import { buildTaskAgentProfileSnapshot } from "../agent-profile-snapshot";
 import {
-	moduleSchema,
+	repositoryModuleSchema,
+	repositoryScanManifestSchema,
 	repositorySchema,
 } from "../artifacts/contracts/domain-object.contract";
-import type {
-	Module,
-	Repository,
-	ScanJob,
-} from "../types";
+import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";
 import { DEFAULT_DELTA_COMMIT_WINDOW } from "../constants";
-import {
-	createStageDefinition,
-	type StageQueueBinding,
-	type StageDefinition,
-} from "../pipeline/stage-definition";
-import {
-	updateScanJobTargetContextRepo,
-} from "../persistence/scan-job.repo";
-import {
-	buildRepositoryScannerPrompt,
-} from "../prompts/repository-scanner.prompt";
-import { buildTaskAgentProfileSnapshot } from "../agent-profile-snapshot";
+import { updateScanJobTargetContextRepo } from "../persistence/scan-job.repo";
 import { bindTaskRuntimeRepo } from "../persistence/task.repo";
 import {
-	prepareRepositoryForScanInContainer,
-} from "../repository/prepare-repository";
+	createStageDefinition,
+	type StageDefinition,
+	type StageQueueBinding,
+} from "../pipeline/stage-definition";
+import { buildRepositoryScannerPrompt } from "../prompts/repository-scanner.prompt";
+import { prepareRepositoryForScanInContainer } from "../repository/prepare-repository";
 import {
 	runSingleTurnAgentInContainer,
 	startContainer,
 } from "../runtime/run-single-turn-agent";
+import type { RepositoryScanManifest, ScanJob } from "../types";
 import {
 	type PipelineContext,
 	resolveStageConcurrencySetting,
@@ -37,15 +28,7 @@ import {
 
 export type RepositoryScanningStageInput = null;
 
-export type RepositoryScanningStageOutput = {
-	repository: Repository;
-	modules: Module[];
-};
-
-const repositoryScanSchema = z.object({
-	repository: repositorySchema,
-	modules: z.array(moduleSchema),
-});
+export type RepositoryScanningStageOutput = RepositoryScanManifest;
 
 const validateRepositoryStageOutput = async (
 	ctx: StageContext,
@@ -59,11 +42,29 @@ const validateRepositoryStageOutput = async (
 			`Repository scan returned invalid JSON output: ${error instanceof Error ? error.message : "unknown error"}`,
 		);
 	}
-	const repositoryScan = repositoryScanSchema.parse(parsed);
-	return {
-		repository: repositoryScan.repository,
-		modules: repositoryScan.modules,
-	};
+	const manifest = repositoryScanManifestSchema.parse(parsed);
+	const taskDir = await ctx.taskDir();
+	try {
+		repositorySchema.parse(
+			await readTaskJsonArtifact({
+				taskDir,
+				containerPath: manifest.repository,
+			}),
+		);
+		for (const modulePath of manifest.modules) {
+			repositoryModuleSchema.parse(
+				await readTaskJsonArtifact({
+					taskDir,
+					containerPath: modulePath,
+				}),
+			);
+		}
+	} catch (error) {
+		throw new Error(
+			`Repository scan artifact validation failed: ${error instanceof Error ? error.message : "unknown error"}`,
+		);
+	}
+	return manifest;
 };
 
 const executeRepositoryScanStage = async (
@@ -75,7 +76,7 @@ const executeRepositoryScanStage = async (
 		throw new Error("Repository stage requires scanJob in pipeline context");
 	}
 	const scanJob = pipelineScanJob;
-	const repository: Repository = {
+	const repository = {
 		id: ctx.taskId,
 		name: ctx.serviceName,
 		summary: "",
@@ -83,9 +84,6 @@ const executeRepositoryScanStage = async (
 		buildSystems: [],
 		runtimeDirectories: [],
 		downrankedDirectories: [],
-		attackSurfaces: [],
-		publicApis: [],
-		vulnerabilityThemes: [],
 		notes: [],
 		targetRef: scanJob.targetRef,
 		targetTag: scanJob.targetTag,
@@ -126,8 +124,7 @@ const executeRepositoryScanStage = async (
 		targetTag: scanJob.targetTag,
 		commitSha: scanJob.commitSha,
 		baseSha: scanJob.baseSha,
-		commitWindow:
-			scanJob.commitWindow || DEFAULT_DELTA_COMMIT_WINDOW,
+		commitWindow: scanJob.commitWindow || DEFAULT_DELTA_COMMIT_WINDOW,
 		scanRootDir: taskStageRootInContainer,
 	});
 
@@ -165,7 +162,7 @@ const executeRepositoryScanStage = async (
 				? scanAgentProfile.thinkingLevel
 				: null,
 		}),
-		outputSchema: repositoryScanSchema,
+		outputSchema: repositoryScanManifestSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
@@ -193,11 +190,7 @@ export const createRepositoryScanningStageDefinition = <
 		persistent: input.persistent,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
-			await resolveStageConcurrencySetting(
-				ctx.scanJobId,
-				input.id,
-				() => 1,
-			),
+			await resolveStageConcurrencySetting(ctx.scanJobId, input.id, () => 1),
 		run: async (ctx, stageInput) => {
 			const result = await executeRepositoryScanStage(
 				ctx as unknown as StageContext,

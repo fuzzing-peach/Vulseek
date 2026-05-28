@@ -7,12 +7,17 @@ import type {
 	BuildFuzzerRequest,
 	Candidate,
 	CriticResponse,
+	Evidence,
 	FinalAnalysis,
 	Function,
+	FunctionScanManifest,
 	FuzzBuildResult,
 	FuzzRunResult,
 	Module,
+	ModuleScanManifest,
 	Repository,
+	RepositoryModule,
+	RepositoryScanManifest,
 	Verification,
 } from "./artifacts/contracts/domain-object.contract";
 export type {
@@ -20,12 +25,17 @@ export type {
 	BuildFuzzerRequest,
 	Candidate,
 	CriticResponse,
+	Evidence,
 	FinalAnalysis,
 	Function,
+	FunctionScanManifest,
 	FuzzBuildResult,
 	FuzzRunResult,
 	Module,
+	ModuleScanManifest,
 	Repository,
+	RepositoryModule,
+	RepositoryScanManifest,
 	Verification,
 } from "./artifacts/contracts/domain-object.contract";
 
@@ -101,6 +111,8 @@ export type AgentProfileLike = {
 	agentProfileId: string;
 	name: string;
 	provider: "codex" | "claude_code";
+	codexAuthMode?: "api_key" | "codex_home";
+	codexHomePath?: string;
 	baseUrl: string;
 	apiKey: string;
 	model: string;

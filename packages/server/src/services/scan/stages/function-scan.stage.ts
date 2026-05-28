@@ -1,20 +1,17 @@
-import { z } from "zod";
-import { candidateSchema } from "../artifacts/contracts/domain-object.contract";
-import type { Candidate, Function, Module, Repository, ScanJob } from "../types";
+import { buildTaskAgentProfileSnapshot } from "../agent-profile-snapshot";
+import { functionScanManifestSchema } from "../artifacts/contracts/domain-object.contract";
+import { bindTaskRuntimeRepo } from "../persistence/task.repo";
 import {
 	createStageDefinition,
-	type StageQueueBinding,
 	type StageDefinition,
+	type StageQueueBinding,
 } from "../pipeline/stage-definition";
-import {
-	buildFunctionScannerPrompt,
-} from "../prompts/function-scanner.prompt";
-import { buildTaskAgentProfileSnapshot } from "../agent-profile-snapshot";
-import { bindTaskRuntimeRepo } from "../persistence/task.repo";
+import { buildFunctionScannerPrompt } from "../prompts/function-scanner.prompt";
 import {
 	runSingleTurnAgentInContainer,
 	startContainer,
 } from "../runtime/run-single-turn-agent";
+import type { FunctionScanManifest, ScanJob } from "../types";
 import {
 	type PipelineContext,
 	resolveStageConcurrencySetting,
@@ -23,22 +20,27 @@ import {
 
 export type FunctionScanningStageInput = {
 	scanJob: ScanJob;
-	repository: Repository;
-	module: Module;
-	function: Function;
+	repositoryPath: string;
+	modulePath: string;
+	functionPath: string;
+	moduleId: string;
+	moduleName: string;
+	functionId: string;
+	functionName: string;
+	filePath?: string | null;
+	line?: number | null;
+	summary?: string | null;
+	vulnerabilityType?: string | null;
+	priority: number | null;
 };
 
-export type FunctionScanningStageOutput = {
-	candidates: Candidate[];
-};
+export type FunctionScanningStageOutput = FunctionScanManifest;
 
 type FunctionStageContext = StageContext & {
 	executionContext?: { fullScanFunctionConcurrency?: number };
 };
 
-const functionScanningOutputSchema = z.object({
-	candidates: z.array(candidateSchema),
-});
+const functionScanningOutputSchema = functionScanManifestSchema;
 
 const executeFunctionScanStage = async (
 	ctx: StageContext,
@@ -51,9 +53,7 @@ const executeFunctionScanStage = async (
 	const stageRootInContainer = ctx.persistent
 		? await ctx.laneDirContainer()
 		: taskStageRootInContainer;
-	const containerName = ctx.containerName(
-		stageInput.function.functionId.slice(0, 24),
-	);
+	const containerName = ctx.containerName(stageInput.functionId.slice(0, 24));
 
 	await bindTaskRuntimeRepo({
 		taskId: ctx.taskId,
@@ -88,17 +88,17 @@ const executeFunctionScanStage = async (
 		parentTaskId: ctx.parentTaskId,
 		prompt: buildFunctionScannerPrompt({
 			scanJobId: stageInput.scanJob.scanJobId,
-			moduleId: stageInput.module.moduleId,
-			moduleName: stageInput.module.name,
-			functionId: stageInput.function.functionId,
-			functionName: stageInput.function.functionName,
-			filePath: stageInput.function.filePath || undefined,
-			line: stageInput.function.line ?? undefined,
-			summary: stageInput.function.summary || undefined,
-			vulnerabilityType: stageInput.function.vulnerabilityType || undefined,
-			repositoryJson: JSON.stringify(stageInput.repository),
-			moduleJson: JSON.stringify(stageInput.module),
-			functionJson: JSON.stringify(stageInput.function),
+			moduleId: stageInput.moduleId,
+			moduleName: stageInput.moduleName,
+			functionId: stageInput.functionId,
+			functionName: stageInput.functionName,
+			filePath: stageInput.filePath || undefined,
+			line: stageInput.line ?? undefined,
+			summary: stageInput.summary || undefined,
+			vulnerabilityType: stageInput.vulnerabilityType || undefined,
+			repositoryJsonPath: stageInput.repositoryPath,
+			moduleJsonPath: stageInput.modulePath,
+			functionJsonPath: stageInput.functionPath,
 			thinkingLevel: scanAgentProfile?.thinkingLevelEnabled
 				? scanAgentProfile.thinkingLevel
 				: null,

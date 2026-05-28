@@ -39,6 +39,8 @@ import { api } from "@/utils/api";
 const Schema = z.object({
 	name: z.string().min(1, { message: "Name is required" }),
 	provider: z.enum(["codex", "claude_code"]),
+	codexAuthMode: z.enum(["api_key", "codex_home"]),
+	codexHomePath: z.string(),
 	baseUrl: z.string().url({ message: "Please enter a valid URL" }),
 	apiKey: z.string(),
 	model: z.string().min(1, { message: "Model is required" }),
@@ -106,6 +108,8 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 		defaultValues: {
 			name: "",
 			provider: "codex",
+			codexAuthMode: "api_key",
+			codexHomePath: "",
 			baseUrl: "https://api.openai.com/v1",
 			apiKey: "",
 			model: "gpt-5.4",
@@ -119,6 +123,10 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 	const provider = useWatch({
 		control: form.control,
 		name: "provider",
+	});
+	const codexAuthMode = useWatch({
+		control: form.control,
+		name: "codexAuthMode",
 	});
 	const envsValue = useWatch({
 		control: form.control,
@@ -138,6 +146,8 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 		form.reset({
 			name: data?.name ?? "",
 			provider: data?.provider ?? "codex",
+			codexAuthMode: data?.codexAuthMode ?? "api_key",
+			codexHomePath: data?.codexHomePath ?? "",
 			baseUrl: data?.baseUrl ?? "https://api.openai.com/v1",
 			apiKey: data?.apiKey ?? "",
 			model: data?.model ?? "gpt-5.4",
@@ -150,6 +160,7 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 
 	useEffect(() => {
 		if (provider === "claude_code" && !agentProfileId && !data?.baseUrl) {
+			form.setValue("codexAuthMode", "api_key");
 			form.setValue("baseUrl", "https://api.anthropic.com");
 			form.setValue("model", "claude-sonnet-4-5");
 		}
@@ -178,6 +189,10 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 		try {
 			await mutateAsync({
 				...values,
+				codexAuthMode:
+					values.provider === "codex" ? values.codexAuthMode : "api_key",
+				codexHomePath:
+					values.provider === "codex" ? values.codexHomePath.trim() : "",
 				agentProfileId: agentProfileId || "",
 			});
 			await utils.ai.getAgentProfiles.invalidate();
@@ -261,41 +276,100 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 							)}
 						/>
 
-						<FormField
-							control={form.control}
-							name="baseUrl"
-							render={({ field }) => (
-								<FormItem>
-									<FormLabel>Base URL</FormLabel>
-									<FormControl>
-										<Input placeholder="https://api.openai.com/v1" {...field} />
-									</FormControl>
-									<FormDescription>
-										Used when Dokploy prepares the agent runtime config
-									</FormDescription>
-									<FormMessage />
-								</FormItem>
-							)}
-						/>
+						{provider === "codex" && (
+							<FormField
+								control={form.control}
+								name="codexAuthMode"
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel>Codex Auth</FormLabel>
+										<Select onValueChange={field.onChange} value={field.value}>
+											<FormControl>
+												<SelectTrigger>
+													<SelectValue placeholder="Select Codex auth" />
+												</SelectTrigger>
+											</FormControl>
+											<SelectContent>
+												<SelectItem value="api_key">API Key</SelectItem>
+												<SelectItem value="codex_home">
+													Copy Codex Home
+												</SelectItem>
+											</SelectContent>
+										</Select>
+										<FormDescription>
+											Copy Codex Home bind-mounts the host path below into each
+											task container.
+										</FormDescription>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+						)}
 
-						<FormField
-							control={form.control}
-							name="apiKey"
-							render={({ field }) => (
-								<FormItem>
-									<FormLabel>API Key</FormLabel>
-									<FormControl>
-										<Input
-											type="password"
-											placeholder="sk-..."
-											autoComplete="one-time-code"
-											{...field}
-										/>
-									</FormControl>
-									<FormMessage />
-								</FormItem>
-							)}
-						/>
+						{provider === "codex" && codexAuthMode === "codex_home" ? (
+							<FormField
+								control={form.control}
+								name="codexHomePath"
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel>Codex Home Path</FormLabel>
+										<FormControl>
+											<Input placeholder="/home/user/.codex" {...field} />
+										</FormControl>
+										<FormDescription>
+											Absolute path on the Docker host that contains Codex
+											auth.json and config.toml.
+										</FormDescription>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+						) : null}
+
+						{provider !== "codex" || codexAuthMode === "api_key" ? (
+							<FormField
+								control={form.control}
+								name="baseUrl"
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel>Base URL</FormLabel>
+										<FormControl>
+											<Input placeholder="https://api.openai.com/v1" {...field} />
+										</FormControl>
+										<FormDescription>
+											Used when Dokploy prepares the agent runtime config
+										</FormDescription>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+						) : null}
+
+						{provider !== "codex" || codexAuthMode === "api_key" ? (
+							<FormField
+								control={form.control}
+								name="apiKey"
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel>API Key</FormLabel>
+										<FormControl>
+											<Input
+												type="password"
+												placeholder="sk-..."
+												autoComplete="one-time-code"
+												{...field}
+											/>
+										</FormControl>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+						) : (
+							<AlertBlock type="info">
+								Dokploy will copy this Codex home into each task container
+								instead of writing an API key.
+							</AlertBlock>
+						)}
 
 						<FormField
 							control={form.control}

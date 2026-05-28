@@ -94,12 +94,18 @@ export const useSandboxAgentActivity = ({
 			}));
 			eventSource.close();
 		});
-		eventSource.addEventListener("error", () => {
+		eventSource.addEventListener("activity_error", () => {
+			setState((current) => ({
+				...current,
+				isConnected: true,
+			}));
+		});
+		eventSource.onerror = () => {
 			setState((current) => ({
 				...current,
 				isConnected: false,
 			}));
-		});
+		};
 
 		return () => {
 			eventSource.close();
@@ -239,7 +245,7 @@ export const useSandboxAgentActivities = ({
 				};
 			});
 		});
-		eventSource.addEventListener("error", (event) => {
+		eventSource.addEventListener("activity_error", (event) => {
 			let message = "Sandbox agent activity stream disconnected";
 			try {
 				const payload = JSON.parse((event as MessageEvent).data) as {
@@ -249,10 +255,17 @@ export const useSandboxAgentActivities = ({
 			} catch {}
 			setState((current) => ({
 				...current,
-				isConnected: false,
+				isConnected: true,
 				errorMessage: message,
 			}));
 		});
+		eventSource.onerror = () => {
+			setState((current) => ({
+				...current,
+				isConnected: false,
+				errorMessage: "Sandbox agent activity stream disconnected",
+			}));
+		};
 
 		return () => {
 			eventSource.close();

@@ -39,6 +39,12 @@ export const agentProfiles = pgTable("agent_profiles", {
 		.$defaultFn(() => nanoid()),
 	name: text("name").notNull(),
 	provider: agentProvider("provider").notNull().default("codex"),
+	codexAuthMode: text("codexAuthMode", {
+		enum: ["api_key", "codex_home"],
+	})
+		.notNull()
+		.default("api_key"),
+	codexHomePath: text("codexHomePath").notNull().default(""),
 	baseUrl: text("baseUrl").notNull(),
 	apiKey: text("apiKey").notNull(),
 	model: text("model").notNull(),
@@ -89,6 +95,8 @@ export const apiUpdateAi = createSchema
 const createAgentProfileSchema = createInsertSchema(agentProfiles, {
 	name: z.string().min(1, { message: "Name is required" }),
 	provider: z.enum(["codex", "claude_code"]),
+	codexAuthMode: z.enum(["api_key", "codex_home"]).default("api_key"),
+	codexHomePath: z.string().optional().default(""),
 	baseUrl: z.string().url({ message: "Please enter a valid URL" }),
 	apiKey: z.string(),
 	model: z.string().min(1, { message: "Model is required" }),
@@ -102,6 +110,8 @@ export const apiCreateAgentProfile = createAgentProfileSchema
 	.pick({
 		name: true,
 		provider: true,
+		codexAuthMode: true,
+		codexHomePath: true,
 		baseUrl: true,
 		apiKey: true,
 		model: true,

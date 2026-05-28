@@ -19,6 +19,8 @@ type TaskAgentProfileSnapshot = {
 	agentProfileId: string | null;
 	name: string | null;
 	provider: "codex" | "claude_code" | null;
+	codexAuthMode?: "api_key" | "codex_home" | null;
+	codexHomePath?: string | null;
 	baseUrl: string | null;
 	model: string | null;
 	thinkingLevel: string | null;

@@ -22,6 +22,7 @@ import { setupDockerContainerTerminalWebSocketServer } from "./wss/docker-contai
 import { setupDockerStatsMonitoringSocketServer } from "./wss/docker-stats";
 import { setupDrawerLogsWebSocketServer } from "./wss/drawer-logs";
 import { setupDeploymentLogsWebSocketServer } from "./wss/listen-deployment";
+import { setupScanStatsMonitoringSocketServer } from "./wss/scan-stats";
 import { setupTerminalWebSocketServer } from "./wss/terminal";
 import { initAutoDeltaScanPolling } from "./utils/auto-delta-scan";
 
@@ -45,6 +46,7 @@ void app.prepare().then(async () => {
 		setupTerminalWebSocketServer(server);
 		if (!IS_CLOUD) {
 			setupDockerStatsMonitoringSocketServer(server);
+			setupScanStatsMonitoringSocketServer(server);
 		}
 
 		if (process.env.NODE_ENV === "production" && !IS_CLOUD) {

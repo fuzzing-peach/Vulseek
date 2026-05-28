@@ -11,29 +11,18 @@ import type {
 	VerificationResult,
 } from "../types";
 import { createShortTaskId } from "../task-id";
+import { readCandidateIdFromTaskInputArtifact } from "./task-artifact-resolver";
 
-const asRecord = (value: unknown): Record<string, unknown> | null =>
-	value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-
-const readString = (
-	record: Record<string, unknown> | null,
-	key: string,
-): string | null => {
-	const value = record?.[key];
-	return typeof value === "string" && value.length > 0 ? value : null;
-};
-
-const buildAnalysisTaskResultView = (
+const buildAnalysisTaskResultView = async (
 	task: typeof tasks.$inferSelect,
-): AnalysisResult | null => {
+): Promise<AnalysisResult | null> => {
 	const parsedOutput = analysisSchema.safeParse(task.output);
 	if (!parsedOutput.success) {
 		return null;
 	}
 
-	const input = asRecord(task.input);
-	const candidate = asRecord(input?.candidate);
-	const vulnerabilityCandidateId = readString(candidate, "id");
+	const vulnerabilityCandidateId =
+		await readCandidateIdFromTaskInputArtifact(task);
 	if (!vulnerabilityCandidateId) {
 		return null;
 	}
@@ -55,18 +44,16 @@ const buildAnalysisTaskResultView = (
 	};
 };
 
-const buildVerificationTaskResultView = (
+const buildVerificationTaskResultView = async (
 	task: typeof tasks.$inferSelect,
-): VerificationResult | null => {
+): Promise<VerificationResult | null> => {
 	const parsedOutput = verificationSchema.safeParse(task.output);
 	if (!parsedOutput.success) {
 		return null;
 	}
 
-	const input = asRecord(task.input);
-	const analysisResult = asRecord(input?.analysisResult);
-	const candidate = asRecord(analysisResult?.candidate);
-	const vulnerabilityCandidateId = readString(candidate, "id");
+	const vulnerabilityCandidateId =
+		await readCandidateIdFromTaskInputArtifact(task);
 	if (!vulnerabilityCandidateId) {
 		return null;
 	}
@@ -426,27 +413,27 @@ export const requeueTaskRepo = async (taskId: string) => {
 
 export const listAnalysisResultsByScanJobIdRepo = async (
 	scanJobId: string,
-): Promise<AnalysisResult[]> =>
-	(
-		await listTasksByScanJobAndStageRepo({
-			scanJobId,
-			stageName: "analyze",
-		})
-	)
-		.map(buildAnalysisTaskResultView)
-		.filter((item): item is AnalysisResult => Boolean(item));
+): Promise<AnalysisResult[]> => {
+	const analysisTasks = await listTasksByScanJobAndStageRepo({
+		scanJobId,
+		stageName: "analyze",
+	});
+	return (await Promise.all(analysisTasks.map(buildAnalysisTaskResultView))).filter(
+		(item): item is AnalysisResult => Boolean(item),
+	);
+};
 
 export const listVerificationResultsByScanJobIdRepo = async (
 	scanJobId: string,
-): Promise<VerificationResult[]> =>
-	(
-		await listTasksByScanJobAndStageRepo({
-			scanJobId,
-			stageName: "verify",
-		})
-	)
-		.map(buildVerificationTaskResultView)
-		.filter((item): item is VerificationResult => Boolean(item));
+): Promise<VerificationResult[]> => {
+	const verificationTasks = await listTasksByScanJobAndStageRepo({
+		scanJobId,
+		stageName: "verify",
+	});
+	return (
+		await Promise.all(verificationTasks.map(buildVerificationTaskResultView))
+	).filter((item): item is VerificationResult => Boolean(item));
+};
 
 export const findLatestAnalysisResultByCandidateIdRepo = async (input: {
 	scanJobId: string;

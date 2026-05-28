@@ -19,12 +19,13 @@
     }
   },
   "scripts": {
-    "build": "npm run switch:prod && rm -rf ./dist && tsc --project tsconfig.server.json && tsc-alias -p tsconfig.server.json",
+    "build": "npm run switch:prod && rm -rf ./dist && tsc --project tsconfig.server.json && tsc-alias -p tsconfig.server.json && npm run copy:scan-prompts",
     "build:types": "tsc --emitDeclarationOnly --experimenta-dts",
     "switch:dev": "node scripts/switchToSrc.js",
     "switch:prod": "node scripts/switchToDist.js",
     "dev": "rm -rf ./dist && pnpm esbuild && tsc --emitDeclarationOnly --outDir dist -p tsconfig.server.json",
-    "esbuild": "tsx ./esbuild.config.ts && tsc --project tsconfig.server.json --emitDeclarationOnly ",
+    "esbuild": "tsx ./esbuild.config.ts && tsc --project tsconfig.server.json --emitDeclarationOnly && npm run copy:scan-prompts",
+    "copy:scan-prompts": "node scripts/copyScanPromptTemplates.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

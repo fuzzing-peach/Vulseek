@@ -1,7 +1,9 @@
 ---
-name: libafl-build
+name: build-fuzzer
 description: Build a per-candidate LibAFL fuzzing program from an analysis-provided harness request, using LibAFL patterns and sanitizer instrumentation.
 ---
+
+# Build Fuzzer
 
 Build a per-candidate LibAFL fuzzing program from an analysis-provided harness request.
 
@@ -16,6 +18,24 @@ installed `address-sanitizer` skill for memory-safety instrumentation choices.
 4. Enable sanitizers and debug symbols when they fit the target language and build system.
 5. Build the executable fuzzer. Capture stdout/stderr into log files under the task directory.
 6. Return the structured result and route requested by the stage prompt.
+
+## Fuzz Goal
+
+Support both build-request goals:
+
+- `evidence`: build a harness to validate or disprove the concrete hypothesis
+  and expected trigger condition
+- `exploration`: build a harness to explore complex control flow, parser
+  boundaries, state machines, protocol interactions, input classes, and
+  unexpected states
+
+Use `harnessEntry`, `inputModel`, `expectedOracle`, `seedCorpusHints`,
+`buildCommandHints`, and `sanitizerRuntimeAssumptions` as the executable test
+specification.
+
+The structured result should include the build status, build logs or error
+summary, executable path when available, `fuzzGoal`, `harnessEntry`,
+`inputModel`, `expectedOracle`, `seedCorpusPath`, notes, and artifact paths.
 
 ## Build Decision
 

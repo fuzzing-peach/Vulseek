@@ -1,13 +1,13 @@
+import { promises as fs } from "node:fs";
 import {
 	findRunningSandboxAgentTaskRuntimesByScanJobId,
+	findSandboxAgentTaskRuntimeByTaskId,
 	findScanJobOrganizationId,
 	findScanJobStatusById,
-	findSandboxAgentTaskRuntimeByTaskId,
 	type SandboxAgentTaskRuntime,
 	validateRequest,
 } from "@dokploy/server";
 import type { NextApiRequest, NextApiResponse } from "next";
-import { promises as fs } from "node:fs";
 import {
 	areSandboxAgentActivitiesEqual,
 	deriveSandboxAgentActivity,
@@ -52,7 +52,9 @@ const sendEvent = (
 };
 
 const asRecord = (value: unknown) =>
-	value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+	value && typeof value === "object"
+		? (value as Record<string, unknown>)
+		: null;
 
 const toStreamMessage = (
 	line: number,
@@ -189,7 +191,7 @@ export default async function handler(
 
 		const metadata = await buildMetadata(runtime);
 		if (!metadata.jsonlExists) {
-			sendEvent(res, "error", {
+			sendEvent(res, "activity_error", {
 				taskId: runtime.taskId,
 				message: "Sandbox agent event file is not visible to this API process",
 				jsonlExists: metadata.jsonlExists,
@@ -219,7 +221,12 @@ export default async function handler(
 		};
 
 		const emitActivityIfChanged = (nextActivity: SandboxAgentActivity) => {
-			if (areSandboxAgentActivitiesEqual(subscription.currentActivity, nextActivity)) {
+			if (
+				areSandboxAgentActivitiesEqual(
+					subscription.currentActivity,
+					nextActivity,
+				)
+			) {
 				return;
 			}
 			subscription.currentActivity = nextActivity;
@@ -233,10 +240,16 @@ export default async function handler(
 		subscription.unsubscribe = buffer.subscribe((event) => {
 			try {
 				if (event.type === "append") {
-					const messages = parseJsonlLines(event.content, subscription.parseState);
+					const messages = parseJsonlLines(
+						event.content,
+						subscription.parseState,
+					);
 					if (messages.length > 0) {
 						emitActivityIfChanged(
-							deriveSandboxAgentActivity(messages, subscription.currentActivity),
+							deriveSandboxAgentActivity(
+								messages,
+								subscription.currentActivity,
+							),
 						);
 					}
 					return;
@@ -244,14 +257,18 @@ export default async function handler(
 
 				subscription.parseState.nextLine = 0;
 				subscription.parseState.pending = "";
-				const messages = parseJsonlLines(event.content, subscription.parseState);
+				const messages = parseJsonlLines(
+					event.content,
+					subscription.parseState,
+				);
 				emitActivityIfChanged(
 					deriveSandboxAgentActivity(messages, idleSandboxAgentActivity),
 				);
 			} catch (error) {
-				sendEvent(res, "error", {
+				sendEvent(res, "activity_error", {
 					taskId: runtime.taskId,
-					message: error instanceof Error ? error.message : "Unknown stream error",
+					message:
+						error instanceof Error ? error.message : "Unknown stream error",
 				});
 				unsubscribeTask(runtime.taskId);
 			}
@@ -283,7 +300,7 @@ export default async function handler(
 			tasks,
 		});
 	} catch (error) {
-		sendEvent(res, "error", {
+		sendEvent(res, "activity_error", {
 			taskId: null,
 			message: error instanceof Error ? error.message : "Unknown stream error",
 		});
@@ -299,7 +316,9 @@ export default async function handler(
 				findScanJobStatusById(scanJobId),
 				findRunningSandboxAgentTaskRuntimesByScanJobId(scanJobId),
 			]);
-			const latestIds = new Set(latestRuntimes.map((runtime) => runtime.taskId));
+			const latestIds = new Set(
+				latestRuntimes.map((runtime) => runtime.taskId),
+			);
 
 			for (const taskId of subscriptions.keys()) {
 				if (latestIds.has(taskId)) {
@@ -310,7 +329,8 @@ export default async function handler(
 				sendEvent(res, "done", {
 					taskId,
 					status: latestRuntime?.status || "missing",
-					taskKind: latestRuntime?.taskKind || fallback?.runtime.taskKind || "unknown",
+					taskKind:
+						latestRuntime?.taskKind || fallback?.runtime.taskKind || "unknown",
 				});
 				unsubscribeTask(taskId);
 			}
@@ -337,9 +357,10 @@ export default async function handler(
 				res.end();
 			}
 		} catch (error) {
-			sendEvent(res, "error", {
+			sendEvent(res, "activity_error", {
 				taskId: null,
-				message: error instanceof Error ? error.message : "Unknown stream error",
+				message:
+					error instanceof Error ? error.message : "Unknown stream error",
 			});
 			cleanup();
 			res.end();

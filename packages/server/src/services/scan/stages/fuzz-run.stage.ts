@@ -1,59 +1,55 @@
-import {
-	fuzzRunResultSchema,
-	type FuzzBuildResult,
-} from "../artifacts/contracts/domain-object.contract";
 import { buildTaskAgentProfileSnapshot } from "../agent-profile-snapshot";
+import { fuzzRunResultSchema } from "../artifacts/contracts/domain-object.contract";
+import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";
 import { bindTaskRuntimeRepo } from "../persistence/task.repo";
 import {
 	createStageDefinition,
 	type StageDefinition,
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
+import { renderPromptTemplate } from "../prompts/prompt-template";
+import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import {
 	runSingleTurnAgentInContainer,
 	startContainer,
 } from "../runtime/run-single-turn-agent";
-import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
-import type { FuzzBuildStageInput } from "./fuzz-build.stage";
+import type { Candidate } from "../types";
 import {
 	type PipelineContext,
 	resolveScanProfileConcurrencySettings,
 	resolveStageConcurrencySetting,
 	type StageContext,
 } from "./full-scan-stage.runtime";
+import type { FuzzBuildStageInput } from "./fuzz-build.stage";
 
 export type FuzzRunStageInput = FuzzBuildStageInput & {
-	buildResult: FuzzBuildResult;
+	buildResultPath: string;
 };
 
 export type FuzzRunStageOutput = unknown;
 
 const DEFAULT_FUZZING_BUDGET_SECONDS = 600;
 
-const buildFuzzRunPrompt = (
+export const buildFuzzRunPrompt = (
 	input: FuzzRunStageInput,
 	paths: {
+		candidate: Candidate;
 		taskDirContainer: string;
 		taskId: string;
 		fuzzingBudgetSeconds: number;
 	},
 ) =>
-	[
-		"You are the fuzzing execution agent for one vulnerability candidate.",
-		...NEVER_REUSE_TASK_PROMPT_LINES,
-		"Use the installed skill named libafl-fuzz as your working method.",
-		`candidate_id: ${input.candidate.id}`,
-		`candidate_title: ${input.candidate.title}`,
-		`task_dir: ${paths.taskDirContainer}`,
-		`fuzzing_budget_seconds: ${paths.fuzzingBudgetSeconds}`,
-		`build_result: ${JSON.stringify(input.buildResult)}`,
-		"",
-		"Run the LibAFL executable within the budget.",
-		"Save corpus, crashes, triggering inputs, and logs under task_dir.",
-		"Before returning, validate the structured JSON against the runtime-provided output.schema.json.",
-		`Use ${paths.taskId} as id.`,
-		"Always route back to analysis.",
-	].join("\n");
+	renderPromptTemplate(new URL("./run-fuzzer.prompt.md", import.meta.url), {
+		taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
+		candidateId: paths.candidate.id,
+		candidateTitle: paths.candidate.title,
+		taskDir: paths.taskDirContainer,
+		fuzzingBudgetSeconds: paths.fuzzingBudgetSeconds,
+		candidateJsonPath: input.candidatePath,
+		buildRequestJsonPath: input.buildRequestPath,
+		buildResultJsonPath: input.buildResultPath,
+		taskId: paths.taskId,
+	});
 
 const executeFuzzRunStage = async (
 	ctx: StageContext,
@@ -66,7 +62,11 @@ const executeFuzzRunStage = async (
 	const stageRootInContainer = ctx.persistent
 		? await ctx.laneDirContainer()
 		: taskStageRootInContainer;
-	const containerName = ctx.containerName(stageInput.candidate.id.slice(0, 8));
+	const candidate = await readTaskJsonArtifact<Candidate>({
+		taskDir: taskStageDirPath,
+		containerPath: stageInput.candidatePath,
+	});
+	const containerName = ctx.containerName(candidate.id.slice(0, 8));
 	const fuzzingBudgetSeconds =
 		(await resolveScanProfileConcurrencySettings(ctx.scanJobId))
 			.fuzzingBudgetSeconds || DEFAULT_FUZZING_BUDGET_SECONDS;
@@ -76,7 +76,7 @@ const executeFuzzRunStage = async (
 		agentProfile: buildTaskAgentProfileSnapshot(agentProfile).agentProfile,
 	});
 	await startContainer({
-		scanJob: stageInput.candidate.scanJob,
+		scanJob: stageInput.scanJob,
 		taskId: ctx.taskId,
 		agentProfile,
 		containerName,
@@ -87,7 +87,7 @@ const executeFuzzRunStage = async (
 	});
 
 	return await runSingleTurnAgentInContainer({
-		scanJob: stageInput.candidate.scanJob,
+		scanJob: stageInput.scanJob,
 		agentProfile,
 		containerName,
 		codexHome: `${stageRootInContainer}/.codex-fuzz-run`,
@@ -103,6 +103,7 @@ const executeFuzzRunStage = async (
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
 		prompt: buildFuzzRunPrompt(stageInput, {
+			candidate,
 			taskDirContainer: taskStageRootInContainer,
 			taskId: ctx.taskId,
 			fuzzingBudgetSeconds,

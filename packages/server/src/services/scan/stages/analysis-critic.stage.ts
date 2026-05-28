@@ -1,19 +1,19 @@
-import {
-	criticResponseSchema,
-	type Analysis,
-} from "../artifacts/contracts/domain-object.contract";
 import { buildTaskAgentProfileSnapshot } from "../agent-profile-snapshot";
+import { criticResponseSchema } from "../artifacts/contracts/domain-object.contract";
+import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";
 import { bindTaskRuntimeRepo } from "../persistence/task.repo";
 import {
 	createStageDefinition,
 	type StageDefinition,
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
+import { renderPromptTemplate } from "../prompts/prompt-template";
+import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import {
 	runSingleTurnAgentInContainer,
 	startContainer,
 } from "../runtime/run-single-turn-agent";
-import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
+import type { Candidate } from "../types";
 import type { CandidateAnalysisStageInput } from "./candidate-analysis.stage";
 import {
 	type PipelineContext,
@@ -22,7 +22,7 @@ import {
 } from "./full-scan-stage.runtime";
 
 export type AnalysisCriticStageInput = CandidateAnalysisStageInput & {
-	draftAnalysis: Analysis;
+	draftAnalysisPath: string;
 	analysisFingerprint: string;
 };
 
@@ -31,26 +31,21 @@ export type AnalysisCriticStageOutput = unknown;
 const buildAnalysisCriticPrompt = (
 	input: AnalysisCriticStageInput,
 	paths: {
+		candidate: Candidate;
 		taskDirContainer: string;
 		taskId: string;
 	},
 ) =>
-	[
-		"You are the critic agent for one vulnerability analysis.",
-		...NEVER_REUSE_TASK_PROMPT_LINES,
-		"Use the installed skill named analysis-critic as your working method.",
-		`candidate_id: ${input.candidate.id}`,
-		`candidate_title: ${input.candidate.title}`,
-		`task_dir: ${paths.taskDirContainer}`,
-		`analysis_fingerprint: ${input.analysisFingerprint}`,
-		`draft_analysis: ${JSON.stringify(input.draftAnalysis)}`,
-		"",
-		"Try to refute the analysis. Focus on reachability, fuzz evidence, false-positive alternatives, exploitability, and severity.",
-		"If you are convinced, set stance to convinced and bind reviewedAnalysisFingerprint to the draft analysis fingerprint supplied by the analysis agent.",
-		"Before returning, validate the structured JSON against the runtime-provided output.schema.json.",
-		`Use ${paths.taskId} as id.`,
-		"Always route back to analysis.",
-	].join("\n");
+	renderPromptTemplate(new URL("./criticize.prompt.md", import.meta.url), {
+		taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
+		candidateId: paths.candidate.id,
+		candidateTitle: paths.candidate.title,
+		taskDir: paths.taskDirContainer,
+		analysisFingerprint: input.analysisFingerprint,
+		candidateJsonPath: input.candidatePath,
+		draftAnalysisJsonPath: input.draftAnalysisPath,
+		taskId: paths.taskId,
+	});
 
 const executeAnalysisCriticStage = async (
 	ctx: StageContext,
@@ -63,14 +58,18 @@ const executeAnalysisCriticStage = async (
 	const stageRootInContainer = ctx.persistent
 		? await ctx.laneDirContainer()
 		: taskStageRootInContainer;
-	const containerName = ctx.containerName(stageInput.candidate.id.slice(0, 8));
+	const candidate = await readTaskJsonArtifact<Candidate>({
+		taskDir: taskStageDirPath,
+		containerPath: stageInput.candidatePath,
+	});
+	const containerName = ctx.containerName(candidate.id.slice(0, 8));
 	await bindTaskRuntimeRepo({
 		taskId: ctx.taskId,
 		containerName,
 		agentProfile: buildTaskAgentProfileSnapshot(agentProfile).agentProfile,
 	});
 	await startContainer({
-		scanJob: stageInput.candidate.scanJob,
+		scanJob: stageInput.scanJob,
 		taskId: ctx.taskId,
 		agentProfile,
 		containerName,
@@ -81,7 +80,7 @@ const executeAnalysisCriticStage = async (
 	});
 
 	return await runSingleTurnAgentInContainer({
-		scanJob: stageInput.candidate.scanJob,
+		scanJob: stageInput.scanJob,
 		agentProfile,
 		containerName,
 		codexHome: `${stageRootInContainer}/.codex-analysis-critic`,
@@ -97,6 +96,7 @@ const executeAnalysisCriticStage = async (
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
 		prompt: buildAnalysisCriticPrompt(stageInput, {
+			candidate,
 			taskDirContainer: taskStageRootInContainer,
 			taskId: ctx.taskId,
 		}),

@@ -15,6 +15,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import {
 	type KeyboardEvent,
+	type MouseEvent,
 	type ReactNode,
 	useEffect,
 	useMemo,
@@ -24,19 +25,21 @@ import {
 import { toast } from "sonner";
 import {
 	ANALYSIS_RESULT_OPTIONS,
-	VERIFY_RESULT_OPTIONS,
 	applyCandidateListQueryState,
 	buildCandidateListStateHref,
-	parseCandidateListQueryState,
-	serializeCandidateListQueryState,
 	type CandidateSortDirection,
 	type CandidateSortKey,
+	parseCandidateListQueryState,
+	serializeCandidateListQueryState,
+	VERIFY_RESULT_OPTIONS,
 } from "@/components/dashboard/scanning/candidate-list-query-state";
 import {
 	LiveTaskActivity,
 	LiveTaskActivityBadge,
 	LiveTaskActivityButton,
+	LiveTaskTextButton,
 } from "@/components/dashboard/scanning/live-task-activity";
+import { ScanMonitoring } from "@/components/dashboard/scanning/scan-monitoring";
 import { ScanStageGraph } from "@/components/dashboard/scanning/scan-stage-graph";
 import { useSandboxAgentActivities } from "@/components/dashboard/scanning/use-sandbox-agent-activity";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
@@ -44,9 +47,6 @@ import { CopyValueButton } from "@/components/shared/copy-value-button";
 import { DateTooltip } from "@/components/shared/date-tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Progress } from "@/components/ui/progress";
-import { Textarea } from "@/components/ui/textarea";
 import {
 	Card,
 	CardContent,
@@ -54,12 +54,15 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
 	Popover,
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
+import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import {
 	idleSandboxAgentActivity,
 	type SandboxAgentActivity,
@@ -93,6 +96,7 @@ type ScanJobTab =
 	| "analysis"
 	| "verify"
 	| "candidates"
+	| "monitoring"
 	| "files";
 
 const RESULT_SORT_RANK: Record<string, number> = {
@@ -149,6 +153,7 @@ const resolveRequestedTab = (
 		rawTab === "analysis" ||
 		rawTab === "verify" ||
 		rawTab === "candidates" ||
+		rawTab === "monitoring" ||
 		rawTab === "files"
 	) {
 		return rawTab;
@@ -1448,10 +1453,25 @@ export const ShowScanJobDetail = ({
 		);
 	const buildTaskDetailHref = (taskId: string) =>
 		`${candidateListPageBasePath}/tasks/${encodeURIComponent(taskId)}`;
+	const shouldIgnoreTaskRowClick = (target: EventTarget | null) =>
+		target instanceof Element &&
+		!!target.closest("a,button,input,textarea,select,[data-task-row-action]");
+	const handleTaskRowClick = (
+		event: MouseEvent<HTMLTableRowElement>,
+		taskId: string,
+	) => {
+		if (shouldIgnoreTaskRowClick(event.target)) {
+			return;
+		}
+		void router.push(buildTaskDetailHref(taskId));
+	};
 	const handleTaskRowKeyDown = (
 		event: KeyboardEvent<HTMLTableRowElement>,
 		taskId: string,
 	) => {
+		if (shouldIgnoreTaskRowClick(event.target)) {
+			return;
+		}
 		if (event.key !== "Enter" && event.key !== " ") {
 			return;
 		}
@@ -1610,6 +1630,7 @@ export const ShowScanJobDetail = ({
 							<TabsTrigger value="analysis">Analysis</TabsTrigger>
 							<TabsTrigger value="verify">Verify</TabsTrigger>
 							<TabsTrigger value="candidates">Candidates</TabsTrigger>
+							<TabsTrigger value="monitoring">Monitoring</TabsTrigger>
 							<TabsTrigger value="files">Files</TabsTrigger>
 						</TabsList>
 
@@ -2377,6 +2398,10 @@ export const ShowScanJobDetail = ({
 							)}
 						</TabsContent>
 
+						<TabsContent value="monitoring" className="pt-4">
+							<ScanMonitoring mode="job" scanJobId={scanJobId} />
+						</TabsContent>
+
 						<TabsContent value="files" className="pt-4">
 							<div className="rounded-lg border">
 								<div className="border-b px-4 py-3">
@@ -2714,10 +2739,10 @@ export const ShowScanJobDetail = ({
 														<th className="w-[10%] px-4 py-3 font-medium">
 															Runtime
 														</th>
-														<th className="w-[50%] px-4 py-3 font-medium">
+														<th className="w-[48%] px-4 py-3 font-medium">
 															Current Activity
 														</th>
-														<th className="w-[8%] px-4 py-3 font-medium">
+														<th className="w-[10%] px-4 py-3 font-medium">
 															Actions
 														</th>
 													</tr>
@@ -2726,7 +2751,15 @@ export const ShowScanJobDetail = ({
 													{runningTaskPagination.items.map((task) => (
 														<tr
 															key={task.id}
-															className="border-b last:border-b-0"
+															tabIndex={0}
+															aria-label={`Open task ${task.title}`}
+															onClick={(event) =>
+																handleTaskRowClick(event, task.taskId)
+															}
+															onKeyDown={(event) =>
+																handleTaskRowKeyDown(event, task.taskId)
+															}
+															className="cursor-pointer border-b transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none last:border-b-0"
 														>
 															<td className="w-[22%] px-4 py-3 align-top">
 																<div className="line-clamp-2 font-medium">
@@ -2745,7 +2778,7 @@ export const ShowScanJobDetail = ({
 																	runtimeNowMs,
 																)}
 															</td>
-															<td className="w-[50%] px-4 py-3 align-top">
+															<td className="w-[48%] px-4 py-3 align-top">
 																<LiveTaskActivityBadge
 																	activity={
 																		activitiesByTaskId[task.taskId] ||
@@ -2756,19 +2789,32 @@ export const ShowScanJobDetail = ({
 																	)}
 																/>
 															</td>
-															<td className="w-[8%] px-4 py-3 align-top">
-																<LiveTaskActivityButton
-																	taskId={task.taskId}
-																	title={task.title}
-																	subtitle={task.subtitle}
-																	activity={
-																		activitiesByTaskId[task.taskId] ||
-																		idleSandboxAgentActivity
-																	}
-																	variant="outline"
-																	size="icon"
-																	iconOnly
-																/>
+															<td
+																className="w-[10%] px-4 py-3 align-top"
+																data-task-row-action
+															>
+																<div className="flex items-center gap-2">
+																	<LiveTaskActivityButton
+																		taskId={task.taskId}
+																		title={task.title}
+																		subtitle={task.subtitle}
+																		activity={
+																			activitiesByTaskId[task.taskId] ||
+																			idleSandboxAgentActivity
+																		}
+																		variant="outline"
+																		size="icon"
+																		iconOnly
+																	/>
+																	<LiveTaskTextButton
+																		taskId={task.taskId}
+																		title={task.title}
+																		subtitle={task.subtitle}
+																		variant="outline"
+																		size="icon"
+																		iconOnly
+																	/>
+																</div>
 															</td>
 														</tr>
 													))}
