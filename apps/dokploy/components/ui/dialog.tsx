@@ -62,7 +62,7 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 const DialogContent = React.forwardRef<
 	React.ElementRef<typeof DialogPrimitive.Content>,
 	React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => {
+>(({ className, children, onClick, onKeyDown, ...props }, ref) => {
 	const contentRef = React.useRef<HTMLDivElement>(null);
 	const { onOpenChange, open } = React.useContext(DialogContext);
 
@@ -134,6 +134,14 @@ const DialogContent = React.forwardRef<
 					className,
 				)}
 				style={{ pointerEvents: "auto" }}
+				onClick={(event) => {
+					onClick?.(event);
+					event.stopPropagation();
+				}}
+				onKeyDown={(event) => {
+					onKeyDown?.(event);
+					event.stopPropagation();
+				}}
 				onInteractOutside={(event) => event.preventDefault()}
 				{...props}
 			>

@@ -1,20 +1,20 @@
+import { db } from "@dokploy/server/db";
+import { type taskStatusEnum, tasks } from "@dokploy/server/db/schema";
 import { TRPCError } from "@trpc/server";
 import { desc, eq, or } from "drizzle-orm";
-import { db } from "@dokploy/server/db";
-import {
-	taskStatusEnum,
-	tasks,
-} from "@dokploy/server/db/schema";
 import {
 	analysisSchema,
 	candidateSchema,
 	verificationSchema,
 } from "../artifacts/contracts/domain-object.contract";
 import {
+	listCandidateDescendantTasksByFunctionTaskIdRepo,
+	listTasksByScanJobAndStageRepo,
+} from "./task.repo";
+import {
 	readCandidateIdFromTaskInputArtifact,
 	readTaskJsonArtifactForTask,
 } from "./task-artifact-resolver";
-import { listTasksByScanJobAndStageRepo } from "./task.repo";
 
 type DerivedCandidateRecord = {
 	vulnerabilityCandidateId: string;
@@ -34,11 +34,11 @@ type DerivedCandidateRecord = {
 };
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
-	value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+	value && typeof value === "object"
+		? (value as Record<string, unknown>)
+		: null;
 
-const shouldVerifyFromAnalysisResult = (
-	result: string | null | undefined,
-) =>
+const shouldVerifyFromAnalysisResult = (result: string | null | undefined) =>
 	result === "real_vulnerability" || result === "likely_vulnerability";
 
 const parseFunctionTaskCandidates = async (task: typeof tasks.$inferSelect) => {
@@ -52,7 +52,9 @@ const parseFunctionTaskCandidates = async (task: typeof tasks.$inferSelect) => {
 	for (const rawCandidate of rawCandidates) {
 		const candidate =
 			typeof rawCandidate === "string"
-				? await readTaskJsonArtifactForTask(task, rawCandidate).catch(() => null)
+				? await readTaskJsonArtifactForTask(task, rawCandidate).catch(
+						() => null,
+					)
 				: rawCandidate;
 		const parsed = candidateSchema.safeParse(candidate);
 		if (parsed.success) {
@@ -64,16 +66,21 @@ const parseFunctionTaskCandidates = async (task: typeof tasks.$inferSelect) => {
 
 const maxTimestamp = (...values: Array<string | null | undefined>) =>
 	values
-		.filter((value): value is string => typeof value === "string" && value.length > 0)
+		.filter(
+			(value): value is string => typeof value === "string" && value.length > 0,
+		)
 		.sort()
 		.at(-1) || new Date(0).toISOString();
 
 const buildDerivedCandidatesFromTasks = async (input: {
-	functionTasks: typeof tasks.$inferSelect[];
-	analysisTasks: typeof tasks.$inferSelect[];
-	verificationTasks: typeof tasks.$inferSelect[];
+	functionTasks: (typeof tasks.$inferSelect)[];
+	analysisTasks: (typeof tasks.$inferSelect)[];
+	verificationTasks: (typeof tasks.$inferSelect)[];
 }) => {
-	const latestAnalysisTaskByCandidateId = new Map<string, typeof tasks.$inferSelect>();
+	const latestAnalysisTaskByCandidateId = new Map<
+		string,
+		typeof tasks.$inferSelect
+	>();
 	for (const task of input.analysisTasks) {
 		const candidateId = await readCandidateIdFromTaskInputArtifact(task);
 		if (candidateId && !latestAnalysisTaskByCandidateId.has(candidateId)) {
@@ -97,7 +104,9 @@ const buildDerivedCandidatesFromTasks = async (input: {
 		const functionCandidates = await parseFunctionTaskCandidates(functionTask);
 		for (const candidate of functionCandidates) {
 			const analysisTask = latestAnalysisTaskByCandidateId.get(candidate.id);
-			const verificationTask = latestVerificationTaskByCandidateId.get(candidate.id);
+			const verificationTask = latestVerificationTaskByCandidateId.get(
+				candidate.id,
+			);
 			const analysisOutput = analysisTask
 				? analysisSchema.safeParse(analysisTask.output)
 				: null;
@@ -144,17 +153,17 @@ const buildDerivedCandidatesFromTasks = async (input: {
 					typeof verificationOutput.data.confidence === "number"
 						? verificationOutput.data.confidence
 						: analysisOutput?.success &&
-							  typeof analysisOutput.data.confidence === "number"
+								typeof analysisOutput.data.confidence === "number"
 							? analysisOutput.data.confidence
-							: candidate.confidence ?? null,
+							: (candidate.confidence ?? null),
 				score:
 					verificationOutput?.success &&
 					typeof verificationOutput.data.score === "number"
 						? verificationOutput.data.score
 						: analysisOutput?.success &&
-							  typeof analysisOutput.data.score === "number"
+								typeof analysisOutput.data.score === "number"
 							? analysisOutput.data.score
-							: candidate.score ?? null,
+							: (candidate.score ?? null),
 				createdAt: functionTask.createdAt,
 				updatedAt: maxTimestamp(
 					functionTask.updatedAt,
@@ -189,7 +198,9 @@ const listDerivedCandidatesByScanJobId = async (
 	]);
 
 	const hasUnifiedTaskPipeline =
-		functionTasks.length > 0 || analysisTasks.length > 0 || verificationTasks.length > 0;
+		functionTasks.length > 0 ||
+		analysisTasks.length > 0 ||
+		verificationTasks.length > 0;
 	if (!hasUnifiedTaskPipeline) {
 		return null;
 	}
@@ -219,7 +230,9 @@ const findDerivedCandidateById = async (
 	const functionTasks = stageTasks.filter(
 		(task) => task.stageName === "function-scan",
 	);
-	const analysisTasks = stageTasks.filter((task) => task.stageName === "analyze");
+	const analysisTasks = stageTasks.filter(
+		(task) => task.stageName === "analyze",
+	);
 	const verificationTasks = stageTasks.filter(
 		(task) => task.stageName === "verify",
 	);
@@ -237,14 +250,76 @@ const findDerivedCandidateById = async (
 	);
 };
 
-export const findVulnerabilityCandidatesByScanJobIdRepo = async (scanJobId: string) => {
+export const findVulnerabilityCandidatesByScanJobIdRepo = async (
+	scanJobId: string,
+) => {
 	return (await listDerivedCandidatesByScanJobId(scanJobId)) || [];
+};
+
+export const findVulnerabilityCandidateByIdAndScanJobIdRepo = async (input: {
+	vulnerabilityCandidateId: string;
+	scanJobId: string;
+}) => {
+	const functionTasks = await listTasksByScanJobAndStageRepo({
+		scanJobId: input.scanJobId,
+		stageName: "function-scan",
+	});
+
+	for (const functionTask of functionTasks) {
+		const candidates = await parseFunctionTaskCandidates(functionTask);
+		if (
+			!candidates.some(
+				(candidate) => candidate.id === input.vulnerabilityCandidateId,
+			)
+		) {
+			continue;
+		}
+
+		const candidateTasks =
+			await listCandidateDescendantTasksByFunctionTaskIdRepo({
+				scanFunctionTaskId: functionTask.taskId,
+				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+			});
+		const derivedCandidates = await buildDerivedCandidatesFromTasks({
+			functionTasks: [functionTask],
+			analysisTasks: candidateTasks.filter(
+				(task) => task.stageName === "analyze",
+			),
+			verificationTasks: candidateTasks.filter(
+				(task) => task.stageName === "verify",
+			),
+		});
+		const derivedCandidate = derivedCandidates.find(
+			(candidate) =>
+				candidate.vulnerabilityCandidateId === input.vulnerabilityCandidateId,
+		);
+		if (derivedCandidate) {
+			return derivedCandidate;
+		}
+	}
+
+	const derivedCandidate = (
+		await listDerivedCandidatesByScanJobId(input.scanJobId)
+	)?.find(
+		(candidate) =>
+			candidate.vulnerabilityCandidateId === input.vulnerabilityCandidateId,
+	);
+	if (derivedCandidate) {
+		return derivedCandidate;
+	}
+
+	throw new TRPCError({
+		code: "NOT_FOUND",
+		message: "Vulnerability candidate not found",
+	});
 };
 
 export const findVulnerabilityCandidateByIdRepo = async (
 	vulnerabilityCandidateId: string,
 ) => {
-	const derivedCandidate = await findDerivedCandidateById(vulnerabilityCandidateId);
+	const derivedCandidate = await findDerivedCandidateById(
+		vulnerabilityCandidateId,
+	);
 	if (derivedCandidate) {
 		return derivedCandidate;
 	}

@@ -14,9 +14,11 @@ import {
 	findScanJobSandboxAgentSession,
 	findScanJobStageGraph,
 	findScanJobStatusView,
+	findScanJobTerminalTasksPage,
 	findTaskById,
 	findVulnerabilityCandidateById,
-	findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId,
+	findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId,
+	findVulnerabilityCandidateWithLatestAnalysisResultById,
 	listScanJobDirectory,
 	listScanTaskDirectory,
 	readCandidateFileContent,
@@ -42,12 +44,37 @@ import {
 	apiFindRunningCheckout,
 	apiFindScanJobsByApplication,
 	apiFindScanJobsByCompose,
-	apiFindVulnerabilityCandidatesByScanJob,
 	apiUpdateScanJobNote,
 } from "@/server/db/schema";
 import type { ScanQueueJob } from "@/server/queues/queue-types";
 import { scansQueue } from "@/server/queues/queueSetup";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
+
+const apiFindVulnerabilityCandidatesPageByScanJob = z
+	.object({
+		scanJobId: z.string().min(1),
+		page: z.number().int().min(1).default(1),
+		pageSize: z.number().int().min(1).max(100).default(20),
+		query: z.string().default(""),
+		analysisResults: z.array(z.string()).default([]),
+		verifyResults: z.array(z.string()).default([]),
+		sortKey: z
+			.enum(["candidate", "analysis", "verify", "score"])
+			.default("candidate"),
+		sortDirection: z.enum(["asc", "desc"]).default("asc"),
+	})
+	.required();
+
+const apiFindScanJobTerminalTasksPage = z
+	.object({
+		scanJobId: z.string().min(1),
+		page: z.number().int().min(1).default(1),
+		pageSize: z.number().int().min(1).max(100).default(20),
+		query: z.string().default(""),
+		stage: z.string().default("all"),
+		status: z.string().default("all"),
+	})
+	.required();
 
 export const scanRouter = createTRPCRouter({
 	checkout: protectedProcedure
@@ -521,7 +548,7 @@ export const scanRouter = createTRPCRouter({
 		}),
 
 	candidates: protectedProcedure
-		.input(apiFindVulnerabilityCandidatesByScanJob)
+		.input(apiFindVulnerabilityCandidatesPageByScanJob)
 		.query(async ({ input, ctx }) => {
 			const scanJob = await findScanJobById(input.scanJobId);
 			let organizationId: string | undefined;
@@ -548,8 +575,8 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 
-			return await findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId(
-				input.scanJobId,
+			return await findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId(
+				input,
 			);
 		}),
 
@@ -745,13 +772,15 @@ export const scanRouter = createTRPCRouter({
 		.input(
 			z.object({
 				vulnerabilityCandidateId: z.string().min(1),
+				scanJobId: z.string().min(1).optional(),
 			}),
 		)
 		.query(async ({ input, ctx }) => {
-			const candidate = await findVulnerabilityCandidateById(
-				input.vulnerabilityCandidateId,
-			);
-			const scanJob = await findScanJobById(candidate.scanJobId);
+			const candidate = input.scanJobId
+				? null
+				: await findVulnerabilityCandidateById(input.vulnerabilityCandidateId);
+			const candidateScanJobId = input.scanJobId || candidate?.scanJobId || "";
+			const scanJob = await findScanJobById(candidateScanJobId);
 			let organizationId: string | undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
@@ -775,14 +804,11 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 
-			const candidates =
-				await findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId(
-					candidate.scanJobId,
-				);
-			const enrichedCandidate = candidates.find(
-				(item) =>
-					item.vulnerabilityCandidateId === candidate.vulnerabilityCandidateId,
-			);
+			const enrichedCandidate =
+				await findVulnerabilityCandidateWithLatestAnalysisResultById({
+					vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+					scanJobId: candidateScanJobId,
+				});
 			if (!enrichedCandidate) {
 				throw new TRPCError({
 					code: "NOT_FOUND",
@@ -797,13 +823,15 @@ export const scanRouter = createTRPCRouter({
 		.input(
 			z.object({
 				vulnerabilityCandidateId: z.string().min(1),
+				scanJobId: z.string().min(1).optional(),
 			}),
 		)
 		.query(async ({ input, ctx }) => {
-			const candidate = await findVulnerabilityCandidateById(
-				input.vulnerabilityCandidateId,
-			);
-			const scanJob = await findScanJobById(candidate.scanJobId);
+			const candidate = input.scanJobId
+				? null
+				: await findVulnerabilityCandidateById(input.vulnerabilityCandidateId);
+			const candidateScanJobId = input.scanJobId || candidate?.scanJobId || "";
+			const scanJob = await findScanJobById(candidateScanJobId);
 			let organizationId: string | undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
@@ -827,7 +855,10 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 
-			return await findCandidateTaskLineage(input.vulnerabilityCandidateId);
+			return await findCandidateTaskLineage({
+				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+				scanJobId: candidateScanJobId,
+			});
 		}),
 
 	analyzeCandidate: protectedProcedure
@@ -922,13 +953,15 @@ export const scanRouter = createTRPCRouter({
 		.input(
 			z.object({
 				vulnerabilityCandidateId: z.string().min(1),
+				scanJobId: z.string().min(1).optional(),
 			}),
 		)
 		.query(async ({ input, ctx }) => {
-			const candidate = await findVulnerabilityCandidateById(
-				input.vulnerabilityCandidateId,
-			);
-			const scanJob = await findScanJobById(candidate.scanJobId);
+			const candidate = input.scanJobId
+				? null
+				: await findVulnerabilityCandidateById(input.vulnerabilityCandidateId);
+			const candidateScanJobId = input.scanJobId || candidate?.scanJobId || "";
+			const scanJob = await findScanJobById(candidateScanJobId);
 			let organizationId: string | undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
@@ -953,8 +986,8 @@ export const scanRouter = createTRPCRouter({
 			}
 
 			return await readCandidateFilesTree({
-				scanJobId: candidate.scanJobId,
-				candidateId: candidate.vulnerabilityCandidateId,
+				scanJobId: candidateScanJobId,
+				candidateId: input.vulnerabilityCandidateId,
 			});
 		}),
 
@@ -962,14 +995,16 @@ export const scanRouter = createTRPCRouter({
 		.input(
 			z.object({
 				vulnerabilityCandidateId: z.string().min(1),
+				scanJobId: z.string().min(1).optional(),
 				filePath: z.string().min(1),
 			}),
 		)
 		.query(async ({ input, ctx }) => {
-			const candidate = await findVulnerabilityCandidateById(
-				input.vulnerabilityCandidateId,
-			);
-			const scanJob = await findScanJobById(candidate.scanJobId);
+			const candidate = input.scanJobId
+				? null
+				: await findVulnerabilityCandidateById(input.vulnerabilityCandidateId);
+			const candidateScanJobId = input.scanJobId || candidate?.scanJobId || "";
+			const scanJob = await findScanJobById(candidateScanJobId);
 			let organizationId: string | undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
@@ -994,8 +1029,8 @@ export const scanRouter = createTRPCRouter({
 			}
 
 			return await readCandidateFileContent({
-				scanJobId: candidate.scanJobId,
-				candidateId: candidate.vulnerabilityCandidateId,
+				scanJobId: candidateScanJobId,
+				candidateId: input.vulnerabilityCandidateId,
 				filePath: input.filePath,
 			});
 		}),
@@ -1128,6 +1163,36 @@ export const scanRouter = createTRPCRouter({
 			}
 
 			return await findScanJobStatusView(input.scanJobId);
+		}),
+
+	terminalTasks: protectedProcedure
+		.input(apiFindScanJobTerminalTasksPage)
+		.query(async ({ input, ctx }) => {
+			const scanJob = await findScanJobById(input.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to access tasks for this scan job",
+				});
+			}
+
+			return await findScanJobTerminalTasksPage(input);
 		}),
 
 	stageGraph: protectedProcedure

@@ -153,53 +153,53 @@ export const ShowProviderForm = ({ applicationId }: Props) => {
 						setSab(e as TabState);
 					}}
 				>
-					<div className="flex flex-row items-center justify-between w-full overflow-auto">
-						<TabsList className="flex gap-4 justify-start bg-transparent">
+					<div className="w-full overflow-x-auto">
+						<TabsList className="flex h-auto min-h-10 w-max justify-start gap-1 bg-transparent p-0 sm:gap-2">
 							<TabsTrigger
 								value="github"
-								className="rounded-none border-b-2 gap-2 border-b-transparent data-[state=active]:border-b-2 data-[state=active]:border-b-border"
+								className="shrink-0 rounded-none border-b-2 gap-2 border-b-transparent px-2 sm:px-3 data-[state=active]:border-b-2 data-[state=active]:border-b-border"
 							>
 								<GithubIcon className="size-4 text-current fill-current" />
 								Github
 							</TabsTrigger>
 							<TabsTrigger
 								value="gitlab"
-								className="rounded-none border-b-2 gap-2 border-b-transparent data-[state=active]:border-b-2 data-[state=active]:border-b-border"
+								className="shrink-0 rounded-none border-b-2 gap-2 border-b-transparent px-2 sm:px-3 data-[state=active]:border-b-2 data-[state=active]:border-b-border"
 							>
 								<GitlabIcon className="size-4 text-current fill-current" />
 								Gitlab
 							</TabsTrigger>
 							<TabsTrigger
 								value="bitbucket"
-								className="rounded-none border-b-2 gap-2 border-b-transparent data-[state=active]:border-b-2 data-[state=active]:border-b-border"
+								className="shrink-0 rounded-none border-b-2 gap-2 border-b-transparent px-2 sm:px-3 data-[state=active]:border-b-2 data-[state=active]:border-b-border"
 							>
 								<BitbucketIcon className="size-4 text-current fill-current" />
 								Bitbucket
 							</TabsTrigger>
 							<TabsTrigger
 								value="gitea"
-								className="rounded-none border-b-2 gap-2 border-b-transparent data-[state=active]:border-b-2 data-[state=active]:border-b-border"
+								className="shrink-0 rounded-none border-b-2 gap-2 border-b-transparent px-2 sm:px-3 data-[state=active]:border-b-2 data-[state=active]:border-b-border"
 							>
 								<GiteaIcon className="size-4 text-current fill-current" />
 								Gitea
 							</TabsTrigger>
 							<TabsTrigger
 								value="docker"
-								className="rounded-none border-b-2 gap-2 border-b-transparent data-[state=active]:border-b-2 data-[state=active]:border-b-border"
+								className="shrink-0 rounded-none border-b-2 gap-2 border-b-transparent px-2 sm:px-3 data-[state=active]:border-b-2 data-[state=active]:border-b-border"
 							>
 								<DockerIcon className="size-5 text-current" />
 								Docker
 							</TabsTrigger>
 							<TabsTrigger
 								value="git"
-								className="rounded-none border-b-2 gap-2 border-b-transparent data-[state=active]:border-b-2 data-[state=active]:border-b-border"
+								className="shrink-0 rounded-none border-b-2 gap-2 border-b-transparent px-2 sm:px-3 data-[state=active]:border-b-2 data-[state=active]:border-b-border"
 							>
 								<GitIcon />
 								Git
 							</TabsTrigger>
 							<TabsTrigger
 								value="drop"
-								className="rounded-none border-b-2 gap-2 border-b-transparent data-[state=active]:border-b-2 data-[state=active]:border-b-border"
+								className="shrink-0 rounded-none border-b-2 gap-2 border-b-transparent px-2 sm:px-3 data-[state=active]:border-b-2 data-[state=active]:border-b-border"
 							>
 								<UploadCloud className="size-5 text-current" />
 								Drop

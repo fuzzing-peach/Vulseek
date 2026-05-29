@@ -267,8 +267,8 @@ const summarizeOutputJson = (content: string) => {
 				parsed &&
 				typeof parsed === "object" &&
 				!Array.isArray(parsed) &&
-				("route" in parsed &&
-					(parsed.route === null || typeof parsed.route === "string")) &&
+				"route" in parsed &&
+				(parsed.route === null || typeof parsed.route === "string") &&
 				typeof parsed.exit === "boolean" &&
 				"output" in parsed,
 			route: typeof parsed.route === "string" ? parsed.route : null,
@@ -318,8 +318,7 @@ const summarizeTaskState = (content: string) => {
 					? parsed.lastEventAgeMs
 					: null,
 			lastEventSummary:
-				parsed.lastEventSummary &&
-				typeof parsed.lastEventSummary === "object"
+				parsed.lastEventSummary && typeof parsed.lastEventSummary === "object"
 					? parsed.lastEventSummary
 					: null,
 			activeToolCalls: Array.isArray(parsed.activeToolCalls)
@@ -367,8 +366,7 @@ const summarizeLastJsonlEvent = (content: string) => {
 			lineCount: lines.length,
 			eventIndex:
 				typeof parsed.eventIndex === "number" ? parsed.eventIndex : null,
-			createdAt:
-				typeof parsed.createdAt === "number" ? parsed.createdAt : null,
+			createdAt: typeof parsed.createdAt === "number" ? parsed.createdAt : null,
 			createdAtIso:
 				typeof parsed.createdAt === "number"
 					? new Date(parsed.createdAt).toISOString()
@@ -376,9 +374,7 @@ const summarizeLastJsonlEvent = (content: string) => {
 			sender: typeof parsed.sender === "string" ? parsed.sender : null,
 			method: typeof payload.method === "string" ? payload.method : null,
 			sessionUpdate:
-				typeof update.sessionUpdate === "string"
-					? update.sessionUpdate
-					: null,
+				typeof update.sessionUpdate === "string" ? update.sessionUpdate : null,
 			kind: typeof update.kind === "string" ? update.kind : null,
 			status: typeof update.status === "string" ? update.status : null,
 			toolCallId:
@@ -390,6 +386,136 @@ const summarizeLastJsonlEvent = (content: string) => {
 			parseError: getErrorMessage(error),
 		};
 	}
+};
+
+const tailText = (content: string, maxLength = 4000) => {
+	if (content.length <= maxLength) {
+		return content;
+	}
+	return `<truncated ${content.length - maxLength} chars>\n${content.slice(-maxLength)}`;
+};
+
+const inspectContainerForFailure = async (
+	containerName: string | null | undefined,
+) => {
+	if (!containerName) {
+		return null;
+	}
+	const [inspectResult, logsResult] = await Promise.all([
+		execAsync(`docker inspect ${containerName} --format '{{json .State}}'`)
+			.then(({ stdout }) => ({
+				ok: true,
+				state: JSON.parse(stdout.trim() || "{}") as unknown,
+			}))
+			.catch((error) => ({
+				ok: false,
+				error: getErrorMessage(error),
+			})),
+		execAsync(`docker logs --tail 120 ${containerName}`)
+			.then(({ stdout, stderr }) => ({
+				ok: true,
+				stdoutTail: tailText(stdout),
+				stderrTail: tailText(stderr),
+			}))
+			.catch((error) => ({
+				ok: false,
+				error: getErrorMessage(error),
+			})),
+	]);
+	return {
+		containerName,
+		inspect: inspectResult,
+		logs: logsResult,
+	};
+};
+
+const buildTaskFailureDiagnostics = async (ctx: StageContext) => {
+	const {
+		taskDir,
+		jsonlPath,
+		textPath,
+		stderrPath,
+		stdoutPath,
+		statePath,
+		outputPath,
+	} = await getTaskRuntimePaths(ctx);
+	const [
+		task,
+		jsonlContent,
+		textContent,
+		stderrContent,
+		stdoutContent,
+		stateContent,
+		outputContent,
+		jsonlStat,
+		textStat,
+		stderrStat,
+		stdoutStat,
+		stateStat,
+		outputStat,
+	] = await Promise.all([
+		findTaskByIdRepo(ctx.taskId).catch(() => null),
+		readFileIfExists(jsonlPath),
+		readFileIfExists(textPath),
+		readFileIfExists(stderrPath),
+		readFileIfExists(stdoutPath),
+		readFileIfExists(statePath),
+		readFileIfExists(outputPath),
+		statFileIfExists(jsonlPath),
+		statFileIfExists(textPath),
+		statFileIfExists(stderrPath),
+		statFileIfExists(stdoutPath),
+		statFileIfExists(statePath),
+		statFileIfExists(outputPath),
+	]);
+	const containerDiagnostics = await inspectContainerForFailure(
+		task?.containerName,
+	);
+	return {
+		taskDir,
+		containerName: task?.containerName || null,
+		threadId: task?.threadId || null,
+		runtimeFiles: {
+			jsonl: jsonlStat,
+			text: textStat,
+			stderr: stderrStat,
+			stdout: stdoutStat,
+			state: stateStat,
+			output: outputStat,
+		},
+		output: summarizeOutputJson(outputContent),
+		state: summarizeTaskState(stateContent),
+		lastJsonlEvent: summarizeLastJsonlEvent(jsonlContent),
+		tails: {
+			stderr: tailText(stderrContent),
+			stdout: tailText(stdoutContent),
+			text: tailText(textContent),
+			jsonl: tailText(jsonlContent),
+			output: tailText(outputContent),
+			state: tailText(stateContent),
+		},
+		container: containerDiagnostics,
+	};
+};
+
+const appendTaskFailureDiagnostics = async (
+	ctx: StageContext,
+	reason: string,
+	diagnostics: unknown,
+) => {
+	const { stderrPath } = await getTaskRuntimePaths(ctx);
+	await fs
+		.appendFile(
+			stderrPath,
+			`\n[task-failure-diagnostics] ${new Date().toISOString()} ${JSON.stringify(
+				{
+					reason,
+					diagnostics,
+				},
+			)}\n`,
+			"utf-8",
+		)
+		.catch(() => {});
 };
 
 const readTaskTokenUsage = async (ctx: StageContext) => {
@@ -439,11 +565,9 @@ const readPersistentQueueFailureForTask = async (
 					typeof parsed.runningPath === "string" ? parsed.runningPath : null,
 				failedPath:
 					typeof parsed.failedPath === "string" ? parsed.failedPath : null,
-				rawBytes:
-					typeof parsed.rawBytes === "number" ? parsed.rawBytes : null,
+				rawBytes: typeof parsed.rawBytes === "number" ? parsed.rawBytes : null,
 				error: typeof parsed.error === "string" ? parsed.error : null,
-				failedAt:
-					typeof parsed.failedAt === "string" ? parsed.failedAt : null,
+				failedAt: typeof parsed.failedAt === "string" ? parsed.failedAt : null,
 			};
 		} catch (error) {
 			logPipelineEvent("stage.queue_failure_marker_invalid", {
@@ -966,6 +1090,7 @@ const failSilentStuckTask = async <TPipelineContext extends PipelineContext>(
 	task: Awaited<ReturnType<typeof findTaskByIdRepo>>,
 	reason: string,
 	diagnostics?: Record<string, unknown>,
+	stageCtx?: StageContext,
 ) => {
 	const currentTask = await findTaskByIdRepo(task.taskId).catch(() => null);
 	if (!currentTask || currentTask.status !== "running") {
@@ -981,6 +1106,26 @@ const failSilentStuckTask = async <TPipelineContext extends PipelineContext>(
 		return;
 	}
 
+	const failureDiagnostics = stageCtx
+		? await buildTaskFailureDiagnostics(stageCtx)
+				.then((runtimeDiagnostics) => ({
+					stuckDetection: diagnostics || {},
+					runtime: runtimeDiagnostics,
+				}))
+				.catch((diagnosticError) => ({
+					stuckDetection: diagnostics || {},
+					error: `Unable to collect task failure diagnostics: ${getErrorMessage(
+						diagnosticError,
+					)}`,
+				}))
+		: diagnostics;
+	if (stageCtx) {
+		await appendTaskFailureDiagnostics(
+			stageCtx,
+			reason,
+			failureDiagnostics || {},
+		).catch(() => {});
+	}
 	runtime.runningStdoutSnapshots.delete(task.taskId);
 	await updateTaskRepo(task.taskId, {
 		status: "failed",
@@ -995,7 +1140,7 @@ const failSilentStuckTask = async <TPipelineContext extends PipelineContext>(
 		taskId: task.taskId,
 		taskName: task.name,
 		reason,
-		...(diagnostics ? { diagnostics } : {}),
+		...(failureDiagnostics ? { diagnostics: failureDiagnostics } : {}),
 	});
 	logPipelineEvent("loop.task_failed", {
 		scanJobId: runtime.ctx.scanJobId,
@@ -1141,7 +1286,8 @@ const createTaskStageContext = <
 		(input as Record<string, unknown> | null | undefined) || undefined,
 		ctx,
 	);
-	const taskName = taskRuntime?.taskName || resolveStageTaskName(stage.id, input);
+	const taskName =
+		taskRuntime?.taskName || resolveStageTaskName(stage.id, input);
 	const stageCtx = createStageContext({
 		base: ctx,
 		stageName: stage.id,
@@ -1180,8 +1326,8 @@ const isOutputEnvelope = (value: unknown): value is OutputEnvelope => {
 	}
 	const record = value as Record<string, unknown>;
 	return (
-		("route" in record &&
-			(record.route === null || typeof record.route === "string")) &&
+		"route" in record &&
+		(record.route === null || typeof record.route === "string") &&
 		typeof record.exit === "boolean" &&
 		"output" in record
 	);
@@ -1209,15 +1355,14 @@ const resolveStageRawOutput = async (ctx: StageContext) => {
 		stdoutContent,
 		stateContent,
 		outputContent,
-	] =
-		await Promise.all([
-			readFileIfExists(jsonlPath),
-			readFileIfExists(textPath),
-			readFileIfExists(stderrPath),
-			readFileIfExists(stdoutPath),
-			readFileIfExists(statePath),
-			readFileIfExists(outputPath),
-		]);
+	] = await Promise.all([
+		readFileIfExists(jsonlPath),
+		readFileIfExists(textPath),
+		readFileIfExists(stderrPath),
+		readFileIfExists(stdoutPath),
+		readFileIfExists(statePath),
+		readFileIfExists(outputPath),
+	]);
 	const progressSignature = sha1(
 		[
 			jsonlContent,
@@ -1234,7 +1379,9 @@ const resolveStageRawOutput = async (ctx: StageContext) => {
 		stateHasEndTurn(stateContent) || hasEndTurnInJsonlContent(jsonlContent);
 	if (hasEndTurn) {
 		if (!outputContent.trim()) {
-			throw new Error(`Task reached end_turn but ${outputPath} is missing or empty`);
+			throw new Error(
+				`Task reached end_turn but ${outputPath} is missing or empty`,
+			);
 		}
 		let parsed: unknown;
 		try {
@@ -1250,7 +1397,9 @@ const resolveStageRawOutput = async (ctx: StageContext) => {
 			);
 		}
 		if (!ctx.routeOutputSchemas?.length && parsed.route !== null) {
-			throw new Error("Task output.json route must be null for non-routed stages");
+			throw new Error(
+				"Task output.json route must be null for non-routed stages",
+			);
 		}
 		return {
 			rawOutput: JSON.stringify(parsed.output, null, 2),
@@ -1439,6 +1588,18 @@ const persistTerminalFailure = async <
 	if (!updated) {
 		return false;
 	}
+	const failureDiagnostics = await buildTaskFailureDiagnostics(stageCtx).catch(
+		(diagnosticError) => ({
+			error: `Unable to collect task failure diagnostics: ${getErrorMessage(
+				diagnosticError,
+			)}`,
+		}),
+	);
+	await appendTaskFailureDiagnostics(
+		stageCtx,
+		getErrorMessage(error),
+		failureDiagnostics,
+	).catch(() => {});
 	await refreshPipelineState(ctx).catch(() => {});
 	await cleanupFailedTaskRuntime(stageCtx.taskId);
 	await stage.onFailure?.(stageCtx, input, error);
@@ -1448,6 +1609,7 @@ const persistTerminalFailure = async <
 		taskId: stageCtx.taskId,
 		taskName: stageCtx.taskName,
 		errorMessage: getErrorMessage(error),
+		diagnostics: failureDiagnostics,
 	});
 	logPipelineEvent("loop.task_failed", {
 		scanJobId: stageCtx.scanJobId,
@@ -1777,10 +1939,10 @@ const launchStageExecution = async <
 		!boundMembership && (stageState.stage.persistent ?? true)
 			? await listReservedLaneIndexesForStage({
 					scanJobId: runtime.ctx.scanJobId,
-				stageName: stageState.stageName,
-				allowedGroupInstanceId: pendingTask?.stageGroupInstanceId ?? null,
-				runtime: runtime as unknown as JobRuntime<PipelineContext>,
-			})
+					stageName: stageState.stageName,
+					allowedGroupInstanceId: pendingTask?.stageGroupInstanceId ?? null,
+					runtime: runtime as unknown as JobRuntime<PipelineContext>,
+				})
 			: [];
 	let laneRuntime = boundMembership
 		? await claimSpecificStageLaneRuntimeRepo({
@@ -1802,7 +1964,9 @@ const launchStageExecution = async <
 				})
 			: null;
 	if ((stageState.stage.persistent ?? true) && !laneRuntime) {
-		await stageState.stage.queue?.enqueue(execution.taskId, queueScope).catch(() => {});
+		await stageState.stage.queue
+			?.enqueue(execution.taskId, queueScope)
+			.catch(() => {});
 		return false;
 	}
 	const launched = await transitionTaskStatusRepo({
@@ -1827,12 +1991,12 @@ const launchStageExecution = async <
 			existingGroup && existingGroup.status === "active"
 				? existingGroup
 				: await createStageGroupInstanceRepo({
-				scanJobId: runtime.ctx.scanJobId,
-				groupName: leaderGroup.name,
-				leaderStageName: stageState.stageName,
-				leaderLaneIndex: laneRuntime.laneIndex,
-				leaderTaskId: execution.taskId,
-			});
+						scanJobId: runtime.ctx.scanJobId,
+						groupName: leaderGroup.name,
+						leaderStageName: stageState.stageName,
+						leaderLaneIndex: laneRuntime.laneIndex,
+						leaderTaskId: execution.taskId,
+					});
 		await ensureStageGroupLaneMembershipRepo({
 			groupInstanceId: groupInstance.groupInstanceId,
 			stageName: stageState.stageName,
@@ -1973,7 +2137,9 @@ const launchStageExecution = async <
 					errorMessage: `Transient runtime launch failure; retry ${nextAttempt}/${MAX_TRANSIENT_LAUNCH_RETRIES}: ${getErrorMessage(error)}`,
 				},
 			});
-			await stageState.stage.queue?.enqueue(execution.taskId, queueScope).catch(() => {});
+			await stageState.stage.queue
+				?.enqueue(execution.taskId, queueScope)
+				.catch(() => {});
 			logPipelineEvent("stage.launch_retry", {
 				scanJobId: runtime.ctx.scanJobId,
 				pipelineName: runtime.pipeline.name,
@@ -2217,9 +2383,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			runtime.ctx,
 			stageCtx,
 			input,
-			new Error(
-				"Sandbox agent prompt completed without end_turn",
-			),
+			new Error("Sandbox agent prompt completed without end_turn"),
 			{ exitLane: hasExitSignal },
 		);
 		await maybeMarkTaskStageGroupExited(task.taskId, runtime);
@@ -2250,6 +2414,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			task,
 			halfStarted.reason,
 			halfStarted.diagnostics,
+			stageCtx,
 		);
 		await backfillStageQueue(runtime, stageState);
 		return true;
@@ -2284,9 +2449,14 @@ const backfillStageQueue = async <
 			break;
 		}
 
-		const launched = await launchStageExecution(runtime, stageState, execution, {
-			logEvent: "loop.stage_backfill_spawned",
-		});
+		const launched = await launchStageExecution(
+			runtime,
+			stageState,
+			execution,
+			{
+				logEvent: "loop.stage_backfill_spawned",
+			},
+		);
 		if (!launched) {
 			break;
 		}
@@ -2305,12 +2475,10 @@ const backfillStageQueue = async <
 	return launchedAny;
 };
 
-const resolvePendingTaskQueueScope = async (
-	task: {
-		taskId: string;
-		stageGroupInstanceId?: string | null;
-	},
-): Promise<StageQueueScope | null> => {
+const resolvePendingTaskQueueScope = async (task: {
+	taskId: string;
+	stageGroupInstanceId?: string | null;
+}): Promise<StageQueueScope | null> => {
 	if (!task.stageGroupInstanceId) {
 		return {};
 	}
@@ -2352,9 +2520,7 @@ const reenqueueMissingPendingTasks = async <
 		const scopedQueue = queueBinding.getQueue(queueScope);
 		const knownJobIds = buildKnownQueueJobIdsForTask(scopedQueue, task);
 		const existingJobs = await Promise.all(
-			knownJobIds.map((jobId) =>
-				scopedQueue.getJob(jobId).catch(() => null),
-			),
+			knownJobIds.map((jobId) => scopedQueue.getJob(jobId).catch(() => null)),
 		);
 		const existingJob = existingJobs.find(Boolean);
 		if (existingJob) {

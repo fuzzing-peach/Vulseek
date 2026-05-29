@@ -2,4 +2,20 @@ node_modules
 .git
 .gitignore
 *.md
+!packages/server/src/services/scan/**/*.prompt.md
 dist
+
+# Local package/build caches
+.pnpm-store
+.turbo
+.next
+**/.next
+**/dist
+
+# Runtime and debugging artifacts
+**/.scan-runtime
+**/core
+*.log
+
+# Local-only third-party checkout
+third_party/raptor

@@ -162,6 +162,7 @@ const CandidateTaskLineagePanel = ({
 	routeSegment,
 	serviceId,
 	scanJobId,
+	enabled,
 }: {
 	candidateId: string;
 	projectId: string;
@@ -170,6 +171,7 @@ const CandidateTaskLineagePanel = ({
 	routeSegment: "profiles" | "services";
 	serviceId: string;
 	scanJobId: string;
+	enabled: boolean;
 }) => {
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 	const [taskOutputView, setTaskOutputView] = useState<"activities" | "text">(
@@ -179,8 +181,11 @@ const CandidateTaskLineagePanel = ({
 	const textAutoScrollRef = useRef(true);
 	const { data, isLoading, isError, error } =
 		api.scan.candidateTaskLineage.useQuery(
-			{ vulnerabilityCandidateId: candidateId },
-			{ enabled: !!candidateId, refetchInterval: 4000 },
+			{ vulnerabilityCandidateId: candidateId, scanJobId },
+			{
+				enabled: enabled && !!candidateId && !!scanJobId,
+				refetchInterval: enabled ? 4000 : false,
+			},
 		);
 	const tasks = (data?.tasks || []) as CandidateTaskLineageTask[];
 	const selectedTask =
@@ -497,6 +502,9 @@ export const ShowScanCandidateDetail = ({
 	);
 	const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
 	const [previewFilePath, setPreviewFilePath] = useState<string | null>(null);
+	const [activeTab, setActiveTab] = useState<
+		"overview" | "task-lineage" | "files"
+	>("overview");
 
 	const jobCandidatesHref = buildCandidateListStateHref(
 		`/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}`,
@@ -517,29 +525,46 @@ export const ShowScanCandidateDetail = ({
 
 	const { data: candidate, isLoading: isLoadingCandidate } =
 		api.scan.candidate.useQuery(
-			{ vulnerabilityCandidateId: candidateId },
-			{ enabled: !!candidateId, refetchInterval: 2000 },
+			{
+				vulnerabilityCandidateId: candidateId,
+				scanJobId: scanJobId || undefined,
+			},
+			{ enabled: !!candidateId && !!scanJobId, refetchInterval: 2000 },
 		);
 	const { data: fileTree, isLoading: isLoadingFileTree } =
 		api.scan.candidateFilesTree.useQuery(
-			{ vulnerabilityCandidateId: candidateId },
-			{ enabled: !!candidateId, refetchInterval: 4000 },
+			{
+				vulnerabilityCandidateId: candidateId,
+				scanJobId: scanJobId || undefined,
+			},
+			{
+				enabled: activeTab === "files" && !!candidateId && !!scanJobId,
+				refetchInterval: activeTab === "files" ? 4000 : false,
+			},
 		);
 	const { data: selectedFile, isLoading: isLoadingSelectedFile } =
 		api.scan.readCandidateFile.useQuery(
 			{
 				vulnerabilityCandidateId: candidateId,
+				scanJobId: scanJobId || undefined,
 				filePath: selectedFilePath || "",
 			},
-			{ enabled: !!candidateId && !!selectedFilePath },
+			{
+				enabled:
+					activeTab === "files" &&
+					!!candidateId &&
+					!!scanJobId &&
+					!!selectedFilePath,
+			},
 		);
 	const { data: previewFile, isLoading: isLoadingPreviewFile } =
 		api.scan.readCandidateFile.useQuery(
 			{
 				vulnerabilityCandidateId: candidateId,
+				scanJobId: scanJobId || undefined,
 				filePath: previewFilePath || "",
 			},
-			{ enabled: !!candidateId && !!previewFilePath },
+			{ enabled: !!candidateId && !!scanJobId && !!previewFilePath },
 		);
 	const verifyCandidateMutation = api.scan.verifyCandidate.useMutation();
 
@@ -582,7 +607,10 @@ export const ShowScanCandidateDetail = ({
 			: candidate?.latestAnalysisResult?.taskId || "";
 	const { messages: liveJsonRpcMessages } = useSandboxAgentSession({
 		taskId: candidateTaskId,
-		enabled: !!candidateTaskId && candidate?.status === "running",
+		enabled:
+			activeTab === "overview" &&
+			!!candidateTaskId &&
+			candidate?.status === "running",
 	});
 	const canVerify =
 		candidate?.latestAnalysisResult?.result === "real_vulnerability" ||
@@ -747,7 +775,13 @@ export const ShowScanCandidateDetail = ({
 					</div>
 				</CardHeader>
 				<CardContent>
-					<Tabs defaultValue="overview" className="w-full">
+					<Tabs
+						value={activeTab}
+						onValueChange={(value) =>
+							setActiveTab(value as "overview" | "task-lineage" | "files")
+						}
+						className="w-full"
+					>
 						<TabsList className="flex gap-4 justify-start">
 							<TabsTrigger value="overview">Overview</TabsTrigger>
 							<TabsTrigger value="task-lineage">Task Lineage</TabsTrigger>
@@ -1027,6 +1061,7 @@ export const ShowScanCandidateDetail = ({
 								routeSegment={routeSegment}
 								serviceId={serviceId}
 								scanJobId={scanJobId}
+								enabled={activeTab === "task-lineage"}
 							/>
 						</TabsContent>
 

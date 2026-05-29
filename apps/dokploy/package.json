@@ -159,7 +159,8 @@
 		"xterm-addon-fit": "^0.8.0",
 		"yaml": "2.8.1",
 		"zod": "^3.25.32",
-		"zod-form-data": "^2.0.7"
+		"zod-form-data": "^2.0.7",
+		"zod-to-json-schema": "3.24.5"
 	},
 	"devDependencies": {
 		"@types/adm-zip": "^0.5.7",

@@ -6,21 +6,28 @@ RUN corepack enable
 RUN corepack prepare pnpm@9.12.0 --activate
 
 FROM base AS build
-COPY . /usr/src/app
 WORKDIR /usr/src/app
 
 RUN apt-get update && apt-get install -y python3 make g++ git python3-pip pkg-config libsecret-1-dev && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
+RUN mkdir -p apps/api apps/dokploy apps/schedules packages/server packages/server/src/services/dockerfiles
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/api/package.json ./apps/api/package.json
+COPY apps/dokploy/package.json ./apps/dokploy/package.json
+COPY apps/schedules/package.json ./apps/schedules/package.json
+COPY packages/server/package.json ./packages/server/package.json
+COPY packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch ./packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch
+
+# Install dependencies before copying source so application edits can reuse this layer.
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 
-# Deploy only the dokploy app
+COPY . .
 
 ENV NODE_ENV=production
 RUN pnpm --filter=@dokploy/server build
 RUN pnpm --filter=./apps/dokploy run build
 
-RUN pnpm --filter=./apps/dokploy --prod deploy /prod/dokploy
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm --filter=./apps/dokploy --prod deploy /prod/dokploy
 
 RUN cp -R /usr/src/app/apps/dokploy/.next /prod/dokploy/.next
 RUN cp -R /usr/src/app/apps/dokploy/dist /prod/dokploy/dist
@@ -32,18 +39,6 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 RUN apt-get update && apt-get install -y curl unzip zip apache2-utils iproute2 rsync git-lfs && git lfs install && rm -rf /var/lib/apt/lists/*
-
-# Copy only the necessary files
-COPY --from=build /prod/dokploy/.next ./.next
-COPY --from=build /prod/dokploy/dist ./dist
-COPY --from=build /prod/dokploy/next.config.mjs ./next.config.mjs
-COPY --from=build /prod/dokploy/public ./public
-COPY --from=build /prod/dokploy/package.json ./package.json
-COPY --from=build /prod/dokploy/drizzle ./drizzle
-COPY .env.production ./.env
-COPY --from=build /prod/dokploy/components.json ./components.json
-COPY --from=build /prod/dokploy/node_modules ./node_modules
-
 
 # Install docker
 RUN curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh && rm get-docker.sh && curl https://rclone.org/install.sh | bash
@@ -63,6 +58,18 @@ RUN curl -sSL https://railpack.com/install.sh | bash
 
 # Install buildpacks
 COPY --from=buildpacksio/pack:0.35.0 /usr/local/bin/pack /usr/local/bin/pack
+
+# Copy only the necessary files after installing runtime tools so app edits reuse
+# the expensive tool-install layers.
+COPY --from=build /prod/dokploy/.next ./.next
+COPY --from=build /prod/dokploy/dist ./dist
+COPY --from=build /prod/dokploy/next.config.mjs ./next.config.mjs
+COPY --from=build /prod/dokploy/public ./public
+COPY --from=build /prod/dokploy/package.json ./package.json
+COPY --from=build /prod/dokploy/drizzle ./drizzle
+COPY .env.production ./.env
+COPY --from=build /prod/dokploy/components.json ./components.json
+COPY --from=build /prod/dokploy/node_modules ./node_modules
 
 EXPOSE 3000
 CMD [ "pnpm", "start" ]

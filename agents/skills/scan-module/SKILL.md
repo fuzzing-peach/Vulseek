@@ -1,41 +1,68 @@
 ---
 name: scan-module
-description: Normalize one module artifact and produce bounded function artifacts for downstream function scanning.
+description: Extract functions from one module and produce broad function artifacts for downstream function scanning.
 ---
 
 # Scan Module
 
 ## Purpose
 
-Scan one repository module and create function-level scan tasks for the next stage.
+Scan one assigned module and produce function-level scan tasks.
 
-This stage is a function candidate extraction stage, not a vulnerability verification stage.
+This stage is recall-oriented.
 
-It should understand the assigned module enough to identify functions worth deeper inspection.
+The goal is to collect functions that may contain or influence vulnerability candidates, not to verify vulnerabilities.
 
-It must produce:
+This stage should remove obvious noise, not shrink the inventory to a small set.
 
-- a normalized module artifact
-- separate function artifacts under `/task/functions/`
-- an output manifest defined by the stage prompt
+Every concrete in-scope function body should either become a function artifact or be omitted for a concrete exclusion reason below.
 
-Use the schemas injected by the stage prompt as the source of truth.
+Do not cap, summarize, or compress the extracted inventory into a smaller function set.
 
 ## Inputs
 
-Use the paths, runtime metadata, and schemas provided by the stage prompt.
+Use the paths, runtime metadata, and Zod schemas provided by the stage prompt.
 
 Expected inputs include:
 
 - repository-level artifact
 - one module artifact
 - checked-out repository
-- function output directory
+- function artifact directory
 - output manifest path
 
 A module is not an exclusive ownership partition.
 
-Modules may overlap. Shared files or shared functions are valid when they matter to this module's entrypoints, trust boundaries, validation stack, or security responsibilities.
+Modules may overlap. Shared files or shared functions are valid when they matter to this module's security model, local behavior, or downstream inspection context.
+
+## Outputs
+
+Write the artifacts required by the stage prompt:
+
+- normalized module artifact
+- one function artifact per kept concrete function
+- output manifest
+
+Use the injected Zod schemas as the source of truth.
+
+Do not write final vulnerability candidates.
+
+Do not embed function objects inside the module artifact.
+
+## Workflow
+
+Follow this workflow:
+
+1. Read repository and module artifacts.
+2. Normalize the module file scope.
+3. Exclude external, vendored, generated, test-only, or unrelated paths.
+4. Use tree-sitter to extract concrete function definitions from in-scope files.
+5. Manually sanity-check extracted function identities.
+6. Infer each function's likely semantic role from lightweight local signals.
+7. Apply the required noise-exclusion pass below.
+8. Write one function artifact for every remaining concrete function.
+9. Write the normalized module artifact and output manifest.
+10. Validate all artifacts.
 
 ## Scope
 
@@ -45,184 +72,181 @@ Avoid unrelated nested repositories, git submodules, vendored dependencies, gene
 
 If external or generated code is intentionally kept in scope, explain the reason briefly in module notes.
 
-## Workflow
+When building the final function list, do not let imported or vendored trees flood the output.
 
-Follow one pass:
-
-1. Read repository and module artifacts.
-2. Normalize the module file scope.
-3. Exclude external, vendored, generated, or unrelated nested repository paths.
-4. Use `tree-sitter` to extract concrete function definitions from in-scope files.
-5. Inspect limited surrounding context to understand module-level risk signals.
-6. Select and prioritize functions worth downstream inspection.
-7. Write one function artifact per selected function.
-8. Write the normalized module artifact and output manifest.
-9. Validate all artifacts.
+Prefer first-party module files even if external trees are physically adjacent in the filesystem.
 
 ## Function Inventory
 
-Function extraction must be tool-driven.
-
 Use the installed `tree-sitter` skill as the primary function inventory method.
 
-Use tree-sitter extracted symbol identity first.
+The extracted function list is the starting point.
 
 If tree-sitter fails for some files, continue with successfully extracted functions and record a short note.
 
-Text search tools may support lookup and context gathering, but they must not replace tree-sitter as the primary function inventory source when tree-sitter is available.
+Use repository-relative paths when possible.
 
-## Lookup Policy
+## Function Identity Verification
 
-Use tools by purpose:
+Do not blindly trust extracted function names.
 
-1. Use `tree-sitter` for concrete function inventory.
-2. Use Serena for symbol-aware lookup and navigation when available.
-3. Use `rg`, `find`, `sed`, `awk`, or `semgrep` only as fallback or lightweight support.
+After extracting functions with tree-sitter or any fallback tool, manually sanity-check the results before writing artifacts.
 
-Do not turn lookup into global program analysis.
+Verify that each kept function has the correct name, file path, line range, enclosing scope, and actual function body.
 
-## Function Selection Policy
+If names or ranges look wrong, adjust the extraction method, query pattern, parser mode, file filters, or fallback lookup tools until the function identity is reliable enough.
 
-Select functions that may contain or influence vulnerability candidates worth deeper function-stage inspection.
+Exclude declarations, prototypes, macro expansions, stubs, and incorrectly extracted symbols when they do not correspond to real function bodies.
 
-This stage may use vulnerability-oriented reasoning to choose functions, but it must not confirm vulnerabilities.
+If extraction remains partially unreliable, continue with verified functions and record a short note.
 
-Select a function when one or more of the following apply:
+## Function Semantic Inference
 
-1. It reaches or guards a sensitive operation
+For each extracted function, infer its likely role using lightweight local signals:
 
-   The function performs, authorizes, validates, wraps, or dispatches security-sensitive behavior such as authentication, authorization, session or token handling, permission checks, secret handling, cryptography, payments, database writes, filesystem access, network requests, command execution, plugin execution, tool execution, or privileged state changes.
+- function name
+- file path
+- enclosing type or class, if available
+- signature and parameter names
+- return type
+- nearby comments
+- nearby macro or export annotations
+- nearby sibling function names
 
-2. It performs parser, decoder, validator, sanitizer, or policy logic
+Prefer broad semantic inference over deep source analysis.
 
-   The function parses, decodes, deserializes, imports, normalizes, validates, verifies, sanitizes, checks bounds, enforces policy, handles resource lifecycle, or transforms data before it reaches a sensitive operation.
+Useful semantic labels include:
 
-3. It connects security-relevant control or data flow
+- parse / decode / deserialize / import / load
+- validate / verify / check / authorize / authenticate
+- sanitize / normalize / canonicalize / escape
+- read / write / send / receive / connect / accept
+- open / close / create / delete / update
+- allocate / free / init / cleanup / reset
+- copy / move / append / resize / convert
+- dispatch / handle / process / execute / invoke
+- configure / set / enable / disable / register
+- encrypt / decrypt / sign / hash / random / key
+- state / transition / retry / fallback / error
+- callback / hook / plugin / tool / sandbox
+- admin / permission / policy / session / token
 
-   The function is glue code, dispatcher code, middleware, adapter logic, or service-layer code that connects module boundaries, validation logic, policy checks, storage layers, execution layers, or other sensitive operations.
+## Function Inclusion Policy
 
-4. It matches common vulnerability-prone patterns
+This stage uses exclusion-based inclusion.
 
-   Prioritize functions that appear related to:
+Start from all concrete functions extracted by tree-sitter.
 
-   - injection
-   - path traversal
-   - SSRF
-   - unsafe deserialization
-   - authentication bypass
-   - authorization bypass
-   - confused deputy
-   - insecure direct object reference
-   - file upload handling
-   - command execution
-   - unsafe dynamic evaluation
-   - template rendering
-   - XSS or HTML/script generation
-   - CSRF-sensitive state changes
-   - cryptographic misuse
-   - signature or certificate verification
-   - race conditions
-   - resource exhaustion
-   - memory safety
-   - integer overflow or bounds errors
-   - unsafe pointer or buffer handling
-   - sandbox escape
-   - plugin or extension abuse
-   - LLM prompt injection
-   - tool permission bypass
-   - data exfiltration
+Default behavior: keep the function.
 
-5. It is useful supporting evidence for another candidate
+For a first-party module file, thousands of function artifacts are acceptable when the module has thousands of concrete functions.
 
-   Include a lower-priority function when it implements validation, sanitization, authorization, safe handling, dispatch, or policy behavior that another selected candidate depends on.
+Do not create a small function set, capped function set, summary set, or theme-based subset.
 
-Do not select functions merely because they exist.
+## Required Noise-Exclusion Pass
 
-Do not emit a full function inventory as scan tasks.
+You must omit concrete functions that clearly match one of these low-value patterns:
 
-For each selected function, explain why it may contain or influence a vulnerability candidate.
+- out-of-scope external, vendored, generated, or test-only functions
+- trivial getters, setters, constant returns, or empty stubs
+- simple logging, tracing, metrics, or debug helpers
+- pure formatting helpers with no security-relevant output
+- pure wrappers that only forward arguments without changing validation, state, flags, options, or control flow
+- unrelated compatibility shims with no meaningful local behavior
+- method/version constructor functions that only return a fixed static method table or constant descriptor
+- feature-probe functions that only return a compile-time constant or a simple boolean flag
+- stack/list/object boilerplate that only allocates, frees, duplicates, pushes, pops, or returns a field without validation, parsing, policy, memory-copy complexity, or state transitions
+- short option accessors that only set or read one field and do not change policy, validation, callbacks, trust, credentials, I/O, crypto, parser, or session state
 
-The explanation should describe the suspected risk shape, not claim that a vulnerability is confirmed.
+Use lightweight body inspection for functions whose name suggests obvious boilerplate, especially:
 
-Use cautious language such as:
+- `get`, `set`, `is`, `has`, `new`, `free`, `dup`, `push`, `pop`, `num`, `value`, `method`, `version`
+- OpenSSL compatibility wrappers
+- stack/list helpers
+- debug, trace, print, statistics, and string-name helpers
 
-- "may be vulnerable if..."
-- "worth inspecting because..."
-- "appears to handle..."
-- "may influence..."
-- "possible risk area..."
+Keep the function if the body contains any of these signals:
 
-Avoid confirmed-judgment language such as:
+- parses, decodes, normalizes, imports, loads, or processes structured data
+- validates, verifies, checks, authorizes, authenticates, or enforces policy
+- reads, writes, sends, receives, connects, accepts, or dispatches I/O
+- copies, moves, appends, resizes, indexes, bounds-checks, allocates with nontrivial ownership, or frees state involved in callbacks/lifecycles
+- configures security behavior, trust, credentials, callbacks, protocol versions, ciphers, curves, signatures, or options with policy impact
+- performs or prepares crypto, key schedule, random, MAC, hash, signature, certificate, session, ticket, or secret handling
+- changes protocol, parser, handshake, retry, fallback, timeout, error, or session state
 
-- "is vulnerable"
-- "confirmed"
-- "exploitable"
-- "allows attacker to..."
-- "root cause is..."
+Keep functions that may process input, validate data, enforce policy, touch sensitive operations, manipulate memory or resources, manage state, handle errors, configure security behavior, register callbacks, dispatch behavior, or influence nearby security-relevant code.
 
-Confirmed vulnerability judgment belongs to the function stage.
+When uncertain, keep the function with lower priority or a short note.
+
+The goal is to remove obvious noise, not to keep only high-confidence targets.
+
+The `output.functions` manifest must include every kept concrete function artifact. Its length should match the number of kept concrete functions, not the number of themes or subareas.
+
+Record exclusion statistics in the module notes:
+
+- extracted concrete function count
+- kept function count
+- omitted function count
+- main omission categories
 
 ## Priority Policy
 
-Assign function priority numerically.
+Assign numeric priority according to likely downstream inspection value.
 
-- `0`: externally reachable and security-critical
-- `1`: trust-boundary, parser, validator, dispatcher, or sensitive sink logic
-- `2`: important internal runtime logic
-- `3`: low-priority support or negative-evidence target
+- `0`: strong local signals of security-sensitive behavior
+- `1`: likely input processing, validation, policy, state, or sensitive operation logic
+- `2`: indirect security influence, wrapper, glue, comparison, or useful context
+- `3`: low-confidence but not clearly excludable
 
-Do not confirm vulnerabilities in this stage.
-
-Priority means “worth inspecting next,” not “vulnerable.”
-
-## Function Artifact Rules
-
-Write each selected function as a separate JSON artifact under `/task/functions/`.
-
-Each function artifact must satisfy the injected runtime function schema.
-
-Each function artifact should explain briefly:
-
-- what the function is
-- why it matters to this module
-- why it should be inspected next
-- how it appears reachable, or why reachability is limited
-- which files provide useful local context
-
-Use repository-relative paths when possible.
-
-Do not embed function objects inside the module artifact.
+Priority is an ordering hint for downstream scheduling, not a vulnerability judgment.
 
 ## Module Artifact Rules
 
 Write a concise normalized module artifact using the injected module schema.
 
-Keep it focused on module-stage facts:
+Keep it limited to module-stage facts and notes useful for downstream function scanning.
 
-- module summary
-- normalized important files
-- module-level entrypoints or risk signals, if schema allows
-- notes useful for downstream function scanning
+Do not write final vulnerability findings.
 
-Do not include final vulnerability findings.
+## Function Artifact Rules
 
-Do not include exploit hypotheses.
+Write each kept concrete function as a separate JSON artifact under the function artifact directory required by the stage prompt.
 
-Do not include detailed attack paths.
+Each function artifact should briefly state:
+
+- extracted function identity
+- file path and line range when available
+- inferred semantic role
+- why it was kept
+- priority
+- useful local context files when available
+
+Use tree-sitter extracted symbol identity first.
+
+Use repository-relative paths when possible.
+
+Do not embed function objects inside the module artifact.
+
+## Lookup Policy
+
+Use tools by purpose:
+
+1. Use tree-sitter for concrete function inventory.
+2. Use Serena for symbol-aware lookup and navigation when available.
+3. Use `rg`, `find`, `sed`, `awk`, or `semgrep` only as fallback or lightweight support.
+
+Do not turn lookup into global program analysis.
 
 ## Boundaries
 
-Stay within the module-stage contract.
+This stage extracts and filters function scan tasks.
 
-This stage extracts and prioritizes function scan tasks.
+It does not verify vulnerabilities, produce final vulnerability candidates, perform taint analysis, build call graphs, run CodeQL, run fuzzing, run builds, or run tests.
 
-It does not verify vulnerabilities, write final merged candidates, run heavy static analysis, run fuzzing, build call graphs, or perform full data-flow analysis.
+Use lightweight semantic inference only.
 
-It should use limited local context only as needed to prioritize functions.
-
-If uncertain, record a short note and continue.
-
-Prefer useful bounded function tasks over exhaustive module understanding.
+If uncertain, prefer inclusion.
 
 ## Validation
 
@@ -230,13 +254,12 @@ Before finishing, validate that:
 
 - the normalized module artifact exists
 - the output manifest exists
-- all written JSON artifacts are parseable
+- all function artifacts are parseable JSON
 - all artifacts conform to the injected schemas
-- every selected function came from tree-sitter extraction unless a fallback is explicitly noted
-- excluded external or vendored paths did not flood the function list
-- function artifact paths are repository-relative where possible
+- every kept function came from tree-sitter extraction unless a fallback is explicitly noted
+- kept function identities were sanity-checked
+- output.functions includes every kept concrete function artifact
+- excluded external, generated, test-only, or vendored paths did not flood the output
 - no final vulnerability result is written
 
 If validation fails, fix the artifacts once.
-
-Refine function selection only when validation requires it.

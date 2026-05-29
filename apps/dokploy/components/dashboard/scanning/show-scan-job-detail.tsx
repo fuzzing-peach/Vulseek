@@ -99,14 +99,6 @@ type ScanJobTab =
 	| "monitoring"
 	| "files";
 
-const RESULT_SORT_RANK: Record<string, number> = {
-	real_vulnerability: 4,
-	likely_vulnerability: 3,
-	plausible_but_unproven: 2,
-	api_misuse: 1,
-	false_positive: 0,
-};
-
 const RESULT_SHORT_LABELS: Record<string, string> = {
 	real_vulnerability: "Real",
 	likely_vulnerability: "Likely",
@@ -595,6 +587,8 @@ const RUNNING_TASK_STAGE_ORDER: Record<string, number> = {
 	verifying: 7,
 };
 
+const TASK_STAGE_OPTIONS = Object.keys(RUNNING_TASK_STAGE_ORDER);
+const TERMINAL_TASK_STATUS_OPTIONS = ["completed", "failed", "exited"];
 const TASK_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
 const getQueueProgressClassName = (queueId: string) => {
@@ -692,10 +686,30 @@ export const ShowScanJobDetail = ({
 		{ scanJobId },
 		{ enabled: !!scanJobId, refetchInterval: 1000 },
 	);
+	const shouldLoadStatusView =
+		activeTab === "overview" ||
+		activeTab === "tasks" ||
+		activeTab === "analysis" ||
+		activeTab === "verify";
+	const shouldLoadJobActivities =
+		activeTab === "tasks" || activeTab === "analysis" || activeTab === "verify";
 	const { data: candidates, isLoading: isLoadingCandidates } =
 		api.scan.candidates.useQuery(
-			{ scanJobId },
-			{ enabled: !!scanJobId, refetchInterval: 1000 },
+			{
+				scanJobId,
+				page: candidatePage,
+				pageSize: candidatePageSize,
+				query: candidateQuery,
+				analysisResults: analysisFilters,
+				verifyResults: verifyFilters,
+				sortKey: candidateSortKey,
+				sortDirection: candidateSortDirection,
+			},
+			{
+				enabled: !!scanJobId && activeTab === "candidates",
+				refetchInterval: activeTab === "candidates" ? 1000 : false,
+				keepPreviousData: true,
+			},
 		);
 	const {
 		data: statusView,
@@ -703,12 +717,31 @@ export const ShowScanJobDetail = ({
 		error: statusViewError,
 	} = api.scan.statusView.useQuery(
 		{ scanJobId },
-		{ enabled: !!scanJobId, refetchInterval: 1000 },
+		{
+			enabled: !!scanJobId && shouldLoadStatusView,
+			refetchInterval: shouldLoadStatusView ? 1000 : false,
+		},
 	);
+	const { data: terminalTasks, isLoading: isLoadingTerminalTasks } =
+		api.scan.terminalTasks.useQuery(
+			{
+				scanJobId,
+				page: finishedTaskPage,
+				pageSize: finishedTaskPageSize,
+				query: taskSearchQuery,
+				stage: taskStageFilter,
+				status: taskStatusFilter,
+			},
+			{
+				enabled: !!scanJobId && activeTab === "tasks",
+				refetchInterval: activeTab === "tasks" ? 1000 : false,
+				keepPreviousData: true,
+			},
+		);
 	const { activitiesByTaskId, connectedTaskIds: activityConnectedTaskIds } =
 		useSandboxAgentActivities({
 			scanJobId,
-			enabled: !!scanJobId,
+			enabled: !!scanJobId && shouldLoadJobActivities,
 		});
 	const { data: selectedFile, isLoading: isLoadingSelectedFile } =
 		api.scan.readFile.useQuery(
@@ -980,51 +1013,6 @@ export const ShowScanJobDetail = ({
 			return right.updatedAt.localeCompare(left.updatedAt);
 		});
 	}, [statusView?.inProgressTasks]);
-	const sortedTerminalTasks = useMemo(() => {
-		return [...(statusView?.terminalTasks || [])].sort((left, right) => {
-			const rightCompletedAt = right.completedAt || right.updatedAt;
-			const leftCompletedAt = left.completedAt || left.updatedAt;
-			const completedAtDiff = rightCompletedAt.localeCompare(leftCompletedAt);
-			if (completedAtDiff !== 0) {
-				return completedAtDiff;
-			}
-			const stageRankDiff =
-				(RUNNING_TASK_STAGE_ORDER[left.stage] ?? Number.MAX_SAFE_INTEGER) -
-				(RUNNING_TASK_STAGE_ORDER[right.stage] ?? Number.MAX_SAFE_INTEGER);
-			if (stageRankDiff !== 0) {
-				return stageRankDiff;
-			}
-			return right.updatedAt.localeCompare(left.updatedAt);
-		});
-	}, [statusView?.terminalTasks]);
-	const taskStageOptions = useMemo(() => {
-		const stages = new Set<string>();
-		for (const task of [...sortedInProgressTasks, ...sortedTerminalTasks]) {
-			if (task.stage) {
-				stages.add(task.stage);
-			}
-		}
-		return [...stages].sort((left, right) => {
-			const rankDiff =
-				(RUNNING_TASK_STAGE_ORDER[left] ?? Number.MAX_SAFE_INTEGER) -
-				(RUNNING_TASK_STAGE_ORDER[right] ?? Number.MAX_SAFE_INTEGER);
-			if (rankDiff !== 0) {
-				return rankDiff;
-			}
-			return getTaskStageLabel(left).localeCompare(getTaskStageLabel(right));
-		});
-	}, [sortedInProgressTasks, sortedTerminalTasks]);
-	const terminalTaskStatusOptions = useMemo(() => {
-		const statuses = new Set<string>();
-		for (const task of sortedTerminalTasks) {
-			if (task.status) {
-				statuses.add(task.status);
-			}
-		}
-		return [...statuses].sort((left, right) =>
-			getTaskStatusLabel(left).localeCompare(getTaskStatusLabel(right)),
-		);
-	}, [sortedTerminalTasks]);
 	const filteredInProgressTasks = useMemo(() => {
 		const query = taskSearchQuery.trim().toLowerCase();
 		return sortedInProgressTasks.filter((task) => {
@@ -1046,33 +1034,6 @@ export const ShowScanJobDetail = ({
 				.includes(query);
 		});
 	}, [sortedInProgressTasks, taskSearchQuery, taskStageFilter]);
-	const filteredTerminalTasks = useMemo(() => {
-		const query = taskSearchQuery.trim().toLowerCase();
-		return sortedTerminalTasks.filter((task) => {
-			if (taskStageFilter !== "all" && task.stage !== taskStageFilter) {
-				return false;
-			}
-			if (taskStatusFilter !== "all" && task.status !== taskStatusFilter) {
-				return false;
-			}
-			if (!query) {
-				return true;
-			}
-			return [
-				task.title,
-				task.subtitle || "",
-				task.stage || "",
-				getTaskStageLabel(task.stage),
-				task.status || "",
-				getTaskStatusLabel(task.status),
-				task.errorMessage || "",
-				task.taskId,
-			]
-				.join("\n")
-				.toLowerCase()
-				.includes(query);
-		});
-	}, [sortedTerminalTasks, taskSearchQuery, taskStageFilter, taskStatusFilter]);
 	const runningTaskPagination = useMemo(() => {
 		const totalItems = filteredInProgressTasks.length;
 		const totalPages = Math.max(1, Math.ceil(totalItems / runningTaskPageSize));
@@ -1090,24 +1051,27 @@ export const ShowScanJobDetail = ({
 		};
 	}, [filteredInProgressTasks, runningTaskPage, runningTaskPageSize]);
 	const finishedTaskPagination = useMemo(() => {
-		const totalItems = filteredTerminalTasks.length;
-		const totalPages = Math.max(
-			1,
-			Math.ceil(totalItems / finishedTaskPageSize),
-		);
-		const page = Math.min(Math.max(1, finishedTaskPage), totalPages);
-		const startIndex = (page - 1) * finishedTaskPageSize;
-		const endIndex = Math.min(totalItems, startIndex + finishedTaskPageSize);
+		const totalItems = terminalTasks?.total ?? 0;
+		const pageSize = terminalTasks?.pageSize ?? finishedTaskPageSize;
+		const totalPages =
+			terminalTasks?.totalPages ??
+			Math.max(1, Math.ceil(totalItems / pageSize));
+		const page =
+			terminalTasks?.page ??
+			Math.min(Math.max(1, finishedTaskPage), totalPages);
+		const startIndex = totalItems > 0 ? (page - 1) * pageSize : 0;
+		const items = terminalTasks?.items ?? [];
+		const endIndex = Math.min(totalItems, startIndex + items.length);
 		return {
 			page,
-			pageSize: finishedTaskPageSize,
+			pageSize,
 			totalItems,
 			totalPages,
 			startIndex,
 			endIndex,
-			items: filteredTerminalTasks.slice(startIndex, endIndex),
+			items,
 		};
-	}, [filteredTerminalTasks, finishedTaskPage, finishedTaskPageSize]);
+	}, [finishedTaskPage, finishedTaskPageSize, terminalTasks]);
 
 	useEffect(() => {
 		if (runningTaskPage !== runningTaskPagination.page) {
@@ -1131,61 +1095,19 @@ export const ShowScanJobDetail = ({
 		return () => window.clearInterval(timer);
 	}, [sortedInProgressTasks.length]);
 
-	const analysisQueuedCount = useMemo(
-		() =>
-			(statusView?.queuedCandidates || []).filter(
-				(candidate) => (candidate.stage || "analyzing") === "analyzing",
-			).length,
-		[statusView?.queuedCandidates],
-	);
-	const verifyQueuedCount = useMemo(
-		() =>
-			(statusView?.queuedCandidates || []).filter(
-				(candidate) => candidate.stage === "verifying",
-			).length,
-		[statusView?.queuedCandidates],
-	);
-	const analysisCompletedCandidates = useMemo(
-		() =>
-			(candidates || []).filter((candidate) => !!candidate.latestAnalysisResult)
-				.length,
-		[candidates],
-	);
-	const failedAnalysisCandidatesCount = useMemo(
-		() =>
-			(candidates || []).filter(
-				(candidate) =>
-					candidate.status === "failed" &&
-					candidate.currentStage === "analyzing",
-			).length,
-		[candidates],
-	);
-	const verifyEligibleCandidates = useMemo(
-		() =>
-			(candidates || []).filter((candidate) => {
-				const result = candidate.latestAnalysisResult?.result;
-				return (
-					result === "real_vulnerability" || result === "likely_vulnerability"
-				);
-			}).length,
-		[candidates],
-	);
-	const verifyCompletedCandidates = useMemo(
-		() =>
-			(candidates || []).filter(
-				(candidate) => !!candidate.latestVerificationResult,
-			).length,
-		[candidates],
-	);
-	const failedVerificationCandidatesCount = useMemo(
-		() =>
-			(candidates || []).filter(
-				(candidate) =>
-					candidate.status === "failed" &&
-					candidate.currentStage === "verifying",
-			).length,
-		[candidates],
-	);
+	const analysisQueuedCount = statusView?.summary.analysisQueuedCandidates ?? 0;
+	const verifyQueuedCount =
+		statusView?.summary.verificationQueuedCandidates ?? 0;
+	const analysisCompletedCandidates =
+		statusView?.summary.analysisCompletedCandidates ?? 0;
+	const failedAnalysisCandidatesCount =
+		statusView?.summary.analysisFailedCandidates ?? 0;
+	const verifyEligibleCandidates =
+		statusView?.summary.verificationEligibleCandidates ?? 0;
+	const verifyCompletedCandidates =
+		statusView?.summary.verificationCompletedCandidates ?? 0;
+	const failedVerificationCandidatesCount =
+		statusView?.summary.verificationFailedCandidates ?? 0;
 	const handleRetryFailedTasks = async () => {
 		try {
 			const result = await retryFailedTasksMutation.mutateAsync({
@@ -1242,129 +1164,42 @@ export const ShowScanJobDetail = ({
 			setRerunningTaskId((current) => (current === taskId ? null : current));
 		}
 	};
-	const filteredCandidates = useMemo(() => {
-		if (!candidates) {
-			return [];
-		}
-		const query = candidateQuery.trim().toLowerCase();
-		return candidates.filter((candidate) => {
-			const latestAnalysisResult = candidate.latestAnalysisResult?.result || "";
-			const latestVerifyResult =
-				candidate.latestVerificationResult?.result || "";
-			if (
-				analysisFilters.length > 0 &&
-				!analysisFilters.includes(latestAnalysisResult)
-			) {
-				return false;
-			}
-			if (
-				verifyFilters.length > 0 &&
-				!verifyFilters.includes(latestVerifyResult)
-			) {
-				return false;
-			}
-			if (!query) {
-				return true;
-			}
-			const haystack = [
-				candidate.title,
-				candidate.description || "",
-				candidate.filePath || "",
-				candidate.status,
-				typeof candidate.line === "number" ? String(candidate.line) : "",
-				candidate.latestAnalysisResult?.result || "",
-				candidate.latestAnalysisResult?.reportPath || "",
-				candidate.latestAnalysisResult?.threadId || "",
-				candidate.latestVerificationResult?.result || "",
-				typeof candidate.latestVerificationResult?.isBug === "boolean"
-					? String(candidate.latestVerificationResult.isBug)
-					: "",
-				typeof candidate.latestVerificationResult?.isSecurity === "boolean"
-					? String(candidate.latestVerificationResult.isSecurity)
-					: "",
-				typeof candidate.latestVerificationResult?.confidence === "number"
-					? String(candidate.latestVerificationResult.confidence)
-					: "",
-				typeof candidate.latestVerificationResult?.score === "number"
-					? String(candidate.latestVerificationResult.score)
-					: "",
-				typeof candidate.latestAnalysisResult?.score === "number"
-					? String(candidate.latestAnalysisResult.score)
-					: "",
-				typeof candidate.score === "number" ? String(candidate.score) : "",
-				candidate.latestVerificationResult?.reportPath || "",
-				candidate.latestVerificationResult?.issueDraftPath || "",
-				candidate.latestVerificationResult?.threadId || "",
-			]
-				.join("\n")
-				.toLowerCase();
-			return haystack.includes(query);
-		});
-	}, [analysisFilters, candidateQuery, candidates, verifyFilters]);
-
-	const sortedCandidates = useMemo(() => {
-		const items = [...filteredCandidates];
-		items.sort((left, right) => {
-			const direction = candidateSortDirection === "asc" ? 1 : -1;
-
-			if (candidateSortKey === "candidate") {
-				return direction * left.title.localeCompare(right.title);
-			}
-
-			if (candidateSortKey === "analysis") {
-				const leftRank =
-					RESULT_SORT_RANK[left.latestAnalysisResult?.result || ""] ?? -1;
-				const rightRank =
-					RESULT_SORT_RANK[right.latestAnalysisResult?.result || ""] ?? -1;
-				if (leftRank !== rightRank) {
-					return direction * (leftRank - rightRank);
-				}
-				return direction * left.title.localeCompare(right.title);
-			}
-
-			if (candidateSortKey === "verify") {
-				const leftRank =
-					RESULT_SORT_RANK[left.latestVerificationResult?.result || ""] ?? -1;
-				const rightRank =
-					RESULT_SORT_RANK[right.latestVerificationResult?.result || ""] ?? -1;
-				if (leftRank !== rightRank) {
-					return direction * (leftRank - rightRank);
-				}
-				return direction * left.title.localeCompare(right.title);
-			}
-
-			const leftScore = typeof left.score === "number" ? left.score : -1;
-			const rightScore = typeof right.score === "number" ? right.score : -1;
-			if (leftScore !== rightScore) {
-				return direction * (leftScore - rightScore);
-			}
-			return direction * left.title.localeCompare(right.title);
-		});
-		return items;
-	}, [candidateSortDirection, candidateSortKey, filteredCandidates]);
-
 	const candidatePagination = useMemo(() => {
-		const totalItems = sortedCandidates.length;
-		const totalPages = Math.max(1, Math.ceil(totalItems / candidatePageSize));
-		const safePage = Math.min(Math.max(1, candidatePage), totalPages);
-		const startIndex = (safePage - 1) * candidatePageSize;
-		const endIndex = Math.min(totalItems, startIndex + candidatePageSize);
+		const totalItems = candidates?.total ?? 0;
+		const pageSize = candidates?.pageSize ?? candidatePageSize;
+		const totalPages =
+			candidates?.totalPages ?? Math.max(1, Math.ceil(totalItems / pageSize));
+		const safePage =
+			candidates?.page ?? Math.min(Math.max(1, candidatePage), totalPages);
+		const startIndex = totalItems > 0 ? (safePage - 1) * pageSize : 0;
+		const items = candidates?.items ?? [];
+		const endIndex = Math.min(totalItems, startIndex + items.length);
 		return {
 			page: safePage,
-			pageSize: candidatePageSize,
+			pageSize,
 			totalItems,
 			totalPages,
 			startIndex,
 			endIndex,
-			items: sortedCandidates.slice(startIndex, endIndex),
+			items,
 		};
-	}, [candidatePage, candidatePageSize, sortedCandidates]);
+	}, [candidatePage, candidatePageSize, candidates]);
 
 	useEffect(() => {
 		if (candidatePage !== candidatePagination.page) {
 			setCandidatePage(candidatePagination.page);
 		}
 	}, [candidatePage, candidatePagination.page]);
+	const hasCandidateFilters =
+		candidateQuery.trim().length > 0 ||
+		analysisFilters.length > 0 ||
+		verifyFilters.length > 0;
+	const hasAnyCandidates =
+		(statusView?.summary.totalCandidates ?? candidates?.total ?? 0) > 0;
+	const hasFinishedTaskFilters =
+		taskSearchQuery.trim().length > 0 ||
+		taskStageFilter !== "all" ||
+		taskStatusFilter !== "all";
 
 	const toggleCandidateSort = (key: CandidateSortKey) => {
 		if (candidateSortKey === key) {
@@ -1624,14 +1459,28 @@ export const ShowScanJobDetail = ({
 						}}
 						className="w-full"
 					>
-						<TabsList className="flex gap-4 justify-start">
-							<TabsTrigger value="overview">Overview</TabsTrigger>
-							<TabsTrigger value="tasks">Tasks</TabsTrigger>
-							<TabsTrigger value="analysis">Analysis</TabsTrigger>
-							<TabsTrigger value="verify">Verify</TabsTrigger>
-							<TabsTrigger value="candidates">Candidates</TabsTrigger>
-							<TabsTrigger value="monitoring">Monitoring</TabsTrigger>
-							<TabsTrigger value="files">Files</TabsTrigger>
+						<TabsList className="flex h-auto min-h-10 w-full justify-start gap-1 overflow-x-auto p-1 sm:gap-2">
+							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="overview">
+								Overview
+							</TabsTrigger>
+							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="tasks">
+								Tasks
+							</TabsTrigger>
+							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="analysis">
+								Analysis
+							</TabsTrigger>
+							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="verify">
+								Verify
+							</TabsTrigger>
+							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="candidates">
+								Candidates
+							</TabsTrigger>
+							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="monitoring">
+								Monitoring
+							</TabsTrigger>
+							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="files">
+								Files
+							</TabsTrigger>
 						</TabsList>
 
 						<TabsContent value="overview" className="pt-4">
@@ -1648,14 +1497,7 @@ export const ShowScanJobDetail = ({
 							) : (
 								<div className="flex flex-col gap-3">
 									{canCancelScanJob ? (
-										<div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3">
-											<div>
-												<div className="font-medium">Cancel Running Job</div>
-												<div className="text-sm text-muted-foreground">
-													Stop all running tasks and clear pending work for this
-													job.
-												</div>
-											</div>
+										<div className="flex justify-end">
 											<Button
 												type="button"
 												variant="destructive"
@@ -1838,7 +1680,7 @@ export const ShowScanJobDetail = ({
 						</TabsContent>
 
 						<TabsContent value="analysis" className="pt-4">
-							{isLoadingStatusView || isLoadingCandidates ? (
+							{isLoadingStatusView ? (
 								<div className="flex items-center gap-2 text-muted-foreground">
 									<Loader2 className="size-4 animate-spin" />
 									Loading status...
@@ -1851,15 +1693,7 @@ export const ShowScanJobDetail = ({
 							) : (
 								<div className="flex flex-col gap-4">
 									{failedAnalysisCandidatesCount > 0 ? (
-										<div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3">
-											<div>
-												<div className="font-medium">Failed Analysis Tasks</div>
-												<div className="text-sm text-muted-foreground">
-													{failedAnalysisCandidatesCount} failed candidate
-													analysis tasks were detected. Retry will requeue every
-													failed task in this job.
-												</div>
-											</div>
+										<div className="flex justify-end">
 											<Button
 												type="button"
 												disabled={retryFailedTasksMutation.isLoading}
@@ -1917,7 +1751,7 @@ export const ShowScanJobDetail = ({
 						</TabsContent>
 
 						<TabsContent value="verify" className="pt-4">
-							{isLoadingStatusView || isLoadingCandidates ? (
+							{isLoadingStatusView ? (
 								<div className="flex items-center gap-2 text-muted-foreground">
 									<Loader2 className="size-4 animate-spin" />
 									Loading status...
@@ -1930,17 +1764,7 @@ export const ShowScanJobDetail = ({
 							) : (
 								<div className="flex flex-col gap-4">
 									{failedVerificationCandidatesCount > 0 ? (
-										<div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3">
-											<div>
-												<div className="font-medium">
-													Failed Verification Tasks
-												</div>
-												<div className="text-sm text-muted-foreground">
-													{failedVerificationCandidatesCount} failed candidate
-													verification tasks were detected. Retry will requeue
-													every failed task in this job.
-												</div>
-											</div>
+										<div className="flex justify-end">
 											<Button
 												type="button"
 												disabled={retryFailedTasksMutation.isLoading}
@@ -2001,7 +1825,10 @@ export const ShowScanJobDetail = ({
 									<Loader2 className="size-4 animate-spin" />
 									Loading candidates...
 								</div>
-							) : !candidates || candidates.length === 0 ? (
+							) : !candidates ||
+								(!hasAnyCandidates &&
+									!hasCandidateFilters &&
+									candidates.total === 0) ? (
 								<div className="flex items-center gap-2 text-muted-foreground">
 									<FileSearch className="size-4" />
 									No Candidates yet
@@ -2113,7 +1940,7 @@ export const ShowScanJobDetail = ({
 											</PopoverContent>
 										</Popover>
 									</div>
-									{sortedCandidates.length === 0 ? (
+									{candidatePagination.totalItems === 0 ? (
 										<div className="flex items-center gap-2 text-muted-foreground">
 											<FileSearch className="size-4" />
 											No matching candidates
@@ -2464,20 +2291,7 @@ export const ShowScanJobDetail = ({
 						<TabsContent value="tasks" className="pt-4">
 							<div className="flex flex-col gap-4">
 								{shouldShowRetryFailedTasks ? (
-									<div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3">
-										<div>
-											<div className="font-medium">Failed Tasks</div>
-											<div className="text-sm text-muted-foreground">
-												{totalFailedTasks} failed tasks were found across scan
-												stages.
-											</div>
-											{!canRetryFailedTasks ? (
-												<div className="mt-1 text-xs text-muted-foreground">
-													Retry becomes available after the full scan job
-													finishes and all running tasks stop.
-												</div>
-											) : null}
-										</div>
+									<div className="flex justify-end">
 										<Button
 											type="button"
 											disabled={
@@ -2522,16 +2336,13 @@ export const ShowScanJobDetail = ({
 											<table className="w-full text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
-														<th className="w-[22%] px-4 py-3 font-medium">
+														<th className="w-[28%] px-4 py-3 font-medium">
 															Queue
 														</th>
-														<th className="w-[30%] px-4 py-3 font-medium">
-															BullMQ Name
-														</th>
-														<th className="w-[26%] px-4 py-3 font-medium">
+														<th className="w-[36%] px-4 py-3 font-medium">
 															Tasks
 														</th>
-														<th className="w-[22%] px-4 py-3 font-medium">
+														<th className="w-[36%] px-4 py-3 font-medium">
 															Progress
 														</th>
 													</tr>
@@ -2546,9 +2357,6 @@ export const ShowScanJobDetail = ({
 															>
 																<td className="px-4 py-3 align-top font-medium">
 																	{queue.title}
-																</td>
-																<td className="px-4 py-3 align-top font-mono text-xs text-muted-foreground break-all">
-																	{queue.queueName}
 																</td>
 																<td
 																	className="px-4 py-3 align-top"
@@ -2645,7 +2453,7 @@ export const ShowScanJobDetail = ({
 													className="h-9 rounded-md border border-input bg-background px-2 text-sm"
 												>
 													<option value="all">All stages</option>
-													{taskStageOptions.map((stage) => (
+													{TASK_STAGE_OPTIONS.map((stage) => (
 														<option key={stage} value={stage}>
 															{getTaskStageLabel(stage)}
 														</option>
@@ -2831,7 +2639,8 @@ export const ShowScanJobDetail = ({
 											Completed, failed, and canceled tasks for this job.
 										</div>
 									</div>
-									{statusView && sortedTerminalTasks.length > 0 ? (
+									{terminalTasks &&
+									(terminalTasks.total > 0 || hasFinishedTaskFilters) ? (
 										<div className="flex flex-col gap-3 border-b px-4 py-3 text-sm xl:flex-row xl:items-center xl:justify-between">
 											<div className="grid min-w-0 flex-1 grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_180px_180px]">
 												<div className="relative">
@@ -2858,7 +2667,7 @@ export const ShowScanJobDetail = ({
 													className="h-9 rounded-md border border-input bg-background px-2 text-sm"
 												>
 													<option value="all">All stages</option>
-													{taskStageOptions.map((stage) => (
+													{TASK_STAGE_OPTIONS.map((stage) => (
 														<option key={stage} value={stage}>
 															{getTaskStageLabel(stage)}
 														</option>
@@ -2873,7 +2682,7 @@ export const ShowScanJobDetail = ({
 													className="h-9 rounded-md border border-input bg-background px-2 text-sm"
 												>
 													<option value="all">All statuses</option>
-													{terminalTaskStatusOptions.map((status) => (
+													{TERMINAL_TASK_STATUS_OPTIONS.map((status) => (
 														<option key={status} value={status}>
 															{getTaskStatusLabel(status)}
 														</option>
@@ -2946,11 +2755,18 @@ export const ShowScanJobDetail = ({
 										</div>
 									) : null}
 									<div className="overflow-x-auto">
-										{!statusView || sortedTerminalTasks.length === 0 ? (
+										{isLoadingTerminalTasks ? (
+											<div className="flex items-center gap-2 px-4 py-6 text-sm text-muted-foreground">
+												<Loader2 className="size-4 animate-spin" />
+												Loading finished tasks...
+											</div>
+										) : !terminalTasks ||
+											(terminalTasks.total === 0 && !hasFinishedTaskFilters) ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
 												No finished tasks
 											</div>
-										) : filteredTerminalTasks.length === 0 ? (
+										) : terminalTasks.total === 0 ||
+											finishedTaskPagination.items.length === 0 ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
 												No matching tasks
 											</div>

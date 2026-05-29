@@ -16,7 +16,7 @@ import { findScanJobByIdRepo } from "./persistence/scan-job.repo";
 import { findVulnerabilityCandidateByIdRepo } from "./persistence/candidate.repo";
 import {
 	findTaskByIdRepo,
-	listTasksByScanJobIdRepo,
+	listTasksByScanJobAndStatusesRepo,
 	listTasksByScanJobAndStageRepo,
 } from "./persistence/task.repo";
 import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "./runtime/sandbox-agent-shared";
@@ -384,8 +384,10 @@ const buildSandboxAgentTaskRuntime = async (
 export const findRunningSandboxAgentTaskRuntimesByScanJobId = async (
 	scanJobId: string,
 ): Promise<SandboxAgentTaskRuntime[]> => {
-	const tasks = await listTasksByScanJobIdRepo(scanJobId);
-	const runningTasks = tasks.filter((task) => task.status === "running");
+	const runningTasks = await listTasksByScanJobAndStatusesRepo({
+		scanJobId,
+		statuses: ["running"],
+	});
 	return await Promise.all(runningTasks.map(buildSandboxAgentTaskRuntime));
 };
 

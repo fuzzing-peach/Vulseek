@@ -14,7 +14,10 @@ module_json_path: {{moduleJsonPath}}
 Use the scan-module skill for the detailed workflow and function-selection rules.
 Read repository_json_path and module_json_path before analysis.
 Write the canonical module object to /task/module.json.
-Write each selected function object to a separate /task/functions/<function-id>.json file.
+Write each kept concrete in-scope function object to a separate /task/functions/<function-id>.json file.
+Do not reduce the extracted function inventory to a small subset, cap, or theme summary.
+Only omit a concrete function when the scan-module skill gives a concrete exclusion reason.
+Run the scan-module skill's required noise-exclusion pass, and record extracted/kept/omitted counts plus omission categories in /task/module.json notes.
 Return a schema-valid path manifest: module is /task/module.json, and functions is the list of function JSON file paths.
 Use the module JSON file's files field as the starting file set, while respecting overlapping security modules.
 Before returning, validate the structured JSON against the runtime-provided output.schema.json.

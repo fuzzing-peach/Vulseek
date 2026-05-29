@@ -1,15 +1,15 @@
 ---
 name: scan-repository
-description: Build repository context and split the repository into bounded downstream scan modules.
+description: Build repository context and split the repository into downstream scan modules.
 ---
 
 # Scan Repository
 
 ## Purpose
 
-Create repository-level context and split the checked-out repository into bounded modules for downstream scanning.
+Create repository-level context and split the checked-out repository into modules for downstream scanning.
 
-This stage is a routing stage. It should understand the repository just enough to create useful module tasks.
+This stage is a routing stage. It should preserve security-relevant module boundaries while removing obvious repository noise.
 
 This stage may use lightweight threat-model reasoning to choose module boundaries, but it must not generate vulnerability candidates or confirmed findings.
 
@@ -46,18 +46,21 @@ Follow one pass:
 1. Read repository metadata.
 2. Inventory the repository structure.
 3. Detect repository context.
-4. Identify runtime and downranked areas.
-5. Inspect limited representative source content.
+4. Identify runtime areas, security surfaces, and obvious noise areas.
+5. Inspect enough source content and repository structure to justify module boundaries.
 6. Split the repository into modules.
-7. Assign module priority.
-8. Write artifacts.
-9. Validate artifacts.
+7. Apply large-module splitting before writing module artifacts.
+8. Set module priority fields.
+9. Write artifacts.
+10. Validate artifacts.
 
 ## Module Splitting Policy
 
-Create modules that are useful downstream scan units.
+Create modules that preserve security-relevant boundaries for downstream scanning.
 
-A module should group code that shares a similar runtime role, trust boundary, threat model, or security responsibility.
+A module should group code that shares a similar runtime role, trust boundary, threat model, privilege level, language/runtime integration point, or security responsibility.
+
+Noise filtering happens before module splitting, but it must not merge distinct runtime or security boundaries.
 
 Prefer boundaries in this order:
 
@@ -105,23 +108,75 @@ Prefer boundaries in this order:
 
 5. Core responsibility and directory fallback
 
-   When stronger boundaries are not obvious, split by core responsibility observed from representative source content.
+   When stronger boundaries are not obvious, split by core responsibility observed from source content.
 
    If evidence is weak, use top-level runtime directories and record a short note that the boundary is path-derived.
 
-Use a small, bounded module set.
+Choose the module set from the repository's actual scale and complexity.
 
-Prefer a good-enough security-relevant split over an optimal architectural split.
+Large repositories may produce more than 20 modules when that is needed to preserve distinct security surfaces.
 
-If two splits are both reasonable, choose the one that better separates trust boundaries and sensitive responsibilities.
+When two splits are both reasonable, choose the one that better separates trust boundaries, runtime roles, privilege levels, language/runtime integration points, and sensitive responsibilities.
 
-If still ambiguous, choose the simpler split.
+When uncertain between merging and splitting, split if downstream module scanning would otherwise mix different trust boundaries, attacker-controlled inputs, runtime contexts, privilege levels, language/runtime integration points, or security responsibilities.
 
 Do not split modules by individual functions, speculative vulnerabilities, or extra exploration done only to perfect the boundary.
 
-## Priority Policy
+## Large Module Splitting
 
-Assign numeric priority.
+Before writing module artifacts, review each candidate module for signs that it is an aggregate module that should be split structurally.
+
+A candidate module should be split when it combines multiple independent security surfaces, for example:
+
+- different external entrypoints, such as API endpoints, CLI commands, background workers, event consumers, webhooks, plugins, embedded runtimes, daemons, libraries, tools, or generated bindings
+- different execution environments, such as frontend, backend, worker, CLI, mobile, embedded, kernel, sandboxed, serverless, browser extension, build-time, or release-time code
+- different trust or privilege contexts, such as unauthenticated user paths, authenticated user paths, admin paths, internal service paths, privileged system paths, local-only tools, or third-party extension points
+- different data ownership or tenancy boundaries, such as user data, organization data, project/workspace data, credentials, secrets, billing data, audit data, cached data, or shared global state
+- different stateful subsystems, such as sessions, queues, schedulers, transactions, caches, locks, configuration, migrations, synchronization, retry/recovery, or lifecycle management
+- different storage and I/O surfaces, such as database access, filesystem access, network access, IPC, device access, message buses, object storage, logs, telemetry, imports, exports, or uploads/downloads
+- different input interpretation layers, such as request handling, command handling, file import, serialization, deserialization, validation, normalization, transformation, template rendering, or policy evaluation
+- different integration layers, such as SDKs, adapters, drivers, compatibility layers, language bindings, FFI, provider integrations, platform ports, or framework glue
+- different implementation families or backends, such as pure runtime logic, optimized backends, platform-specific implementations, optional feature implementations, generated adapters, or hardware/service-backed implementations
+- different operational surfaces, such as installer code, packaging, deployment, configuration, update flows, release tooling, CI/CD helpers, tests that execute runtime behavior, fuzz harnesses, or examples that expose real entrypoints
+
+Use source-backed structural signals to split aggregate modules:
+
+- directory names and file names
+- package, crate, app, service, binary, command, plugin, extension, or deployable boundaries
+- build-system targets, manifests, dependency groups, and conditional feature flags
+- exported public APIs, route tables, command registries, provider registries, plugin registries, or schema definitions
+- filename prefixes or suffixes that identify ownership domains, runtime roles, adapters, backends, platforms, bindings, commands, jobs, or data formats
+- nearby README, manifest, config, Kconfig, CMake, autotools, package metadata, service descriptors, or deployment metadata that identifies runtime roles
+- repeated source-file clusters with separate entrypoints, state owners, trust boundaries, storage surfaces, or integration responsibilities
+
+Avoid broad module artifacts whose `files` field is only a large catch-all directory when that directory contains separable security surfaces.
+
+Do not treat a broad application, package, library, service, platform, tooling, integration, or binding directory as one module when source files clearly separate multiple runtime roles, entrypoints, state owners, storage surfaces, trust boundaries, execution environments, integration layers, or operational surfaces.
+
+Do not merge code that has separate entrypoints, ownership boundaries, trust boundaries, privilege levels, data lifecycles, storage/I/O responsibilities, execution environments, or integration responsibilities.
+
+When a candidate module is split, each child module should still be a meaningful downstream scan unit with coherent files, entrypoints, trust boundaries, attack surfaces, and notes. Record in notes when a module was split from a larger aggregate surface.
+
+## Noise Handling
+
+Exclude or downscope repository areas that are clearly noise for downstream security scanning:
+
+- vendored dependencies, copied third-party source, submodules, and package manager caches
+- generated files, generated mirrors, build outputs, minified bundles, and compiled artifacts
+- documentation-only directories, screenshots, static media, and marketing assets
+- test fixtures, sample certificates, sample keys, corpora, golden files, snapshots, and large data assets
+- boilerplate packaging metadata with no install, build, signing, release, or dependency-resolution behavior
+- compatibility aliases that only re-export another already-covered runtime area
+
+Do not create separate modules for pure noise areas unless they are explicitly part of the runtime attack surface, build pipeline, packaging trust boundary, fuzz/test harness behavior, or security configuration surface.
+
+If a noisy area is intentionally included, explain why in module notes.
+
+When an area contains both noise and security-relevant code, keep the security-relevant code in the appropriate module and note the excluded noise.
+
+## Priority Field
+
+Set numeric priority.
 
 - `0`: externally reachable or security-critical module
 - `1`: high-value module with indirect exposure
@@ -136,9 +191,7 @@ Do not produce function inventories, vulnerability candidates, exploit hypothese
 
 Do not run commands that install dependencies, build, test, fuzz, modify repository state, use external services, or perform web/network access.
 
-Do not perform exhaustive source inspection or repeated exploratory analysis.
-
-Do not optimize module boundaries after the first defensible assignment.
+Inspect enough files and directory structure to justify module boundaries. Prefer source-backed boundaries over purely top-level directory guesses.
 
 ## Validation
 

@@ -1,16 +1,13 @@
-import { TRPCError } from "@trpc/server";
-import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@dokploy/server/db";
-import { taskStatusEnum, tasks } from "@dokploy/server/db/schema";
+import { type taskStatusEnum, tasks } from "@dokploy/server/db/schema";
+import { TRPCError } from "@trpc/server";
+import { and, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import {
 	analysisSchema,
 	verificationSchema,
 } from "../artifacts/contracts/domain-object.contract";
-import type {
-	AnalysisResult,
-	VerificationResult,
-} from "../types";
 import { createShortTaskId } from "../task-id";
+import type { AnalysisResult, VerificationResult } from "../types";
 import { readCandidateIdFromTaskInputArtifact } from "./task-artifact-resolver";
 
 const buildAnalysisTaskResultView = async (
@@ -189,12 +186,134 @@ export const listTasksByScanJobIdRepo = async (scanJobId: string) =>
 		.where(eq(tasks.scanJobId, scanJobId))
 		.orderBy(desc(tasks.createdAt));
 
+export const listTasksByScanJobAndStatusesRepo = async (input: {
+	scanJobId: string;
+	statuses: Array<(typeof taskStatusEnum.enumValues)[number]>;
+}) =>
+	await db
+		.select()
+		.from(tasks)
+		.where(
+			and(
+				eq(tasks.scanJobId, input.scanJobId),
+				inArray(tasks.status, input.statuses),
+			),
+		)
+		.orderBy(desc(tasks.updatedAt));
+
+export const listTaskStatusCountsByScanJobIdRepo = async (scanJobId: string) =>
+	await db
+		.select({
+			stageName: tasks.stageName,
+			status: tasks.status,
+			count: count(),
+		})
+		.from(tasks)
+		.where(eq(tasks.scanJobId, scanJobId))
+		.groupBy(tasks.stageName, tasks.status);
+
+export const listTerminalTasksPageByScanJobIdRepo = async (input: {
+	scanJobId: string;
+	page: number;
+	pageSize: number;
+	query?: string;
+	stageName?: string;
+	status?: (typeof taskStatusEnum.enumValues)[number];
+}) => {
+	const pageSize = Math.max(1, Math.min(100, input.pageSize));
+	const requestedPage = Math.max(1, input.page);
+	const terminalStatuses: Array<(typeof taskStatusEnum.enumValues)[number]> = [
+		"completed",
+		"failed",
+		"exited",
+	];
+	const trimmedQuery = input.query?.trim() || "";
+	const conditions = [
+		eq(tasks.scanJobId, input.scanJobId),
+		inArray(tasks.status, terminalStatuses),
+		input.stageName ? eq(tasks.stageName, input.stageName) : undefined,
+		input.status ? eq(tasks.status, input.status) : undefined,
+		trimmedQuery
+			? or(
+					ilike(tasks.taskId, `%${trimmedQuery}%`),
+					ilike(tasks.name, `%${trimmedQuery}%`),
+					ilike(tasks.stageName, `%${trimmedQuery}%`),
+					ilike(tasks.errorMessage, `%${trimmedQuery}%`),
+				)
+			: undefined,
+	].filter(Boolean);
+	const where = and(...conditions);
+	const [{ total = 0 } = { total: 0 }] = await db
+		.select({ total: count() })
+		.from(tasks)
+		.where(where);
+	const totalPages = Math.max(1, Math.ceil(total / pageSize));
+	const page = Math.min(requestedPage, totalPages);
+	const items = await db
+		.select()
+		.from(tasks)
+		.where(where)
+		.orderBy(
+			desc(sql<string>`coalesce(${tasks.completedAt}, ${tasks.updatedAt})`),
+		)
+		.limit(pageSize)
+		.offset((page - 1) * pageSize);
+
+	return {
+		items,
+		total,
+		page,
+		pageSize,
+		totalPages,
+	};
+};
+
 export const listChildTasksByParentTaskIdRepo = async (parentTaskId: string) =>
 	await db
 		.select()
 		.from(tasks)
 		.where(eq(tasks.parentTaskId, parentTaskId))
 		.orderBy(desc(tasks.createdAt));
+
+export const listCandidateDescendantTasksByFunctionTaskIdRepo = async (input: {
+	scanFunctionTaskId: string;
+	vulnerabilityCandidateId: string;
+}) => {
+	const directChildren = await listChildTasksByParentTaskIdRepo(
+		input.scanFunctionTaskId,
+	);
+	const candidateRoots: Array<typeof tasks.$inferSelect> = [];
+	for (const task of directChildren) {
+		const candidateId = await readCandidateIdFromTaskInputArtifact(task).catch(
+			() => null,
+		);
+		if (candidateId === input.vulnerabilityCandidateId) {
+			candidateRoots.push(task);
+		}
+	}
+
+	const descendants: Array<typeof tasks.$inferSelect> = [];
+	const queue = [...candidateRoots];
+	const seenTaskIds = new Set<string>();
+	while (queue.length > 0) {
+		const task = queue.shift();
+		if (!task || seenTaskIds.has(task.taskId)) {
+			continue;
+		}
+		seenTaskIds.add(task.taskId);
+		descendants.push(task);
+		const children = await listChildTasksByParentTaskIdRepo(task.taskId);
+		for (const child of children) {
+			if (!seenTaskIds.has(child.taskId)) {
+				queue.push(child);
+			}
+		}
+	}
+
+	return descendants.sort((left, right) =>
+		right.createdAt.localeCompare(left.createdAt),
+	);
+};
 
 export const listChildTasksByParentTaskIdAndStageRepo = async (input: {
 	parentTaskId: string;
@@ -276,11 +395,15 @@ export const transitionTaskStatusRepo = async (input: {
 			...(input.to === "launching" || input.to === "running"
 				? { startedAt: now, completedAt: null }
 				: {}),
-			...(input.to === "completed" || input.to === "failed" || input.to === "exited"
+			...(input.to === "completed" ||
+			input.to === "failed" ||
+			input.to === "exited"
 				? { completedAt: now }
 				: {}),
 		})
-		.where(and(eq(tasks.taskId, input.taskId), inArray(tasks.status, input.from)))
+		.where(
+			and(eq(tasks.taskId, input.taskId), inArray(tasks.status, input.from)),
+		)
 		.returning();
 
 	return updated[0] || null;
@@ -324,7 +447,11 @@ export const updateTaskStatusRepo = async (input: {
 		patch.completedAt = null;
 	}
 
-	if (input.status === "completed" || input.status === "failed" || input.status === "exited") {
+	if (
+		input.status === "completed" ||
+		input.status === "failed" ||
+		input.status === "exited"
+	) {
 		patch.completedAt = new Date().toISOString();
 	}
 
@@ -346,14 +473,12 @@ export const bindTaskRuntimeRepo = async (input: {
 export const storeTaskInputRepo = async (
 	taskId: string,
 	input: typeof tasks.$inferSelect.input,
-) =>
-	await updateTaskRepo(taskId, { input });
+) => await updateTaskRepo(taskId, { input });
 
 export const storeTaskOutputRepo = async (
 	taskId: string,
 	output: typeof tasks.$inferSelect.output,
-) =>
-	await updateTaskRepo(taskId, { output });
+) => await updateTaskRepo(taskId, { output });
 
 export const resetFailedTaskForRetryRepo = async (taskId: string) => {
 	const updated = await db
@@ -418,9 +543,9 @@ export const listAnalysisResultsByScanJobIdRepo = async (
 		scanJobId,
 		stageName: "analyze",
 	});
-	return (await Promise.all(analysisTasks.map(buildAnalysisTaskResultView))).filter(
-		(item): item is AnalysisResult => Boolean(item),
-	);
+	return (
+		await Promise.all(analysisTasks.map(buildAnalysisTaskResultView))
+	).filter((item): item is AnalysisResult => Boolean(item));
 };
 
 export const listVerificationResultsByScanJobIdRepo = async (
@@ -438,24 +563,64 @@ export const listVerificationResultsByScanJobIdRepo = async (
 export const findLatestAnalysisResultByCandidateIdRepo = async (input: {
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
-}): Promise<AnalysisResult | null> =>
-	(
-		await listAnalysisResultsByScanJobIdRepo(input.scanJobId)
-	).find(
-		(result) =>
-			result.vulnerabilityCandidateId === input.vulnerabilityCandidateId,
-	) || null;
+	scanFunctionTaskId?: string | null;
+}): Promise<AnalysisResult | null> => {
+	if (input.scanFunctionTaskId) {
+		const candidateTasks =
+			await listCandidateDescendantTasksByFunctionTaskIdRepo({
+				scanFunctionTaskId: input.scanFunctionTaskId,
+				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+			});
+		for (const task of candidateTasks) {
+			if (task.stageName !== "analyze") {
+				continue;
+			}
+			const result = await buildAnalysisTaskResultView(task);
+			if (result?.vulnerabilityCandidateId === input.vulnerabilityCandidateId) {
+				return result;
+			}
+		}
+		return null;
+	}
+
+	return (
+		(await listAnalysisResultsByScanJobIdRepo(input.scanJobId)).find(
+			(result) =>
+				result.vulnerabilityCandidateId === input.vulnerabilityCandidateId,
+		) || null
+	);
+};
 
 export const findLatestVerificationResultByCandidateIdRepo = async (input: {
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
-}): Promise<VerificationResult | null> =>
-	(
-		await listVerificationResultsByScanJobIdRepo(input.scanJobId)
-	).find(
-		(result) =>
-			result.vulnerabilityCandidateId === input.vulnerabilityCandidateId,
-	) || null;
+	scanFunctionTaskId?: string | null;
+}): Promise<VerificationResult | null> => {
+	if (input.scanFunctionTaskId) {
+		const candidateTasks =
+			await listCandidateDescendantTasksByFunctionTaskIdRepo({
+				scanFunctionTaskId: input.scanFunctionTaskId,
+				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+			});
+		for (const task of candidateTasks) {
+			if (task.stageName !== "verify") {
+				continue;
+			}
+			const result = await buildVerificationTaskResultView(task);
+			if (result?.vulnerabilityCandidateId === input.vulnerabilityCandidateId) {
+				return result;
+			}
+		}
+		return null;
+	}
+
+	return (
+		(await listVerificationResultsByScanJobIdRepo(input.scanJobId)).find(
+			(result) =>
+				result.vulnerabilityCandidateId === input.vulnerabilityCandidateId,
+		) || null
+	);
+};
 
 export const countTasksByScanJobAndStatusRepo = async (scanJobId: string) =>
 	await db
@@ -467,7 +632,9 @@ export const countTasksByScanJobAndStatusRepo = async (scanJobId: string) =>
 		.where(eq(tasks.scanJobId, scanJobId))
 		.groupBy(tasks.status);
 
-export const countTasksByScanJobStageAndStatusRepo = async (scanJobId: string) =>
+export const countTasksByScanJobStageAndStatusRepo = async (
+	scanJobId: string,
+) =>
 	await db
 		.select({
 			stageName: tasks.stageName,

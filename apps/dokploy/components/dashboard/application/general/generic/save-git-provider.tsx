@@ -108,25 +108,25 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 				onSubmit={form.handleSubmit(onSubmit)}
 				className="flex flex-col gap-4"
 			>
-				<div className="grid md:grid-cols-2 gap-4">
-					<div className="flex items-end col-span-2 gap-4">
-						<div className="grow">
+				<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+					<div className="flex min-w-0 flex-col gap-4 md:col-span-2 md:flex-row md:items-end">
+						<div className="min-w-0 grow">
 							<FormField
 								control={form.control}
 								name="repositoryURL"
 								render={({ field }) => (
 									<FormItem>
-										<div className="flex items-center justify-between">
+										<div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
 											<FormLabel>Repository URL</FormLabel>
 											{field.value?.startsWith("https://") && (
 												<Link
 													href={field.value}
 													target="_blank"
 													rel="noopener noreferrer"
-													className="flex items-center gap-1 text-sm text-muted-foreground hover:text-primary"
+													className="inline-flex min-w-0 items-center gap-1 text-sm text-muted-foreground hover:text-primary"
 												>
-													<GitIcon className="h-4 w-4" />
-													<span>View Repository</span>
+													<GitIcon className="h-4 w-4 shrink-0" />
+													<span className="truncate">View Repository</span>
 												</Link>
 											)}
 										</div>
@@ -143,7 +143,7 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 								control={form.control}
 								name="sshKey"
 								render={({ field }) => (
-									<FormItem className="basis-40">
+									<FormItem className="w-full md:basis-40">
 										<FormLabel className="w-full inline-flex justify-between">
 											SSH Key
 											<LockIcon className="size-4 text-muted-foreground" />
@@ -182,6 +182,7 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 								variant="secondary"
 								onClick={() => router.push("/dashboard/settings/ssh-keys")}
 								type="button"
+								className="w-full md:w-auto"
 							>
 								<KeyRoundIcon className="size-4" /> Add SSH Key
 							</Button>
@@ -229,10 +230,14 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 								</div>
 								<div className="flex flex-wrap gap-2 mb-2">
 									{field.value?.map((path, index) => (
-										<Badge key={index} variant="secondary">
-											{path}
+										<Badge
+											key={index}
+											variant="secondary"
+											className="max-w-full whitespace-normal break-all"
+										>
+											<span className="min-w-0 break-all">{path}</span>
 											<X
-												className="ml-1 size-3 cursor-pointer"
+												className="ml-1 size-3 shrink-0 cursor-pointer"
 												onClick={() => {
 													const newPaths = [...(field.value || [])];
 													newPaths.splice(index, 1);
@@ -243,7 +248,7 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 									))}
 								</div>
 								<FormControl>
-									<div className="flex gap-2">
+									<div className="flex flex-col gap-2 sm:flex-row">
 										<Input
 											placeholder="Enter a path to watch (e.g., src/**, dist/*.js)"
 											onKeyDown={(e) => {
@@ -262,6 +267,7 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 										<Button
 											type="button"
 											variant="secondary"
+											className="w-full sm:w-auto"
 											onClick={() => {
 												const input = document.querySelector(
 													'input[placeholder="Enter a path to watch (e.g., src/**, dist/*.js)"]',
@@ -300,8 +306,8 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 					/>
 				</div>
 
-				<div className="flex flex-row justify-end">
-					<Button type="submit" className="w-fit" isLoading={isLoading}>
+				<div className="flex justify-end">
+					<Button type="submit" className="w-full sm:w-fit" isLoading={isLoading}>
 						Save
 					</Button>
 				</div>
