@@ -97,6 +97,8 @@ const executeFuzzRunStage = async (
 		taskStageDirPath,
 		taskStageRootInContainer,
 		persistent: ctx.persistent,
+		groupedPersistent: ctx.groupedPersistent,
+		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
 		cwd: "/workspace/repo",
 		sessionMode: ctx.sessionMode,

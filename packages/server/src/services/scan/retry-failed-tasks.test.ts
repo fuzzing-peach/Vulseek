@@ -1,13 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { TRPCError } from "@trpc/server";
-import {
-	retryFailedScanJobTasksWithDeps,
-} from "./retry-failed-tasks";
-import type {
-	ScanJob,
-	Task,
-} from "./types";
+import { retryFailedScanJobTasksWithDeps } from "./retry-failed-tasks";
+import type { ScanJob, Task } from "./types";
 
 const makeScanJob = (overrides?: Partial<ScanJob>): ScanJob => ({
 	scanJobId: "scan-job-1",
@@ -35,6 +30,12 @@ const makeScanJob = (overrides?: Partial<ScanJob>): ScanJob => ({
 	finishedAt: "2026-05-04T00:10:00.000Z",
 	errorMessage: null,
 	scanningThreadId: null,
+	inputTokens: 0,
+	outputTokens: 0,
+	thoughtTokens: 0,
+	totalTokens: 0,
+	cachedReadTokens: 0,
+	cachedWriteTokens: 0,
 	repositoryTaskId: "scan-job-1",
 	repositoryTaskStatus: "completed",
 	...overrides,
@@ -58,7 +59,12 @@ const makeTask = (overrides?: Partial<Task>): Task => ({
 	stageGroupInstanceId: null,
 	input: null,
 	output: null,
-	tokenUsage: null,
+	inputTokens: null,
+	outputTokens: null,
+	thoughtTokens: null,
+	totalTokens: null,
+	cachedReadTokens: null,
+	cachedWriteTokens: null,
 	errorMessage: null,
 	exitReason: null,
 	exitNote: null,
@@ -77,6 +83,13 @@ test("retryFailedScanJobTasksWithDeps retries every failed task type in stage or
 			status: "failed",
 			name: "verify task",
 			createdAt: "2026-05-04T00:05:00.000Z",
+		}),
+		makeTask({
+			taskId: "triage-1",
+			stageName: "triage",
+			status: "failed",
+			name: "triage task",
+			createdAt: "2026-05-04T00:06:00.000Z",
 		}),
 		makeTask({
 			taskId: "function-1",
@@ -144,14 +157,16 @@ test("retryFailedScanJobTasksWithDeps retries every failed task type in stage or
 		"function-scan": 1,
 		analyze: 1,
 		verify: 1,
+		triage: 1,
 	});
-	assert.equal(result.retriedTaskCount, 5);
+	assert.equal(result.retriedTaskCount, 6);
 	assert.deepEqual(removed, [
 		"repo-1",
 		"module-1",
 		"function-1",
 		"analysis-1",
 		"verify-1",
+		"triage-1",
 	]);
 	assert.deepEqual(cleared, removed);
 	assert.deepEqual(reset, removed);

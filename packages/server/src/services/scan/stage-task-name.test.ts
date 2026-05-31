@@ -14,6 +14,7 @@ test("resolveStageTaskName uses candidate title for analysis-adjacent stages", (
 		"build-fuzzer",
 		"run-fuzzer",
 		"criticize",
+		"triage",
 	]) {
 		assert.equal(
 			resolveStageTaskName(stageName, candidateInput),

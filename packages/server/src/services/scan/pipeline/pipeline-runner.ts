@@ -33,6 +33,7 @@ import {
 import { buildKnownQueueJobIdsForTask } from "../queue-job-ids";
 import { removeContainer } from "../runtime/run-single-turn-agent";
 import {
+	extractPromptResponseUsage,
 	hasEndTurnInJsonlContent,
 	SANDBOX_AGENT_RUNTIME_FILE_NAMES,
 	summarizeSandboxAgentTokenUsage,
@@ -156,6 +157,21 @@ const defaultValidateOutput = async <TOutput>(
 const ensureTaskRuntimeDirectory = async (ctx: StageContext) => {
 	const taskDirPath = await ctx.taskDir();
 	await fs.mkdir(taskDirPath, { recursive: true });
+	if (ctx.persistent && ctx.laneIndex !== null) {
+		const laneDirPath = await ctx.laneDir();
+		const taskInputsPath = path.join(taskDirPath, "inputs");
+		const laneInputsPath = path.join(laneDirPath, "inputs");
+		const hasTaskInputs = await fs.stat(taskInputsPath).catch(() => null);
+		if (hasTaskInputs?.isDirectory()) {
+			await fs.rm(laneInputsPath, { recursive: true, force: true });
+			await fs.mkdir(path.dirname(laneInputsPath), { recursive: true });
+			await fs.cp(taskInputsPath, laneInputsPath, { recursive: true });
+		} else {
+			await fs.rm(laneInputsPath, { recursive: true, force: true }).catch(
+				() => {},
+			);
+		}
+	}
 	return {
 		taskDir: taskDirPath,
 		taskDirContainer: await ctx.taskDirContainer(),
@@ -163,7 +179,10 @@ const ensureTaskRuntimeDirectory = async (ctx: StageContext) => {
 };
 
 const getTaskRuntimePaths = async (ctx: StageContext) => {
-	const taskDir = await ctx.taskDir();
+	const taskDir =
+		ctx.persistent && ctx.laneIndex !== null
+			? await ctx.laneDir()
+			: await ctx.taskDir();
 	const runtimeBase = SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl.replace(
 		/\.jsonl$/i,
 		"",
@@ -174,9 +193,42 @@ const getTaskRuntimePaths = async (ctx: StageContext) => {
 		textPath: path.join(taskDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.text),
 		stderrPath: path.join(taskDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.stderr),
 		stdoutPath: path.join(taskDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.stdout),
+		usagePath: path.join(taskDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.usage),
 		statePath: path.join(taskDir, `.${runtimeBase}-state.json`),
 		outputPath: path.join(taskDir, "output.json"),
 	};
+};
+
+const copyPersistentLaneArtifactsToTaskDir = async (ctx: StageContext) => {
+	if (!ctx.persistent || ctx.laneIndex === null) {
+		return;
+	}
+	const [laneDir, taskDir] = await Promise.all([ctx.laneDir(), ctx.taskDir()]);
+	if (laneDir === taskDir) {
+		return;
+	}
+	const skipEntries = new Set([
+		"inputs",
+		"parent-session-store",
+		"parent-runtime",
+		SANDBOX_AGENT_DRIVER_TASK_DIR_NAME,
+		"sandbox-agent-driver.pid",
+		"sandbox-agent-driver.mjs",
+		"sandbox-agent-driver-launch.sh",
+	]);
+	const entries = await fs.readdir(laneDir, { withFileTypes: true }).catch(
+		() => [],
+	);
+	await fs.mkdir(taskDir, { recursive: true });
+	for (const entry of entries) {
+		if (skipEntries.has(entry.name)) {
+			continue;
+		}
+		const fromPath = path.join(laneDir, entry.name);
+		const toPath = path.join(taskDir, entry.name);
+		await fs.rm(toPath, { recursive: true, force: true }).catch(() => {});
+		await fs.cp(fromPath, toPath, { recursive: true, force: true });
+	}
 };
 
 const updateTaskDefault = async (
@@ -519,9 +571,24 @@ const appendTaskFailureDiagnostics = async (
 };
 
 const readTaskTokenUsage = async (ctx: StageContext) => {
-	const { jsonlPath } = await getTaskRuntimePaths(ctx);
-	const jsonlContent = await readFileIfExists(jsonlPath);
-	return summarizeSandboxAgentTokenUsage(jsonlContent)?.tokenUsage ?? null;
+	const { jsonlPath, usagePath } = await getTaskRuntimePaths(ctx);
+	const [jsonlContent, promptUsageContent] = await Promise.all([
+		readFileIfExists(jsonlPath),
+		readFileIfExists(usagePath),
+	]);
+	const summary = summarizeSandboxAgentTokenUsage(jsonlContent);
+	const promptUsage = extractPromptResponseUsage(promptUsageContent);
+	const totalTokens = promptUsage?.totalTokens ?? summary?.totalTokens ?? null;
+	const cachedReadTokens =
+		promptUsage?.cachedReadTokens ?? summary?.cachedReadTokens ?? null;
+	return {
+		inputTokens: promptUsage?.inputTokens ?? null,
+		outputTokens: promptUsage?.outputTokens ?? null,
+		thoughtTokens: promptUsage?.thoughtTokens ?? null,
+		totalTokens,
+		cachedReadTokens,
+		cachedWriteTokens: promptUsage?.cachedWriteTokens ?? null,
+	};
 };
 
 const readPersistentQueueFailureForTask = async (
@@ -894,7 +961,9 @@ const isContainerAlive = async (
 	}
 };
 
-const createStageContextForTask = <TPipelineContext extends PipelineContext>(
+const createStageContextForTask = async <
+	TPipelineContext extends PipelineContext,
+>(
 	runtime: JobRuntime<TPipelineContext>,
 	task: {
 		stageName: string;
@@ -909,6 +978,12 @@ const createStageContextForTask = <TPipelineContext extends PipelineContext>(
 	const scanJobRef = hasPipelineScanJobContext(runtime.ctx)
 		? runtime.ctx.scanJob
 		: null;
+	const laneRuntime = await findStageLaneRuntimeByActiveTaskIdRepo(
+		task.taskId,
+	).catch(() => null);
+	const groupedPersistent = Boolean(
+		laneRuntime && getStageGroup(runtime.pipeline, task.stageName),
+	);
 	return createStageContext({
 		base: runtime.ctx,
 		stageName: task.stageName,
@@ -919,7 +994,11 @@ const createStageContextForTask = <TPipelineContext extends PipelineContext>(
 		},
 		taskId: task.taskId,
 		taskName: task.name || resolveStageTaskName(task.stageName, task.input),
-		persistent: false,
+		persistent: Boolean(laneRuntime),
+		groupedPersistent,
+		allowAgentExit: task.stageName === SCAN_STAGE_IDS.analysis,
+		laneIndex: laneRuntime?.laneIndex ?? null,
+		laneThreadId: laneRuntime?.threadId ?? null,
 		sessionMode: task.runtimeMode === "fork_session" ? "fork" : "new",
 		parentSessionId: task.forkedFromThreadId ?? null,
 		parentTaskId: task.forkedFromTaskId ?? null,
@@ -940,7 +1019,7 @@ const inspectHalfStartedRunningTask = async <
 		return null;
 	}
 
-	const stageCtx = createStageContextForTask(runtime, task);
+	const stageCtx = await createStageContextForTask(runtime, task);
 	const {
 		taskDir,
 		jsonlPath,
@@ -1279,6 +1358,8 @@ const createTaskStageContext = <
 		laneRuntime?: StageLaneRuntime | null;
 		routeOutputSchemas?: StageContext["routeOutputSchemas"];
 		taskName?: string | null;
+		groupedPersistent?: boolean;
+		allowAgentExit?: boolean;
 	} | null,
 ) => {
 	const taskId = resolveStageTaskId(stage.id, ctx, input, taskIdOverride);
@@ -1296,6 +1377,9 @@ const createTaskStageContext = <
 		taskName,
 		routeOutputSchemas: taskRuntime?.routeOutputSchemas,
 		persistent: stage.persistent ?? true,
+		groupedPersistent: taskRuntime?.groupedPersistent ?? false,
+		allowAgentExit:
+			taskRuntime?.allowAgentExit ?? stage.id === SCAN_STAGE_IDS.analysis,
 		laneIndex: taskRuntime?.laneRuntime?.laneIndex ?? null,
 		laneThreadId: taskRuntime?.laneRuntime?.threadId ?? null,
 		sessionMode: taskRuntime?.laneRuntime?.threadId
@@ -1406,7 +1490,7 @@ const resolveStageRawOutput = async (ctx: StageContext) => {
 			stderrContent,
 			progressSignature,
 			hasAgentOutput,
-			hasExitSignal: parsed.exit,
+			hasExitSignal: ctx.allowAgentExit ? parsed.exit : false,
 			routeKey: parsed.route,
 		};
 	}
@@ -1462,6 +1546,7 @@ const prepareStageSuccess = async <
 	const output = stage.validateOutput
 		? await stage.validateOutput(stageCtx, input, rawOutput)
 		: await defaultValidateOutput<TOutput>(stage.id, rawOutput);
+	await copyPersistentLaneArtifactsToTaskDir(stageCtx);
 	await updateTaskDefault(stageCtx.taskId, { output });
 	await stage.onSuccess?.(stageCtx, input, output);
 	return output;
@@ -1498,7 +1583,14 @@ const persistTerminalSuccess = async <
 		});
 		return false;
 	}
-	const tokenUsage = await readTaskTokenUsage(stageCtx).catch(() => null);
+	const usagePatch = await readTaskTokenUsage(stageCtx).catch(() => ({
+		inputTokens: null,
+		outputTokens: null,
+		thoughtTokens: null,
+		totalTokens: null,
+		cachedReadTokens: null,
+		cachedWriteTokens: null,
+	}));
 	const shouldMarkTaskExited =
 		Boolean(options?.exitReason) && (await isStageGroupLeaderTask(currentTask));
 	const updated = await transitionTaskStatusRepo({
@@ -1512,9 +1604,9 @@ const persistTerminalSuccess = async <
 						? "Agent requested group leader exit"
 						: "Agent requested lane exit",
 					errorMessage: null,
-					tokenUsage,
+					...usagePatch,
 				}
-			: { tokenUsage },
+			: usagePatch,
 	});
 	if (!updated) {
 		return false;
@@ -1578,12 +1670,19 @@ const persistTerminalFailure = async <
 		});
 		return false;
 	}
-	const tokenUsage = await readTaskTokenUsage(stageCtx).catch(() => null);
+	const usagePatch = await readTaskTokenUsage(stageCtx).catch(() => ({
+		inputTokens: null,
+		outputTokens: null,
+		thoughtTokens: null,
+		totalTokens: null,
+		cachedReadTokens: null,
+		cachedWriteTokens: null,
+	}));
 	const updated = await transitionTaskStatusRepo({
 		taskId: stageCtx.taskId,
 		from: ["launching", "running"],
 		to: "failed",
-		patch: { errorMessage: getErrorMessage(error), tokenUsage },
+		patch: { errorMessage: getErrorMessage(error), ...usagePatch },
 	}).catch(() => null);
 	if (!updated) {
 		return false;
@@ -2058,6 +2157,8 @@ const launchStageExecution = async <
 				stageState.stageName,
 			),
 			taskName: launched.name,
+			groupedPersistent: Boolean(laneRuntime && group),
+			allowAgentExit: stageState.stageName === SCAN_STAGE_IDS.analysis,
 		},
 	).stageCtx;
 	try {
@@ -2181,7 +2282,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 	stageState: RuntimeStageState<TPipelineContext>,
 	task: Awaited<ReturnType<typeof findTaskByIdRepo>>,
 ) => {
-	const stageCtx = createStageContextForTask(runtime, task);
+	const stageCtx = await createStageContextForTask(runtime, task);
 	const input = task.input as unknown;
 	const { stdoutPath, stderrPath } = await getTaskRuntimePaths(stageCtx);
 	const [stdoutContent, stderrContent] = await Promise.all([

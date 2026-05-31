@@ -25,12 +25,18 @@ const statusColorMap = {
 	canceled: "bg-destructive",
 } as const;
 
-const formatJobTitle = (job: {
-	scanJobId: string;
-}) => `Scan Job (${job.scanJobId.slice(0, 6)})`;
+const formatJobTitle = (job: { scanJobId: string }) =>
+	`Scan Job (${job.scanJobId.slice(0, 6)})`;
 
 const formatTriggerSource = (triggerSource: string) =>
 	triggerSource === "schedule" ? "auto" : triggerSource;
+
+const formatTokenUsage = (value?: number | null) => {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return "-";
+	}
+	return `${new Intl.NumberFormat().format(value)} tokens`;
+};
 
 export const ShowScanJobs = ({ id, type }: Props) => {
 	const router = useRouter();
@@ -62,19 +68,25 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 			<CardHeader className="flex flex-row items-center justify-between flex-wrap gap-2">
 				<div className="flex flex-col gap-2">
 					<CardTitle className="text-xl">Jobs</CardTitle>
-					<CardDescription>See the scan job queue for this {type}</CardDescription>
+					<CardDescription>
+						See the scan job queue for this {type}
+					</CardDescription>
 				</div>
 			</CardHeader>
 			<CardContent className="flex flex-col gap-4">
 				{isLoading ? (
 					<div className="flex w-full flex-row items-center justify-center gap-3 pt-10 min-h-[25vh]">
 						<Loader2 className="size-6 text-muted-foreground animate-spin" />
-						<span className="text-base text-muted-foreground">Loading jobs...</span>
+						<span className="text-base text-muted-foreground">
+							Loading jobs...
+						</span>
 					</div>
 				) : jobs?.length === 0 ? (
 					<div className="flex w-full flex-col items-center justify-center gap-3 pt-10 min-h-[25vh]">
 						<RocketIcon className="size-8 text-muted-foreground" />
-						<span className="text-base text-muted-foreground">No jobs found</span>
+						<span className="text-base text-muted-foreground">
+							No jobs found
+						</span>
 					</div>
 				) : (
 					<div className="flex flex-col gap-4">
@@ -103,6 +115,7 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 												{job.scanType === "delta" ? "Delta Scan" : "Full Scan"}
 											</Badge>
 											<span>{formatTriggerSource(job.triggerSource)}</span>
+											<span>{formatTokenUsage(job.totalTokens)}</span>
 										</div>
 									</div>
 									<div className="flex flex-col items-end gap-2">

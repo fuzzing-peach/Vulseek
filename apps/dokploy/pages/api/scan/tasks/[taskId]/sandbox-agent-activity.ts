@@ -12,7 +12,10 @@ import {
 	type SandboxAgentActivity,
 	type SandboxAgentActivityStreamMessage,
 } from "@/lib/scan/sandbox-agent-activity";
-import { getFileStreamBuffer } from "@/server/utils/file-stream-buffer";
+import {
+	clearFileStreamBuffer,
+	getFileStreamBuffer,
+} from "@/server/utils/file-stream-buffer";
 
 type ParseState = {
 	nextLine: number;
@@ -227,6 +230,7 @@ export default async function handler(
 					taskKind: latest?.taskKind || runtime.taskKind,
 				});
 				cleanup();
+				clearFileStreamBuffer(runtime.jsonlPath);
 				res.end();
 			}
 		} catch (error) {

@@ -12,17 +12,23 @@ export const ANALYSIS_RESULT_OPTIONS = [
 ] as const;
 
 export const VERIFY_RESULT_OPTIONS = [
-	"real_vulnerability",
-	"likely_vulnerability",
-	"plausible_but_unproven",
-	"false_positive",
-	"api_misuse",
+	"true",
+	"likely",
+	"false",
+] as const;
+
+export const TRIAGE_RESULT_OPTIONS = [
+	"security_issue",
+	"non_security",
+	"hardening",
+	"needs_review",
 ] as const;
 
 export type CandidateListQueryState = {
 	candidateQuery: string;
 	analysisFilters: string[];
 	verifyFilters: string[];
+	triageFilters: string[];
 	candidateSortKey: CandidateSortKey;
 	candidateSortDirection: CandidateSortDirection;
 	candidatePage: number;
@@ -32,6 +38,7 @@ export type CandidateListQueryState = {
 const CANDIDATE_QUERY_PARAM = "candidateQuery";
 const ANALYSIS_FILTERS_PARAM = "candidateAnalysis";
 const VERIFY_FILTERS_PARAM = "candidateVerify";
+const TRIAGE_FILTERS_PARAM = "candidateTriage";
 const SORT_KEY_PARAM = "candidateSortKey";
 const SORT_DIRECTION_PARAM = "candidateSortDirection";
 const PAGE_PARAM = "candidatePage";
@@ -94,6 +101,10 @@ export const parseCandidateListQueryState = (
 			getFirstQueryValue(query[VERIFY_FILTERS_PARAM]),
 			VERIFY_RESULT_OPTIONS,
 		),
+		triageFilters: normalizeDelimitedValues(
+			getFirstQueryValue(query[TRIAGE_FILTERS_PARAM]),
+			TRIAGE_RESULT_OPTIONS,
+		),
 		candidateSortKey: CANDIDATE_SORT_KEYS.includes(
 			rawSortKey as CandidateSortKey,
 		)
@@ -124,6 +135,7 @@ export const serializeCandidateListQueryState = (
 		candidateQuery: state.candidateQuery,
 		analysisFilters: state.analysisFilters,
 		verifyFilters: state.verifyFilters,
+		triageFilters: state.triageFilters,
 		candidateSortKey: state.candidateSortKey,
 		candidateSortDirection: state.candidateSortDirection,
 		candidatePage: state.candidatePage,
@@ -142,6 +154,7 @@ export const applyCandidateListQueryState = (
 			key === CANDIDATE_QUERY_PARAM ||
 			key === ANALYSIS_FILTERS_PARAM ||
 			key === VERIFY_FILTERS_PARAM ||
+			key === TRIAGE_FILTERS_PARAM ||
 			key === SORT_KEY_PARAM ||
 			key === SORT_DIRECTION_PARAM ||
 			key === PAGE_PARAM ||
@@ -171,6 +184,10 @@ export const applyCandidateListQueryState = (
 
 	if (state.verifyFilters.length > 0) {
 		nextQuery[VERIFY_FILTERS_PARAM] = state.verifyFilters.join(",");
+	}
+
+	if (state.triageFilters.length > 0) {
+		nextQuery[TRIAGE_FILTERS_PARAM] = state.triageFilters.join(",");
 	}
 
 	if (state.candidateSortKey !== "candidate") {
@@ -210,6 +227,9 @@ export const buildCandidateListStateHref = (
 	}
 	if (state.verifyFilters.length > 0) {
 		params.set(VERIFY_FILTERS_PARAM, state.verifyFilters.join(","));
+	}
+	if (state.triageFilters.length > 0) {
+		params.set(TRIAGE_FILTERS_PARAM, state.triageFilters.join(","));
 	}
 	if (state.candidateSortKey !== "candidate") {
 		params.set(SORT_KEY_PARAM, state.candidateSortKey);

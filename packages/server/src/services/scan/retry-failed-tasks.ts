@@ -10,6 +10,7 @@ export const RETRYABLE_TASK_STAGE_NAMES = [
 	"function-scan",
 	"analyze",
 	"verify",
+	"triage",
 ] as const;
 
 export type RetryableTaskStageName =
@@ -40,6 +41,7 @@ const RETRY_STAGE_ORDER: Record<RetryableTaskStageName, number> = {
 	"function-scan": 2,
 	analyze: 3,
 	verify: 4,
+	triage: 5,
 };
 
 const createEmptyRetryCounts = (): RetryFailedTasksByStage => ({
@@ -48,6 +50,7 @@ const createEmptyRetryCounts = (): RetryFailedTasksByStage => ({
 	"function-scan": 0,
 	analyze: 0,
 	verify: 0,
+	triage: 0,
 });
 
 export const isRetryableTaskStageName = (

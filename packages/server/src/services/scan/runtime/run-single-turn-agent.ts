@@ -54,7 +54,6 @@ const DEFAULT_FULL_SCAN_MODULE_CONCURRENCY = 4;
 const DEFAULT_FULL_SCAN_FUNCTION_CONCURRENCY = 4;
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
 const TASK_ALIAS_ROOT_IN_CONTAINER = "/task";
-const TASK_PARENT_RUNTIME_ROOT_IN_CONTAINER = "/task/parent-runtime";
 const TASK_PARENT_SESSION_STORE_ROOT_IN_CONTAINER =
 	"/task/parent-session-store";
 const STRUCTURED_OUTPUT_SCHEMA_FILE_NAME = "output.schema.json";
@@ -866,12 +865,15 @@ export type StageContainerInput = {
 	stageDirPath: string;
 	stageRootInContainer: string;
 	persistent?: boolean;
-	runtimeFileNames?: {
-		jsonl: string;
-		text: string;
-		stderr: string;
-		stdout: string;
-	};
+	groupedPersistent?: boolean;
+	allowAgentExit?: boolean;
+		runtimeFileNames?: {
+			jsonl: string;
+			text: string;
+			stderr: string;
+			stdout: string;
+			usage?: string;
+		};
 };
 
 export type RunSingleTurnAgentInput = StageContainerInput & {
@@ -989,6 +991,11 @@ export const buildStructuredOutputPromptSuffix = (
 		schema: ZodTypeAny;
 		default?: boolean;
 	}>,
+	options?: {
+		persistent?: boolean;
+		groupedPersistent?: boolean;
+		allowAgentExit?: boolean;
+	},
 ) => {
 	const jsonSchema = buildStructuredOutputEnvelopeJsonSchema(
 		schema,
@@ -1005,7 +1012,11 @@ export const buildStructuredOutputPromptSuffix = (
 		`- Write the final structured result to ${outputFilePath}.`,
 		"- The output file content must be only a JSON object, with no markdown fences, comments, or prose.",
 		"- The top-level JSON object must be an envelope with exactly these fields: route, exit, output.",
-		"- Set exit to true only when this lane should be discarded after this task; otherwise set exit to false.",
+		...(options?.allowAgentExit
+			? [
+					"- Set exit to true only when the stage prompt explicitly instructs this analysis workflow to exit; otherwise set exit to false.",
+				]
+			: ["- Set exit to false."]),
 		`- The JSON Schema for the complete output.json envelope is written to ${schemaFilePath}.`,
 		"- You must use that schema file as the source of truth and validate output.json against it before ending your turn.",
 		"- Perform validation with Python and the jsonschema package available in the container environment.",
@@ -1061,8 +1072,9 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		`VULSEEK_PROJECT_PROFILE_DIR=${input.stageRootInContainer}`,
 		`VULSEEK_PROJECT_CACHE_DIR=${path.posix.join(input.stageRootInContainer, "cache")}`,
 	];
-	const runtimeFileNames = input.runtimeFileNames || {
+	const runtimeFileNames = {
 		...SANDBOX_AGENT_RUNTIME_FILE_NAMES,
+		...(input.runtimeFileNames || {}),
 	};
 	const containerNetworkArg = await resolveCurrentDockerNetworkArg();
 	const containerEnvArgs = containerEnvPairs
@@ -1074,15 +1086,17 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 
 	const jsonlPath = path.join(input.stageDirPath, runtimeFileNames.jsonl);
 	const textPath = path.join(input.stageDirPath, runtimeFileNames.text);
-	const stderrPath = path.join(input.stageDirPath, runtimeFileNames.stderr);
-	const stdoutPath = path.join(input.stageDirPath, runtimeFileNames.stdout);
-	const runtimeArtifacts = createCodexRuntimeArtifacts({
-		runtimeDir: input.stageDirPath,
-		jsonlFileName: runtimeFileNames.jsonl,
-		textFileName: runtimeFileNames.text,
-		stderrFileName: runtimeFileNames.stderr,
-		stdoutFileName: runtimeFileNames.stdout,
-	});
+		const stderrPath = path.join(input.stageDirPath, runtimeFileNames.stderr);
+		const stdoutPath = path.join(input.stageDirPath, runtimeFileNames.stdout);
+		const usagePath = path.join(input.stageDirPath, runtimeFileNames.usage);
+		const runtimeArtifacts = createCodexRuntimeArtifacts({
+			runtimeDir: input.stageDirPath,
+			jsonlFileName: runtimeFileNames.jsonl,
+			textFileName: runtimeFileNames.text,
+			stderrFileName: runtimeFileNames.stderr,
+			stdoutFileName: runtimeFileNames.stdout,
+			usageFileName: runtimeFileNames.usage,
+		});
 
 	return {
 		imageTag,
@@ -1101,10 +1115,11 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		containerEnvArgs,
 		jsonlPath,
 		textPath,
-		stderrPath,
-		stdoutPath,
-		runtimeArtifacts,
-	};
+			stderrPath,
+			stdoutPath,
+			usagePath,
+			runtimeArtifacts,
+		};
 };
 
 export const startContainer = async (input: StageContainerInput) => {
@@ -1146,11 +1161,12 @@ export const startContainer = async (input: StageContainerInput) => {
 
 	await initializeRuntimeFiles({
 		runtimeDir: input.stageDirPath,
-		jsonlPath: runtime.jsonlPath,
-		textPath: runtime.textPath,
-		stderrPath: runtime.stderrPath,
-		stdoutPath: runtime.stdoutPath,
-	});
+			jsonlPath: runtime.jsonlPath,
+			textPath: runtime.textPath,
+			stderrPath: runtime.stderrPath,
+			stdoutPath: runtime.stdoutPath,
+			usagePath: runtime.runtimeArtifacts.usagePath,
+		});
 	await appendHostBootstrapLog(logPath, "runtime_files_initialized_on_host");
 	await initializeCodexRuntimeMetadataFiles({
 		cursorPath: runtime.runtimeArtifacts.cursorPath,
@@ -1180,10 +1196,11 @@ export const startContainer = async (input: StageContainerInput) => {
 				containerName: input.containerName,
 				runtimeDirInContainer: input.stageRootInContainer,
 				jsonlFileName: runtime.runtimeArtifacts.jsonlFileName,
-				textFileName: runtime.runtimeArtifacts.textFileName,
-				stderrFileName: runtime.runtimeArtifacts.stderrFileName,
-				stdoutFileName: runtime.runtimeArtifacts.stdoutFileName,
-			}),
+					textFileName: runtime.runtimeArtifacts.textFileName,
+					stderrFileName: runtime.runtimeArtifacts.stderrFileName,
+					stdoutFileName: runtime.runtimeArtifacts.stdoutFileName,
+					usageFileName: runtime.runtimeArtifacts.usageFileName,
+				}),
 	);
 	await withHostBootstrapLog(
 		logPath,
@@ -1673,48 +1690,6 @@ const writeTaskStateFile = async (taskInput, state, extra = {}) => {
   );
 };
 
-const fileSizeOrZero = async (filePath) => {
-  if (!filePath) return 0;
-  const stat = await fs.stat(filePath).catch(() => null);
-  return stat ? Number(stat.size || 0) : 0;
-};
-
-const copyParentRuntimeFileOnce = async (input, parentPath, childPath, suffix = "") => {
-  if (!parentPath || !childPath) {
-    return { copied: false, bytes: 0, reason: "missing_path" };
-  }
-  const parentSize = await fileSizeOrZero(parentPath);
-  if (parentSize <= 0) {
-    return { copied: false, bytes: 0, reason: "empty_parent" };
-  }
-  const childSize = await fileSizeOrZero(childPath);
-  if (childSize > 0) {
-    return { copied: false, bytes: childSize, reason: "target_has_content" };
-  }
-  await fs.mkdir(path.dirname(childPath), { recursive: true });
-  const content = await fs.readFile(parentPath, "utf-8");
-  const written = content + suffix;
-  await fs.writeFile(childPath, written, "utf-8");
-  return {
-    copied: true,
-    bytes: Buffer.byteLength(written, "utf-8"),
-    parentBytes: Buffer.byteLength(content, "utf-8"),
-    suffixBytes: Buffer.byteLength(suffix, "utf-8"),
-    reason: suffix ? "copied_with_suffix" : "copied",
-  };
-};
-
-const deriveParentRuntimePath = (parentSessionPersistPath, filePath, parentRuntimeRootPath) => {
-  if (parentRuntimeRootPath && filePath) {
-    return path.join(parentRuntimeRootPath, path.basename(filePath));
-  }
-  if (!parentSessionPersistPath || !filePath) return "";
-  return path.join(
-    path.dirname(path.dirname(parentSessionPersistPath)),
-    path.basename(filePath),
-  );
-};
-
 const inheritForkRuntimeArtifactsOnce = async (taskInput, sessionId) => {
   if (taskInput.sessionMode !== "fork") {
     return;
@@ -1743,24 +1718,6 @@ const inheritForkRuntimeArtifactsOnce = async (taskInput, sessionId) => {
     );
     return;
   }
-  const textResult = await copyParentRuntimeFileOnce(
-    taskInput,
-    deriveParentRuntimePath(
-      taskInput.parentSessionPersistPath,
-      taskInput.textPath,
-      taskInput.parentRuntimeRootPath,
-    ),
-    taskInput.textPath,
-    "\n\n" +
-      "----- forked child task output starts here -----\n" +
-      "parent_agent_session_id: " +
-      parentSessionId +
-      "\nchild_agent_session_id: " +
-      sessionId +
-      "\nchild_task_id: " +
-      String(taskInput.taskId || "") +
-      "\n------------------------------------------------\n\n",
-  );
   if (markerPath) {
     await fs.writeFile(
       markerPath,
@@ -1774,7 +1731,11 @@ const inheritForkRuntimeArtifactsOnce = async (taskInput, sessionId) => {
             bytes: 0,
             reason: "disabled",
           },
-          text: textResult,
+          text: {
+            copied: false,
+            bytes: 0,
+            reason: "parent_runtime_disabled",
+          },
         },
         null,
         2,
@@ -1789,12 +1750,7 @@ const inheritForkRuntimeArtifactsOnce = async (taskInput, sessionId) => {
       " child_agent_session_id=" +
       sessionId +
       " jsonl_copied=false jsonl_bytes=0 jsonl_reason=disabled" +
-      " text_copied=" +
-      String(Boolean(textResult.copied)) +
-      " text_bytes=" +
-      String(textResult.bytes || 0) +
-      " text_reason=" +
-      String(textResult.reason || ""),
+      " text_copied=false text_bytes=0 text_reason=parent_runtime_disabled",
   );
 };
 
@@ -2650,10 +2606,10 @@ const main = async () => {
     }
     await appendDriverLog(taskInput.stderrPath, "starting prompt task_id=" + String(taskInput.taskId || ""));
     const promptStartedAt = Date.now();
-    await withHeartbeat(
-      withTimeout(
-        session.prompt([{ type: "text", text: taskInput.prompt }]),
-        SANDBOX_AGENT_PROMPT_TIMEOUT_MS,
+	    const promptResponse = await withHeartbeat(
+	      withTimeout(
+	        session.prompt([{ type: "text", text: taskInput.prompt }]),
+	        SANDBOX_AGENT_PROMPT_TIMEOUT_MS,
         () =>
           new Error(
             "sandbox-agent session.prompt timed out after " +
@@ -2690,9 +2646,17 @@ const main = async () => {
             promptElapsedMs: Date.now() - promptStartedAt,
             outputFile,
           });
-        },
-    );
-    await appendDriverLog(taskInput.stderrPath, "prompt finished");
+	        },
+	      );
+	    const promptUsage = asRecord(promptResponse)?.usage ?? null;
+	    if (taskInput.usagePath) {
+	      await fs.writeFile(
+	        taskInput.usagePath,
+	        JSON.stringify(promptUsage, null, 2) + "\n",
+	        "utf-8",
+	      );
+	    }
+	    await appendDriverLog(taskInput.stderrPath, "prompt finished");
     await appendDriverLifecycleLog(
       taskInput,
       "prompt_resolved task_id=" +
@@ -2708,7 +2672,8 @@ const main = async () => {
     state.outputFile = await inspectOutputEnvelopeFile(
       taskInput.structuredOutputResultPathInContainer,
     );
-    state.exitRequested = Boolean(state.outputFile?.validEnvelope && state.outputFile.exit);
+    const rawExitRequested = Boolean(state.outputFile?.validEnvelope && state.outputFile.exit);
+    state.exitRequested = Boolean(taskInput.allowAgentExit && rawExitRequested);
     state.completedAt = new Date().toISOString();
     await writeTaskStateFile(taskInput, state);
     if (!state.endTurnReceived) {
@@ -2719,6 +2684,11 @@ const main = async () => {
     }
     if (state.exitRequested) {
       await appendDriverLog(taskInput.stderrPath, "output.json requested lane exit");
+    } else if (rawExitRequested) {
+      await appendDriverLog(
+        taskInput.stderrPath,
+        "output.json requested lane exit but allowAgentExit=false; keeping lane alive",
+      );
     }
     await appendDriverLifecycleLog(
       taskInput,
@@ -3080,28 +3050,6 @@ const resolveParentRuntimeRootOnHost = async (
 		input.taskStageDirPath || input.stageDirPath,
 		input.scanJob.scanJobId,
 	);
-	const parentContainerLaneIndex = resolvePersistentLaneIndexFromContainerName(
-		parentTask.containerName,
-	);
-	if (parentContainerLaneIndex !== null) {
-		return buildLaneRootOnHost({
-			jobRootOnHost,
-			stageName: parentTask.stageName,
-			laneIndex: parentContainerLaneIndex,
-		});
-	}
-	const parentLaneRuntime = await findStageLaneRuntimeByTaskIdRepo({
-		scanJobId: input.scanJob.scanJobId,
-		stageName: parentTask.stageName,
-		taskId: parentTask.taskId,
-	}).catch(() => null);
-	if (parentLaneRuntime) {
-		return buildLaneRootOnHost({
-			jobRootOnHost,
-			stageName: parentTask.stageName,
-			laneIndex: parentLaneRuntime.laneIndex,
-		});
-	}
 	return buildTaskRootOnHost({
 		jobRootOnHost,
 		stageName: parentTask.stageName,
@@ -3125,24 +3073,16 @@ const copyDirectoryReplacing = async (source: string, target: string) => {
 	return true;
 };
 
-const copyFileIfPresent = async (source: string, target: string) => {
-	if (!(await pathExists(source))) {
-		return false;
-	}
-	await fs.mkdir(path.dirname(target), { recursive: true });
-	await fs.copyFile(source, target);
-	return true;
-};
-
 const prepareForkRuntimeArtifactsOnHost = async (input: {
 	runInput: RunSingleTurnAgentInput;
 	taskStageDirPath: string;
-	runtimeFileNames: {
-		jsonl: string;
-		text: string;
-		stderr: string;
-		stdout: string;
-	};
+		runtimeFileNames: {
+			jsonl: string;
+			text: string;
+			stderr: string;
+			stdout: string;
+			usage?: string;
+		};
 }) => {
 	if (input.runInput.sessionMode !== "fork" || !input.runInput.parentTaskId) {
 		return {
@@ -3157,7 +3097,7 @@ const prepareForkRuntimeArtifactsOnHost = async (input: {
 	);
 	if (!parentRuntimeRootOnHost) {
 		return {
-			parentRuntimeRootPathInContainer: undefined,
+			parentRuntimeRootPathInContainer: null,
 			parentSessionPersistPathInContainer: undefined,
 			parentAgentHomePathInContainer: undefined,
 		};
@@ -3167,8 +3107,11 @@ const prepareForkRuntimeArtifactsOnHost = async (input: {
 		parentRuntimeRootOnHost,
 		SANDBOX_AGENT_AGENT_HOME_DIR_NAME,
 	);
+	const childAgentHomeRootOnHost = input.runInput.persistent
+		? input.runInput.stageDirPath
+		: input.taskStageDirPath;
 	const childAgentHomeOnHost = path.join(
-		input.taskStageDirPath,
+		childAgentHomeRootOnHost,
 		SANDBOX_AGENT_AGENT_HOME_DIR_NAME,
 	);
 	const copiedAgentHome = await copyDirectoryReplacing(
@@ -3180,8 +3123,11 @@ const prepareForkRuntimeArtifactsOnHost = async (input: {
 		parentRuntimeRootOnHost,
 		SANDBOX_AGENT_SESSION_STORE_DIR_NAME,
 	);
+	const childRuntimeRootOnHost = input.runInput.persistent
+		? input.runInput.stageDirPath
+		: input.taskStageDirPath;
 	const childParentSessionStoreOnHost = path.join(
-		input.taskStageDirPath,
+		childRuntimeRootOnHost,
 		"parent-session-store",
 	);
 	const copiedParentSessionStore = await copyDirectoryReplacing(
@@ -3189,37 +3135,23 @@ const prepareForkRuntimeArtifactsOnHost = async (input: {
 		childParentSessionStoreOnHost,
 	);
 
-	const childParentRuntimeOnHost = path.join(
-		input.taskStageDirPath,
-		"parent-runtime",
-	);
-	await fs.rm(childParentRuntimeOnHost, { recursive: true, force: true });
-	await fs.mkdir(childParentRuntimeOnHost, { recursive: true });
-	await Promise.all([
-		copyFileIfPresent(
-			path.join(parentRuntimeRootOnHost, input.runtimeFileNames.text),
-			path.join(childParentRuntimeOnHost, input.runtimeFileNames.text),
-		),
-		copyFileIfPresent(
-			path.join(parentRuntimeRootOnHost, input.runtimeFileNames.jsonl),
-			path.join(childParentRuntimeOnHost, input.runtimeFileNames.jsonl),
-		),
-	]);
-
 	if (!copiedAgentHome) {
 		throw new Error(
 			`Fork session requested but parent agent-home was not found at ${parentAgentHomeOnHost}`,
 		);
 	}
+	if (!copiedParentSessionStore) {
+		throw new Error(
+			`Fork session requested but parent session-store was not found at ${parentSessionStoreOnHost}`,
+		);
+	}
 
 	return {
-		parentRuntimeRootPathInContainer: TASK_PARENT_RUNTIME_ROOT_IN_CONTAINER,
-		parentSessionPersistPathInContainer: copiedParentSessionStore
-			? path.posix.join(
-					TASK_PARENT_SESSION_STORE_ROOT_IN_CONTAINER,
-					SANDBOX_AGENT_SESSION_PERSIST_FILE_NAME,
-				)
-			: null,
+		parentRuntimeRootPathInContainer: null,
+		parentSessionPersistPathInContainer: path.posix.join(
+			TASK_PARENT_SESSION_STORE_ROOT_IN_CONTAINER,
+			SANDBOX_AGENT_SESSION_PERSIST_FILE_NAME,
+		),
 		parentAgentHomePathInContainer: null,
 	};
 };
@@ -3443,12 +3375,21 @@ export const runSingleTurnAgentInContainer = async (
 			input.outputSchema || input.routeOutputSchemas![0]!.schema,
 			input.routeOutputSchemas,
 		);
+		const serializedJsonSchema = `${JSON.stringify(jsonSchema, null, 2)}\n`;
 		await fs.mkdir(taskStageDirPath, { recursive: true });
 		await fs.writeFile(
 			structuredOutputSchemaPathOnHost,
-			`${JSON.stringify(jsonSchema, null, 2)}\n`,
+			serializedJsonSchema,
 			"utf-8",
 		);
+		if (input.persistent && input.stageDirPath !== taskStageDirPath) {
+			await fs.mkdir(input.stageDirPath, { recursive: true });
+			await fs.writeFile(
+				path.join(input.stageDirPath, STRUCTURED_OUTPUT_SCHEMA_FILE_NAME),
+				serializedJsonSchema,
+				"utf-8",
+			);
+		}
 	}
 
 	const resolvedPrompt =
@@ -3462,26 +3403,34 @@ export const runSingleTurnAgentInContainer = async (
 					structuredOutputSchemaAgentPathInContainer,
 					structuredOutputResultAgentPathInContainer,
 					input.routeOutputSchemas,
+					{
+						persistent: input.persistent,
+						groupedPersistent: input.groupedPersistent,
+						allowAgentExit: input.allowAgentExit,
+					},
 				)}`
 			: resolvedPrompt;
-	const runtimeFileNames = input.runtimeFileNames || {
-		...SANDBOX_AGENT_RUNTIME_FILE_NAMES,
-	};
+		const runtimeFileNames = {
+			...SANDBOX_AGENT_RUNTIME_FILE_NAMES,
+			...(input.runtimeFileNames || {}),
+		};
 	const taskStderrPath = path.join(taskStageDirPath, runtimeFileNames.stderr);
 	const taskRuntimeArtifacts = createCodexRuntimeArtifacts({
 		runtimeDir: taskStageDirPath,
-		jsonlFileName: runtimeFileNames.jsonl,
-		textFileName: runtimeFileNames.text,
-		stderrFileName: runtimeFileNames.stderr,
-		stdoutFileName: runtimeFileNames.stdout,
-	});
+			jsonlFileName: runtimeFileNames.jsonl,
+			textFileName: runtimeFileNames.text,
+			stderrFileName: runtimeFileNames.stderr,
+			stdoutFileName: runtimeFileNames.stdout,
+			usageFileName: runtimeFileNames.usage,
+		});
 	await initializeRuntimeFiles({
 		runtimeDir: taskStageDirPath,
 		jsonlPath: path.join(taskStageDirPath, runtimeFileNames.jsonl),
 		textPath: path.join(taskStageDirPath, runtimeFileNames.text),
-		stderrPath: path.join(taskStageDirPath, runtimeFileNames.stderr),
-		stdoutPath: path.join(taskStageDirPath, runtimeFileNames.stdout),
-	});
+			stderrPath: path.join(taskStageDirPath, runtimeFileNames.stderr),
+			stdoutPath: path.join(taskStageDirPath, runtimeFileNames.stdout),
+			usagePath: path.join(taskStageDirPath, runtimeFileNames.usage),
+		});
 	await appendHostBootstrapLog(
 		taskStderrPath,
 		`run_single_turn_start task_id=${input.taskId || ""} container=${input.containerName} persistent=${String(
@@ -3505,10 +3454,11 @@ export const runSingleTurnAgentInContainer = async (
 				containerName: input.containerName,
 				runtimeDirInContainer: taskStageRootInContainer,
 				jsonlFileName: runtimeFileNames.jsonl,
-				textFileName: runtimeFileNames.text,
-				stderrFileName: runtimeFileNames.stderr,
-				stdoutFileName: runtimeFileNames.stdout,
-			}),
+					textFileName: runtimeFileNames.text,
+					stderrFileName: runtimeFileNames.stderr,
+					stdoutFileName: runtimeFileNames.stdout,
+					usageFileName: runtimeFileNames.usage,
+				}),
 	);
 	await withHostBootstrapLog(
 		taskStderrPath,
@@ -3695,14 +3645,18 @@ export const runSingleTurnAgentInContainer = async (
 			taskStageRootInContainer,
 			runtimeFileNames.stderr,
 		),
-		stdoutPath: path.posix.join(
-			taskStageRootInContainer,
-			runtimeFileNames.stdout,
-		),
-		statePath: path.posix.join(
-			taskStageRootInContainer,
-			taskRuntimeArtifacts.stateFileName,
-		),
+			stdoutPath: path.posix.join(
+				taskStageRootInContainer,
+				runtimeFileNames.stdout,
+			),
+			usagePath: path.posix.join(
+				taskStageRootInContainer,
+				runtimeFileNames.usage,
+			),
+			statePath: path.posix.join(
+				taskStageRootInContainer,
+				taskRuntimeArtifacts.stateFileName,
+			),
 		driverLifecyclePath,
 		agentHomePathInContainer: taskAgentHome.agentHomePathInContainer,
 		agentHomeLinkPathInContainer: taskAgentHome.agentHomeLinkPathInContainer,

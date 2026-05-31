@@ -1226,6 +1226,27 @@
       "when": 1779742700000,
       "tag": "0174_agent_profile_codex_home_path",
       "breakpoints": true
+    },
+    {
+      "idx": 175,
+      "version": "7",
+      "when": 1779742800000,
+      "tag": "0175_tasks_cached_input_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 176,
+      "version": "7",
+      "when": 1779742900000,
+      "tag": "0176_tasks_prompt_usage_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 177,
+      "version": "7",
+      "when": 1779743000000,
+      "tag": "0177_drop_task_usage_compat_fields",
+      "breakpoints": true
     }
   ]
 }

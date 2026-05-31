@@ -5,6 +5,7 @@ import { desc, eq, or } from "drizzle-orm";
 import {
 	analysisSchema,
 	candidateSchema,
+	triageSchema,
 	verificationSchema,
 } from "../artifacts/contracts/domain-object.contract";
 import {
@@ -76,6 +77,7 @@ const buildDerivedCandidatesFromTasks = async (input: {
 	functionTasks: (typeof tasks.$inferSelect)[];
 	analysisTasks: (typeof tasks.$inferSelect)[];
 	verificationTasks: (typeof tasks.$inferSelect)[];
+	triageTasks: (typeof tasks.$inferSelect)[];
 }) => {
 	const latestAnalysisTaskByCandidateId = new Map<
 		string,
@@ -99,6 +101,17 @@ const buildDerivedCandidatesFromTasks = async (input: {
 		}
 	}
 
+	const latestTriageTaskByCandidateId = new Map<
+		string,
+		typeof tasks.$inferSelect
+	>();
+	for (const task of input.triageTasks) {
+		const candidateId = await readCandidateIdFromTaskInputArtifact(task);
+		if (candidateId && !latestTriageTaskByCandidateId.has(candidateId)) {
+			latestTriageTaskByCandidateId.set(candidateId, task);
+		}
+	}
+
 	const candidates: DerivedCandidateRecord[] = [];
 	for (const functionTask of input.functionTasks) {
 		const functionCandidates = await parseFunctionTaskCandidates(functionTask);
@@ -107,11 +120,15 @@ const buildDerivedCandidatesFromTasks = async (input: {
 			const verificationTask = latestVerificationTaskByCandidateId.get(
 				candidate.id,
 			);
+			const triageTask = latestTriageTaskByCandidateId.get(candidate.id);
 			const analysisOutput = analysisTask
 				? analysisSchema.safeParse(analysisTask.output)
 				: null;
 			const verificationOutput = verificationTask
 				? verificationSchema.safeParse(verificationTask.output)
+				: null;
+			const triageOutput = triageTask
+				? triageSchema.safeParse(triageTask.output)
 				: null;
 
 			let status: DerivedCandidateRecord["status"] =
@@ -119,7 +136,10 @@ const buildDerivedCandidatesFromTasks = async (input: {
 			let currentStage: DerivedCandidateRecord["currentStage"] =
 				candidate.currentStage || "analyzing";
 
-			if (verificationTask) {
+			if (triageTask) {
+				status = triageTask.status;
+				currentStage = "verifying";
+			} else if (verificationTask) {
 				status = verificationTask.status;
 				currentStage = "verifying";
 			} else if (analysisTask) {
@@ -157,10 +177,13 @@ const buildDerivedCandidatesFromTasks = async (input: {
 							? analysisOutput.data.confidence
 							: (candidate.confidence ?? null),
 				score:
-					verificationOutput?.success &&
-					typeof verificationOutput.data.score === "number"
-						? verificationOutput.data.score
-						: analysisOutput?.success &&
+					triageOutput?.success &&
+					typeof triageOutput.data.cvssScore === "number"
+						? triageOutput.data.cvssScore
+						: verificationOutput?.success &&
+							typeof verificationOutput.data.score === "number"
+							? verificationOutput.data.score
+							: analysisOutput?.success &&
 								typeof analysisOutput.data.score === "number"
 							? analysisOutput.data.score
 							: (candidate.score ?? null),
@@ -169,6 +192,7 @@ const buildDerivedCandidatesFromTasks = async (input: {
 					functionTask.updatedAt,
 					analysisTask?.updatedAt,
 					verificationTask?.updatedAt,
+					triageTask?.updatedAt,
 				),
 			});
 		}
@@ -182,25 +206,31 @@ const buildDerivedCandidatesFromTasks = async (input: {
 const listDerivedCandidatesByScanJobId = async (
 	scanJobId: string,
 ): Promise<DerivedCandidateRecord[] | null> => {
-	const [functionTasks, analysisTasks, verificationTasks] = await Promise.all([
-		listTasksByScanJobAndStageRepo({
-			scanJobId,
-			stageName: "function-scan",
-		}),
-		listTasksByScanJobAndStageRepo({
-			scanJobId,
-			stageName: "analyze",
-		}),
-		listTasksByScanJobAndStageRepo({
-			scanJobId,
-			stageName: "verify",
-		}),
-	]);
+	const [functionTasks, analysisTasks, verificationTasks, triageTasks] =
+		await Promise.all([
+			listTasksByScanJobAndStageRepo({
+				scanJobId,
+				stageName: "function-scan",
+			}),
+			listTasksByScanJobAndStageRepo({
+				scanJobId,
+				stageName: "analyze",
+			}),
+			listTasksByScanJobAndStageRepo({
+				scanJobId,
+				stageName: "verify",
+			}),
+			listTasksByScanJobAndStageRepo({
+				scanJobId,
+				stageName: "triage",
+			}),
+		]);
 
 	const hasUnifiedTaskPipeline =
 		functionTasks.length > 0 ||
 		analysisTasks.length > 0 ||
-		verificationTasks.length > 0;
+		verificationTasks.length > 0 ||
+		triageTasks.length > 0;
 	if (!hasUnifiedTaskPipeline) {
 		return null;
 	}
@@ -209,6 +239,7 @@ const listDerivedCandidatesByScanJobId = async (
 		functionTasks,
 		analysisTasks,
 		verificationTasks,
+		triageTasks,
 	});
 };
 
@@ -223,6 +254,7 @@ const findDerivedCandidateById = async (
 				eq(tasks.stageName, "function-scan"),
 				eq(tasks.stageName, "analyze"),
 				eq(tasks.stageName, "verify"),
+				eq(tasks.stageName, "triage"),
 			),
 		)
 		.orderBy(desc(tasks.createdAt));
@@ -236,11 +268,13 @@ const findDerivedCandidateById = async (
 	const verificationTasks = stageTasks.filter(
 		(task) => task.stageName === "verify",
 	);
+	const triageTasks = stageTasks.filter((task) => task.stageName === "triage");
 
 	const candidates = await buildDerivedCandidatesFromTasks({
 		functionTasks,
 		analysisTasks,
 		verificationTasks,
+		triageTasks,
 	});
 	return (
 		candidates.find(
@@ -288,6 +322,7 @@ export const findVulnerabilityCandidateByIdAndScanJobIdRepo = async (input: {
 			verificationTasks: candidateTasks.filter(
 				(task) => task.stageName === "verify",
 			),
+			triageTasks: candidateTasks.filter((task) => task.stageName === "triage"),
 		});
 		const derivedCandidate = derivedCandidates.find(
 			(candidate) =>

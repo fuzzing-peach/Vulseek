@@ -165,6 +165,7 @@ RUN --mount=type=cache,id=dokploy-cargo-registry,target=/root/.cargo/registry,sh
     && git clone /tmp/codex-acp-git/mirror.git /tmp/codex-acp \
     && cd /tmp/codex-acp \
     && git checkout "${CODEX_ACP_REF}" \
+    && rm -f rust-toolchain.toml \
     && patch -p1 < /tmp/dokploy-codex-acp-fork.patch \
     && CARGO_TARGET_DIR=/tmp/cargo-target cargo build --release --bin codex-acp \
     && install -m 0755 /tmp/cargo-target/release/codex-acp /tmp/dokploy-codex-acp \

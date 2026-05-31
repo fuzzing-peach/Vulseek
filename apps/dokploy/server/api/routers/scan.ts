@@ -58,6 +58,7 @@ const apiFindVulnerabilityCandidatesPageByScanJob = z
 		query: z.string().default(""),
 		analysisResults: z.array(z.string()).default([]),
 		verifyResults: z.array(z.string()).default([]),
+		triageResults: z.array(z.string()).default([]),
 		sortKey: z
 			.enum(["candidate", "analysis", "verify", "score"])
 			.default("candidate"),

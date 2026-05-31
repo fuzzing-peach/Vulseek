@@ -15,7 +15,10 @@ import {
 	type SandboxAgentActivity,
 	type SandboxAgentActivityStreamMessage,
 } from "@/lib/scan/sandbox-agent-activity";
-import { getFileStreamBuffer } from "@/server/utils/file-stream-buffer";
+import {
+	clearFileStreamBuffer,
+	getFileStreamBuffer,
+} from "@/server/utils/file-stream-buffer";
 
 type ParseState = {
 	nextLine: number;
@@ -333,6 +336,10 @@ export default async function handler(
 						latestRuntime?.taskKind || fallback?.runtime.taskKind || "unknown",
 				});
 				unsubscribeTask(taskId);
+				const jsonlPath = latestRuntime?.jsonlPath || fallback?.runtime.jsonlPath;
+				if (jsonlPath) {
+					clearFileStreamBuffer(jsonlPath);
+				}
 			}
 
 			for (const runtime of latestRuntimes) {

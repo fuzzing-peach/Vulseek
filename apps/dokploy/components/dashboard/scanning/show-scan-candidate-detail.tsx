@@ -79,15 +79,22 @@ const getVerificationTruthBadge = (
 		return null;
 	}
 
-	if (result === "real_vulnerability") {
+	if (result === "true") {
 		return {
-			label: "Verified 0day",
-			className: "border-red-200 bg-red-100 text-red-700",
+			label: "Facts True",
+			className: "border-emerald-200 bg-emerald-100 text-emerald-700",
+		};
+	}
+
+	if (result === "likely") {
+		return {
+			label: "Facts Likely",
+			className: "border-amber-200 bg-amber-100 text-amber-700",
 		};
 	}
 
 	return {
-		label: "Verified Not 0day",
+		label: "Facts False",
 		className: "border-muted-foreground/20 bg-muted text-muted-foreground",
 	};
 };
@@ -131,6 +138,9 @@ const getTaskStageLabel = (stage?: string | null) => {
 	}
 	if (stage === "verify") {
 		return "Verify";
+	}
+	if (stage === "triage") {
+		return "Triage";
 	}
 	return stage || "-";
 };
@@ -801,92 +811,97 @@ export const ShowScanCandidateDetail = ({
 								</div>
 							) : (
 								<div className="grid gap-6">
-									<div className="grid gap-3 md:grid-cols-2">
-										<div className="rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">
-												Status
+									<section className="rounded-lg border p-4">
+										<div className="mb-4 text-lg font-semibold">General</div>
+										<div className="grid gap-3 md:grid-cols-2">
+											<div className="rounded-lg border p-3">
+												<div className="text-sm text-muted-foreground">
+													Status
+												</div>
+												<div className="mt-1 font-medium capitalize">
+													{candidate.status}
+												</div>
 											</div>
-											<div className="mt-1 font-medium capitalize">
-												{candidate.status}
+											<div className="rounded-lg border p-3">
+												<div className="text-sm text-muted-foreground">
+													Current Stage
+												</div>
+												<div className="mt-1 font-medium capitalize">
+													{candidate.currentStage}
+												</div>
+											</div>
+											<div className="rounded-lg border p-3">
+												<div className="text-sm text-muted-foreground">
+													Sanity Check
+												</div>
+												<div className="mt-1 font-medium">
+													{candidate.latestVerificationResult
+														? candidate.latestVerificationResult.result
+														: "-"}
+												</div>
+											</div>
+											<div className="rounded-lg border p-3">
+												<div className="text-sm text-muted-foreground">
+													Location
+												</div>
+												<div className="mt-1 break-all font-medium">
+													{candidate.filePath || "-"}
+													{candidate.line ? `:${candidate.line}` : ""}
+												</div>
+											</div>
+											<div className="rounded-lg border p-3">
+												<div className="text-sm text-muted-foreground">
+													Score
+												</div>
+												<div className="mt-1 font-medium">
+													{typeof candidate.score === "number"
+														? candidate.score.toFixed(1)
+														: "-"}
+												</div>
+											</div>
+											<div className="rounded-lg border p-3">
+												<div className="text-sm text-muted-foreground">
+													Confidence
+												</div>
+												<div className="mt-1 font-medium">
+													{typeof candidate.confidence === "number"
+														? candidate.confidence
+														: "-"}
+												</div>
+											</div>
+											<div className="rounded-lg border p-3">
+												<div className="text-sm text-muted-foreground">
+													Created
+												</div>
+												<div className="mt-1 font-medium">
+													<DateTooltip date={candidate.createdAt} />
+												</div>
+											</div>
+											<div className="rounded-lg border p-3">
+												<div className="text-sm text-muted-foreground">
+													Updated
+												</div>
+												<div className="mt-1 font-medium">
+													<DateTooltip date={candidate.updatedAt} />
+												</div>
 											</div>
 										</div>
-										<div className="rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">
-												Current Stage
-											</div>
-											<div className="mt-1 font-medium capitalize">
-												{candidate.currentStage}
-											</div>
-										</div>
-										<div className="rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">
-												Verified
-											</div>
-											<div className="mt-1 font-medium">
-												{candidate.latestVerificationResult
-													? candidate.latestVerificationResult.result ===
-														"real_vulnerability"
-														? "Yes"
-														: "No"
-													: "-"}
-											</div>
-										</div>
-										<div className="rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">
-												Location
-											</div>
-											<div className="mt-1 break-all font-medium">
-												{candidate.filePath || "-"}
-												{candidate.line ? `:${candidate.line}` : ""}
-											</div>
-										</div>
-										<div className="rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">Score</div>
-											<div className="mt-1 font-medium">
-												{typeof candidate.score === "number"
-													? candidate.score.toFixed(1)
-													: "-"}
-											</div>
-										</div>
-										<div className="rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">
-												Confidence
-											</div>
-											<div className="mt-1 font-medium">
-												{typeof candidate.confidence === "number"
-													? candidate.confidence
-													: "-"}
-											</div>
-										</div>
-										<div className="rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">
-												Created
-											</div>
-											<div className="mt-1 font-medium">
-												<DateTooltip date={candidate.createdAt} />
-											</div>
-										</div>
-										<div className="rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">
-												Updated
-											</div>
-											<div className="mt-1 font-medium">
-												<DateTooltip date={candidate.updatedAt} />
-											</div>
-										</div>
-									</div>
 
-									<div className="rounded-lg border p-3">
-										<div className="text-sm text-muted-foreground">
-											Description
+										<div className="rounded-lg border p-3">
+											<div className="text-sm text-muted-foreground">
+												Description
+											</div>
+											<div className="mt-1 whitespace-pre-wrap break-words text-sm">
+												{candidate.description || "-"}
+											</div>
 										</div>
-										<div className="mt-1 whitespace-pre-wrap break-words text-sm">
-											{candidate.description || "-"}
-										</div>
-									</div>
+									</section>
 
 									{candidate.status === "running" ? (
-										<div className="rounded-lg border p-3">
+										<section className="rounded-lg border p-4">
+											<div className="mb-4 text-lg font-semibold">
+												Live Output
+											</div>
 											<div className="mb-3 flex items-center justify-between gap-3">
 												<div className="text-sm text-muted-foreground">
 													Live Agent Output
@@ -899,10 +914,11 @@ export const ShowScanCandidateDetail = ({
 												messages={liveJsonRpcMessages}
 												maxHeightClassName="max-h-[420px]"
 											/>
-										</div>
+										</section>
 									) : null}
 
-									<div className="rounded-lg border p-3">
+									<section className="rounded-lg border p-4">
+										<div className="mb-4 text-lg font-semibold">Analysis</div>
 										<div className="mb-3 flex items-center justify-between gap-3">
 											<div className="text-sm text-muted-foreground">
 												Latest Analysis Result
@@ -982,9 +998,10 @@ export const ShowScanCandidateDetail = ({
 												</div>
 											</div>
 										</div>
-									</div>
+									</section>
 
-									<div className="rounded-lg border p-3">
+									<section className="rounded-lg border p-4">
+										<div className="mb-4 text-lg font-semibold">Verify</div>
 										<div className="mb-3 flex items-center justify-between gap-3">
 											<div className="text-sm text-muted-foreground">
 												Latest Verification Result
@@ -1036,18 +1053,76 @@ export const ShowScanCandidateDetail = ({
 												candidate.latestVerificationResult?.reportPath,
 												"Verification Report Path",
 											)}
+										</div>
+									</section>
+
+									<section className="rounded-lg border p-4">
+										<div className="mb-4 text-lg font-semibold">Triage</div>
+										<div className="mb-3 text-sm text-muted-foreground">
+											Latest Triage
+										</div>
+										<div className="grid gap-3 md:grid-cols-2">
+											<div className="rounded-md border p-3">
+												<div className="text-xs text-muted-foreground">
+													Classification
+												</div>
+												<div className="mt-1 text-sm">
+													{candidate.latestTriageResult
+														?.securityClassification || "-"}
+												</div>
+											</div>
+											<div className="rounded-md border p-3">
+												<div className="text-xs text-muted-foreground">
+													Security Issue
+												</div>
+												<div className="mt-1 text-sm">
+													{typeof candidate.latestTriageResult
+														?.isSecurityIssue === "boolean"
+														? candidate.latestTriageResult
+																.isSecurityIssue
+															? "Yes"
+															: "No"
+														: "-"}
+												</div>
+											</div>
+											<div className="rounded-md border p-3">
+												<div className="text-xs text-muted-foreground">
+													Impact
+												</div>
+												<div className="mt-1 text-sm">
+													{candidate.latestTriageResult?.impactType || "-"}
+												</div>
+											</div>
+											<div className="rounded-md border p-3">
+												<div className="text-xs text-muted-foreground">
+													CVSS
+												</div>
+												<div className="mt-1 text-sm">
+													{candidate.latestTriageResult?.cvssSeverity || "-"}
+													{typeof candidate.latestTriageResult
+														?.cvssScore === "number"
+														? ` ${candidate.latestTriageResult.cvssScore.toFixed(1)}`
+														: ""}
+												</div>
+											</div>
+											<div className="rounded-md border p-3">
+												<div className="text-xs text-muted-foreground">
+													EPSS 30d
+												</div>
+												<div className="mt-1 text-sm">
+													{typeof candidate.latestTriageResult
+														?.epssProbability30d === "number"
+														? `${(candidate.latestTriageResult.epssProbability30d * 100).toFixed(2)}%`
+														: "-"}
+												</div>
+											</div>
 											{renderPathCard(
-												"Issue Draft Path",
-												candidate.latestVerificationResult?.issueDraftPath,
-												"Issue Draft Path",
-											)}
-											{renderPathCard(
-												"PoC Path",
-												candidate.latestVerificationResult?.pocPath,
-												"PoC Path",
+												"Report Path",
+												candidate.latestTriageResult?.reportPath,
+												"Triage Report Path",
 											)}
 										</div>
-									</div>
+									</section>
 								</div>
 							)}
 						</TabsContent>

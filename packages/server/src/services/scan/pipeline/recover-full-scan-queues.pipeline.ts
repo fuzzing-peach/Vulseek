@@ -22,6 +22,10 @@ export const recoverFullScanQueuesPipeline = async <
 		taskId: string;
 		status: string;
 	},
+	TriageTask extends {
+		taskId: string;
+		status: string;
+	},
 >(input: {
 	loadJobs: () => Promise<Job[]>;
 	loadScanJob: (scanJobId: string) => Promise<ScanJob>;
@@ -40,6 +44,7 @@ export const recoverFullScanQueuesPipeline = async <
 	) => Promise<unknown>;
 	loadAnalysisTasks: (scanJobId: string) => Promise<AnalysisTask[]>;
 	loadVerificationTasks: (scanJobId: string) => Promise<VerificationTask[]>;
+	loadTriageTasks: (scanJobId: string) => Promise<TriageTask[]>;
 	enqueueAnalysisWork: (
 		scanJobId: string,
 		analysisTaskId: string,
@@ -47,6 +52,10 @@ export const recoverFullScanQueuesPipeline = async <
 	enqueueVerificationWork: (
 		scanJobId: string,
 		verificationTaskId: string,
+	) => Promise<unknown>;
+	enqueueTriageWork: (
+		scanJobId: string,
+		triageTaskId: string,
 	) => Promise<unknown>;
 	updateScanJobStatus: (
 		scanJobId: string,
@@ -62,6 +71,7 @@ export const recoverFullScanQueuesPipeline = async <
 	let functionTasksEnqueued = 0;
 	let analysisTasksEnqueued = 0;
 	let verificationTasksEnqueued = 0;
+	let triageTasksEnqueued = 0;
 
 	for (const job of jobs) {
 		if (job.scanType !== "full") {
@@ -127,11 +137,21 @@ export const recoverFullScanQueuesPipeline = async <
 			verificationTasksEnqueued += 1;
 		}
 
+			const triageTasks = await input.loadTriageTasks(job.scanJobId);
+			for (const triageTask of triageTasks) {
+				if (triageTask.status !== "pending") {
+					continue;
+				}
+				await input.enqueueTriageWork(job.scanJobId, triageTask.taskId);
+				triageTasksEnqueued += 1;
+			}
+
 			if (
 				job.status !== "running" &&
 				job.status !== "pending" &&
 				(verificationTasks.some((task) => task.status === "pending") ||
-					analysisTasks.some((task) => task.status === "pending"))
+					analysisTasks.some((task) => task.status === "pending") ||
+					triageTasks.some((task) => task.status === "pending"))
 			) {
 				await input.updateScanJobStatus(job.scanJobId, "running").catch(
 					() => {},
@@ -149,5 +169,6 @@ export const recoverFullScanQueuesPipeline = async <
 		functionTasksEnqueued,
 		analysisTasksEnqueued,
 		verificationTasksEnqueued,
+		triageTasksEnqueued,
 	};
 };

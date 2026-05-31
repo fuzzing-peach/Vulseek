@@ -11,6 +11,8 @@ import {
 	moduleSchema,
 	repositoryModuleSchema,
 	repositoryScanManifestSchema,
+	triageSchema,
+	verificationSchema,
 } from "./artifacts/contracts/domain-object.contract";
 import { buildFunctionScannerPrompt } from "./prompts/function-scanner.prompt";
 import { buildModuleScannerPrompt } from "./prompts/module-scanner.prompt";
@@ -303,6 +305,25 @@ test("structured output prompts include annotated task artifact schemas", () => 
 	assert.match(moduleSuffix, /"attackSurfaces"/);
 	assert.match(moduleSuffix, /"vulnerabilityThemes"/);
 	assert.match(moduleSuffix, /"runtimeComponents"/);
+
+	const persistentSuffix = buildStructuredOutputPromptSuffix(
+		functionScanManifestSchema,
+		"/task/output.schema.json",
+		"/task/output.json",
+		undefined,
+		{ persistent: true },
+	);
+	assert.match(persistentSuffix, /Set exit to false/);
+	assert.doesNotMatch(persistentSuffix, /Set exit to true/);
+
+	const analysisExitSuffix = buildStructuredOutputPromptSuffix(
+		functionScanManifestSchema,
+		"/task/output.schema.json",
+		"/task/output.json",
+		undefined,
+		{ allowAgentExit: true },
+	);
+	assert.match(analysisExitSuffix, /stage prompt explicitly instructs/);
 });
 
 test("analysis and fuzz prompts allow exploration-oriented fuzzing without route changes", () => {
@@ -357,4 +378,73 @@ test("analysis and fuzz prompts allow exploration-oriented fuzzing without route
 	const runSkill = readSkillSource("run-fuzzer");
 	assert.match(runSkill, /path\/state exploration/);
 	assert.match(runSkill, /newly reached paths or states/);
+});
+
+test("verification is a three-value sanity check and triage owns security classification", () => {
+	const baseVerification = {
+		id: "verify-1",
+		summary: "The code path and precondition exist.",
+		confidence: 0.8,
+		score: 0.8,
+		reportPath: "/task/01_verify_report.md",
+		runtimeSeconds: null,
+		evidenceBundle: [evidence],
+		residualUncertainty: [],
+		status: "completed" as const,
+	};
+
+	assert.equal(
+		verificationSchema.safeParse({
+			...baseVerification,
+			result: "true",
+		}).success,
+		true,
+	);
+	assert.equal(
+		verificationSchema.safeParse({
+			...baseVerification,
+			result: "likely",
+		}).success,
+		true,
+	);
+	assert.equal(
+		verificationSchema.safeParse({
+			...baseVerification,
+			result: "false",
+		}).success,
+		true,
+	);
+	assert.equal(
+		verificationSchema.safeParse({
+			...baseVerification,
+			result: "real_vulnerability",
+		}).success,
+		false,
+	);
+
+	assert.equal(
+		triageSchema.safeParse({
+			id: "triage-1",
+			result: "security_issue",
+			securityClassification: "vulnerability",
+			isSecurityIssue: true,
+			impactType: "memory corruption",
+			cvssVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+			cvssScore: 9.8,
+			cvssSeverity: "critical",
+			exploitability: "practical",
+			isExploitable: true,
+			commonTriggerConditions: ["malformed network record reaches parser"],
+			hardeningOrRobustness: false,
+			epssProbability30d: 0.02,
+			epssSource: "heuristic:no-cve-mapping",
+			summary: "Security issue with network trigger.",
+			reportPath: "/task/01_triage_report.md",
+			runtimeSeconds: null,
+			evidenceBundle: [evidence],
+			residualUncertainty: [],
+			status: "completed",
+		}).success,
+		true,
+	);
 });

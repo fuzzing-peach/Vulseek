@@ -31,6 +31,10 @@ export const SCAN_STAGE_METADATA = {
 		id: "verify",
 		name: "Verify",
 	},
+	triage: {
+		id: "triage",
+		name: "Triage",
+	},
 } as const;
 
 export type ScanStageKey = keyof typeof SCAN_STAGE_METADATA;

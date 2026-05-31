@@ -4,6 +4,7 @@ import {
 	extractPayloadText,
 	hasEndTurnInJsonlContent,
 	renderSandboxAgentEvent,
+	summarizeSandboxAgentTokenUsage,
 } from "./sandbox-agent-shared";
 
 const makeEventLine = (payload: unknown) =>
@@ -76,4 +77,53 @@ test("extractPayloadText reads nested text payloads", () => {
 		}),
 		"nested",
 	);
+});
+
+test("summarizeSandboxAgentTokenUsage records last cached input tokens", () => {
+	const content = [
+		makeEventLine({
+			params: {
+				update: {
+					sessionUpdate: "usage_update",
+					tokenUsage: {
+						last: {
+							totalTokens: 100,
+							cachedInputTokens: 40,
+						},
+						total: {
+							totalTokens: 100,
+							cachedInputTokens: 40,
+						},
+						modelContextWindow: 2000,
+					},
+				},
+			},
+		}),
+		makeEventLine({
+			params: {
+				update: {
+					sessionUpdate: "usage_update",
+					tokenUsage: {
+						last: {
+							totalTokens: 150,
+							cachedInputTokens: 90,
+						},
+						total: {
+							totalTokens: 250,
+							cachedInputTokens: 130,
+						},
+						modelContextWindow: 2000,
+					},
+				},
+			},
+		}),
+	].join("\n");
+
+	assert.deepEqual(summarizeSandboxAgentTokenUsage(content), {
+		firstUsed: 100,
+		latestUsed: 150,
+		totalTokens: 150,
+		cachedReadTokens: 90,
+		contextSize: 2000,
+	});
 });

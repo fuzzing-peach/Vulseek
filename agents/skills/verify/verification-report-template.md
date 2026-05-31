@@ -1,11 +1,4 @@
-# Verification Report
-
-## Verified Version
-- Current affected version:
-- Verified target type:
-- Verified tag:
-- Verified branch:
-- Verified commit:
+# Verification Sanity Report
 
 ## Candidate Identity
 - Candidate ID:
@@ -14,75 +7,33 @@
 - Line:
 - Component/subsystem:
 
-## Previous Analysis Claim
+## Analysis Claim Checked
 - Analysis result:
-- Analysis confidence:
-- Analysis score:
+- Analysis fingerprint:
 - Analysis summary:
+- Claimed code path:
+- Claimed trigger/preconditions:
 
-## Verification Conclusion
-- Final result:
-- Is bug:
-- Is security issue:
+## Sanity Conclusion
+- Result (`true`, `likely`, or `false`):
 - Confidence:
-- Estimated score:
+- Score:
 - Short conclusion:
 
-## Classification Decision
-- Real vulnerability vs false positive vs API misuse:
-- Responsibility boundary:
-- Why this classification is correct:
+## Confirmed Facts
+- Files/symbols found:
+- Relevant control/data flow found:
+- Preconditions or trigger conditions found:
 
-## Root Cause
-- Root cause summary:
-- Faulty assumption or logic:
-- Security property violated:
+## Contradicted Or Missing Facts
+- Missing files/symbols:
+- Contradicted code path claims:
+- Unsupported trigger/precondition claims:
 
-## Trigger Conditions
-- Required input:
-- Required state:
-- Required configuration/build conditions:
-- Required caller behavior:
+## Evidence
+- Supporting evidence:
+- Contradicting evidence:
 
-## Attack Surface
-- Publicly reachable surface:
-- Trigger vector:
-- Privilege/user interaction assumptions:
-- Typical vs niche usage:
-
-## Reproduction Evidence
-- What was reproduced:
-- What was observed:
-- PoC status:
-- Reproduction limitations:
-
-## Known/Fixed History
-- Already known?:
-- Already fixed upstream?:
-- Related PRs:
-- Related issues:
-- Related CVEs:
-
-## CVSS-Style Assessment
-- Attack Vector:
-- Attack Complexity:
-- Privileges Required:
-- User Interaction:
-- Scope:
-- Confidentiality impact:
-- Integrity impact:
-- Availability impact:
-- Additional usage-breadth note:
-
-## Maintainer Disclosure-Likelihood Assessment
-- Similar historical maintainer behavior:
-- Likely maintainer view:
-- CVE disclosure likelihood:
-
-## Remaining Uncertainty
+## Residual Uncertainty
 - Unknowns:
 - What would reduce uncertainty:
-
-## Final Recommendation
-- Recommended maintainer action:
-- Recommended reporter action:

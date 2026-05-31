@@ -3,6 +3,7 @@ export const SANDBOX_AGENT_RUNTIME_FILE_NAMES = {
 	text: "sandbox-agent-text.log",
 	stderr: "sandbox-agent-stderr.log",
 	stdout: "task-stdout.log",
+	usage: "usage.json",
 } as const;
 
 type SandboxAgentSessionUpdate =
@@ -28,7 +29,9 @@ export type SandboxAgentSessionEvent = {
 type MaybeSandboxAgentSessionUpdate = SandboxAgentSessionUpdate | undefined;
 
 const asRecord = (value: unknown) =>
-	value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+	value && typeof value === "object"
+		? (value as Record<string, unknown>)
+		: null;
 
 const asString = (value: unknown) => (typeof value === "string" ? value : "");
 
@@ -109,11 +112,23 @@ export const formatSandboxAgentSessionEvent = (
 const asNumber = (value: unknown) =>
 	typeof value === "number" && Number.isFinite(value) ? value : null;
 
+const asRecordOrNull = (value: unknown) => asRecord(value);
+
 export type SandboxAgentTokenUsageSummary = {
 	firstUsed: number;
 	latestUsed: number;
-	tokenUsage: number;
+	totalTokens: number;
+	cachedReadTokens: number | null;
 	contextSize: number | null;
+};
+
+export type PromptResponseUsage = {
+	inputTokens: number | null;
+	outputTokens: number | null;
+	thoughtTokens: number | null;
+	totalTokens: number | null;
+	cachedReadTokens: number | null;
+	cachedWriteTokens: number | null;
 };
 
 export const getUsageUpdateUsedTokens = (
@@ -125,14 +140,17 @@ export const getUsageUpdateUsedTokens = (
 	}
 	const directUsed = asNumber(record.used);
 	const tokenUsage = asRecord(record.tokenUsage);
+	const last = asRecord(tokenUsage?.last);
 	const total = asRecord(tokenUsage?.total);
-	const nestedUsed = asNumber(total?.totalTokens);
-	const used = directUsed ?? nestedUsed;
+	const lastUsed = asNumber(last?.totalTokens);
+	const totalUsed = asNumber(total?.totalTokens);
+	const used = lastUsed ?? directUsed ?? totalUsed;
 	if (used === null) {
 		return null;
 	}
 	return {
 		used,
+		cachedReadTokens: asNumber(last?.cachedInputTokens),
 		contextSize:
 			asNumber(record.size) ?? asNumber(tokenUsage?.modelContextWindow),
 	};
@@ -143,6 +161,7 @@ export const summarizeSandboxAgentTokenUsage = (
 ): SandboxAgentTokenUsageSummary | null => {
 	let firstUsed: number | null = null;
 	let latestUsed: number | null = null;
+	let cachedReadTokens: number | null = null;
 	let contextSize: number | null = null;
 
 	for (const rawLine of content.split("\n")) {
@@ -158,6 +177,7 @@ export const summarizeSandboxAgentTokenUsage = (
 			}
 			firstUsed ??= usage.used;
 			latestUsed = usage.used;
+			cachedReadTokens = usage.cachedReadTokens;
 			contextSize = usage.contextSize ?? contextSize;
 		} catch {}
 	}
@@ -169,9 +189,32 @@ export const summarizeSandboxAgentTokenUsage = (
 	return {
 		firstUsed,
 		latestUsed,
-		tokenUsage: Math.max(0, latestUsed - firstUsed),
+		totalTokens: latestUsed,
+		cachedReadTokens,
 		contextSize,
 	};
+};
+
+export const extractPromptResponseUsage = (
+	content: string,
+): PromptResponseUsage | null => {
+	try {
+		const parsed = JSON.parse(content) as unknown;
+		const usage = asRecordOrNull(parsed);
+		if (!usage) {
+			return null;
+		}
+		return {
+			inputTokens: asNumber(usage.inputTokens),
+			outputTokens: asNumber(usage.outputTokens),
+			thoughtTokens: asNumber(usage.thoughtTokens),
+			totalTokens: asNumber(usage.totalTokens),
+			cachedReadTokens: asNumber(usage.cachedReadTokens),
+			cachedWriteTokens: asNumber(usage.cachedWriteTokens),
+		};
+	} catch {
+		return null;
+	}
 };
 
 export const isAgentMessageChunkEvent = (event: SandboxAgentSessionEvent) => {

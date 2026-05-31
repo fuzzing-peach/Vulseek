@@ -85,6 +85,7 @@ export const AgentProfilesForm = () => {
 												</CardDescription>
 											</div>
 											<div className="flex justify-between items-center shrink-0">
+												<HandleAgentProfile duplicateProfile={profile} />
 												<HandleAgentProfile
 													agentProfileId={profile.agentProfileId}
 												/>

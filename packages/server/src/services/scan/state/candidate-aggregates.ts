@@ -23,14 +23,31 @@ export const buildCandidatesWithLatestResults = <
 		vulnerabilityCandidateId: string;
 		result: string;
 		reportPath?: string | null;
-		issueDraftPath?: string | null;
-		pocPath?: string | null;
-		dockerfilePath?: string | null;
-		runScriptPath?: string | null;
-		isBug?: boolean | null;
-		isSecurity?: boolean | null;
 		confidence?: number | null;
 		score?: number | null;
+		runtimeSeconds?: number | null;
+		threadId?: string | null;
+		summary?: string | null;
+		createdAt: string;
+		updatedAt: string;
+	},
+	TriageResult extends {
+		taskId: string;
+		vulnerabilityCandidateId: string;
+		result: string;
+		securityClassification: string;
+		isSecurityIssue: boolean;
+		impactType: string;
+		cvssVector?: string | null;
+		cvssScore?: number | null;
+		cvssSeverity: string;
+		exploitability: string;
+		isExploitable?: boolean | null;
+		commonTriggerConditions: string[];
+		hardeningOrRobustness: boolean;
+		epssProbability30d?: number | null;
+		epssSource: string;
+		reportPath?: string | null;
 		runtimeSeconds?: number | null;
 		threadId?: string | null;
 		summary?: string | null;
@@ -41,6 +58,7 @@ export const buildCandidatesWithLatestResults = <
 	candidates: Candidate[];
 	analysisResults: AnalysisResult[];
 	verificationResults: VerificationResult[];
+	triageResults?: TriageResult[];
 	buildAnalysisReportPath: (
 		scanJobId: string,
 		vulnerabilityCandidateId: string,
@@ -50,10 +68,6 @@ export const buildCandidatesWithLatestResults = <
 		vulnerabilityCandidateId: string,
 	) => {
 		reportPath: string | null;
-		issueDraftPath: string | null;
-		pocPath: string | null;
-		dockerfilePath: string | null;
-		runScriptPath: string | null;
 	};
 }) => {
 	const latestAnalysisResultByCandidateId = new Map<string, AnalysisResult>();
@@ -66,6 +80,20 @@ export const buildCandidatesWithLatestResults = <
 			latestAnalysisResultByCandidateId.set(
 				analysisResult.vulnerabilityCandidateId,
 				analysisResult,
+			);
+		}
+	}
+
+	const latestTriageResultByCandidateId = new Map<string, TriageResult>();
+	for (const triageResult of input.triageResults || []) {
+		if (
+			!latestTriageResultByCandidateId.has(
+				triageResult.vulnerabilityCandidateId,
+			)
+		) {
+			latestTriageResultByCandidateId.set(
+				triageResult.vulnerabilityCandidateId,
+				triageResult,
 			);
 		}
 	}
@@ -94,6 +122,9 @@ export const buildCandidatesWithLatestResults = <
 		const latestVerificationResult = latestVerificationResultByCandidateId.get(
 			candidate.vulnerabilityCandidateId,
 		);
+		const latestTriageResult = latestTriageResultByCandidateId.get(
+			candidate.vulnerabilityCandidateId,
+		);
 		const analysisReportPath =
 			latestAnalysisResult?.reportPath ||
 			input.buildAnalysisReportPath(
@@ -101,17 +132,9 @@ export const buildCandidatesWithLatestResults = <
 				candidate.vulnerabilityCandidateId,
 			);
 		const verificationArtifactPaths =
-			latestVerificationResult?.reportPath &&
-			latestVerificationResult.issueDraftPath &&
-			latestVerificationResult.pocPath &&
-			latestVerificationResult.dockerfilePath &&
-			latestVerificationResult.runScriptPath
+			latestVerificationResult?.reportPath
 				? {
 						reportPath: latestVerificationResult.reportPath,
-						issueDraftPath: latestVerificationResult.issueDraftPath,
-						pocPath: latestVerificationResult.pocPath,
-						dockerfilePath: latestVerificationResult.dockerfilePath,
-						runScriptPath: latestVerificationResult.runScriptPath,
 					}
 				: input.buildVerificationArtifactPaths(
 						candidate.scanJobId,
@@ -124,7 +147,9 @@ export const buildCandidatesWithLatestResults = <
 					? latestAnalysisResult.confidence
 					: candidate.confidence;
 		const resolvedScore =
-			typeof latestVerificationResult?.score === "number"
+			typeof latestTriageResult?.cvssScore === "number"
+				? latestTriageResult.cvssScore
+				: typeof latestVerificationResult?.score === "number"
 				? latestVerificationResult.score
 				: typeof latestAnalysisResult?.score === "number"
 					? latestAnalysisResult.score
@@ -152,20 +177,41 @@ export const buildCandidatesWithLatestResults = <
 				? {
 						taskId: latestVerificationResult.taskId,
 						result: latestVerificationResult.result,
-						isBug: latestVerificationResult.isBug,
-						isSecurity: latestVerificationResult.isSecurity,
 						confidence: latestVerificationResult.confidence,
 						score: latestVerificationResult.score,
 						reportPath: verificationArtifactPaths.reportPath,
-						issueDraftPath: verificationArtifactPaths.issueDraftPath,
-						pocPath: verificationArtifactPaths.pocPath,
-						dockerfilePath: verificationArtifactPaths.dockerfilePath,
-						runScriptPath: verificationArtifactPaths.runScriptPath,
 						runtimeSeconds: latestVerificationResult.runtimeSeconds,
 						threadId: latestVerificationResult.threadId,
 						summary: latestVerificationResult.summary,
 						createdAt: latestVerificationResult.createdAt,
 						updatedAt: latestVerificationResult.updatedAt,
+					}
+				: null,
+			latestTriageResult: latestTriageResult
+				? {
+						taskId: latestTriageResult.taskId,
+						result: latestTriageResult.result,
+						securityClassification:
+							latestTriageResult.securityClassification,
+						isSecurityIssue: latestTriageResult.isSecurityIssue,
+						impactType: latestTriageResult.impactType,
+						cvssVector: latestTriageResult.cvssVector,
+						cvssScore: latestTriageResult.cvssScore,
+						cvssSeverity: latestTriageResult.cvssSeverity,
+						exploitability: latestTriageResult.exploitability,
+						isExploitable: latestTriageResult.isExploitable,
+						commonTriggerConditions:
+							latestTriageResult.commonTriggerConditions,
+						hardeningOrRobustness:
+							latestTriageResult.hardeningOrRobustness,
+						epssProbability30d: latestTriageResult.epssProbability30d,
+						epssSource: latestTriageResult.epssSource,
+						reportPath: latestTriageResult.reportPath,
+						runtimeSeconds: latestTriageResult.runtimeSeconds,
+						threadId: latestTriageResult.threadId,
+						summary: latestTriageResult.summary,
+						createdAt: latestTriageResult.createdAt,
+						updatedAt: latestTriageResult.updatedAt,
 					}
 				: null,
 		};

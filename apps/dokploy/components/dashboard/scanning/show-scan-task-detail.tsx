@@ -99,6 +99,9 @@ const getTaskStageLabel = (stage?: string | null) => {
 	if (stage === "Verify" || stage === "verify" || stage === "verifying") {
 		return "Verify";
 	}
+	if (stage === "Triage" || stage === "triage" || stage === "triaging") {
+		return "Triage";
+	}
 	return stage || "-";
 };
 
@@ -143,6 +146,28 @@ const formatTokenUsage = (value?: number | null) => {
 		return "-";
 	}
 	return `${new Intl.NumberFormat().format(value)} tokens`;
+};
+
+const formatTokenCount = (value?: number | null) => {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return "-";
+	}
+	return new Intl.NumberFormat().format(value);
+};
+
+const formatTokenUsageWithCache = (
+	total?: number | null,
+	cached?: number | null,
+	cacheLabel = "cache read",
+) => {
+	const totalValue = formatTokenCount(total);
+	if (totalValue === "-") {
+		return "-";
+	}
+	const cachedValue = formatTokenCount(cached);
+	return cachedValue === "-"
+		? `${totalValue} tokens`
+		: `${totalValue} / (${cachedValue} ${cacheLabel})`;
 };
 
 const stringifyJson = (value: unknown) => {
@@ -229,6 +254,19 @@ const DetailField = ({
 		</div>
 	);
 };
+
+const DetailSection = ({
+	title,
+	children,
+}: {
+	title: string;
+	children: ReactNode;
+}) => (
+	<section className="rounded-lg border p-4">
+		<div className="mb-4 text-lg font-semibold">{title}</div>
+		{children}
+	</section>
+);
 
 const JsonBlock = ({ label, value }: { label: string; value: unknown }) => {
 	const json = stringifyJson(value);
@@ -680,77 +718,106 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 										</Badge>
 									</div>
 
-									<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-										<DetailField label="Task ID" value={task.taskId} />
-										<DetailField
-											label="Scan Job ID"
-											value={task.scanJobId}
-											href={jobTasksHref}
-										/>
-										<DetailField label="Name" value={task.name} />
-										<DetailField
-											label="Stage"
-											value={getTaskStageLabel(task.stageName)}
-										/>
-										<DetailField
-											label="Status"
-											value={getTaskStatusLabel(task.status)}
-											badgeClassName={getTaskStatusBadgeClassName(task.status)}
-										/>
-										<DetailField label="Priority" value={task.priority} />
-										<DetailField label="Attempt" value={task.attempt} />
-										<DetailField
-											label="Token Usage"
-											value={formatTokenUsage(task.tokenUsage)}
-											copyLabel="Token Usage"
-										/>
-										<DetailField label="Runtime Mode" value={task.runtimeMode} />
-										<DetailField
-											label="Parent Task ID"
-											value={task.parentTaskId}
-											href={buildTaskHref(task.parentTaskId)}
-										/>
-										<DetailField
-											label="Forked From Task ID"
-											value={task.forkedFromTaskId}
-											href={buildTaskHref(task.forkedFromTaskId)}
-										/>
-										<DetailField
-											label="Forked From Thread ID"
-											value={task.forkedFromThreadId}
-										/>
-										<DetailField
-											label="Stage Group Instance ID"
-											value={task.stageGroupInstanceId}
-										/>
-										<DetailField label="Thread ID" value={task.threadId} />
-										<DetailField
-											label="Container Name"
-											value={task.containerName}
-										/>
-										<DetailField label="Exit Reason" value={task.exitReason} />
-										<DetailField label="Exit Note" value={task.exitNote} />
-										<DetailField
-											label="Created"
-											value={task.createdAt}
-											date={task.createdAt}
-										/>
-										<DetailField
-											label="Updated"
-											value={task.updatedAt}
-											date={task.updatedAt}
-										/>
-										<DetailField
-											label="Started"
-											value={task.startedAt}
-											date={task.startedAt}
-										/>
-										<DetailField
-											label="Completed"
-											value={task.completedAt}
-											date={task.completedAt}
-										/>
-									</div>
+									<DetailSection title="General">
+										<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+											<DetailField label="Task ID" value={task.taskId} />
+											<DetailField
+												label="Scan Job ID"
+												value={task.scanJobId}
+												href={jobTasksHref}
+											/>
+											<DetailField label="Name" value={task.name} />
+											<DetailField
+												label="Stage"
+												value={getTaskStageLabel(task.stageName)}
+											/>
+											<DetailField
+												label="Status"
+												value={getTaskStatusLabel(task.status)}
+												badgeClassName={getTaskStatusBadgeClassName(task.status)}
+											/>
+											<DetailField label="Priority" value={task.priority} />
+											<DetailField label="Attempt" value={task.attempt} />
+											<DetailField label="Runtime Mode" value={task.runtimeMode} />
+											<DetailField
+												label="Parent Task ID"
+												value={task.parentTaskId}
+												href={buildTaskHref(task.parentTaskId)}
+											/>
+											<DetailField
+												label="Forked From Task ID"
+												value={task.forkedFromTaskId}
+												href={buildTaskHref(task.forkedFromTaskId)}
+											/>
+											<DetailField
+												label="Forked From Thread ID"
+												value={task.forkedFromThreadId}
+											/>
+											<DetailField
+												label="Stage Group Instance ID"
+												value={task.stageGroupInstanceId}
+											/>
+											<DetailField label="Thread ID" value={task.threadId} />
+											<DetailField
+												label="Container Name"
+												value={task.containerName}
+											/>
+											<DetailField label="Exit Reason" value={task.exitReason} />
+											<DetailField label="Exit Note" value={task.exitNote} />
+											<DetailField
+												label="Created"
+												value={task.createdAt}
+												date={task.createdAt}
+											/>
+											<DetailField
+												label="Updated"
+												value={task.updatedAt}
+												date={task.updatedAt}
+											/>
+											<DetailField
+												label="Started"
+												value={task.startedAt}
+												date={task.startedAt}
+											/>
+											<DetailField
+												label="Completed"
+												value={task.completedAt}
+												date={task.completedAt}
+											/>
+										</div>
+									</DetailSection>
+
+									<DetailSection title="Usage">
+										<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+											<DetailField
+												label="Input / Cache Read"
+												value={formatTokenUsageWithCache(
+													task.inputTokens,
+													task.cachedReadTokens,
+												)}
+												copyLabel="Input / Cache Read"
+											/>
+											<DetailField
+												label="Output / Cache Write"
+												value={formatTokenUsageWithCache(
+													task.outputTokens,
+													task.cachedWriteTokens,
+													"write cache",
+												)}
+												copyLabel="Output / Cache Write"
+											/>
+											<DetailField
+												label="Total Tokens"
+												value={formatTokenUsage(task.totalTokens)}
+												copyLabel="Total Tokens"
+											/>
+											<DetailField
+												label="Thought Tokens"
+												value={formatTokenUsage(task.thoughtTokens)}
+												copyLabel="Thought Tokens"
+											/>
+										</div>
+									</DetailSection>
 
 									{task.errorMessage ? (
 										<div className="rounded-lg border p-3">
@@ -763,11 +830,13 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 										</div>
 									) : null}
 
-									<div className="grid gap-4 xl:grid-cols-2">
-										<JsonBlock label="Agent Profile" value={task.agentProfile} />
-										<JsonBlock label="Input" value={task.input} />
-										<JsonBlock label="Output" value={task.output} />
-									</div>
+									<DetailSection title="Output">
+										<div className="grid gap-4 xl:grid-cols-2">
+											<JsonBlock label="Agent Profile" value={task.agentProfile} />
+											<JsonBlock label="Input" value={task.input} />
+											<JsonBlock label="Output" value={task.output} />
+										</div>
+									</DetailSection>
 								</div>
 							</TabsContent>
 

@@ -3,6 +3,8 @@ import {
 	AlertCircle,
 	ChevronRight,
 	ChevronsUpDown,
+	Clipboard,
+	Download,
 	FileIcon,
 	FileSearch,
 	Folder,
@@ -31,6 +33,7 @@ import {
 	type CandidateSortKey,
 	parseCandidateListQueryState,
 	serializeCandidateListQueryState,
+	TRIAGE_RESULT_OPTIONS,
 	VERIFY_RESULT_OPTIONS,
 } from "@/components/dashboard/scanning/candidate-list-query-state";
 import {
@@ -55,6 +58,14 @@ import {
 	CardTitle,
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import {
 	Popover,
 	PopoverContent,
@@ -102,6 +113,9 @@ type ScanJobTab =
 const RESULT_SHORT_LABELS: Record<string, string> = {
 	real_vulnerability: "Real",
 	likely_vulnerability: "Likely",
+	true: "True",
+	likely: "Likely",
+	false: "False",
 	plausible_but_unproven: "Plausible",
 	false_positive: "False",
 	api_misuse: "Misuse",
@@ -109,6 +123,96 @@ const RESULT_SHORT_LABELS: Record<string, string> = {
 
 const formatResultLabel = (value: string) =>
 	value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+
+const CANDIDATE_EXPORT_FIELDS = [
+	{ key: "vulnerabilityCandidateId", label: "Candidate ID" },
+	{ key: "scanJobId", label: "Scan Job ID" },
+	{ key: "scanFunctionTaskId", label: "Function Task ID" },
+	{ key: "title", label: "Title" },
+	{ key: "description", label: "Description" },
+	{ key: "fileHostPath", label: "Source File Host Path" },
+	{ key: "line", label: "Line" },
+	{ key: "vulnerabilityType", label: "Vulnerability Type" },
+	{ key: "status", label: "Status" },
+	{ key: "currentStage", label: "Current Stage" },
+	{ key: "confidence", label: "Confidence" },
+	{ key: "score", label: "Score" },
+	{ key: "createdAt", label: "Created At" },
+	{ key: "updatedAt", label: "Updated At" },
+	{ key: "analysisTaskId", label: "Analysis Task ID" },
+	{ key: "analysisResult", label: "Analysis Result" },
+	{ key: "analysisConfidence", label: "Analysis Confidence" },
+	{ key: "analysisScore", label: "Analysis Score" },
+	{ key: "analysisSummary", label: "Analysis Summary" },
+	{ key: "analysisReportHostPath", label: "Analysis Report Host Path" },
+	{ key: "analysisRuntimeSeconds", label: "Analysis Runtime Seconds" },
+	{ key: "analysisThreadId", label: "Analysis Thread ID" },
+	{ key: "analysisCreatedAt", label: "Analysis Created At" },
+	{ key: "analysisUpdatedAt", label: "Analysis Updated At" },
+	{ key: "verificationTaskId", label: "Verification Task ID" },
+	{ key: "verificationResult", label: "Verification Result" },
+	{ key: "verificationConfidence", label: "Verification Confidence" },
+	{ key: "verificationScore", label: "Verification Score" },
+	{ key: "verificationSummary", label: "Verification Summary" },
+	{ key: "verificationReportHostPath", label: "Verification Report Host Path" },
+	{
+		key: "verificationRuntimeSeconds",
+		label: "Verification Runtime Seconds",
+	},
+	{ key: "verificationThreadId", label: "Verification Thread ID" },
+	{ key: "verificationCreatedAt", label: "Verification Created At" },
+	{ key: "verificationUpdatedAt", label: "Verification Updated At" },
+	{ key: "triageTaskId", label: "Triage Task ID" },
+	{ key: "triageResult", label: "Triage Result" },
+	{ key: "triageSecurityClassification", label: "Triage Classification" },
+	{ key: "triageIsSecurityIssue", label: "Triage Is Security Issue" },
+	{ key: "triageImpactType", label: "Triage Impact Type" },
+	{ key: "triageCvssVector", label: "Triage CVSS Vector" },
+	{ key: "triageCvssScore", label: "Triage CVSS Score" },
+	{ key: "triageCvssSeverity", label: "Triage CVSS Severity" },
+	{ key: "triageExploitability", label: "Triage Exploitability" },
+	{ key: "triageIsExploitable", label: "Triage Is Exploitable" },
+	{ key: "triageEpssProbability30d", label: "Triage EPSS 30d" },
+	{ key: "triageEpssSource", label: "Triage EPSS Source" },
+	{ key: "triageSummary", label: "Triage Summary" },
+	{ key: "triageReportHostPath", label: "Triage Report Host Path" },
+] as const;
+
+type CandidateExportField = (typeof CANDIDATE_EXPORT_FIELDS)[number]["key"];
+
+const DEFAULT_CANDIDATE_EXPORT_FIELDS = CANDIDATE_EXPORT_FIELDS.map(
+	(field) => field.key,
+);
+
+const buildCandidateExportFilename = (scanJobId: string) => {
+	const timestamp = new Date()
+		.toISOString()
+		.replace(/[-:]/g, "")
+		.replace(/\.\d{3}Z$/, "")
+		.replace("T", "-");
+	return `scan-candidates-${scanJobId}-${timestamp}.json`;
+};
+
+const copyTextToClipboard = async (text: string) => {
+	if (navigator.clipboard?.writeText) {
+		await navigator.clipboard.writeText(text);
+		return;
+	}
+
+	const textarea = document.createElement("textarea");
+	textarea.value = text;
+	textarea.setAttribute("readonly", "true");
+	textarea.style.position = "fixed";
+	textarea.style.left = "-9999px";
+	textarea.style.top = "0";
+	document.body.appendChild(textarea);
+	textarea.select();
+	const didCopy = document.execCommand("copy");
+	textarea.remove();
+	if (!didCopy) {
+		throw new Error("Failed to copy candidate JSON");
+	}
+};
 
 const formatTaskRuntime = (
 	startedAt: string | null | undefined,
@@ -132,6 +236,35 @@ const formatTaskRuntime = (
 		return `${minutes}m ${seconds}s`;
 	}
 	return `${seconds}s`;
+};
+
+const formatTokenUsage = (value?: number | null) => {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return "-";
+	}
+	return `${new Intl.NumberFormat().format(value)} tokens`;
+};
+
+const formatTokenCount = (value?: number | null) => {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return "-";
+	}
+	return new Intl.NumberFormat().format(value);
+};
+
+const formatTokenUsageWithCache = (
+	total?: number | null,
+	cached?: number | null,
+	cacheLabel = "cache read",
+) => {
+	const totalValue = formatTokenCount(total);
+	if (totalValue === "-") {
+		return "-";
+	}
+	const cachedValue = formatTokenCount(cached);
+	return cachedValue === "-"
+		? `${totalValue} tokens`
+		: `${totalValue} / (${cachedValue} ${cacheLabel})`;
 };
 
 const resolveRequestedTab = (
@@ -490,10 +623,17 @@ const getVerificationTruthBadge = (
 		return null;
 	}
 
-	if (result === "real_vulnerability") {
+	if (result === "true") {
 		return {
-			label: "Real",
-			className: "border-red-200 bg-red-100 text-red-700",
+			label: "True",
+			className: "border-emerald-200 bg-emerald-100 text-emerald-700",
+		};
+	}
+
+	if (result === "likely") {
+		return {
+			label: "Likely",
+			className: "border-amber-200 bg-amber-100 text-amber-700",
 		};
 	}
 
@@ -501,6 +641,22 @@ const getVerificationTruthBadge = (
 		label: getShortResultLabel(result),
 		className: "border-muted-foreground/20 bg-muted text-muted-foreground",
 	};
+};
+
+const getTriageResultBadgeClassName = (result?: string | null) => {
+	if (result === "security_issue") {
+		return "border-red-200 bg-red-100 text-red-700";
+	}
+
+	if (result === "non_security") {
+		return "border-muted-foreground/20 bg-muted text-muted-foreground";
+	}
+
+	if (result === "needs_more_information") {
+		return "border-amber-200 bg-amber-100 text-amber-700";
+	}
+
+	return "border-muted-foreground/20 bg-muted text-muted-foreground";
 };
 
 const getTaskStageLabel = (stage?: string) => {
@@ -547,6 +703,9 @@ const getTaskStageLabel = (stage?: string) => {
 	}
 	if (stage === "Verify" || stage === "verify" || stage === "verifying") {
 		return "Verify";
+	}
+	if (stage === "Triage" || stage === "triage" || stage === "triaging") {
+		return "Triage";
 	}
 	return "Task";
 };
@@ -616,6 +775,9 @@ const getQueueProgressClassName = (queueId: string) => {
 	if (queueId === "verification") {
 		return "h-3 bg-secondary/70 [&>div]:bg-violet-500";
 	}
+	if (queueId === "triage") {
+		return "h-3 bg-secondary/70 [&>div]:bg-indigo-500";
+	}
 	return "h-3 bg-secondary/70 [&>div]:bg-primary";
 };
 
@@ -644,6 +806,9 @@ export const ShowScanJobDetail = ({
 	const [verifyFilters, setVerifyFilters] = useState<string[]>(
 		() => initialCandidateListQueryState.verifyFilters,
 	);
+	const [triageFilters, setTriageFilters] = useState<string[]>(
+		() => initialCandidateListQueryState.triageFilters,
+	);
 	const [candidateSortKey, setCandidateSortKey] = useState<CandidateSortKey>(
 		() => initialCandidateListQueryState.candidateSortKey,
 	);
@@ -657,6 +822,14 @@ export const ShowScanJobDetail = ({
 	const [candidatePageSize, setCandidatePageSize] = useState(
 		() => initialCandidateListQueryState.candidatePageSize,
 	);
+	const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(
+		() => new Set(),
+	);
+	const [isCandidateExportDialogOpen, setIsCandidateExportDialogOpen] =
+		useState(false);
+	const [candidateExportFields, setCandidateExportFields] = useState<
+		CandidateExportField[]
+	>(() => [...DEFAULT_CANDIDATE_EXPORT_FIELDS]);
 	const [taskSearchQuery, setTaskSearchQuery] = useState("");
 	const [taskStageFilter, setTaskStageFilter] = useState("all");
 	const [taskStatusFilter, setTaskStatusFilter] = useState("all");
@@ -702,6 +875,7 @@ export const ShowScanJobDetail = ({
 				query: candidateQuery,
 				analysisResults: analysisFilters,
 				verifyResults: verifyFilters,
+				triageResults: triageFilters,
 				sortKey: candidateSortKey,
 				sortDirection: candidateSortDirection,
 			},
@@ -797,6 +971,7 @@ export const ShowScanJobDetail = ({
 			candidateQuery,
 			analysisFilters,
 			verifyFilters,
+			triageFilters,
 			candidateSortKey,
 			candidateSortDirection,
 			candidatePage,
@@ -809,6 +984,7 @@ export const ShowScanJobDetail = ({
 			candidatePageSize,
 			candidateSortDirection,
 			candidateSortKey,
+			triageFilters,
 			verifyFilters,
 		],
 	);
@@ -827,6 +1003,7 @@ export const ShowScanJobDetail = ({
 		setCandidateQuery(candidateListQueryState.candidateQuery);
 		setAnalysisFilters(candidateListQueryState.analysisFilters);
 		setVerifyFilters(candidateListQueryState.verifyFilters);
+		setTriageFilters(candidateListQueryState.triageFilters);
 		setCandidateSortKey(candidateListQueryState.candidateSortKey);
 		setCandidateSortDirection(candidateListQueryState.candidateSortDirection);
 		setCandidatePage(candidateListQueryState.candidatePage);
@@ -1184,16 +1361,61 @@ export const ShowScanJobDetail = ({
 			items,
 		};
 	}, [candidatePage, candidatePageSize, candidates]);
+	type CandidateListItem = (typeof candidatePagination.items)[number];
+	const currentPageCandidateIds = useMemo(
+		() =>
+			candidatePagination.items.map(
+				(candidate) => candidate.vulnerabilityCandidateId,
+			),
+		[candidatePagination.items],
+	);
+	const selectedCurrentPageCandidates = useMemo(
+		() =>
+			candidatePagination.items.filter((candidate) =>
+				selectedCandidateIds.has(candidate.vulnerabilityCandidateId),
+			),
+		[candidatePagination.items, selectedCandidateIds],
+	);
+	const selectedCandidateCount = selectedCurrentPageCandidates.length;
+	const hasCurrentPageCandidates = currentPageCandidateIds.length > 0;
+	const areAllCurrentPageCandidatesSelected =
+		hasCurrentPageCandidates &&
+		currentPageCandidateIds.every((candidateId) =>
+			selectedCandidateIds.has(candidateId),
+		);
+	const areSomeCurrentPageCandidatesSelected =
+		selectedCandidateCount > 0 && !areAllCurrentPageCandidatesSelected;
+	const selectedExportFieldSet = useMemo(
+		() => new Set(candidateExportFields),
+		[candidateExportFields],
+	);
+	const hasSelectedExportFields = candidateExportFields.length > 0;
 
 	useEffect(() => {
 		if (candidatePage !== candidatePagination.page) {
 			setCandidatePage(candidatePagination.page);
 		}
 	}, [candidatePage, candidatePagination.page]);
+	useEffect(() => {
+		const currentPageIds = new Set(currentPageCandidateIds);
+		setSelectedCandidateIds((current) => {
+			let changed = false;
+			const next = new Set<string>();
+			for (const candidateId of current) {
+				if (currentPageIds.has(candidateId)) {
+					next.add(candidateId);
+				} else {
+					changed = true;
+				}
+			}
+			return changed ? next : current;
+		});
+	}, [currentPageCandidateIds]);
 	const hasCandidateFilters =
 		candidateQuery.trim().length > 0 ||
 		analysisFilters.length > 0 ||
-		verifyFilters.length > 0;
+		verifyFilters.length > 0 ||
+		triageFilters.length > 0;
 	const hasAnyCandidates =
 		(statusView?.summary.totalCandidates ?? candidates?.total ?? 0) > 0;
 	const hasFinishedTaskFilters =
@@ -1228,6 +1450,164 @@ export const ShowScanJobDetail = ({
 				? current.filter((item) => item !== value)
 				: [...current, value],
 		);
+	};
+
+	const toggleTriageFilter = (value: string) => {
+		setCandidatePage(1);
+		setTriageFilters((current) =>
+			current.includes(value)
+				? current.filter((item) => item !== value)
+				: [...current, value],
+		);
+	};
+
+	const toggleCandidateSelection = (candidateId: string) => {
+		setSelectedCandidateIds((current) => {
+			const next = new Set(current);
+			if (next.has(candidateId)) {
+				next.delete(candidateId);
+			} else {
+				next.add(candidateId);
+			}
+			return next;
+		});
+	};
+
+	const toggleCurrentPageCandidateSelection = () => {
+		setSelectedCandidateIds((current) => {
+			if (areAllCurrentPageCandidatesSelected) {
+				return new Set();
+			}
+			return new Set([...current, ...currentPageCandidateIds]);
+		});
+	};
+
+	const toggleCandidateExportField = (field: CandidateExportField) => {
+		setCandidateExportFields((current) =>
+			current.includes(field)
+				? current.filter((item) => item !== field)
+				: [...current, field],
+		);
+	};
+
+	const buildCandidateExportRecord = (candidate: CandidateListItem) => {
+		const candidateWithHostPaths = candidate as CandidateListItem & {
+			fileHostPath?: string | null;
+			latestAnalysisResult?:
+				| (CandidateListItem["latestAnalysisResult"] & {
+						reportHostPath?: string | null;
+				  })
+				| null;
+			latestVerificationResult?:
+				| (CandidateListItem["latestVerificationResult"] & {
+						reportHostPath?: string | null;
+				  })
+				| null;
+			latestTriageResult?:
+				| (CandidateListItem["latestTriageResult"] & {
+						reportHostPath?: string | null;
+				  })
+				| null;
+		};
+		const latestAnalysisResult = candidateWithHostPaths.latestAnalysisResult;
+		const latestVerificationResult =
+			candidateWithHostPaths.latestVerificationResult;
+		const latestTriageResult = candidateWithHostPaths.latestTriageResult;
+		const exportableFields: Record<CandidateExportField, unknown> = {
+			vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
+			scanJobId: candidate.scanJobId,
+			scanFunctionTaskId: candidate.scanFunctionTaskId,
+			title: candidate.title,
+			description: candidate.description,
+			fileHostPath: candidateWithHostPaths.fileHostPath,
+			line: candidate.line,
+			vulnerabilityType: candidate.vulnerabilityType,
+			status: candidate.status,
+			currentStage: candidate.currentStage,
+			confidence: candidate.confidence,
+			score: candidate.score,
+			createdAt: candidate.createdAt,
+			updatedAt: candidate.updatedAt,
+			analysisTaskId: latestAnalysisResult?.taskId ?? null,
+			analysisResult: latestAnalysisResult?.result ?? null,
+			analysisConfidence: latestAnalysisResult?.confidence ?? null,
+			analysisScore: latestAnalysisResult?.score ?? null,
+			analysisSummary: latestAnalysisResult?.summary ?? null,
+			analysisReportHostPath: latestAnalysisResult?.reportHostPath ?? null,
+			analysisRuntimeSeconds: latestAnalysisResult?.runtimeSeconds ?? null,
+			analysisThreadId: latestAnalysisResult?.threadId ?? null,
+			analysisCreatedAt: latestAnalysisResult?.createdAt ?? null,
+			analysisUpdatedAt: latestAnalysisResult?.updatedAt ?? null,
+			verificationTaskId: latestVerificationResult?.taskId ?? null,
+			verificationResult: latestVerificationResult?.result ?? null,
+			verificationConfidence: latestVerificationResult?.confidence ?? null,
+			verificationScore: latestVerificationResult?.score ?? null,
+			verificationSummary: latestVerificationResult?.summary ?? null,
+			verificationReportHostPath:
+				latestVerificationResult?.reportHostPath ?? null,
+			verificationRuntimeSeconds:
+				latestVerificationResult?.runtimeSeconds ?? null,
+			verificationThreadId: latestVerificationResult?.threadId ?? null,
+			verificationCreatedAt: latestVerificationResult?.createdAt ?? null,
+			verificationUpdatedAt: latestVerificationResult?.updatedAt ?? null,
+			triageTaskId: latestTriageResult?.taskId ?? null,
+			triageResult: latestTriageResult?.result ?? null,
+			triageSecurityClassification:
+				latestTriageResult?.securityClassification ?? null,
+			triageIsSecurityIssue: latestTriageResult?.isSecurityIssue ?? null,
+			triageImpactType: latestTriageResult?.impactType ?? null,
+			triageCvssVector: latestTriageResult?.cvssVector ?? null,
+			triageCvssScore: latestTriageResult?.cvssScore ?? null,
+			triageCvssSeverity: latestTriageResult?.cvssSeverity ?? null,
+			triageExploitability: latestTriageResult?.exploitability ?? null,
+			triageIsExploitable: latestTriageResult?.isExploitable ?? null,
+			triageEpssProbability30d:
+				latestTriageResult?.epssProbability30d ?? null,
+			triageEpssSource: latestTriageResult?.epssSource ?? null,
+			triageSummary: latestTriageResult?.summary ?? null,
+			triageReportHostPath: latestTriageResult?.reportHostPath ?? null,
+		};
+		return Object.fromEntries(
+			CANDIDATE_EXPORT_FIELDS.filter((field) =>
+				selectedExportFieldSet.has(field.key),
+			).map((field) => [field.key, exportableFields[field.key]]),
+		);
+	};
+
+	const buildCandidateExportJson = () =>
+		JSON.stringify(
+			selectedCurrentPageCandidates.map((candidate) =>
+				buildCandidateExportRecord(candidate),
+			),
+			null,
+			2,
+		);
+
+	const downloadSelectedCandidatesJson = () => {
+		const exportJson = buildCandidateExportJson();
+		const blob = new Blob([exportJson], { type: "application/json" });
+		const objectUrl = URL.createObjectURL(blob);
+		const anchor = document.createElement("a");
+		anchor.href = objectUrl;
+		anchor.download = buildCandidateExportFilename(scanJobId);
+		document.body.appendChild(anchor);
+		anchor.click();
+		anchor.remove();
+		URL.revokeObjectURL(objectUrl);
+		toast.success("Candidate JSON downloaded");
+	};
+
+	const copySelectedCandidatesJson = async () => {
+		try {
+			await copyTextToClipboard(buildCandidateExportJson());
+			toast.success("Candidate JSON copied");
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? error.message
+					: "Failed to copy candidate JSON",
+			);
+		}
 	};
 
 	const candidateListPageBasePath = `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}`;
@@ -1573,6 +1953,50 @@ export const ShowScanJobDetail = ({
 												{formatTriggerSourceLabel(scanJob.triggerSource)}
 											</div>
 										</div>
+										<div className="border rounded-lg p-3 md:col-span-2">
+											<div className="mb-3 text-sm font-medium">Usage</div>
+											<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+												<div>
+													<div className="text-sm text-muted-foreground">
+														Input / Cache Read
+													</div>
+													<div className="font-medium">
+														{formatTokenUsageWithCache(
+															scanJob.inputTokens,
+															scanJob.cachedReadTokens,
+														)}
+													</div>
+												</div>
+												<div>
+													<div className="text-sm text-muted-foreground">
+														Output / Cache Write
+													</div>
+													<div className="font-medium">
+														{formatTokenUsageWithCache(
+															scanJob.outputTokens,
+															scanJob.cachedWriteTokens,
+															"write cache",
+														)}
+													</div>
+												</div>
+												<div>
+													<div className="text-sm text-muted-foreground">
+														Total Tokens
+													</div>
+													<div className="font-medium">
+														{formatTokenUsage(scanJob.totalTokens)}
+													</div>
+												</div>
+												<div>
+													<div className="text-sm text-muted-foreground">
+														Thought Tokens
+													</div>
+													<div className="font-medium">
+														{formatTokenUsage(scanJob.thoughtTokens)}
+													</div>
+												</div>
+											</div>
+										</div>
 										{scanJob.scanType === "delta" ? (
 											<div className="border rounded-lg p-3">
 												<div className="text-sm text-muted-foreground">
@@ -1783,7 +2207,7 @@ export const ShowScanJobDetail = ({
 									) : null}
 									<CandidateWorkflowSection
 										title="Verify"
-										description="Candidates currently being verified and pending verification."
+										description="Candidates currently being sanity-checked and pending verification."
 										summaryCards={[
 											{
 												title: "Candidate Verify",
@@ -1803,8 +2227,14 @@ export const ShowScanJobDetail = ({
 												progressClassName: "[&>div]:bg-sky-500",
 											},
 											{
-												title: "Verified 0day",
+												title: "Facts True/Likely",
 												value: statusView.summary.verifiedZeroDayCandidates,
+											},
+											{
+												title: "Triaged",
+												value:
+													statusView.summary.triageCompletedCandidates ??
+													0,
 											},
 											{
 												title: "Queued / Running",
@@ -1835,7 +2265,7 @@ export const ShowScanJobDetail = ({
 								</div>
 							) : (
 								<div className="flex flex-col gap-3">
-									<div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_220px_220px]">
+									<div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_220px_220px_220px]">
 										<div className="relative">
 											<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
 											<input
@@ -1939,6 +2369,51 @@ export const ShowScanJobDetail = ({
 												</div>
 											</PopoverContent>
 										</Popover>
+										<Popover>
+											<PopoverTrigger asChild>
+												<Button variant="outline" className="justify-between">
+													<span>
+														Triage Result
+														{triageFilters.length > 0
+															? ` (${triageFilters.length})`
+															: ""}
+													</span>
+													<ChevronsUpDown className="size-4 text-muted-foreground" />
+												</Button>
+											</PopoverTrigger>
+											<PopoverContent align="end" className="w-72 p-3">
+												<div className="mb-3 flex items-center justify-between">
+													<div className="text-sm font-medium">
+														Triage Result
+													</div>
+													<Button
+														type="button"
+														variant="ghost"
+														size="sm"
+														className="h-auto px-2 py-1 text-xs"
+														onClick={() => setTriageFilters([])}
+													>
+														Clear
+													</Button>
+												</div>
+												<div className="space-y-2">
+													{TRIAGE_RESULT_OPTIONS.map((value) => (
+														<label
+															key={value}
+															className="flex items-center gap-2 text-sm"
+														>
+															<Checkbox
+																checked={triageFilters.includes(value)}
+																onCheckedChange={() =>
+																	toggleTriageFilter(value)
+																}
+															/>
+															<span>{formatResultLabel(value)}</span>
+														</label>
+													))}
+												</div>
+											</PopoverContent>
+										</Popover>
 									</div>
 									{candidatePagination.totalItems === 0 ? (
 										<div className="flex items-center gap-2 text-muted-foreground">
@@ -1946,280 +2421,457 @@ export const ShowScanJobDetail = ({
 											No matching candidates
 										</div>
 									) : (
-										<div className="rounded-lg border">
-											<div className="flex flex-col gap-3 border-b px-4 py-3 text-sm md:flex-row md:items-center md:justify-between">
-												<div className="text-muted-foreground">
-													Showing {candidatePagination.startIndex + 1}-
-													{candidatePagination.endIndex} of{" "}
-													{candidatePagination.totalItems}
-												</div>
-												<div className="flex flex-wrap items-center gap-2">
-													<label className="text-muted-foreground">
-														Page size
-													</label>
-													<select
-														value={candidatePageSize}
-														onChange={(event) => {
-															setCandidatePage(1);
-															setCandidatePageSize(
-																Number.parseInt(event.target.value, 10) || 20,
-															);
-														}}
-														className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-													>
-														{[10, 20, 50, 100].map((size) => (
-															<option key={size} value={size}>
-																{size}
-															</option>
-														))}
-													</select>
-													<Button
-														type="button"
-														variant="outline"
-														size="sm"
-														onClick={() =>
-															setCandidatePage((current) =>
-																Math.max(1, current - 1),
-															)
-														}
-														disabled={candidatePagination.page <= 1}
-													>
-														Previous
-													</Button>
-													<div className="min-w-[96px] text-center text-muted-foreground">
-														Page {candidatePagination.page} /{" "}
-														{candidatePagination.totalPages}
+										<>
+											<div className="rounded-lg border">
+												<div className="flex flex-col gap-3 border-b px-4 py-3 text-sm md:flex-row md:items-center md:justify-between">
+													<div className="text-muted-foreground">
+														Showing {candidatePagination.startIndex + 1}-
+														{candidatePagination.endIndex} of{" "}
+														{candidatePagination.totalItems}
+														{selectedCandidateCount > 0
+															? ` (${selectedCandidateCount} selected)`
+															: ""}
 													</div>
-													<Button
-														type="button"
-														variant="outline"
-														size="sm"
-														onClick={() =>
-															setCandidatePage((current) =>
-																Math.min(
-																	candidatePagination.totalPages,
-																	current + 1,
-																),
-															)
-														}
-														disabled={
-															candidatePagination.page >=
-															candidatePagination.totalPages
-														}
-													>
-														Next
-													</Button>
+													<div className="flex flex-wrap items-center gap-2">
+														<Button
+															type="button"
+															variant="outline"
+															size="sm"
+															disabled={selectedCandidateCount === 0}
+															onClick={() =>
+																setIsCandidateExportDialogOpen(true)
+															}
+														>
+															<Download className="mr-2 size-4" />
+															Export
+														</Button>
+														<label className="text-muted-foreground">
+															Page size
+														</label>
+														<select
+															value={candidatePageSize}
+															onChange={(event) => {
+																setCandidatePage(1);
+																setCandidatePageSize(
+																	Number.parseInt(event.target.value, 10) || 20,
+																);
+															}}
+															className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+														>
+															{[10, 20, 50, 100].map((size) => (
+																<option key={size} value={size}>
+																	{size}
+																</option>
+															))}
+														</select>
+														<Button
+															type="button"
+															variant="outline"
+															size="sm"
+															onClick={() =>
+																setCandidatePage((current) =>
+																	Math.max(1, current - 1),
+																)
+															}
+															disabled={candidatePagination.page <= 1}
+														>
+															Previous
+														</Button>
+														<div className="min-w-[96px] text-center text-muted-foreground">
+															Page {candidatePagination.page} /{" "}
+															{candidatePagination.totalPages}
+														</div>
+														<Button
+															type="button"
+															variant="outline"
+															size="sm"
+															onClick={() =>
+																setCandidatePage((current) =>
+																	Math.min(
+																		candidatePagination.totalPages,
+																		current + 1,
+																	),
+																)
+															}
+															disabled={
+																candidatePagination.page >=
+																candidatePagination.totalPages
+															}
+														>
+															Next
+														</Button>
+													</div>
+												</div>
+												<div className="overflow-x-auto">
+													<table className="w-full text-sm">
+														<thead className="border-b bg-muted/30 text-left">
+															<tr>
+																<th className="w-12 px-4 py-3 font-medium">
+																	<Checkbox
+																		aria-label="Select all candidates on this page"
+																		checked={
+																			areAllCurrentPageCandidatesSelected
+																				? true
+																				: areSomeCurrentPageCandidatesSelected
+																					? "indeterminate"
+																					: false
+																		}
+																		onClick={(event) => event.stopPropagation()}
+																		onCheckedChange={
+																			toggleCurrentPageCandidateSelection
+																		}
+																	/>
+																</th>
+																<th className="w-[10%] px-4 py-3 font-medium">
+																	Status
+																</th>
+																<th className="w-[32%] px-4 py-3 font-medium">
+																	<button
+																		type="button"
+																		onClick={() =>
+																			toggleCandidateSort("candidate")
+																		}
+																		className="inline-flex items-center gap-1 hover:text-foreground"
+																	>
+																		<span>Candidate</span>
+																		<ChevronsUpDown className="size-3.5" />
+																	</button>
+																</th>
+																<th className="w-[16%] px-4 py-3 font-medium">
+																	<button
+																		type="button"
+																		onClick={() =>
+																			toggleCandidateSort("analysis")
+																		}
+																		className="inline-flex items-center gap-1 hover:text-foreground"
+																	>
+																		<span>Analysis Result</span>
+																		<ChevronsUpDown className="size-3.5" />
+																	</button>
+																</th>
+																<th className="w-[14%] px-4 py-3 font-medium">
+																	<button
+																		type="button"
+																		onClick={() =>
+																			toggleCandidateSort("verify")
+																		}
+																		className="inline-flex items-center gap-1 hover:text-foreground"
+																	>
+																		<span>Verify Result</span>
+																		<ChevronsUpDown className="size-3.5" />
+																	</button>
+																</th>
+																<th className="w-[18%] px-4 py-3 font-medium">
+																	Triage Result
+																</th>
+																<th className="w-[14%] px-4 py-3 font-medium">
+																	<button
+																		type="button"
+																		onClick={() => toggleCandidateSort("score")}
+																		className="inline-flex items-center gap-1 hover:text-foreground"
+																	>
+																		<span>Score</span>
+																		<ChevronsUpDown className="size-3.5" />
+																	</button>
+																</th>
+																<th className="w-[8%] px-4 py-3 font-medium">
+																	Actions
+																</th>
+															</tr>
+														</thead>
+														<tbody>
+															{candidatePagination.items.map((candidate) => {
+																const verificationTruthBadge =
+																	getVerificationTruthBadge(
+																		candidate.latestVerificationResult?.result,
+																	);
+																const isTerminalCandidate =
+																	TERMINAL_CANDIDATE_STATUSES.has(
+																		candidate.status,
+																	);
+																const isReanalyzingCandidate =
+																	reanalyzingCandidateId ===
+																	candidate.vulnerabilityCandidateId;
+																const isSelectedCandidate =
+																	selectedCandidateIds.has(
+																		candidate.vulnerabilityCandidateId,
+																	);
+																return (
+																	<tr
+																		key={candidate.vulnerabilityCandidateId}
+																		className={`border-b last:border-b-0 transition-colors hover:bg-muted/40 ${
+																			isSelectedCandidate ? "bg-muted/40" : ""
+																		}`}
+																	>
+																		<td className="px-4 py-3 align-top">
+																			<Checkbox
+																				aria-label={`Select candidate ${candidate.title}`}
+																				checked={isSelectedCandidate}
+																				onClick={(event) =>
+																					event.stopPropagation()
+																				}
+																				onCheckedChange={() =>
+																					toggleCandidateSelection(
+																						candidate.vulnerabilityCandidateId,
+																					)
+																				}
+																			/>
+																		</td>
+																		<td className="px-4 py-3 align-top text-xs text-muted-foreground capitalize">
+																			<Link
+																				href={buildCandidateDetailHref(
+																					candidate.vulnerabilityCandidateId,
+																				)}
+																				onClick={handleCandidateLinkClick}
+																				className="block"
+																			>
+																				{candidate.status}
+																			</Link>
+																		</td>
+																		<td className="px-4 py-3 align-top">
+																			<Link
+																				href={buildCandidateDetailHref(
+																					candidate.vulnerabilityCandidateId,
+																				)}
+																				onClick={handleCandidateLinkClick}
+																				className="block"
+																			>
+																				<div className="font-medium">
+																					{candidate.title}
+																				</div>
+																				<div className="mt-1 text-xs text-muted-foreground break-all">
+																					{candidate.filePath || "-"}
+																					{candidate.line
+																						? `:${candidate.line}`
+																						: ""}
+																				</div>
+																			</Link>
+																		</td>
+																		<td className="px-4 py-3 align-top">
+																			<Link
+																				href={buildCandidateDetailHref(
+																					candidate.vulnerabilityCandidateId,
+																				)}
+																				onClick={handleCandidateLinkClick}
+																				className="block"
+																			>
+																				{candidate.latestAnalysisResult
+																					?.result ? (
+																					<Badge
+																						variant="outline"
+																						className={getAnalysisResultBadgeClassName(
+																							candidate.latestAnalysisResult
+																								.result,
+																						)}
+																					>
+																						{getShortResultLabel(
+																							candidate.latestAnalysisResult
+																								.result,
+																						)}
+																					</Badge>
+																				) : (
+																					<span className="text-xs text-muted-foreground">
+																						-
+																					</span>
+																				)}
+																			</Link>
+																		</td>
+																		<td className="px-4 py-3 align-top">
+																			<Link
+																				href={buildCandidateDetailHref(
+																					candidate.vulnerabilityCandidateId,
+																				)}
+																				onClick={handleCandidateLinkClick}
+																				className="block"
+																			>
+																				{verificationTruthBadge ? (
+																					<Badge
+																						variant="outline"
+																						className={verificationTruthBadge.className}
+																					>
+																						{verificationTruthBadge.label}
+																					</Badge>
+																				) : (
+																					<span className="text-xs text-muted-foreground">
+																						-
+																					</span>
+																				)}
+																			</Link>
+																		</td>
+																		<td className="px-4 py-3 align-top">
+																			<Link
+																				href={buildCandidateDetailHref(
+																					candidate.vulnerabilityCandidateId,
+																				)}
+																				onClick={handleCandidateLinkClick}
+																				className="block"
+																			>
+																				{candidate.latestTriageResult ? (
+																					<Badge
+																						variant="outline"
+																						className={getTriageResultBadgeClassName(
+																							candidate.latestTriageResult.result,
+																						)}
+																					>
+																						{getShortResultLabel(
+																							candidate.latestTriageResult.result,
+																						)}
+																					</Badge>
+																				) : (
+																					<span className="text-xs text-muted-foreground">
+																						-
+																					</span>
+																				)}
+																			</Link>
+																		</td>
+																		<td className="px-4 py-3 align-top text-xs text-muted-foreground">
+																			<Link
+																				href={buildCandidateDetailHref(
+																					candidate.vulnerabilityCandidateId,
+																				)}
+																				onClick={handleCandidateLinkClick}
+																				className="block"
+																			>
+																				{typeof candidate.score === "number"
+																					? candidate.score.toFixed(1)
+																					: "-"}
+																			</Link>
+																		</td>
+																		<td className="px-4 py-3 align-top">
+																			<Button
+																				type="button"
+																				variant="outline"
+																				size="icon"
+																				title={
+																					isTerminalCandidate
+																						? "Re-run analysis"
+																						: "Analysis can be re-run after the candidate reaches a terminal state"
+																				}
+																				aria-label={
+																					isTerminalCandidate
+																						? "Re-run analysis"
+																						: "Analysis can be re-run after the candidate reaches a terminal state"
+																				}
+																				disabled={
+																					!isTerminalCandidate ||
+																					isReanalyzingCandidate
+																				}
+																				onClick={() =>
+																					handleAnalyzeCandidate(
+																						candidate.vulnerabilityCandidateId,
+																					)
+																				}
+																			>
+																				{isReanalyzingCandidate ? (
+																					<Loader2 className="size-4 animate-spin" />
+																				) : (
+																					<RefreshCw className="size-4" />
+																				)}
+																			</Button>
+																		</td>
+																	</tr>
+																);
+															})}
+														</tbody>
+													</table>
 												</div>
 											</div>
-											<div className="overflow-x-auto">
-												<table className="w-full text-sm">
-													<thead className="border-b bg-muted/30 text-left">
-														<tr>
-															<th className="w-[10%] px-4 py-3 font-medium">
-																Status
-															</th>
-															<th className="w-[38%] px-4 py-3 font-medium">
-																<button
-																	type="button"
-																	onClick={() =>
-																		toggleCandidateSort("candidate")
-																	}
-																	className="inline-flex items-center gap-1 hover:text-foreground"
+											<Dialog
+												open={isCandidateExportDialogOpen}
+												onOpenChange={setIsCandidateExportDialogOpen}
+											>
+												<DialogContent className="sm:max-w-xl">
+													<DialogHeader>
+														<DialogTitle>Export Candidates</DialogTitle>
+														<DialogDescription>
+															Export {selectedCandidateCount} selected candidate
+															{selectedCandidateCount === 1 ? "" : "s"} from the
+															current page.
+														</DialogDescription>
+													</DialogHeader>
+													<div className="space-y-4">
+														<div className="flex items-center justify-between gap-3">
+															<div>
+																<div className="text-sm font-medium">
+																	Fields
+																</div>
+																<div className="text-xs text-muted-foreground">
+																	Choose the fields included in the generated
+																	JSON.
+																</div>
+															</div>
+															<Button
+																type="button"
+																variant="ghost"
+																size="sm"
+																className="h-auto px-2 py-1 text-xs"
+																onClick={() =>
+																	setCandidateExportFields(
+																		candidateExportFields.length ===
+																			CANDIDATE_EXPORT_FIELDS.length
+																			? []
+																			: [...DEFAULT_CANDIDATE_EXPORT_FIELDS],
+																	)
+																}
+															>
+																{candidateExportFields.length ===
+																CANDIDATE_EXPORT_FIELDS.length
+																	? "Clear"
+																	: "Select all"}
+															</Button>
+														</div>
+														<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+															{CANDIDATE_EXPORT_FIELDS.map((field) => (
+																<label
+																	key={field.key}
+																	className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
 																>
-																	<span>Candidate</span>
-																	<ChevronsUpDown className="size-3.5" />
-																</button>
-															</th>
-															<th className="w-[18%] px-4 py-3 font-medium">
-																<button
-																	type="button"
-																	onClick={() =>
-																		toggleCandidateSort("analysis")
-																	}
-																	className="inline-flex items-center gap-1 hover:text-foreground"
-																>
-																	<span>Analysis Result</span>
-																	<ChevronsUpDown className="size-3.5" />
-																</button>
-															</th>
-															<th className="w-[18%] px-4 py-3 font-medium">
-																<button
-																	type="button"
-																	onClick={() => toggleCandidateSort("verify")}
-																	className="inline-flex items-center gap-1 hover:text-foreground"
-																>
-																	<span>Verify Result</span>
-																	<ChevronsUpDown className="size-3.5" />
-																</button>
-															</th>
-															<th className="w-[14%] px-4 py-3 font-medium">
-																<button
-																	type="button"
-																	onClick={() => toggleCandidateSort("score")}
-																	className="inline-flex items-center gap-1 hover:text-foreground"
-																>
-																	<span>Score</span>
-																	<ChevronsUpDown className="size-3.5" />
-																</button>
-															</th>
-															<th className="w-[8%] px-4 py-3 font-medium">
-																Actions
-															</th>
-														</tr>
-													</thead>
-													<tbody>
-														{candidatePagination.items.map((candidate) => {
-															const verificationTruthBadge =
-																getVerificationTruthBadge(
-																	candidate.latestVerificationResult?.result,
-																);
-															const isTerminalCandidate =
-																TERMINAL_CANDIDATE_STATUSES.has(
-																	candidate.status,
-																);
-															const isReanalyzingCandidate =
-																reanalyzingCandidateId ===
-																candidate.vulnerabilityCandidateId;
-															return (
-																<tr
-																	key={candidate.vulnerabilityCandidateId}
-																	className="border-b last:border-b-0 transition-colors hover:bg-muted/40"
-																>
-																	<td className="px-4 py-3 align-top text-xs text-muted-foreground capitalize">
-																		<Link
-																			href={buildCandidateDetailHref(
-																				candidate.vulnerabilityCandidateId,
-																			)}
-																			onClick={handleCandidateLinkClick}
-																			className="block"
-																		>
-																			{candidate.status}
-																		</Link>
-																	</td>
-																	<td className="px-4 py-3 align-top">
-																		<Link
-																			href={buildCandidateDetailHref(
-																				candidate.vulnerabilityCandidateId,
-																			)}
-																			onClick={handleCandidateLinkClick}
-																			className="block"
-																		>
-																			<div className="font-medium">
-																				{candidate.title}
-																			</div>
-																			<div className="mt-1 text-xs text-muted-foreground break-all">
-																				{candidate.filePath || "-"}
-																				{candidate.line
-																					? `:${candidate.line}`
-																					: ""}
-																			</div>
-																		</Link>
-																	</td>
-																	<td className="px-4 py-3 align-top">
-																		<Link
-																			href={buildCandidateDetailHref(
-																				candidate.vulnerabilityCandidateId,
-																			)}
-																			onClick={handleCandidateLinkClick}
-																			className="block"
-																		>
-																			{candidate.latestAnalysisResult
-																				?.result ? (
-																				<Badge
-																					variant="outline"
-																					className={getAnalysisResultBadgeClassName(
-																						candidate.latestAnalysisResult
-																							.result,
-																					)}
-																				>
-																					{getShortResultLabel(
-																						candidate.latestAnalysisResult
-																							.result,
-																					)}
-																				</Badge>
-																			) : (
-																				<span className="text-xs text-muted-foreground">
-																					-
-																				</span>
-																			)}
-																		</Link>
-																	</td>
-																	<td className="px-4 py-3 align-top">
-																		<Link
-																			href={buildCandidateDetailHref(
-																				candidate.vulnerabilityCandidateId,
-																			)}
-																			onClick={handleCandidateLinkClick}
-																			className="block"
-																		>
-																			{verificationTruthBadge ? (
-																				<Badge
-																					variant="outline"
-																					className={
-																						verificationTruthBadge.className
-																					}
-																				>
-																					{verificationTruthBadge.label}
-																				</Badge>
-																			) : (
-																				<span className="text-xs text-muted-foreground">
-																					-
-																				</span>
-																			)}
-																		</Link>
-																	</td>
-																	<td className="px-4 py-3 align-top text-xs text-muted-foreground">
-																		<Link
-																			href={buildCandidateDetailHref(
-																				candidate.vulnerabilityCandidateId,
-																			)}
-																			onClick={handleCandidateLinkClick}
-																			className="block"
-																		>
-																			{typeof candidate.score === "number"
-																				? candidate.score.toFixed(1)
-																				: "-"}
-																		</Link>
-																	</td>
-																	<td className="px-4 py-3 align-top">
-																		<Button
-																			type="button"
-																			variant="outline"
-																			size="icon"
-																			title={
-																				isTerminalCandidate
-																					? "Re-run analysis"
-																					: "Analysis can be re-run after the candidate reaches a terminal state"
-																			}
-																			aria-label={
-																				isTerminalCandidate
-																					? "Re-run analysis"
-																					: "Analysis can be re-run after the candidate reaches a terminal state"
-																			}
-																			disabled={
-																				!isTerminalCandidate ||
-																				isReanalyzingCandidate
-																			}
-																			onClick={() =>
-																				handleAnalyzeCandidate(
-																					candidate.vulnerabilityCandidateId,
-																				)
-																			}
-																		>
-																			{isReanalyzingCandidate ? (
-																				<Loader2 className="size-4 animate-spin" />
-																			) : (
-																				<RefreshCw className="size-4" />
-																			)}
-																		</Button>
-																	</td>
-																</tr>
-															);
-														})}
-													</tbody>
-												</table>
-											</div>
-										</div>
+																	<Checkbox
+																		checked={selectedExportFieldSet.has(
+																			field.key,
+																		)}
+																		onCheckedChange={() =>
+																			toggleCandidateExportField(field.key)
+																		}
+																	/>
+																	<span>{field.label}</span>
+																</label>
+															))}
+														</div>
+														{!hasSelectedExportFields ? (
+															<div className="text-xs text-destructive">
+																Select at least one field to export.
+															</div>
+														) : null}
+													</div>
+													<DialogFooter>
+														<Button
+															type="button"
+															variant="outline"
+															onClick={copySelectedCandidatesJson}
+															disabled={
+																selectedCandidateCount === 0 ||
+																!hasSelectedExportFields
+															}
+														>
+															<Clipboard className="mr-2 size-4" />
+															Copy JSON
+														</Button>
+														<Button
+															type="button"
+															onClick={downloadSelectedCandidatesJson}
+															disabled={
+																selectedCandidateCount === 0 ||
+																!hasSelectedExportFields
+															}
+														>
+															<Download className="mr-2 size-4" />
+															Download JSON
+														</Button>
+													</DialogFooter>
+												</DialogContent>
+											</Dialog>
+										</>
 									)}
 								</div>
 							)}

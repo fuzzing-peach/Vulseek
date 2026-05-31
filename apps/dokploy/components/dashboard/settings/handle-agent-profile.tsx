@@ -1,6 +1,6 @@
 "use client";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { PenBoxIcon, PlusIcon } from "lucide-react";
+import { CopyIcon, PenBoxIcon, PlusIcon } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
@@ -52,10 +52,6 @@ const Schema = z.object({
 
 type Schema = z.infer<typeof Schema>;
 
-interface Props {
-	agentProfileId?: string;
-}
-
 const renderEnvHighlight = (value: string) => {
 	const lines = value.length > 0 ? value.split("\n") : [""];
 
@@ -84,12 +80,21 @@ const renderEnvHighlight = (value: string) => {
 	});
 };
 
-export const HandleAgentProfile = ({ agentProfileId }: Props) => {
+interface Props {
+	agentProfileId?: string;
+	duplicateProfile?: Partial<Schema> & { name: string };
+}
+
+export const HandleAgentProfile = ({
+	agentProfileId,
+	duplicateProfile,
+}: Props) => {
 	const utils = api.useUtils();
 	const [error, setError] = useState<string | null>(null);
 	const [open, setOpen] = useState(false);
 	const envTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 	const envHighlightRef = useRef<HTMLPreElement | null>(null);
+	const isDuplicate = Boolean(duplicateProfile);
 	const { data, refetch } = api.ai.agentProfileOne.useQuery(
 		{
 			agentProfileId: agentProfileId || "",
@@ -143,20 +148,23 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 	const showEnvPlaceholder = !envsValue;
 
 	useEffect(() => {
+		const source = duplicateProfile || data;
 		form.reset({
-			name: data?.name ?? "",
-			provider: data?.provider ?? "codex",
-			codexAuthMode: data?.codexAuthMode ?? "api_key",
-			codexHomePath: data?.codexHomePath ?? "",
-			baseUrl: data?.baseUrl ?? "https://api.openai.com/v1",
-			apiKey: data?.apiKey ?? "",
-			model: data?.model ?? "gpt-5.4",
-			thinkingLevel: data?.thinkingLevel ?? "medium",
-			thinkingLevelEnabled: data?.thinkingLevelEnabled ?? true,
-			envs: data?.envs ?? "",
-			isEnabled: data?.isEnabled ?? true,
+			name: duplicateProfile
+				? `${duplicateProfile.name} Copy`
+				: (data?.name ?? ""),
+			provider: source?.provider ?? "codex",
+			codexAuthMode: source?.codexAuthMode ?? "api_key",
+			codexHomePath: source?.codexHomePath ?? "",
+			baseUrl: source?.baseUrl ?? "https://api.openai.com/v1",
+			apiKey: source?.apiKey ?? "",
+			model: source?.model ?? "gpt-5.4",
+			thinkingLevel: source?.thinkingLevel ?? "medium",
+			thinkingLevelEnabled: source?.thinkingLevelEnabled ?? true,
+			envs: source?.envs ?? "",
+			isEnabled: source?.isEnabled ?? true,
 		});
-	}, [data, form]);
+	}, [data, duplicateProfile, form]);
 
 	useEffect(() => {
 		if (provider === "claude_code" && !agentProfileId && !data?.baseUrl) {
@@ -210,7 +218,16 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
 			<DialogTrigger asChild>
-				{agentProfileId ? (
+				{isDuplicate ? (
+					<Button
+						variant="ghost"
+						size="icon"
+						className="group hover:bg-emerald-500/10"
+						aria-label="Duplicate agent profile"
+					>
+						<CopyIcon className="size-3.5 text-primary group-hover:text-emerald-500" />
+					</Button>
+				) : agentProfileId ? (
 					<Button
 						variant="ghost"
 						size="icon"
@@ -228,7 +245,11 @@ export const HandleAgentProfile = ({ agentProfileId }: Props) => {
 			<DialogContent className="sm:max-w-lg">
 				<DialogHeader>
 					<DialogTitle>
-						{agentProfileId ? "Edit Agent Profile" : "Add Agent Profile"}
+						{isDuplicate
+							? "Duplicate Agent Profile"
+							: agentProfileId
+								? "Edit Agent Profile"
+								: "Add Agent Profile"}
 					</DialogTitle>
 					<DialogDescription>
 						Configure a reusable agent runtime profile

@@ -102,6 +102,23 @@ class FileStreamBuffer {
 		this.pollTimer = null;
 	}
 
+	getSubscriberCount() {
+		return this.subscribers.size;
+	}
+
+	dispose() {
+		if (this.pollTimer) {
+			clearInterval(this.pollTimer);
+			this.pollTimer = null;
+		}
+		this.subscribers.clear();
+		this.content = "";
+		this.offset = 0;
+		this.initialized = false;
+		this.initializing = null;
+		this.syncing = false;
+	}
+
 	subscribe(subscriber: FileStreamBufferSubscriber) {
 		this.subscribers.add(subscriber);
 		this.startPolling();
@@ -182,4 +199,23 @@ export const getFileStreamBuffer = (
 	const created = new FileStreamBuffer(filePath, options?.pollIntervalMs ?? 1000);
 	fileStreamBuffers.set(filePath, created);
 	return created;
+};
+
+export const clearFileStreamBuffer = (
+	filePath: string,
+	options?: {
+		onlyIfIdle?: boolean;
+	},
+) => {
+	const existing = fileStreamBuffers.get(filePath);
+	if (!existing) {
+		return false;
+	}
+	const onlyIfIdle = options?.onlyIfIdle ?? true;
+	if (onlyIfIdle && existing.getSubscriberCount() > 0) {
+		return false;
+	}
+	existing.dispose();
+	fileStreamBuffers.delete(filePath);
+	return true;
 };

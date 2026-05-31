@@ -7,12 +7,14 @@ export type CodexRuntimeArtifacts = {
   textPath: string;
   stderrPath: string;
   stdoutPath: string;
+  usagePath: string;
   cursorPath: string;
   statePath: string;
   jsonlFileName: string;
   textFileName: string;
   stderrFileName: string;
   stdoutFileName: string;
+  usageFileName: string;
   cursorFileName: string;
   stateFileName: string;
 };
@@ -35,19 +37,23 @@ export const createCodexRuntimeArtifacts = (input: {
   textFileName: string;
   stderrFileName: string;
   stdoutFileName: string;
+  usageFileName?: string;
 }): CodexRuntimeArtifacts => {
   const runtimeBase = input.jsonlFileName.replace(/\.jsonl$/i, "");
+  const usageFileName = input.usageFileName || "usage.json";
   return {
     jsonlPath: path.join(input.runtimeDir, input.jsonlFileName),
     textPath: path.join(input.runtimeDir, input.textFileName),
     stderrPath: path.join(input.runtimeDir, input.stderrFileName),
     stdoutPath: path.join(input.runtimeDir, input.stdoutFileName),
+    usagePath: path.join(input.runtimeDir, usageFileName),
     cursorPath: path.join(input.runtimeDir, `.${runtimeBase}-cursor.json`),
     statePath: path.join(input.runtimeDir, `.${runtimeBase}-state.json`),
     jsonlFileName: input.jsonlFileName,
     textFileName: input.textFileName,
     stderrFileName: input.stderrFileName,
     stdoutFileName: input.stdoutFileName,
+    usageFileName,
     cursorFileName: `.${runtimeBase}-cursor.json`,
     stateFileName: `.${runtimeBase}-state.json`,
   };
@@ -59,6 +65,7 @@ export const initializeRuntimeFiles = async (input: {
   textPath: string;
   stderrPath: string;
   stdoutPath: string;
+  usagePath?: string;
 }) => {
   await fs.mkdir(input.runtimeDir, { recursive: true });
   await Promise.all([
@@ -66,6 +73,9 @@ export const initializeRuntimeFiles = async (input: {
     fs.writeFile(input.textPath, "", "utf-8"),
     fs.writeFile(input.stderrPath, "", "utf-8"),
     fs.writeFile(input.stdoutPath, "", "utf-8"),
+    input.usagePath
+      ? fs.writeFile(input.usagePath, "", "utf-8")
+      : Promise.resolve(),
   ]);
 };
 
@@ -90,9 +100,13 @@ export const initializeRuntimeFilesInContainer = async (input: {
   textFileName: string;
   stderrFileName: string;
   stdoutFileName: string;
+  usageFileName?: string;
 }) => {
+  const usageInit = input.usageFileName
+    ? ` && : > '${input.runtimeDirInContainer}/${input.usageFileName}'`
+    : "";
   await execAsync(
-    `docker exec ${input.containerName} bash -lc "mkdir -p '${input.runtimeDirInContainer}' && : > '${input.runtimeDirInContainer}/${input.jsonlFileName}' && : > '${input.runtimeDirInContainer}/${input.textFileName}' && : > '${input.runtimeDirInContainer}/${input.stderrFileName}' && : > '${input.runtimeDirInContainer}/${input.stdoutFileName}'"`,
+    `docker exec ${input.containerName} bash -lc "mkdir -p '${input.runtimeDirInContainer}' && : > '${input.runtimeDirInContainer}/${input.jsonlFileName}' && : > '${input.runtimeDirInContainer}/${input.textFileName}' && : > '${input.runtimeDirInContainer}/${input.stderrFileName}' && : > '${input.runtimeDirInContainer}/${input.stdoutFileName}'${usageInit}"`,
   );
 };
 

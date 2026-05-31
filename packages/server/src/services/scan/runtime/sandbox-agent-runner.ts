@@ -1,4 +1,4 @@
-import { appendFile } from "node:fs/promises";
+import { appendFile, writeFile } from "node:fs/promises";
 import { SandboxAgent } from "sandbox-agent";
 import { Agent, type Dispatcher } from "undici";
 
@@ -207,6 +207,7 @@ export const runSandboxAgentHeadlessTurnInContainer = async (input: {
   jsonlPath: string;
   textPath: string;
   stderrPath: string;
+  usagePath: string;
   onSessionId?: (sessionId: string) => Promise<void>;
 }) => {
   const client: any = await SandboxAgent.connect({
@@ -283,7 +284,7 @@ export const runSandboxAgentHeadlessTurnInContainer = async (input: {
   });
 
   try {
-    await withTimeout(
+    const promptResponse = await withTimeout(
       session.prompt([{ type: "text", text: input.prompt }]),
       SANDBOX_AGENT_PROMPT_TIMEOUT_MS,
       () =>
@@ -292,6 +293,12 @@ export const runSandboxAgentHeadlessTurnInContainer = async (input: {
             SANDBOX_AGENT_PROMPT_TIMEOUT_MS / 1000,
           )}s`,
         ),
+    );
+    const promptUsage = asRecord(promptResponse)?.usage ?? null;
+    await writeFile(
+      input.usagePath,
+      `${JSON.stringify(promptUsage, null, 2)}\n`,
+      "utf-8",
     );
     await eventWriteChain;
   } catch (error) {

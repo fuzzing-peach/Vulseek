@@ -1,5 +1,5 @@
 diff --git a/src/codex_agent.rs b/src/codex_agent.rs
-index bae7687..81dcb4a 100644
+index bae7687..30bf1e0 100644
 --- a/src/codex_agent.rs
 +++ b/src/codex_agent.rs
 @@ -1,12 +1,13 @@
@@ -135,3 +135,172 @@ index bae7687..81dcb4a 100644
      async fn list_sessions(
          &self,
          request: ListSessionsRequest,
+@@ -757,9 +850,9 @@ impl CodexAgent {
+ 
+         // Get the session state
+         let thread = self.get_thread(&request.session_id)?;
+-        let stop_reason = thread.prompt(request).await?;
++        let prompt_result = thread.prompt(request).await?;
+ 
+-        Ok(PromptResponse::new(stop_reason))
++        Ok(PromptResponse::new(prompt_result.stop_reason).usage(prompt_result.usage))
+     }
+ 
+     async fn cancel(&self, args: CancelNotification) -> Result<(), Error> {
+diff --git a/src/thread.rs b/src/thread.rs
+index 143206a..3b8e50b 100644
+--- a/src/thread.rs
++++ b/src/thread.rs
+@@ -21,7 +21,7 @@ use agent_client_protocol::{
+         SessionModeState, SessionModelState, SessionNotification, SessionUpdate, StopReason,
+         Terminal, TextContent, TextResourceContents, ToolCall, ToolCallContent, ToolCallId,
+         ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
+-        UnstructuredCommandInput, UsageUpdate,
++        UnstructuredCommandInput, Usage, UsageUpdate,
+     },
+ };
+ use codex_apply_patch::parse_patch;
+@@ -277,7 +277,7 @@ enum ThreadMessage {
+     },
+     Prompt {
+         request: PromptRequest,
+-        response_tx: oneshot::Sender<Result<oneshot::Receiver<Result<StopReason, Error>>, Error>>,
++        response_tx: oneshot::Sender<Result<oneshot::Receiver<Result<PromptResult, Error>>, Error>>,
+     },
+     SetMode {
+         mode: SessionModeId,
+@@ -309,6 +309,11 @@ enum ThreadMessage {
+     },
+ }
+ 
++pub struct PromptResult {
++    pub stop_reason: StopReason,
++    pub usage: Option<Usage>,
++}
++
+ pub struct Thread {
+     /// Direct handle to the underlying Codex thread for out-of-band shutdown.
+     thread: Arc<dyn CodexThreadImpl>,
+@@ -372,7 +377,7 @@ impl Thread {
+             .map_err(|e| Error::internal_error().data(e.to_string()))?
+     }
+ 
+-    pub async fn prompt(&self, request: PromptRequest) -> Result<StopReason, Error> {
++    pub async fn prompt(&self, request: PromptRequest) -> Result<PromptResult, Error> {
+         let (response_tx, response_rx) = oneshot::channel();
+ 
+         let message = ThreadMessage::Prompt {
+@@ -860,17 +865,22 @@ struct PromptState {
+     resolution_tx: mpsc::UnboundedSender<ThreadMessage>,
+     pending_permission_interactions: HashMap<String, PendingPermissionInteraction>,
+     event_count: usize,
+-    response_tx: Option<oneshot::Sender<Result<StopReason, Error>>>,
++    response_tx: Option<oneshot::Sender<Result<PromptResult, Error>>>,
++    last_usage: Option<Usage>,
+     seen_message_deltas: bool,
+     seen_reasoning_deltas: bool,
+ }
+ 
++fn non_negative_u64(value: i64) -> u64 {
++    value.max(0) as u64
++}
++
+ impl PromptState {
+     fn new(
+         submission_id: String,
+         thread: Arc<dyn CodexThreadImpl>,
+         resolution_tx: mpsc::UnboundedSender<ThreadMessage>,
+-        response_tx: oneshot::Sender<Result<StopReason, Error>>,
++        response_tx: oneshot::Sender<Result<PromptResult, Error>>,
+     ) -> Self {
+         Self {
+             submission_id,
+@@ -883,6 +893,7 @@ impl PromptState {
+             pending_permission_interactions: HashMap::new(),
+             event_count: 0,
+             response_tx: Some(response_tx),
++            last_usage: None,
+             seen_message_deltas: false,
+             seen_reasoning_deltas: false,
+         }
+@@ -1112,14 +1123,27 @@ impl PromptState {
+                 info!("Task started with context window of {turn_id} {model_context_window:?} {collaboration_mode_kind:?}");
+             }
+             EventMsg::TokenCount(TokenCountEvent { info, .. }) => {
+-                if let Some(info) = info
+-                    && let Some(size) = info.model_context_window {
++                if let Some(info) = info {
++                    let token_usage = &info.last_token_usage;
++                    self.last_usage = Some(
++                        Usage::new(
++                            non_negative_u64(token_usage.total_tokens),
++                            non_negative_u64(token_usage.input_tokens),
++                            non_negative_u64(token_usage.output_tokens),
++                        )
++                        .thought_tokens(non_negative_u64(token_usage.reasoning_output_tokens))
++                        .cached_read_tokens(non_negative_u64(token_usage.cached_input_tokens))
++                        .cached_write_tokens(0),
++                    );
++
++                    if let Some(size) = info.model_context_window {
+                         let used = info.last_token_usage.tokens_in_context_window().max(0) as u64;
+                         client.send_notification(SessionUpdate::UsageUpdate(UsageUpdate::new(
+                             used,
+                             size as u64,
+                         )));
+-                    }
++                    };
++                }
+             }
+             EventMsg::ItemStarted(ItemStartedEvent { thread_id, turn_id, item , started_at_ms: _}) => {
+                 info!("Item started with thread_id: {thread_id}, turn_id: {turn_id}, item: {item:?}");
+@@ -1338,7 +1362,12 @@ impl PromptState {
+                 );
+                 self.abort_pending_interactions();
+                 if let Some(response_tx) = self.response_tx.take() {
+-                    response_tx.send(Ok(StopReason::EndTurn)).ok();
++                    response_tx
++                        .send(Ok(PromptResult {
++                            stop_reason: StopReason::EndTurn,
++                            usage: self.last_usage.clone(),
++                        }))
++                        .ok();
+                 }
+             }
+             EventMsg::StreamError(StreamErrorEvent {
+@@ -1368,14 +1397,24 @@ impl PromptState {
+                 info!("Turn {turn_id:?} aborted: {reason:?}");
+                 self.abort_pending_interactions();
+                 if let Some(response_tx) = self.response_tx.take() {
+-                    response_tx.send(Ok(StopReason::Cancelled)).ok();
++                    response_tx
++                        .send(Ok(PromptResult {
++                            stop_reason: StopReason::Cancelled,
++                            usage: self.last_usage.clone(),
++                        }))
++                        .ok();
+                 }
+             }
+             EventMsg::ShutdownComplete => {
+                 info!("Agent shutting down");
+                 self.abort_pending_interactions();
+                 if let Some(response_tx) = self.response_tx.take() {
+-                    response_tx.send(Ok(StopReason::Cancelled)).ok();
++                    response_tx
++                        .send(Ok(PromptResult {
++                            stop_reason: StopReason::Cancelled,
++                            usage: self.last_usage.clone(),
++                        }))
++                        .ok();
+                 }
+             }
+             EventMsg::ViewImageToolCall(ViewImageToolCallEvent { call_id, path }) => {
+@@ -3244,7 +3283,7 @@ impl<A: Auth> ThreadActor<A> {
+     async fn handle_prompt(
+         &mut self,
+         request: PromptRequest,
+-    ) -> Result<oneshot::Receiver<Result<StopReason, Error>>, Error> {
++    ) -> Result<oneshot::Receiver<Result<PromptResult, Error>>, Error> {
+         let (response_tx, response_rx) = oneshot::channel();
+ 
+         let items = build_prompt_items(request.prompt);

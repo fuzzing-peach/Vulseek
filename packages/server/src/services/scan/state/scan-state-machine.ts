@@ -21,6 +21,8 @@ export type ResolveScanPipelineStateInput = {
 	analysisFailed: number;
 	verificationPendingCount: number;
 	verificationFailed: number;
+	triagePendingCount?: number;
+	triageFailed?: number;
 };
 
 export type ResolvedScanPipelineState = {
@@ -41,7 +43,8 @@ export const resolveNextScanPipelineState = (
 		input.functionPendingCount > 0 ||
 		input.modulePendingCount > 0 ||
 		input.analysisPendingCount > 0 ||
-		input.verificationPendingCount > 0
+		input.verificationPendingCount > 0 ||
+		(input.triagePendingCount ?? 0) > 0
 	) {
 		return {
 			status: "running",

@@ -51,6 +51,7 @@ const resolveStageAgentKindFromStageName = (stageName: string): StageAgentKind =
 		case SCAN_STAGE_IDS.analysisCritic:
 			return "analysis";
 		case SCAN_STAGE_IDS.verification:
+		case SCAN_STAGE_IDS.triage:
 			return "verification";
 		default:
 			return "scan";
@@ -75,6 +76,8 @@ const resolveStageContainerPrefix = (stageName: string) => {
 			return "analysis-critic";
 		case SCAN_STAGE_IDS.verification:
 			return "verify";
+		case SCAN_STAGE_IDS.triage:
+			return "triage";
 		default:
 			return sanitizeContainerNamePart(stageName);
 	}
@@ -354,6 +357,8 @@ export type StageContext = PipelineContext & {
 	taskId: string;
 	taskName: string;
 	persistent: boolean;
+	groupedPersistent: boolean;
+	allowAgentExit: boolean;
 	laneIndex: number | null;
 	laneThreadId: string | null;
 	routeOutputSchemas?: Array<{
@@ -399,6 +404,8 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 		default?: boolean;
 	}>;
 	persistent?: boolean;
+	groupedPersistent?: boolean;
+	allowAgentExit?: boolean;
 	laneIndex?: number | null;
 	laneThreadId?: string | null;
 	sessionMode?: "new" | "fork";
@@ -410,6 +417,8 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 	taskId: input.taskId,
 	taskName: input.taskName,
 	persistent: input.persistent ?? false,
+	groupedPersistent: input.groupedPersistent ?? false,
+	allowAgentExit: input.allowAgentExit ?? false,
 	laneIndex: input.laneIndex ?? null,
 	laneThreadId: input.laneThreadId ?? null,
 	routeOutputSchemas: input.routeOutputSchemas,

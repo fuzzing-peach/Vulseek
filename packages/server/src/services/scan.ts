@@ -29,6 +29,8 @@ import {
 	finalAnalysisSchema,
 	fuzzBuildResultSchema,
 	fuzzRunResultSchema,
+	verificationSchema,
+	type Verification,
 } from "./scan/artifacts/contracts/domain-object.contract";
 import {
 	copyTaskJsonArtifact,
@@ -57,6 +59,7 @@ import {
 import {
 	createTaskRepo,
 	findLatestAnalysisResultByCandidateIdRepo,
+	findLatestTriageResultByCandidateIdRepo,
 	findLatestVerificationResultByCandidateIdRepo,
 	findTaskByIdRepo,
 	listAnalysisResultsByScanJobIdRepo,
@@ -66,6 +69,7 @@ import {
 	listTasksByScanJobAndStatusesRepo,
 	listTasksByScanJobIdRepo,
 	listTerminalTasksPageByScanJobIdRepo,
+	listTriageResultsByScanJobIdRepo,
 	listVerificationResultsByScanJobIdRepo,
 	requeueTaskRepo,
 	resetFailedTaskForRetryRepo,
@@ -100,6 +104,10 @@ import {
 	type CandidateAnalysisStageInput,
 	createAnalysisStageDefinition,
 } from "./scan/stages/candidate-analysis.stage";
+import {
+	type CandidateTriageStageInput,
+	createTriageStageDefinition,
+} from "./scan/stages/candidate-triage.stage";
 import {
 	type CandidateVerificationStageInput,
 	createVerifyingStageDefinition,
@@ -143,6 +151,7 @@ import type {
 	RepositoryModule as CanonicalRepositoryModule,
 	ScanJob,
 	Task,
+	TriageResult,
 	VerificationResult,
 	VulnerabilityCandidateStage,
 } from "./scan/types";
@@ -259,7 +268,8 @@ type InProgressTaskView = {
 		| "fuzz_building"
 		| "fuzzing"
 		| "criticizing"
-		| "verifying";
+		| "verifying"
+		| "triaging";
 	startedAt: string | null;
 	updatedAt: string;
 };
@@ -298,6 +308,7 @@ const IN_PROGRESS_TASK_STAGE_ORDER: Record<
 	fuzzing: 5,
 	criticizing: 6,
 	verifying: 7,
+	triaging: 8,
 };
 
 const compareInProgressTaskView = (
@@ -339,7 +350,8 @@ type ScanStageQueueKind =
 	| "fuzz-build"
 	| "fuzz-run"
 	| "analysis-critic"
-	| "verification";
+	| "verification"
+	| "triage";
 
 type RequestInitWithDispatcher = RequestInit & {
 	dispatcher?: Dispatcher;
@@ -471,6 +483,7 @@ const obliterateScanStageGroupQueues = async (
 				"fuzz-run",
 				"analysis-critic",
 				"verification",
+				"triage",
 			] satisfies ScanStageQueueKind[]
 		).map((kind) =>
 			obliterateScanStageGroupQueue(scanJobId, groupInstanceId, kind),
@@ -517,6 +530,9 @@ const getAnalysisCriticQueue = (scanJobId: string) =>
 
 const getVerificationQueue = (scanJobId: string) =>
 	getScanStageQueue(scanJobId, "verification");
+
+const getTriageQueue = (scanJobId: string) =>
+	getScanStageQueue(scanJobId, "triage");
 
 const stopScanContainer = async (containerName: string | null | undefined) => {
 	if (!containerName) {
@@ -762,6 +778,9 @@ const readCandidateRecordFromTaskInput = (
 	if (task.stageName === SCAN_STAGE_IDS.verification) {
 		return asTaskRecord(asTaskRecord(input?.analysisResult)?.candidate);
 	}
+	if (task.stageName === SCAN_STAGE_IDS.triage) {
+		return asTaskRecord(input?.candidate);
+	}
 	return null;
 };
 
@@ -918,6 +937,25 @@ const buildInProgressTaskView = (task: Task): InProgressTaskView | null => {
 				updatedAt: task.updatedAt,
 			};
 		}
+		case SCAN_STAGE_IDS.triage: {
+			const candidate = readCandidateRecordFromTaskInput(task);
+			return {
+				id: `triage-${task.taskId}`,
+				taskId: task.taskId,
+				title: readString(candidate, "title") || task.name,
+				subtitle:
+					joinTaskSubtitle(
+						formatTaskLocation(
+							readString(candidate, "filePath"),
+							readNumber(candidate, "line"),
+						),
+						readString(candidate, "vulnerabilityType"),
+					) || "-",
+				stage: "triaging",
+				startedAt: task.startedAt,
+				updatedAt: task.updatedAt,
+			};
+		}
 		default:
 			return null;
 	}
@@ -1009,6 +1047,12 @@ const listQueuePendingCountsByScanJobId = async (
 			title: SCAN_STAGE_METADATA.verification.name,
 			stageName: SCAN_STAGE_IDS.verification,
 			queue: getVerificationQueue(scanJobId),
+		},
+		{
+			id: "triage",
+			title: SCAN_STAGE_METADATA.triage.name,
+			stageName: SCAN_STAGE_IDS.triage,
+			queue: getTriageQueue(scanJobId),
 		},
 	];
 
@@ -1110,6 +1154,7 @@ const RERUNNABLE_TASK_STAGE_NAMES = new Set<Task["stageName"]>([
 	SCAN_STAGE_IDS.fuzzRun,
 	SCAN_STAGE_IDS.analysisCritic,
 	SCAN_STAGE_IDS.verification,
+	SCAN_STAGE_IDS.triage,
 ]);
 
 export const rerunScanTask = async (taskId: string) => {
@@ -2795,13 +2840,18 @@ const listCandidateArtifactRoots = async (input: {
 		scanJobId: input.scanJobId,
 		vulnerabilityCandidateId: input.candidateId,
 	});
-	const [analysisResult, verificationResult] = await Promise.all([
+	const [analysisResult, verificationResult, triageResult] = await Promise.all([
 		findLatestAnalysisResultByCandidateIdRepo({
 			scanJobId: input.scanJobId,
 			vulnerabilityCandidateId: input.candidateId,
 			scanFunctionTaskId: candidate.scanFunctionTaskId,
 		}),
 		findLatestVerificationResultByCandidateIdRepo({
+			scanJobId: input.scanJobId,
+			vulnerabilityCandidateId: input.candidateId,
+			scanFunctionTaskId: candidate.scanFunctionTaskId,
+		}),
+		findLatestTriageResultByCandidateIdRepo({
 			scanJobId: input.scanJobId,
 			vulnerabilityCandidateId: input.candidateId,
 			scanFunctionTaskId: candidate.scanFunctionTaskId,
@@ -2822,12 +2872,14 @@ const listCandidateArtifactRoots = async (input: {
 				scanJobId: input.scanJobId,
 				taskId: verificationResult?.taskId,
 				projectProfileHostContextRoot,
-				containerFilePath:
-					verificationResult?.reportPath ||
-					verificationResult?.issueDraftPath ||
-					verificationResult?.pocPath ||
-					verificationResult?.dockerfilePath ||
-					verificationResult?.runScriptPath,
+				containerFilePath: verificationResult?.reportPath,
+			}),
+			buildCandidateArtifactRoot({
+				name: "triage",
+				scanJobId: input.scanJobId,
+				taskId: triageResult?.taskId,
+				projectProfileHostContextRoot,
+				containerFilePath: triageResult?.reportPath,
 			}),
 		])
 	).filter((root): root is CandidateArtifactRoot => Boolean(root));
@@ -4340,6 +4392,7 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 		candidates,
 		analysisResultsList,
 		verificationResultsList,
+		triageResultsList,
 		runningTasks,
 		taskStatusCounts,
 	] = await Promise.all([
@@ -4347,6 +4400,7 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 		findVulnerabilityCandidatesByScanJobIdRepo(scanJobId),
 		listAnalysisResultsByScanJobIdRepo(scanJobId),
 		listVerificationResultsByScanJobIdRepo(scanJobId),
+		listTriageResultsByScanJobIdRepo(scanJobId),
 		listTasksByScanJobAndStatusesRepo({
 			scanJobId,
 			statuses: ["running"],
@@ -4390,6 +4444,20 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 		}
 	}
 
+	const latestTriageResultByCandidateId = new Map<string, TriageResult>();
+	for (const triageResult of triageResultsList) {
+		if (
+			!latestTriageResultByCandidateId.has(
+				triageResult.vulnerabilityCandidateId,
+			)
+		) {
+			latestTriageResultByCandidateId.set(
+				triageResult.vulnerabilityCandidateId,
+				triageResult,
+			);
+		}
+	}
+
 	const analysisLikelyOrConfirmedCount = candidates.filter((candidate) => {
 		const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
 			candidate.vulnerabilityCandidateId,
@@ -4404,7 +4472,10 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 		const latestVerificationResult = latestVerificationResultByCandidateId.get(
 			candidate.vulnerabilityCandidateId,
 		);
-		return latestVerificationResult?.result === "real_vulnerability";
+		return (
+			latestVerificationResult?.result === "true" ||
+			latestVerificationResult?.result === "likely"
+		);
 	}).length;
 	const analysisCompletedCount = candidates.filter((candidate) =>
 		latestAnalysisResultByCandidateId.has(candidate.vulnerabilityCandidateId),
@@ -4419,6 +4490,9 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 		latestVerificationResultByCandidateId.has(
 			candidate.vulnerabilityCandidateId,
 		),
+	).length;
+	const triageCompletedCount = candidates.filter((candidate) =>
+		latestTriageResultByCandidateId.has(candidate.vulnerabilityCandidateId),
 	).length;
 	const failedVerificationCount = candidates.filter(
 		(candidate) =>
@@ -4502,6 +4576,7 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 			verificationFailedCandidates: failedVerificationCount,
 			verificationQueuedCandidates: verificationQueuedCount,
 			verifiedZeroDayCandidates: verifiedZeroDayCount,
+			triageCompletedCandidates: triageCompletedCount,
 			moduleTasksTotal: scanJob.moduleTasksTotal,
 			moduleTasksCompleted: scanJob.moduleTasksCompleted,
 			moduleTasksFailed: scanJob.moduleTasksFailed,
@@ -4524,6 +4599,7 @@ const SCAN_TASK_VIEW_STAGE_TO_STAGE_NAME: Record<string, Task["stageName"]> = {
 	fuzzing: SCAN_STAGE_IDS.fuzzRun,
 	criticizing: SCAN_STAGE_IDS.analysisCritic,
 	verifying: SCAN_STAGE_IDS.verification,
+	triaging: SCAN_STAGE_IDS.triage,
 };
 
 export const findScanJobTerminalTasksPage = async (input: {
@@ -5654,6 +5730,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 	const fuzzRunQueue = getFuzzRunQueue(scanJob.scanJobId);
 	const analysisCriticQueue = getAnalysisCriticQueue(scanJob.scanJobId);
 	const verificationQueue = getVerificationQueue(scanJob.scanJobId);
+	const triageQueue = getTriageQueue(scanJob.scanJobId);
 	const repositoryStage =
 		createRepositoryScanningStageDefinition<FullScanPipelineContext>({
 			id: SCAN_STAGE_METADATA.repositoryScan.id,
@@ -5741,7 +5818,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 		createFunctionScanningStageDefinition<FullScanPipelineContext>({
 			id: SCAN_STAGE_METADATA.functionScan.id,
 			name: SCAN_STAGE_METADATA.functionScan.name,
-			persistent: false,
+			persistent: true,
 			queue: createStageQueueBinding({
 				queue: functionScanQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -5946,7 +6023,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 		createVerifyingStageDefinition<FullScanPipelineContext>({
 			id: SCAN_STAGE_METADATA.verification.id,
 			name: SCAN_STAGE_METADATA.verification.name,
-			persistent: false,
+			persistent: true,
 			queue: createStageQueueBinding({
 				queue: verificationQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -5985,6 +6062,44 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 				},
 			}),
 		});
+	const triageStage = createTriageStageDefinition<FullScanPipelineContext>({
+		id: SCAN_STAGE_METADATA.triage.id,
+		name: SCAN_STAGE_METADATA.triage.name,
+		persistent: true,
+		queue: createStageQueueBinding({
+			queue: triageQueue,
+			getGroupQueue: (groupInstanceId) =>
+				getScanStageGroupQueue(scanJob.scanJobId, groupInstanceId, "triage"),
+			obliterateGroupQueue: (groupInstanceId) =>
+				obliterateScanStageGroupQueue(
+					scanJob.scanJobId,
+					groupInstanceId,
+					"triage",
+				),
+			ownsInputId: async (ctx, inputId, _jobData, _jobId, scope) => {
+				const task = await findTaskByIdRepo(inputId).catch(() => null);
+				return Boolean(
+					task &&
+						task.scanJobId === ctx.scanJob.scanJobId &&
+						task.stageName === SCAN_STAGE_IDS.triage &&
+						(await taskMatchesStageQueueScope(task, scope?.groupInstanceId)),
+				);
+			},
+			loadInput: async (ctx, inputId) => {
+				const task = await findTaskByIdRepo(inputId).catch(() => null);
+				if (
+					!task ||
+					task.scanJobId !== ctx.scanJob.scanJobId ||
+					task.stageName !== SCAN_STAGE_IDS.triage ||
+					task.status !== "pending" ||
+					!task.input
+				) {
+					return undefined;
+				}
+				return task.input as CandidateTriageStageInput;
+			},
+		}),
+	});
 
 	const stages = [
 		repositoryStage,
@@ -5995,6 +6110,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 		fuzzRunStage,
 		analysisCriticStage,
 		verifyingStage,
+		triageStage,
 	] as const;
 	const edges = [
 		createPipelineEdge<
@@ -6473,6 +6589,109 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						parentTaskId: fromTaskId,
 						name: taskName,
 						stageName: SCAN_STAGE_IDS.verification,
+						input: downstreamInput,
+					});
+					taskIds.push(task.taskId);
+				}
+				return taskIds;
+			},
+		}),
+		createPipelineEdge<
+			FullScanPipelineContext,
+			typeof verifyingStage,
+			CandidateTriageStageInput,
+			typeof triageStage,
+			Verification
+		>({
+			name: "verification-to-triage",
+			from: verifyingStage,
+			to: triageStage,
+			fork: false,
+			outputSchema: verificationSchema,
+			transformOutput: async ({ stageInput, stageOutput }) => {
+				if (stageOutput.result !== "true" && stageOutput.result !== "likely") {
+					return [];
+				}
+				return [
+					{
+						scanJob: stageInput.scanJob,
+						repositoryPath: stageInput.repositoryPath,
+						modulePath: stageInput.modulePath,
+						functionPath: stageInput.functionPath,
+						candidatePath: stageInput.candidatePath,
+						analysisResultPath: stageInput.analysisResultPath,
+						verifyResultPath: "",
+					},
+				];
+			},
+			createTasks: async ({
+				fromTaskId,
+				stageInput,
+				stageOutput,
+				nextInputObjects,
+			}) => {
+				const fromTask = await findTaskByIdRepo(fromTaskId);
+				const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
+					context,
+					fromTask,
+				);
+				const candidate = await readTaskJsonArtifact<CanonicalCandidate>({
+					taskDir: fromTaskDir,
+					containerPath: stageInput.candidatePath,
+				});
+				const taskIds: string[] = [];
+				for (const _downstreamInput of nextInputObjects) {
+					const taskId = createShortTaskId();
+					const taskName = `Candidate Triage: ${candidate.title}`;
+					const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
+						taskId,
+						stageName: SCAN_STAGE_IDS.triage,
+						taskName,
+					});
+					const downstreamInput: CandidateTriageStageInput = {
+						scanJob: stageInput.scanJob,
+						repositoryPath: await copyArtifactToDownstreamInput({
+							fromTaskDir,
+							fromPath: stageInput.repositoryPath,
+							toTaskDir,
+							toRelativePath: "inputs/repository.json",
+						}),
+						modulePath: await copyArtifactToDownstreamInput({
+							fromTaskDir,
+							fromPath: stageInput.modulePath,
+							toTaskDir,
+							toRelativePath: "inputs/module.json",
+						}),
+						functionPath: await copyArtifactToDownstreamInput({
+							fromTaskDir,
+							fromPath: stageInput.functionPath,
+							toTaskDir,
+							toRelativePath: "inputs/function.json",
+						}),
+						candidatePath: await copyArtifactToDownstreamInput({
+							fromTaskDir,
+							fromPath: stageInput.candidatePath,
+							toTaskDir,
+							toRelativePath: "inputs/candidate.json",
+						}),
+						analysisResultPath: await copyArtifactToDownstreamInput({
+							fromTaskDir,
+							fromPath: stageInput.analysisResultPath,
+							toTaskDir,
+							toRelativePath: "inputs/final-analysis.json",
+						}),
+						verifyResultPath: await writeDownstreamInputArtifact({
+							toTaskDir,
+							toRelativePath: "inputs/verify-result.json",
+							value: stageOutput,
+						}),
+					};
+					const task = await createTaskRepo({
+						taskId,
+						scanJobId: stageInput.scanJob.scanJobId,
+						parentTaskId: fromTaskId,
+						name: taskName,
+						stageName: SCAN_STAGE_IDS.triage,
 						input: downstreamInput,
 					});
 					taskIds.push(task.taskId);
@@ -7395,6 +7614,15 @@ const enqueueVerificationTask = async (
 	});
 };
 
+const enqueueTriageTask = async (scanJobId: string, triageTaskId: string) => {
+	const triageQueue = getTriageQueue(scanJobId);
+	await triageQueue.add("triage", triageTaskId, {
+		jobId: buildQueueTaskJobId(triageQueue.name, triageTaskId),
+		removeOnComplete: true,
+		removeOnFail: true,
+	});
+};
+
 const enqueueFuzzBuildTask = async (
 	scanJobId: string,
 	fuzzBuildTaskId: string,
@@ -7453,6 +7681,9 @@ const enqueueRetriedTask = async (scanJobId: string, task: Task) => {
 			return;
 		case SCAN_STAGE_IDS.verification:
 			await enqueueVerificationTask(scanJobId, task.taskId);
+			return;
+		case SCAN_STAGE_IDS.triage:
+			await enqueueTriageTask(scanJobId, task.taskId);
 			return;
 		default:
 			throw new Error(`Unsupported retry stage: ${task.stageName}`);
@@ -7582,6 +7813,16 @@ const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
 							getVerificationQueue(scanJobId),
 							jobId,
 						).catch(() => {}),
+				),
+			);
+			return;
+		case SCAN_STAGE_IDS.triage:
+			await Promise.all(
+				buildKnownQueueJobIdsForTask(getTriageQueue(scanJobId), task).map(
+					(jobId) =>
+						forceRemoveStageQueueJob(getTriageQueue(scanJobId), jobId).catch(
+							() => {},
+						),
 				),
 			);
 			return;
@@ -7777,6 +8018,19 @@ const getPendingVerificationCandidates = async (scanJobId: string) => {
 	});
 };
 
+const getPendingTriageTaskState = async (scanJobId: string) => {
+	const triageTasks = await listTasksByScanJobAndStageRepo({
+		scanJobId,
+		stageName: SCAN_STAGE_IDS.triage,
+	});
+	return {
+		pendingCount: triageTasks.filter((task) =>
+			["pending", "launching", "running"].includes(task.status),
+		).length,
+		failed: triageTasks.filter((task) => task.status === "failed").length,
+	};
+};
+
 const getPendingScanTaskState = async (scanJobId: string) => {
 	const [scanJob, moduleTasks, functionTasks] = await Promise.all([
 		findScanJobByIdRepo(scanJobId),
@@ -7794,17 +8048,20 @@ const getPendingScanTaskState = async (scanJobId: string) => {
 export const reconcileScanJobCandidatePipelineStatus = async (
 	scanJobId: string,
 ) => {
-	const [scanState, analysisState, verificationState] = await Promise.all([
+	const [scanState, analysisState, verificationState, triageState] =
+		await Promise.all([
 		getPendingScanTaskState(scanJobId),
 		getPendingAnalysisCandidates(scanJobId),
 		getPendingVerificationCandidates(scanJobId),
-	]);
+			getPendingTriageTaskState(scanJobId),
+		]);
 
 	if (scanState.scanJob.status === "canceled") {
 		return {
 			status: "canceled" as const,
 			analysisFailed: analysisState.failed,
 			verificationFailed: verificationState.failed,
+			triageFailed: triageState.failed,
 			moduleFailed: scanState.moduleFailed,
 			functionFailed: scanState.functionFailed,
 		};
@@ -7821,6 +8078,8 @@ export const reconcileScanJobCandidatePipelineStatus = async (
 		analysisFailed: analysisState.failed,
 		verificationPendingCount: verificationState.pendingCandidates.length,
 		verificationFailed: verificationState.failed,
+		triagePendingCount: triageState.pendingCount,
+		triageFailed: triageState.failed,
 	});
 
 	if (nextState.status !== scanState.scanJob.status || nextState.errorMessage) {
@@ -7835,6 +8094,7 @@ export const reconcileScanJobCandidatePipelineStatus = async (
 		status: nextState.status,
 		analysisFailed: analysisState.failed,
 		verificationFailed: verificationState.failed,
+		triageFailed: triageState.failed,
 		moduleFailed: scanState.moduleFailed,
 		functionFailed: scanState.functionFailed,
 	};
@@ -8090,13 +8350,56 @@ export const startCandidateVerification = async (
 		}
 	}
 
+	const context = await buildFullScanPipelineContext(scanJob.scanJobId);
+	const latestAnalysisTask = await findTaskByIdRepo(latestAnalysisResult.taskId);
+	const latestAnalysisTaskDir = await resolveExistingFullScanTaskRuntimeDir(
+		context,
+		latestAnalysisTask,
+	);
+	const analysisStageInput =
+		latestAnalysisTask.input as CandidateAnalysisStageInput | null;
+	const finalAnalysis = finalAnalysisSchema.safeParse(latestAnalysisTask.output);
+	if (!analysisStageInput || !finalAnalysis.success) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message:
+				"Verification requires a critic-approved final analysis task with artifact paths",
+		});
+	}
+	const verificationTaskId =
+		existingVerificationTask?.taskId || createShortTaskId();
+	const verificationTaskName = existingVerificationTask?.name
+		? existingVerificationTask.name
+		: `Candidate Verification: ${candidate.title}`;
+	const verificationTaskDir = await resolveFullScanTaskRuntimeDir(context, {
+		taskId: verificationTaskId,
+		stageName: SCAN_STAGE_IDS.verification,
+		taskName: verificationTaskName,
+	});
+	const baseInput = await copyAnalysisBaseInputArtifacts({
+		fromTaskDir: latestAnalysisTaskDir,
+		toTaskDir: verificationTaskDir,
+		stageInput: analysisStageInput,
+	});
+	const verificationInput: CandidateVerificationStageInput = {
+		scanJob: baseInput.scanJob,
+		repositoryPath: baseInput.repositoryPath,
+		modulePath: baseInput.modulePath,
+		functionPath: baseInput.functionPath,
+		candidatePath: baseInput.candidatePath,
+		analysisResultPath: await writeDownstreamInputArtifact({
+			toTaskDir: verificationTaskDir,
+			toRelativePath: "inputs/final-analysis.json",
+			value: finalAnalysis.data,
+		}),
+	};
 	const verificationTask =
 		existingVerificationTask ||
 		(await createTaskRepo({
-			taskId: createShortTaskId(),
+			taskId: verificationTaskId,
 			scanJobId: scanJob.scanJobId,
 			parentTaskId: latestAnalysisResult.taskId,
-			name: `Candidate Verification: ${candidate.title}`,
+			name: verificationTaskName,
 			stageName: SCAN_STAGE_IDS.verification,
 			runtimeMode: latestAnalysisResult.threadId
 				? "fork_session"
@@ -8105,7 +8408,7 @@ export const startCandidateVerification = async (
 				? latestAnalysisResult.taskId
 				: null,
 			forkedFromThreadId: latestAnalysisResult.threadId,
-			input: await buildJoinedAnalysisResultInput(vulnerabilityCandidateId),
+			input: verificationInput,
 		}));
 
 	if (
@@ -8121,10 +8424,18 @@ export const startCandidateVerification = async (
 				? latestAnalysisResult.taskId
 				: null,
 			forkedFromThreadId: latestAnalysisResult.threadId,
+			input: verificationInput,
 		});
 		await requeueTaskRepo(verificationTask.taskId);
 	}
 	await enqueueVerificationTask(scanJob.scanJobId, verificationTask.taskId);
+	if (scanJob.status === "finished") {
+		await updateScanJobStatusRepo(scanJob.scanJobId, "running").catch(() => {});
+	}
+	await runFullScan(scanJob.scanJobId, {
+		enqueueInitialRepositoryTask: false,
+		awaitCompletion: false,
+	});
 
 	return {
 		started: true,

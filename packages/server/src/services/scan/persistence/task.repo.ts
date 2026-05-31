@@ -4,10 +4,11 @@ import { TRPCError } from "@trpc/server";
 import { and, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import {
 	analysisSchema,
+	triageSchema,
 	verificationSchema,
 } from "../artifacts/contracts/domain-object.contract";
 import { createShortTaskId } from "../task-id";
-import type { AnalysisResult, VerificationResult } from "../types";
+import type { AnalysisResult, TriageResult, VerificationResult } from "../types";
 import { readCandidateIdFromTaskInputArtifact } from "./task-artifact-resolver";
 
 const buildAnalysisTaskResultView = async (
@@ -60,15 +61,52 @@ const buildVerificationTaskResultView = async (
 		scanJobId: task.scanJobId,
 		vulnerabilityCandidateId,
 		result: parsedOutput.data.result,
-		isBug: parsedOutput.data.isBug,
-		isSecurity: parsedOutput.data.isSecurity,
 		confidence: parsedOutput.data.confidence,
 		score: parsedOutput.data.score,
 		reportPath: parsedOutput.data.reportPath,
-		issueDraftPath: parsedOutput.data.issueDraftPath,
-		pocPath: parsedOutput.data.pocPath,
-		dockerfilePath: parsedOutput.data.dockerfilePath,
-		runScriptPath: parsedOutput.data.runScriptPath,
+		runtimeSeconds: parsedOutput.data.runtimeSeconds,
+		threadId: task.threadId,
+		summary: parsedOutput.data.summary,
+		createdAt: task.createdAt,
+		updatedAt: task.updatedAt,
+		status: parsedOutput.data.status ?? task.status,
+	};
+};
+
+const buildTriageTaskResultView = async (
+	task: typeof tasks.$inferSelect,
+): Promise<TriageResult | null> => {
+	const parsedOutput = triageSchema.safeParse(task.output);
+	if (!parsedOutput.success) {
+		return null;
+	}
+
+	const vulnerabilityCandidateId =
+		await readCandidateIdFromTaskInputArtifact(task);
+	if (!vulnerabilityCandidateId) {
+		return null;
+	}
+
+	return {
+		taskId: task.taskId,
+		scanJobId: task.scanJobId,
+		vulnerabilityCandidateId,
+		result: parsedOutput.data.result,
+		securityClassification: parsedOutput.data.securityClassification,
+		isSecurityIssue: parsedOutput.data.isSecurityIssue,
+		impactType: parsedOutput.data.impactType,
+		cvssVector: parsedOutput.data.cvssVector,
+		cvssScore: parsedOutput.data.cvssScore,
+		cvssSeverity: parsedOutput.data.cvssSeverity,
+		exploitability: parsedOutput.data.exploitability,
+		isExploitable: parsedOutput.data.isExploitable,
+		commonTriggerConditions: parsedOutput.data.commonTriggerConditions,
+		hardeningOrRobustness: parsedOutput.data.hardeningOrRobustness,
+		epssProbability30d: parsedOutput.data.epssProbability30d,
+		epssSource: parsedOutput.data.epssSource,
+		confidence: null,
+		score: parsedOutput.data.cvssScore,
+		reportPath: parsedOutput.data.reportPath,
 		runtimeSeconds: parsedOutput.data.runtimeSeconds,
 		threadId: task.threadId,
 		summary: parsedOutput.data.summary,
@@ -95,7 +133,12 @@ export const createTaskRepo = async (input: {
 	forkedFromThreadId?: string | null;
 	input?: typeof tasks.$inferSelect.input;
 	output?: typeof tasks.$inferSelect.output;
-	tokenUsage?: number | null;
+	inputTokens?: number | null;
+	outputTokens?: number | null;
+	thoughtTokens?: number | null;
+	totalTokens?: number | null;
+	cachedReadTokens?: number | null;
+	cachedWriteTokens?: number | null;
 	errorMessage?: string | null;
 	exitReason?: typeof tasks.$inferSelect.exitReason;
 	exitNote?: string | null;
@@ -127,7 +170,12 @@ export const createTaskRepo = async (input: {
 					forkedFromThreadId: input.forkedFromThreadId ?? null,
 					input: input.input ?? null,
 					output: input.output ?? null,
-					tokenUsage: input.tokenUsage ?? null,
+					inputTokens: input.inputTokens ?? null,
+					outputTokens: input.outputTokens ?? null,
+					thoughtTokens: input.thoughtTokens ?? null,
+					totalTokens: input.totalTokens ?? null,
+					cachedReadTokens: input.cachedReadTokens ?? null,
+					cachedWriteTokens: input.cachedWriteTokens ?? null,
 					errorMessage: input.errorMessage ?? null,
 					exitReason: input.exitReason ?? null,
 					exitNote: input.exitNote ?? null,
@@ -491,7 +539,12 @@ export const resetFailedTaskForRetryRepo = async (taskId: string) => {
 			containerName: null,
 			threadId: null,
 			output: null,
-			tokenUsage: null,
+			inputTokens: null,
+			outputTokens: null,
+			thoughtTokens: null,
+			totalTokens: null,
+			cachedReadTokens: null,
+			cachedWriteTokens: null,
 			attempt: sql`${tasks.attempt} + 1`,
 			updatedAt: new Date().toISOString(),
 		})
@@ -519,7 +572,12 @@ export const requeueTaskRepo = async (taskId: string) => {
 			containerName: null,
 			threadId: null,
 			output: null,
-			tokenUsage: null,
+			inputTokens: null,
+			outputTokens: null,
+			thoughtTokens: null,
+			totalTokens: null,
+			cachedReadTokens: null,
+			cachedWriteTokens: null,
 			attempt: sql`${tasks.attempt} + 1`,
 			updatedAt: new Date().toISOString(),
 		})
@@ -558,6 +616,18 @@ export const listVerificationResultsByScanJobIdRepo = async (
 	return (
 		await Promise.all(verificationTasks.map(buildVerificationTaskResultView))
 	).filter((item): item is VerificationResult => Boolean(item));
+};
+
+export const listTriageResultsByScanJobIdRepo = async (
+	scanJobId: string,
+): Promise<TriageResult[]> => {
+	const triageTasks = await listTasksByScanJobAndStageRepo({
+		scanJobId,
+		stageName: "triage",
+	});
+	return (
+		await Promise.all(triageTasks.map(buildTriageTaskResultView))
+	).filter((item): item is TriageResult => Boolean(item));
 };
 
 export const findLatestAnalysisResultByCandidateIdRepo = async (input: {
@@ -616,6 +686,37 @@ export const findLatestVerificationResultByCandidateIdRepo = async (input: {
 
 	return (
 		(await listVerificationResultsByScanJobIdRepo(input.scanJobId)).find(
+			(result) =>
+				result.vulnerabilityCandidateId === input.vulnerabilityCandidateId,
+		) || null
+	);
+};
+
+export const findLatestTriageResultByCandidateIdRepo = async (input: {
+	scanJobId: string;
+	vulnerabilityCandidateId: string;
+	scanFunctionTaskId?: string | null;
+}): Promise<TriageResult | null> => {
+	if (input.scanFunctionTaskId) {
+		const candidateTasks =
+			await listCandidateDescendantTasksByFunctionTaskIdRepo({
+				scanFunctionTaskId: input.scanFunctionTaskId,
+				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+			});
+		for (const task of candidateTasks) {
+			if (task.stageName !== "triage") {
+				continue;
+			}
+			const result = await buildTriageTaskResultView(task);
+			if (result?.vulnerabilityCandidateId === input.vulnerabilityCandidateId) {
+				return result;
+			}
+		}
+		return null;
+	}
+
+	return (
+		(await listTriageResultsByScanJobIdRepo(input.scanJobId)).find(
 			(result) =>
 				result.vulnerabilityCandidateId === input.vulnerabilityCandidateId,
 		) || null

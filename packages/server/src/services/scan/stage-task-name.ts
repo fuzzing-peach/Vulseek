@@ -41,6 +41,13 @@ export const resolveStageTaskName = <TInput>(
 				typeof record.analysisResult.candidate.title === "string"
 				? record.analysisResult.candidate.title
 				: "candidate-verification";
+		case "triage":
+			return typeof record?.candidate === "object" &&
+				record.candidate &&
+				"title" in record.candidate &&
+				typeof record.candidate.title === "string"
+				? record.candidate.title
+				: "candidate-triage";
 		default:
 			return stageName;
 	}

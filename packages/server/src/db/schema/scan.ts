@@ -122,7 +122,12 @@ export const tasks = pgTable(
 			stageGroupInstanceId: text("stageGroupInstanceId"),
 			input: jsonb("input").$type<unknown | null>(),
 			output: jsonb("output").$type<unknown | null>(),
-			tokenUsage: integer("token_usage"),
+			inputTokens: integer("input_tokens"),
+			outputTokens: integer("output_tokens"),
+			thoughtTokens: integer("thought_tokens"),
+			totalTokens: integer("total_tokens"),
+			cachedReadTokens: integer("cached_read_tokens"),
+			cachedWriteTokens: integer("cached_write_tokens"),
 			errorMessage: text("errorMessage"),
 		exitReason: text("exitReason").$type<
 			"agent_exit" | "leader_exit" | null

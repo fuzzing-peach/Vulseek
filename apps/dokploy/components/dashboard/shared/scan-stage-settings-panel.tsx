@@ -148,7 +148,15 @@ const STAGES: StageDefinition[] = [
 		role: "verification",
 		defaultConcurrency: 1,
 		maxConcurrency: 16,
-		description: "Verifies final critic-approved analysis results.",
+		description: "Sanity-checks final analysis facts.",
+	},
+	{
+		stageName: "triage",
+		label: "Triage",
+		role: "verification",
+		defaultConcurrency: 1,
+		maxConcurrency: 16,
+		description: "Classifies security impact after verification.",
 	},
 ];
 

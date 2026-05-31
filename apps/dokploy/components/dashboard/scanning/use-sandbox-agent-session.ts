@@ -12,7 +12,8 @@ type SandboxAgentSessionMetadata = {
 		| "fuzz_building"
 		| "fuzzing"
 		| "criticizing"
-		| "verifying";
+		| "verifying"
+		| "triaging";
 	containerName?: string | null;
 	baseUrl?: string | null;
 	provider?: "codex" | "claude";

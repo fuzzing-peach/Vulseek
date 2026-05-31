@@ -1,7 +1,4 @@
-import {
-	scanJobs,
-	tasks,
-} from "@dokploy/server/db/schema";
+import { scanJobs, tasks } from "@dokploy/server/db/schema";
 import type {
 	Analysis,
 	BuildFuzzerRequest,
@@ -18,6 +15,7 @@ import type {
 	Repository,
 	RepositoryModule,
 	RepositoryScanManifest,
+	Triage,
 	Verification,
 } from "./artifacts/contracts/domain-object.contract";
 export type {
@@ -36,10 +34,17 @@ export type {
 	Repository,
 	RepositoryModule,
 	RepositoryScanManifest,
+	Triage,
 	Verification,
 } from "./artifacts/contracts/domain-object.contract";
 
 export type ScanJob = typeof scanJobs.$inferSelect & {
+	inputTokens: number;
+	outputTokens: number;
+	thoughtTokens: number;
+	totalTokens: number;
+	cachedReadTokens: number;
+	cachedWriteTokens: number;
 	repositoryTaskId: string | null;
 	repositoryTaskStatus: typeof tasks.$inferSelect.status;
 };
@@ -53,7 +58,13 @@ export type VulnerabilityCandidate = {
 	filePath: string | null;
 	line: number | null;
 	vulnerabilityType: string | null;
-	status: "pending" | "launching" | "running" | "completed" | "failed" | "exited";
+	status:
+		| "pending"
+		| "launching"
+		| "running"
+		| "completed"
+		| "failed"
+		| "exited";
 	currentStage: "analyzing" | "fuzzing" | "verifying";
 	confidence: number | null;
 	score: number | null;
@@ -80,15 +91,9 @@ export type VerificationResult = {
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
 	result: Verification["result"];
-	isBug: boolean | null;
-	isSecurity: boolean | null;
 	confidence: number | null;
 	score: number | null;
 	reportPath: string | null;
-	issueDraftPath: string | null;
-	pocPath: string | null;
-	dockerfilePath: string | null;
-	runScriptPath: string | null;
 	runtimeSeconds: number | null;
 	threadId: string | null;
 	summary: string | null;
@@ -97,10 +102,35 @@ export type VerificationResult = {
 	status?: typeof tasks.$inferSelect.status;
 };
 
-export type VulnerabilityCandidateStage =
-	| "analyzing"
-	| "fuzzing"
-	| "verifying";
+export type TriageResult = {
+	taskId: string;
+	scanJobId: string;
+	vulnerabilityCandidateId: string;
+	result: Triage["result"];
+	securityClassification: Triage["securityClassification"];
+	isSecurityIssue: boolean;
+	impactType: string;
+	cvssVector: string | null;
+	cvssScore: number | null;
+	cvssSeverity: Triage["cvssSeverity"];
+	exploitability: Triage["exploitability"];
+	isExploitable: boolean | null;
+	commonTriggerConditions: string[];
+	hardeningOrRobustness: boolean;
+	epssProbability30d: number | null;
+	epssSource: string;
+	confidence: number | null;
+	score: number | null;
+	reportPath: string | null;
+	runtimeSeconds: number | null;
+	threadId: string | null;
+	summary: string | null;
+	createdAt: string;
+	updatedAt: string;
+	status?: typeof tasks.$inferSelect.status;
+};
+
+export type VulnerabilityCandidateStage = "analyzing" | "fuzzing" | "verifying";
 
 export type ScanCandidateQueueJob = {
 	scanJobId: string;

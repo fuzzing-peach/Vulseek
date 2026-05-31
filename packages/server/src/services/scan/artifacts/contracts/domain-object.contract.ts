@@ -27,11 +27,41 @@ export const analysisResultEnumSchema = z.enum([
 ]);
 
 export const verificationResultEnumSchema = z.enum([
-	"real_vulnerability",
-	"likely_vulnerability",
-	"plausible_but_unproven",
-	"false_positive",
-	"api_misuse",
+	"true",
+	"likely",
+	"false",
+]);
+
+export const triageResultEnumSchema = z.enum([
+	"security_issue",
+	"non_security",
+	"hardening",
+	"needs_review",
+]);
+
+export const triageSecurityClassificationSchema = z.enum([
+	"vulnerability",
+	"security_hardening",
+	"robustness",
+	"non_security",
+	"unknown",
+]);
+
+export const triageCvssSeveritySchema = z.enum([
+	"none",
+	"low",
+	"medium",
+	"high",
+	"critical",
+	"unknown",
+]);
+
+export const triageExploitabilitySchema = z.enum([
+	"none",
+	"theoretical",
+	"proof_of_concept",
+	"practical",
+	"unknown",
 ]);
 
 export const evidenceSchema = z.object({
@@ -337,20 +367,35 @@ export const verificationSchema = z.object({
 	// scanJobId: z.string().min(1),
 	// candidateId: z.string().min(1),
 	result: verificationResultEnumSchema,
-	isBug: z.boolean().nullable(),
-	isSecurity: z.boolean().nullable(),
 	summary: z.string(),
 	confidence: z.number().nullable(),
 	score: z.number().nullable(),
 	reportPath: z.string().nullable(),
-	issueDraftPath: z.string().nullable(),
-	pocPath: z.string().nullable(),
-	dockerfilePath: z.string().nullable(),
-	runScriptPath: z.string().nullable(),
 	runtimeSeconds: z.number().nullable(),
 	evidenceBundle: z.array(evidenceSchema),
-	verifiedAttackPath: z.array(z.string()),
-	reproductionSteps: z.array(z.string()),
+	residualUncertainty: z.array(z.string()),
+	status: scanTaskStatusSchema.optional(),
+});
+
+export const triageSchema = z.object({
+	id: z.string().min(1),
+	result: triageResultEnumSchema,
+	securityClassification: triageSecurityClassificationSchema,
+	isSecurityIssue: z.boolean(),
+	impactType: z.string(),
+	cvssVector: z.string().nullable(),
+	cvssScore: z.number().min(0).max(10).nullable(),
+	cvssSeverity: triageCvssSeveritySchema,
+	exploitability: triageExploitabilitySchema,
+	isExploitable: z.boolean().nullable(),
+	commonTriggerConditions: z.array(z.string()),
+	hardeningOrRobustness: z.boolean(),
+	epssProbability30d: z.number().min(0).max(1).nullable(),
+	epssSource: z.string(),
+	summary: z.string(),
+	reportPath: z.string().nullable(),
+	runtimeSeconds: z.number().nullable(),
+	evidenceBundle: z.array(evidenceSchema),
 	residualUncertainty: z.array(z.string()),
 	status: scanTaskStatusSchema.optional(),
 });
@@ -376,3 +421,4 @@ export type AnalysisFeedbackEnvelope = z.infer<
 >;
 export type FinalAnalysis = z.infer<typeof finalAnalysisSchema>;
 export type Verification = z.infer<typeof verificationSchema>;
+export type Triage = z.infer<typeof triageSchema>;

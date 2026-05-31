@@ -214,7 +214,8 @@ export type SandboxAgentTaskRuntime = {
 		| "fuzz_building"
 		| "fuzzing"
 		| "criticizing"
-		| "verifying";
+		| "verifying"
+		| "triaging";
 	status: string;
 	containerName: string | null;
 	sessionId: string | null;
@@ -364,6 +365,9 @@ const buildSandboxAgentTaskRuntime = async (
 			break;
 		case "verify":
 			taskKind = "verifying";
+			break;
+		case "triage":
+			taskKind = "triaging";
 			break;
 	}
 
