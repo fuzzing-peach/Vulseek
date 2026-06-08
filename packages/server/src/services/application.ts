@@ -102,7 +102,13 @@ export const createApplication = async (
 				fullScanFunctionConcurrency: 4,
 				scanStageSettings: {},
 			})
-			.returning()
+			.returning({
+				applicationId: applications.applicationId,
+				appName: applications.appName,
+				name: applications.name,
+				environmentId: applications.environmentId,
+				serverId: applications.serverId,
+			})
 			.then((value) => value[0]);
 
 		if (!newApplication) {

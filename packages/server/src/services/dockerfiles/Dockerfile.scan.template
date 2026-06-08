@@ -77,7 +77,7 @@ RUN python3 -m pip config set global.index-url "$PIP_INDEX_URL" \
     && python3 -m pip config set global.trusted-host "$PIP_TRUSTED_HOST"
 RUN --mount=type=cache,id=dokploy-pip-cache,target=/root/.cache/pip,sharing=locked \
     PIPX_BIN_DIR=/usr/local/bin pipx install semgrep \
-    && semgrep --version
+    && env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy semgrep --version
 
 # Vulseek parsing helpers
 RUN --mount=type=cache,id=dokploy-pip-cache,target=/root/.cache/pip,sharing=locked \
@@ -104,6 +104,8 @@ RUN --mount=type=cache,id=dokploy-npm-cache,target=/root/.npm,sharing=locked \
     && patch -d "$(npm root -g)/sandbox-agent" -p1 < /tmp/dokploy-sandbox-agent.patch \
     && grep -R "async loadSession(" "$(npm root -g)/sandbox-agent/dist" >/dev/null \
     && grep -R "async forkSession(" "$(npm root -g)/sandbox-agent/dist" >/dev/null \
+    && grep -R "session/close" "$(npm root -g)/sandbox-agent/dist" >/dev/null \
+    && grep -R "this.unbindSession(localSessionId, agentSessionId)" "$(npm root -g)/sandbox-agent/dist" >/dev/null \
     && rm -f /tmp/dokploy-sandbox-agent.patch
 RUN --mount=type=cache,id=dokploy-npm-cache,target=/root/.npm,sharing=locked \
     npm install -g @sandbox-agent/cli@0.4.x \
@@ -171,11 +173,80 @@ RUN --mount=type=cache,id=dokploy-cargo-registry,target=/root/.cargo/registry,sh
     && install -m 0755 /tmp/cargo-target/release/codex-acp /tmp/dokploy-codex-acp \
     && test -x /tmp/dokploy-codex-acp
 
-FROM tools AS final
+FROM ubuntu:24.04 AS repository-source
 
 ARG GIT_URL="<GIT_URL>"
 ARG GIT_BRANCH="<GIT_BRANCH>"
 ARG ENABLE_SUBMODULES="false"
+ARG GIT_TAG_WINDOW="5"
+ARG DEBIAN_FRONTEND=noninteractive
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
+ENV HTTP_PROXY=$HTTP_PROXY \
+    HTTPS_PROXY=$HTTPS_PROXY \
+    NO_PROXY=$NO_PROXY \
+    http_proxy=$http_proxy \
+    https_proxy=$https_proxy \
+    no_proxy=$no_proxy
+
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.ustc.edu.cn/ubuntu/|g; s|http://security.ubuntu.com/ubuntu/|http://mirrors.ustc.edu.cn/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
+
+RUN rm -f /etc/apt/apt.conf.d/docker-clean \
+    && printf '%s\n' 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
+      > /etc/apt/apt.conf.d/keep-cache
+
+RUN --mount=type=cache,id=dokploy-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=dokploy-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+RUN set -eux; \
+    git init repo; \
+    cd repo; \
+    git remote add origin "${GIT_URL}"; \
+    git fetch --progress --depth=1 origin "refs/tags/*:refs/tags/*" || true; \
+    tags="$(git for-each-ref --sort=-creatordate --format="%(refname:short)" refs/tags \
+      | head -n "${GIT_TAG_WINDOW}")"; \
+    if [ -n "${tags}" ]; then \
+      selected_tags="$(printf '%s\n' ${tags} | tr '\n' ' ')"; \
+      git for-each-ref --format="%(refname) %(refname:short)" refs/tags \
+        | while read -r ref tag; do \
+            case " ${selected_tags} " in \
+              *" ${tag} "*) ;; \
+              *) git update-ref -d "${ref}" ;; \
+            esac; \
+          done; \
+      git reflog expire --expire=now --all; \
+      git gc --prune=now; \
+      oldest_tag_date="$(for tag in ${tags}; do git log -1 --format=%cI "refs/tags/${tag}"; done | sort | head -n 1)"; \
+      fetch_since="$(date -u -d "${oldest_tag_date} - 1 day" +%Y-%m-%dT%H:%M:%SZ)"; \
+      fetch_args="--shallow-since=${fetch_since}"; \
+    else \
+      fetch_args="--depth=200"; \
+    fi; \
+    if git ls-remote --exit-code --heads origin "${GIT_BRANCH}" >/dev/null; then \
+      git fetch --progress ${fetch_args} origin "refs/heads/${GIT_BRANCH}:refs/remotes/origin/${GIT_BRANCH}"; \
+      git checkout -B "${GIT_BRANCH}" "refs/remotes/origin/${GIT_BRANCH}"; \
+    elif git ls-remote --exit-code --tags origin "${GIT_BRANCH}" >/dev/null; then \
+      git fetch --progress --depth=1 origin "refs/tags/${GIT_BRANCH}:refs/tags/${GIT_BRANCH}"; \
+      git checkout --detach "refs/tags/${GIT_BRANCH}"; \
+    else \
+      git fetch --progress ${fetch_args} origin "${GIT_BRANCH}"; \
+      git checkout --detach FETCH_HEAD; \
+    fi; \
+    if [ "${ENABLE_SUBMODULES}" = "true" ]; then \
+      git submodule update --init --recursive --depth=1; \
+    fi
+
+FROM tools AS final
 
 COPY --from=codex-acp-builder /tmp/dokploy-codex-acp /usr/local/bin/dokploy-codex-acp
 RUN install -m 0755 /usr/local/bin/dokploy-codex-acp \
@@ -184,11 +255,7 @@ RUN install -m 0755 /usr/local/bin/dokploy-codex-acp \
 
 WORKDIR /workspace
 
-RUN if [ "${ENABLE_SUBMODULES}" = "true" ]; then \
-      git clone --progress --recursive --branch "${GIT_BRANCH}" "${GIT_URL}" repo; \
-    else \
-      git clone --progress --branch "${GIT_BRANCH}" "${GIT_URL}" repo; \
-    fi
+COPY --from=repository-source /workspace/repo /workspace/repo
 
 WORKDIR /workspace/repo
 

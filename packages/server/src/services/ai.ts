@@ -3,7 +3,7 @@ import { agentProfiles, ai } from "@dokploy/server/db/schema";
 import { selectAIProvider } from "@dokploy/server/utils/ai/select-ai-provider";
 import { TRPCError } from "@trpc/server";
 import { generateObject } from "ai";
-import { desc, eq } from "drizzle-orm";
+import { asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { IS_CLOUD } from "../constants";
 import { findOrganizationById } from "./admin";
@@ -57,7 +57,11 @@ export const getAgentProfilesByOrganizationId = async (
 ) => {
 	return await db.query.agentProfiles.findMany({
 		where: eq(agentProfiles.organizationId, organizationId),
-		orderBy: desc(agentProfiles.createdAt),
+		orderBy: [
+			asc(agentProfiles.name),
+			asc(agentProfiles.createdAt),
+			asc(agentProfiles.agentProfileId),
+		],
 	});
 };
 

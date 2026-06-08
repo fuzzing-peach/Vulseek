@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { execAsync } from "../../../utils/process/execAsync";
 import { findScanJobByIdRepo } from "../persistence/scan-job.repo";
+import { stopSandboxAgentServerInContainer } from "../../sandbox-agent/runtime";
 import {
 	bindStageLaneRuntimeRepo,
 	claimIdleStageLaneRuntimeRepo,
@@ -20,10 +21,12 @@ import {
 	resetClaimedStageLaneRuntimeForFreshStartRepo,
 	resetStageLaneRuntimeByLaneForExitRepo,
 	resetStageLaneRuntimeForExitRepo,
+	resetStageLaneRuntimeSessionForExitRepo,
 	type StageLaneRuntime,
 } from "../persistence/stage-lane-runtime.repo";
 import {
 	countActiveTasksByScanJobAndStageRepo,
+	countTasksByScanJobStageAndStatusRepo,
 	findTaskByIdRepo,
 	listActiveTasksByScanJobAndStageRepo,
 	listTasksByScanJobIdRepo,
@@ -84,6 +87,14 @@ const hasPipelineScanJobContext = (
 
 const refreshPipelineState = async (ctx: unknown) => {
 	await (ctx as PipelineRefreshContext).refreshPipelineState?.();
+};
+
+const schedulePipelineStateRefresh = (ctx: unknown) => {
+	void refreshPipelineState(ctx).catch((error) => {
+		logPipelineEvent("pipeline_state.refresh_failed", {
+			errorMessage: getErrorMessage(error),
+		});
+	});
 };
 
 const getErrorMessage = (error: unknown) =>
@@ -157,20 +168,8 @@ const defaultValidateOutput = async <TOutput>(
 const ensureTaskRuntimeDirectory = async (ctx: StageContext) => {
 	const taskDirPath = await ctx.taskDir();
 	await fs.mkdir(taskDirPath, { recursive: true });
-	if (ctx.persistent && ctx.laneIndex !== null) {
-		const laneDirPath = await ctx.laneDir();
-		const taskInputsPath = path.join(taskDirPath, "inputs");
-		const laneInputsPath = path.join(laneDirPath, "inputs");
-		const hasTaskInputs = await fs.stat(taskInputsPath).catch(() => null);
-		if (hasTaskInputs?.isDirectory()) {
-			await fs.rm(laneInputsPath, { recursive: true, force: true });
-			await fs.mkdir(path.dirname(laneInputsPath), { recursive: true });
-			await fs.cp(taskInputsPath, laneInputsPath, { recursive: true });
-		} else {
-			await fs.rm(laneInputsPath, { recursive: true, force: true }).catch(
-				() => {},
-			);
-		}
+	if (ctx.laneIndex !== null) {
+		await ctx.laneDir();
 	}
 	return {
 		taskDir: taskDirPath,
@@ -179,10 +178,7 @@ const ensureTaskRuntimeDirectory = async (ctx: StageContext) => {
 };
 
 const getTaskRuntimePaths = async (ctx: StageContext) => {
-	const taskDir =
-		ctx.persistent && ctx.laneIndex !== null
-			? await ctx.laneDir()
-			: await ctx.taskDir();
+	const taskDir = await ctx.taskDir();
 	const runtimeBase = SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl.replace(
 		/\.jsonl$/i,
 		"",
@@ -215,6 +211,12 @@ const copyPersistentLaneArtifactsToTaskDir = async (ctx: StageContext) => {
 		"sandbox-agent-driver.pid",
 		"sandbox-agent-driver.mjs",
 		"sandbox-agent-driver-launch.sh",
+		"output.json",
+		SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl,
+		SANDBOX_AGENT_RUNTIME_FILE_NAMES.text,
+		SANDBOX_AGENT_RUNTIME_FILE_NAMES.stderr,
+		SANDBOX_AGENT_RUNTIME_FILE_NAMES.stdout,
+		SANDBOX_AGENT_RUNTIME_FILE_NAMES.usage,
 	]);
 	const entries = await fs.readdir(laneDir, { withFileTypes: true }).catch(
 		() => [],
@@ -677,6 +679,20 @@ const cleanupTaskContainer = async (taskId: string) => {
 	await removeContainer(task.containerName).catch(() => {});
 };
 
+const stopReusableSandboxAgentForTask = async (taskId: string) => {
+	const task = await findTaskByIdRepo(taskId).catch(() => null);
+	if (!task?.containerName) {
+		return;
+	}
+	await stopSandboxAgentServerInContainer({
+		containerName: task.containerName,
+	});
+};
+
+const shouldRemoveContainerAfterTask = (
+	stage: Pick<StageDefinition<PipelineContext, unknown, unknown>, "reuseContainer">,
+) => !(stage.reuseContainer ?? true);
+
 const cleanupFailedTaskRuntime = async (taskId: string) => {
 	const [task, lane] = await Promise.all([
 		findTaskByIdRepo(taskId).catch(() => null),
@@ -970,6 +986,7 @@ const createStageContextForTask = async <
 		taskId: string;
 		name: string;
 		input?: unknown;
+		containerIndex?: number | null;
 		runtimeMode?: "new_session" | "fork_session" | null;
 		forkedFromTaskId?: string | null;
 		forkedFromThreadId?: string | null;
@@ -984,6 +1001,7 @@ const createStageContextForTask = async <
 	const groupedPersistent = Boolean(
 		laneRuntime && getStageGroup(runtime.pipeline, task.stageName),
 	);
+	const stageDefinition = runtime.stageStates.get(task.stageName)?.stage;
 	return createStageContext({
 		base: runtime.ctx,
 		stageName: task.stageName,
@@ -994,9 +1012,11 @@ const createStageContextForTask = async <
 		},
 		taskId: task.taskId,
 		taskName: task.name || resolveStageTaskName(task.stageName, task.input),
-		persistent: Boolean(laneRuntime),
+		persistent: Boolean(stageDefinition?.persistent ?? Boolean(laneRuntime)),
+		reuseContainer: stageDefinition?.reuseContainer ?? true,
 		groupedPersistent,
 		allowAgentExit: task.stageName === SCAN_STAGE_IDS.analysis,
+		containerIndex: laneRuntime?.laneIndex ?? task.containerIndex ?? null,
 		laneIndex: laneRuntime?.laneIndex ?? null,
 		laneThreadId: laneRuntime?.threadId ?? null,
 		sessionMode: task.runtimeMode === "fork_session" ? "fork" : "new",
@@ -1356,6 +1376,7 @@ const createTaskStageContext = <
 		forkedFromTaskId?: string | null;
 		forkedFromThreadId?: string | null;
 		laneRuntime?: StageLaneRuntime | null;
+		containerIndex?: number | null;
 		routeOutputSchemas?: StageContext["routeOutputSchemas"];
 		taskName?: string | null;
 		groupedPersistent?: boolean;
@@ -1377,9 +1398,12 @@ const createTaskStageContext = <
 		taskName,
 		routeOutputSchemas: taskRuntime?.routeOutputSchemas,
 		persistent: stage.persistent ?? true,
+		reuseContainer: stage.reuseContainer ?? true,
 		groupedPersistent: taskRuntime?.groupedPersistent ?? false,
 		allowAgentExit:
 			taskRuntime?.allowAgentExit ?? stage.id === SCAN_STAGE_IDS.analysis,
+		containerIndex:
+			taskRuntime?.containerIndex ?? taskRuntime?.laneRuntime?.laneIndex ?? null,
 		laneIndex: taskRuntime?.laneRuntime?.laneIndex ?? null,
 		laneThreadId: taskRuntime?.laneRuntime?.threadId ?? null,
 		sessionMode: taskRuntime?.laneRuntime?.threadId
@@ -1568,7 +1592,26 @@ const persistTerminalSuccess = async <
 		runtime?: JobRuntime<TPipelineContext>;
 	},
 ) => {
+	const persistStartedAt = Date.now();
+	const logPersistTiming = (
+		step: string,
+		startedAt: number,
+		extra: Record<string, unknown> = {},
+	) => {
+		logPipelineEvent("stage.persist_success_timing", {
+			scanJobId: stageCtx.scanJobId,
+			stageName: stage.id,
+			taskId: stageCtx.taskId,
+			taskName: stageCtx.taskName,
+			step,
+			elapsedMs: Date.now() - startedAt,
+			totalElapsedMs: Date.now() - persistStartedAt,
+			...extra,
+		});
+	};
+	let stepStartedAt = Date.now();
 	const currentTask = await findTaskByIdRepo(stageCtx.taskId).catch(() => null);
+	logPersistTiming("find_current_task", stepStartedAt);
 	if (
 		currentTask &&
 		currentTask.status !== "launching" &&
@@ -1583,6 +1626,7 @@ const persistTerminalSuccess = async <
 		});
 		return false;
 	}
+	stepStartedAt = Date.now();
 	const usagePatch = await readTaskTokenUsage(stageCtx).catch(() => ({
 		inputTokens: null,
 		outputTokens: null,
@@ -1591,8 +1635,14 @@ const persistTerminalSuccess = async <
 		cachedReadTokens: null,
 		cachedWriteTokens: null,
 	}));
+	logPersistTiming("read_token_usage", stepStartedAt);
+	stepStartedAt = Date.now();
 	const shouldMarkTaskExited =
 		Boolean(options?.exitReason) && (await isStageGroupLeaderTask(currentTask));
+	logPersistTiming("check_group_leader_exit", stepStartedAt, {
+		shouldMarkTaskExited,
+	});
+	stepStartedAt = Date.now();
 	const updated = await transitionTaskStatusRepo({
 		taskId: stageCtx.taskId,
 		from: ["launching", "running"],
@@ -1608,19 +1658,47 @@ const persistTerminalSuccess = async <
 				}
 			: usagePatch,
 	});
+	logPersistTiming("transition_task_status", stepStartedAt, {
+		updated: Boolean(updated),
+	});
 	if (!updated) {
 		return false;
 	}
-	await refreshPipelineState(ctx);
-	if (stage.persistent ?? true) {
+	if (!(stage.persistent ?? true) && (stage.reuseContainer ?? true)) {
+		stepStartedAt = Date.now();
+		await stopReusableSandboxAgentForTask(stageCtx.taskId);
+		logPersistTiming("stop_reusable_sandbox_agent", stepStartedAt);
+	}
+	stepStartedAt = Date.now();
+	schedulePipelineStateRefresh(ctx);
+	logPersistTiming("schedule_pipeline_state_refresh", stepStartedAt);
+	stepStartedAt = Date.now();
+	if (stageCtx.laneIndex !== null) {
 		if (options?.exitLane) {
-			await cleanupPersistentLaneForTask(stageCtx.taskId, options.runtime);
+			if (shouldRemoveContainerAfterTask(stage)) {
+				await cleanupPersistentLaneForTask(stageCtx.taskId, options.runtime);
+			} else {
+				await resetStageLaneRuntimeSessionForExitRepo({
+					taskId: stageCtx.taskId,
+				}).catch(() => {});
+			}
 		} else {
-			await releasePersistentLaneForTask(stageCtx.taskId);
+			if (stage.persistent ?? true) {
+				await releasePersistentLaneForTask(stageCtx.taskId);
+			} else {
+				await resetStageLaneRuntimeSessionForExitRepo({
+					taskId: stageCtx.taskId,
+				}).catch(() => {});
+			}
 		}
 	} else {
-		await cleanupTaskContainer(stageCtx.taskId);
+		if (shouldRemoveContainerAfterTask(stage)) {
+			await cleanupTaskContainer(stageCtx.taskId);
+		}
 	}
+	logPersistTiming("cleanup_or_release_runtime", stepStartedAt, {
+		laneIndex: stageCtx.laneIndex,
+	});
 	logPipelineEvent("loop.task_completed", {
 		scanJobId: stageCtx.scanJobId,
 		stageName: stage.id,
@@ -2005,6 +2083,28 @@ const isJobRuntimeQuiescent = async <TPipelineContext extends PipelineContext>(
 	return true;
 };
 
+const claimReusableContainerIndexForStage = async (input: {
+	scanJobId: string;
+	stageName: string;
+	containerCount: number;
+}) => {
+	const activeTasks = await listActiveTasksByScanJobAndStageRepo({
+		scanJobId: input.scanJobId,
+		stageName: input.stageName,
+	});
+	const usedIndexes = new Set(
+		activeTasks
+			.map((task) => task.containerIndex)
+			.filter((value): value is number => typeof value === "number"),
+	);
+	for (let index = 0; index < input.containerCount; index += 1) {
+		if (!usedIndexes.has(index)) {
+			return index;
+		}
+	}
+	return null;
+};
+
 const launchStageExecution = async <
 	TPipelineContext extends PipelineContext,
 	TInput,
@@ -2015,6 +2115,24 @@ const launchStageExecution = async <
 	execution: StageExecution<TInput>,
 	options?: { logEvent?: string },
 ) => {
+	const launchStartedAt = Date.now();
+	const logLaunchTiming = (
+		step: string,
+		startedAt: number,
+		extra: Record<string, unknown> = {},
+	) => {
+		logPipelineEvent("stage.launch_timing", {
+			scanJobId: runtime.ctx.scanJobId,
+			pipelineName: runtime.pipeline.name,
+			stageName: stageState.stageName,
+			taskId: execution.taskId,
+			step,
+			elapsedMs: Date.now() - startedAt,
+			totalElapsedMs: Date.now() - launchStartedAt,
+			...extra,
+		});
+	};
+	let stepStartedAt = Date.now();
 	const limit = await getStageConcurrencyLimit(stageState.stage, runtime.ctx);
 	const pendingTask = await findTaskByIdRepo(execution.taskId).catch(
 		() => null,
@@ -2027,15 +2145,26 @@ const launchStageExecution = async <
 		runtime.pipeline,
 		stageState.stageName,
 	);
+	const persistentBacked = stageState.stage.persistent ?? true;
+	const reuseContainer = stageState.stage.reuseContainer ?? true;
+	logLaunchTiming("load_pending_and_scope", stepStartedAt, {
+		concurrencyLimit: limit,
+		persistent: persistentBacked,
+		reuseContainer,
+		hasPendingTask: Boolean(pendingTask),
+		groupName: group?.name ?? null,
+		leaderGroupName: leaderGroup?.name ?? null,
+	});
+	stepStartedAt = Date.now();
 	const boundMembership =
-		pendingTask?.stageGroupInstanceId && (stageState.stage.persistent ?? true)
+		pendingTask?.stageGroupInstanceId && persistentBacked
 			? await findStageGroupLaneMembershipRepo({
 					groupInstanceId: pendingTask.stageGroupInstanceId,
 					stageName: stageState.stageName,
 				}).catch(() => null)
 			: null;
 	const reservedLaneIndexes =
-		!boundMembership && (stageState.stage.persistent ?? true)
+		!boundMembership && persistentBacked
 			? await listReservedLaneIndexesForStage({
 					scanJobId: runtime.ctx.scanJobId,
 					stageName: stageState.stageName,
@@ -2051,7 +2180,7 @@ const launchStageExecution = async <
 				laneCount: limit,
 				taskId: execution.taskId,
 			})
-		: (stageState.stage.persistent ?? true)
+		: persistentBacked
 			? await claimIdleStageLaneRuntimeRepo({
 					scanJobId: runtime.ctx.scanJobId,
 					stageName: stageState.stageName,
@@ -2062,16 +2191,50 @@ const launchStageExecution = async <
 					excludedLaneIndexes: reservedLaneIndexes,
 				})
 			: null;
-	if ((stageState.stage.persistent ?? true) && !laneRuntime) {
+	logLaunchTiming("claim_lane", stepStartedAt, {
+		laneIndex: laneRuntime?.laneIndex ?? null,
+		boundLaneIndex: boundMembership?.laneIndex ?? null,
+		reservedLaneIndexes,
+	});
+	if (persistentBacked && !laneRuntime) {
 		await stageState.stage.queue
 			?.enqueue(execution.taskId, queueScope)
 			.catch(() => {});
+		logLaunchTiming("requeue_no_lane", launchStartedAt);
 		return false;
 	}
+	stepStartedAt = Date.now();
+	const containerIndex = laneRuntime
+		? laneRuntime.laneIndex
+		: reuseContainer
+			? await claimReusableContainerIndexForStage({
+					scanJobId: runtime.ctx.scanJobId,
+					stageName: stageState.stageName,
+					containerCount: limit,
+				})
+			: null;
+	logLaunchTiming("claim_container", stepStartedAt, {
+		containerIndex,
+	});
+	if (reuseContainer && containerIndex === null) {
+		await stageState.stage.queue
+			?.enqueue(execution.taskId, queueScope)
+			.catch(() => {});
+		logLaunchTiming("requeue_no_container", launchStartedAt);
+		return false;
+	}
+	stepStartedAt = Date.now();
 	const launched = await transitionTaskStatusRepo({
 		taskId: execution.taskId,
 		from: ["pending"],
 		to: "launching",
+		patch: {
+			containerIndex,
+		},
+	});
+	logLaunchTiming("transition_launching", stepStartedAt, {
+		launched: Boolean(launched),
+		containerIndex,
 	});
 	if (!launched) {
 		if (laneRuntime) {
@@ -2080,6 +2243,7 @@ const launchStageExecution = async <
 		return false;
 	}
 
+	stepStartedAt = Date.now();
 	if (laneRuntime && leaderGroup) {
 		const existingGroup = pendingTask?.stageGroupInstanceId
 			? await findStageGroupInstanceByIdRepo(
@@ -2113,9 +2277,15 @@ const launchStageExecution = async <
 			role: "member",
 		});
 	}
+	logLaunchTiming("stage_group_membership", stepStartedAt, {
+		laneIndex: laneRuntime?.laneIndex ?? null,
+		stageGroupInstanceId: launched.stageGroupInstanceId ?? null,
+	});
 
+	stepStartedAt = Date.now();
 	if (
 		laneRuntime &&
+		(stageState.stage.persistent ?? true) &&
 		laneRuntime.threadId &&
 		!pendingTask?.stageGroupInstanceId &&
 		((laneRuntime.forkedFromTaskId ?? null) !==
@@ -2143,7 +2313,12 @@ const launchStageExecution = async <
 			laneIndex: laneRuntime.laneIndex,
 		});
 	}
+	logLaunchTiming("stale_lane_check", stepStartedAt, {
+		laneIndex: laneRuntime?.laneIndex ?? null,
+		threadId: laneRuntime?.threadId ?? null,
+	});
 
+	stepStartedAt = Date.now();
 	const stageCtx = createTaskStageContext(
 		stageState.stage,
 		runtime.ctx,
@@ -2152,6 +2327,7 @@ const launchStageExecution = async <
 		{
 			...launched,
 			laneRuntime,
+			containerIndex,
 			routeOutputSchemas: getStageRouteOutputSchemas(
 				runtime.pipeline,
 				stageState.stageName,
@@ -2161,7 +2337,12 @@ const launchStageExecution = async <
 			allowAgentExit: stageState.stageName === SCAN_STAGE_IDS.analysis,
 		},
 	).stageCtx;
+	logLaunchTiming("create_stage_context", stepStartedAt, {
+		laneIndex: laneRuntime?.laneIndex ?? null,
+		containerIndex,
+	});
 	try {
+		stepStartedAt = Date.now();
 		await ensureTaskRuntimeDirectory(stageCtx);
 		await assertScanJobNotCancelled(stageCtx);
 		if (stageState.stage.validateInput) {
@@ -2175,9 +2356,18 @@ const launchStageExecution = async <
 				);
 			}
 		}
+		logLaunchTiming("ensure_runtime_and_validate", stepStartedAt);
 
+		stepStartedAt = Date.now();
 		const runResult = await stageState.stage.run(stageCtx, execution.input);
+		logLaunchTiming("stage_run", stepStartedAt, {
+			completion: runResult.completion,
+			threadId: "threadId" in runResult ? runResult.threadId : null,
+			laneIndex: laneRuntime?.laneIndex ?? null,
+			containerIndex,
+		});
 		if (runResult.completion === "immediate") {
+			stepStartedAt = Date.now();
 			const output = await prepareStageSuccess(
 				stageState.stage,
 				runtime.ctx,
@@ -2185,12 +2375,14 @@ const launchStageExecution = async <
 				execution.input,
 				runResult.rawOutput,
 			);
+			logLaunchTiming("prepare_immediate_success", stepStartedAt);
 			validateSelectedDownstreamOutput(
 				runtime,
 				stageState.stageName,
 				output,
 				null,
 			);
+			stepStartedAt = Date.now();
 			const terminalUpdated = await persistTerminalSuccess(
 				stageState.stage,
 				runtime.ctx,
@@ -2198,7 +2390,11 @@ const launchStageExecution = async <
 				runResult.rawOutput,
 				{ runtime },
 			);
+			logLaunchTiming("persist_immediate_success", stepStartedAt, {
+				terminalUpdated,
+			});
 			if (terminalUpdated) {
+				stepStartedAt = Date.now();
 				await dispatchPipelineDownstream(
 					runtime,
 					stageState.stageName,
@@ -2207,6 +2403,7 @@ const launchStageExecution = async <
 					output,
 					null,
 				);
+				logLaunchTiming("dispatch_immediate_downstream", stepStartedAt);
 				await maybeMarkTaskStageGroupExited(execution.taskId, runtime);
 			}
 		}
@@ -2234,6 +2431,7 @@ const launchStageExecution = async <
 				patch: {
 					attempt: nextAttempt,
 					containerName: null,
+					containerIndex: null,
 					threadId: null,
 					errorMessage: `Transient runtime launch failure; retry ${nextAttempt}/${MAX_TRANSIENT_LAUNCH_RETRIES}: ${getErrorMessage(error)}`,
 				},
@@ -2282,6 +2480,26 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 	stageState: RuntimeStageState<TPipelineContext>,
 	task: Awaited<ReturnType<typeof findTaskByIdRepo>>,
 ) => {
+	const inspectStartedAt = Date.now();
+	const logInspectTiming = (
+		step: string,
+		startedAt: number,
+		extra: Record<string, unknown> = {},
+	) => {
+		logPipelineEvent("stage.inspect_timing", {
+			scanJobId: runtime.ctx.scanJobId,
+			pipelineName: runtime.pipeline.name,
+			stageName: stageState.stageName,
+			taskId: task.taskId,
+			taskName: task.name,
+			status: task.status,
+			step,
+			elapsedMs: Date.now() - startedAt,
+			totalElapsedMs: Date.now() - inspectStartedAt,
+			...extra,
+		});
+	};
+	let stepStartedAt = Date.now();
 	const stageCtx = await createStageContextForTask(runtime, task);
 	const input = task.input as unknown;
 	const { stdoutPath, stderrPath } = await getTaskRuntimePaths(stageCtx);
@@ -2289,8 +2507,10 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 		readFileIfExists(stdoutPath),
 		readFileIfExists(stderrPath),
 	]);
+	logInspectTiming("load_runtime_logs", stepStartedAt);
 
 	if (task.status === "launching") {
+		stepStartedAt = Date.now();
 		const threadId = extractThreadIdFromStdout(stdoutContent);
 		if (threadId) {
 			const lane = await findStageLaneRuntimeByActiveTaskIdRepo(task.taskId);
@@ -2318,11 +2538,13 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 				taskName: task.name,
 				threadId,
 			});
+			logInspectTiming("transition_running", stepStartedAt, { threadId });
 			return true;
 		}
 
 		const exitCode = extractDriverExitCode(stderrContent);
 		if (exitCode !== null) {
+			stepStartedAt = Date.now();
 			await persistTerminalFailure(
 				stageState.stage,
 				runtime.ctx,
@@ -2332,15 +2554,20 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 					? new Error("Sandbox agent driver exited before reporting THREAD_ID")
 					: new Error(
 							`Sandbox agent driver exited with code ${exitCode} before reporting THREAD_ID`,
-						),
+					),
 			);
 			await maybeMarkTaskStageGroupExited(task.taskId, runtime);
-			await backfillStageQueue(runtime, stageState);
+			logInspectTiming("persist_launch_failure", stepStartedAt, { exitCode });
 			return true;
 		}
 
+		stepStartedAt = Date.now();
 		const containerAlive = await isContainerAlive(task.containerName);
+		logInspectTiming("launching_container_alive", stepStartedAt, {
+			containerAlive,
+		});
 		if (!containerAlive) {
+			stepStartedAt = Date.now();
 			await persistTerminalFailure(
 				stageState.stage,
 				runtime.ctx,
@@ -2349,15 +2576,21 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 				new Error("Task runtime container stopped before reporting THREAD_ID"),
 			);
 			await maybeMarkTaskStageGroupExited(task.taskId, runtime);
-			await backfillStageQueue(runtime, stageState);
+			logInspectTiming("persist_container_stopped_failure", stepStartedAt);
 			return true;
 		}
 
+		stepStartedAt = Date.now();
 		const halfStarted = await inspectHalfStartedRunningTask(runtime, {
 			...task,
 			status: "running",
 		});
+		logInspectTiming("inspect_half_started", stepStartedAt, {
+			halfStarted: Boolean(halfStarted),
+			reason: halfStarted?.reason ?? null,
+		});
 		if (halfStarted) {
+			stepStartedAt = Date.now();
 			await persistTerminalFailure(
 				stageState.stage,
 				runtime.ctx,
@@ -2366,7 +2599,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 				new Error(`Task became silently stuck: ${halfStarted.reason}`),
 			);
 			await maybeMarkTaskStageGroupExited(task.taskId, runtime);
-			await backfillStageQueue(runtime, stageState);
+			logInspectTiming("persist_half_started_failure", stepStartedAt);
 			return true;
 		}
 		return false;
@@ -2374,8 +2607,15 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 
 	let resolvedOutput: Awaited<ReturnType<typeof resolveStageRawOutput>>;
 	try {
+		stepStartedAt = Date.now();
 		resolvedOutput = await resolveStageRawOutput(stageCtx);
+		logInspectTiming("resolve_stage_raw_output", stepStartedAt, {
+			hasRawOutput: resolvedOutput.rawOutput !== null,
+			hasExitSignal: resolvedOutput.hasExitSignal,
+			routeKey: resolvedOutput.routeKey ?? null,
+		});
 	} catch (error) {
+		stepStartedAt = Date.now();
 		await persistTerminalFailure(
 			stageState.stage,
 			runtime.ctx,
@@ -2384,7 +2624,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			error,
 		);
 		await maybeMarkTaskStageGroupExited(task.taskId, runtime);
-		await backfillStageQueue(runtime, stageState);
+		logInspectTiming("persist_resolve_failure", stepStartedAt);
 		return true;
 	}
 	const {
@@ -2395,6 +2635,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 	} = resolvedOutput;
 	if (rawOutput !== null) {
 		try {
+			stepStartedAt = Date.now();
 			const output = await prepareStageSuccess(
 				stageState.stage,
 				runtime.ctx,
@@ -2402,12 +2643,16 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 				input,
 				rawOutput,
 			);
+			logInspectTiming("prepare_stage_success", stepStartedAt);
+			stepStartedAt = Date.now();
 			validateSelectedDownstreamOutput(
 				runtime,
 				stageState.stageName,
 				output,
 				routeKey,
 			);
+			logInspectTiming("validate_downstream_output", stepStartedAt);
+			stepStartedAt = Date.now();
 			const terminalUpdated = await persistTerminalSuccess(
 				stageState.stage,
 				runtime.ctx,
@@ -2419,8 +2664,11 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 					runtime,
 				},
 			);
+			logInspectTiming("persist_terminal_success", stepStartedAt, {
+				terminalUpdated,
+			});
 			if (terminalUpdated) {
-				await backfillStageQueue(runtime, stageState);
+				stepStartedAt = Date.now();
 				await dispatchPipelineDownstream(
 					runtime,
 					stageState.stageName,
@@ -2429,10 +2677,14 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 					output,
 					routeKey,
 				);
+				logInspectTiming("dispatch_pipeline_downstream", stepStartedAt);
+				stepStartedAt = Date.now();
 				await maybeMarkTaskStageGroupExited(task.taskId, runtime);
+				logInspectTiming("maybe_mark_group_exited", stepStartedAt);
 			}
 		} catch (error) {
 			if (hasExitSignal) {
+				stepStartedAt = Date.now();
 				await updateTaskRepo(task.taskId, {
 					errorMessage: getErrorMessage(error),
 				}).catch(() => {});
@@ -2443,7 +2695,9 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 					rawOutput,
 					{ exitLane: true, exitReason: "agent_exit", runtime },
 				);
+				logInspectTiming("persist_exit_lane_success_with_error", stepStartedAt);
 			} else {
+				stepStartedAt = Date.now();
 				await persistTerminalFailure(
 					stageState.stage,
 					runtime.ctx,
@@ -2453,14 +2707,15 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 					{ exitLane: hasExitSignal },
 				);
 				await maybeMarkTaskStageGroupExited(task.taskId, runtime);
+				logInspectTiming("persist_success_handling_failure", stepStartedAt);
 			}
-			await backfillStageQueue(runtime, stageState);
 		}
 		return true;
 	}
 
 	const exitCode = extractDriverExitCode(rawStderrContent);
 	if (exitCode !== null) {
+		stepStartedAt = Date.now();
 		await persistTerminalFailure(
 			stageState.stage,
 			runtime.ctx,
@@ -2474,11 +2729,12 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			{ exitLane: hasExitSignal },
 		);
 		await maybeMarkTaskStageGroupExited(task.taskId, runtime);
-		await backfillStageQueue(runtime, stageState);
+		logInspectTiming("persist_driver_exit_failure", stepStartedAt, { exitCode });
 		return true;
 	}
 
 	if (hasDriverCompletedWithoutEndTurn(rawStderrContent)) {
+		stepStartedAt = Date.now();
 		await persistTerminalFailure(
 			stageState.stage,
 			runtime.ctx,
@@ -2488,12 +2744,15 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			{ exitLane: hasExitSignal },
 		);
 		await maybeMarkTaskStageGroupExited(task.taskId, runtime);
-		await backfillStageQueue(runtime, stageState);
+		logInspectTiming("persist_completed_without_end_turn_failure", stepStartedAt);
 		return true;
 	}
 
+	stepStartedAt = Date.now();
 	const containerAlive = await isContainerAlive(task.containerName);
+	logInspectTiming("running_container_alive", stepStartedAt, { containerAlive });
 	if (!containerAlive) {
+		stepStartedAt = Date.now();
 		await persistTerminalFailure(
 			stageState.stage,
 			runtime.ctx,
@@ -2504,12 +2763,18 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			),
 		);
 		await maybeMarkTaskStageGroupExited(task.taskId, runtime);
-		await backfillStageQueue(runtime, stageState);
+		logInspectTiming("persist_running_container_stopped_failure", stepStartedAt);
 		return true;
 	}
 
+	stepStartedAt = Date.now();
 	const halfStarted = await inspectHalfStartedRunningTask(runtime, task);
+	logInspectTiming("inspect_running_half_started", stepStartedAt, {
+		halfStarted: Boolean(halfStarted),
+		reason: halfStarted?.reason ?? null,
+	});
 	if (halfStarted) {
+		stepStartedAt = Date.now();
 		await failSilentStuckTask(
 			runtime,
 			task,
@@ -2517,7 +2782,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			halfStarted.diagnostics,
 			stageCtx,
 		);
-		await backfillStageQueue(runtime, stageState);
+		logInspectTiming("persist_running_half_started_failure", stepStartedAt);
 		return true;
 	}
 	return false;
@@ -2534,7 +2799,7 @@ const backfillStageQueue = async <
 ) => {
 	await assertScanJobNotCancelled(runtime.ctx);
 	const limit = await getStageConcurrencyLimit(stageState.stage, runtime.ctx);
-	let launchedAny = false;
+	let launchedCount = 0;
 
 	while (!runtime.stopRequested) {
 		await assertScanJobNotCancelled(runtime.ctx);
@@ -2561,7 +2826,7 @@ const backfillStageQueue = async <
 		if (!launched) {
 			break;
 		}
-		launchedAny = true;
+		launchedCount += 1;
 		logPipelineEvent("loop.stage_backfill_spawned", {
 			scanJobId: runtime.ctx.scanJobId,
 			pipelineName: runtime.pipeline.name,
@@ -2573,7 +2838,7 @@ const backfillStageQueue = async <
 		});
 	}
 
-	return launchedAny;
+	return launchedCount;
 };
 
 const resolvePendingTaskQueueScope = async (task: {
@@ -2601,7 +2866,7 @@ const reenqueueMissingPendingTasks = async <
 	runtime: JobRuntime<TPipelineContext>,
 ) => {
 	const tasks = await listTasksByScanJobIdRepo(runtime.ctx.scanJobId);
-	let changed = false;
+	let reenqueueCount = 0;
 	for (const task of tasks) {
 		if (task.status !== "pending") {
 			if (task.status !== "launching" && task.status !== "running") {
@@ -2638,9 +2903,9 @@ const reenqueueMissingPendingTasks = async <
 			queueScope: queueScope.groupInstanceId ? "group" : "global",
 			groupInstanceId: queueScope.groupInstanceId ?? null,
 		});
-		changed = true;
+		reenqueueCount += 1;
 	}
-	return changed;
+	return reenqueueCount;
 };
 
 const backfillActiveGroupQueues = async <
@@ -2650,7 +2915,7 @@ const backfillActiveGroupQueues = async <
 ) => {
 	const tasks = await listTasksByScanJobIdRepo(runtime.ctx.scanJobId);
 	const seen = new Set<string>();
-	let progressed = false;
+	let launchedCount = 0;
 	for (const task of tasks) {
 		if (task.status !== "pending" || !task.stageGroupInstanceId) {
 			continue;
@@ -2668,27 +2933,50 @@ const backfillActiveGroupQueues = async <
 		if (!stageState) {
 			continue;
 		}
-		progressed =
-			(await backfillStageQueue(runtime, stageState, queueScope)) || progressed;
+		launchedCount += await backfillStageQueue(runtime, stageState, queueScope);
 	}
-	return progressed;
+	return launchedCount;
 };
 
 const inspectActiveTasks = async <TPipelineContext extends PipelineContext>(
 	runtime: JobRuntime<TPipelineContext>,
 ) => {
-	let progressed = false;
+	const metrics = {
+		progressed: false,
+		inspectedCount: 0,
+		progressedCount: 0,
+		activeCount: 0,
+		completedCount: 0,
+	};
 	for (const stageState of runtime.stageStates.values()) {
 		const activeTasks = await listActiveTasksByScanJobAndStageRepo({
 			scanJobId: runtime.ctx.scanJobId,
 			stageName: stageState.stageName,
 		});
+		metrics.activeCount += activeTasks.length;
 		for (const task of activeTasks) {
-			progressed =
-				(await inspectActiveStageTask(runtime, stageState, task)) || progressed;
+			metrics.inspectedCount += 1;
+			const wasRunning = task.status === "running";
+			const taskProgressed = await inspectActiveStageTask(
+				runtime,
+				stageState,
+				task,
+			);
+			if (taskProgressed) {
+				metrics.progressed = true;
+				metrics.progressedCount += 1;
+				if (wasRunning) {
+					const currentTask = await findTaskByIdRepo(task.taskId).catch(
+						() => null,
+					);
+					if (currentTask?.status === "completed") {
+						metrics.completedCount += 1;
+					}
+				}
+			}
 		}
 	}
-	return progressed;
+	return metrics;
 };
 
 const runJobLoop = async <TPipelineContext extends PipelineContext>(
@@ -2700,7 +2988,10 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 		await backfillStageQueue(runtime, stageState);
 	}
 
+	let loopIteration = 0;
 	while (!runtime.stopRequested) {
+		loopIteration += 1;
+		const loopStartedAt = Date.now();
 		await assertScanJobNotCancelled(runtime.ctx);
 		if (runtime.failure) {
 			throw runtime.failure;
@@ -2716,23 +3007,136 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 			});
 		}
 
-		let progressed = await inspectActiveTasks(runtime);
-		progressed = (await reenqueueMissingPendingTasks(runtime)) || progressed;
-		progressed = (await backfillActiveGroupQueues(runtime)) || progressed;
+		const statusCountsStartedAt = Date.now();
+		const statusCountRows = await countTasksByScanJobStageAndStatusRepo(
+			runtime.ctx.scanJobId,
+		).catch(() => []);
+		const statusCountsElapsedMs = Date.now() - statusCountsStartedAt;
+		const statusTotals = statusCountRows.reduce(
+			(acc, row) => {
+				const countValue = Number(row.count || 0);
+				acc.total += countValue;
+				if (row.status === "pending") {
+					acc.pending += countValue;
+				}
+				if (row.status === "launching") {
+					acc.launching += countValue;
+				}
+				if (row.status === "running") {
+					acc.running += countValue;
+				}
+				if (row.status === "completed") {
+					acc.completed += countValue;
+				}
+				if (row.status === "failed") {
+					acc.failed += countValue;
+				}
+				if (row.status === "exited") {
+					acc.exited += countValue;
+				}
+				return acc;
+			},
+			{
+				total: 0,
+				pending: 0,
+				launching: 0,
+				running: 0,
+				completed: 0,
+				failed: 0,
+				exited: 0,
+			},
+		);
+
+		const inspectStartedAt = Date.now();
+		const inspectMetrics = await inspectActiveTasks(runtime);
+		const inspectElapsedMs = Date.now() - inspectStartedAt;
+		let progressed = inspectMetrics.progressed;
+
+		const reenqueueStartedAt = Date.now();
+		const reenqueueCount = await reenqueueMissingPendingTasks(runtime);
+		const reenqueueElapsedMs = Date.now() - reenqueueStartedAt;
+		progressed = reenqueueCount > 0 || progressed;
+
+		const groupBackfillStartedAt = Date.now();
+		const groupBackfillLaunchedCount = await backfillActiveGroupQueues(runtime);
+		const groupBackfillElapsedMs = Date.now() - groupBackfillStartedAt;
+		progressed = groupBackfillLaunchedCount > 0 || progressed;
+
+		const stageBackfillTimings: Array<{
+			stageName: string;
+			elapsedMs: number;
+			launchedCount: number;
+		}> = [];
+		let stageBackfillLaunchedCount = 0;
 		for (const stageState of runtime.stageStates.values()) {
-			progressed =
-				(await backfillStageQueue(runtime, stageState)) || progressed;
+			const stageBackfillStartedAt = Date.now();
+			const launchedCount = await backfillStageQueue(runtime, stageState);
+			const elapsedMs = Date.now() - stageBackfillStartedAt;
+			stageBackfillTimings.push({
+				stageName: stageState.stageName,
+				elapsedMs,
+				launchedCount,
+			});
+			stageBackfillLaunchedCount += launchedCount;
+			progressed = launchedCount > 0 || progressed;
 		}
+		const totalLaunchedCount =
+			groupBackfillLaunchedCount + stageBackfillLaunchedCount;
 		if (await isJobRuntimeQuiescent(runtime)) {
+			logPipelineEvent("loop.timing", {
+				scanJobId: runtime.ctx.scanJobId,
+				pipelineName: runtime.pipeline.name,
+				iteration: loopIteration,
+				totalElapsedMs: Date.now() - loopStartedAt,
+				statusCountsElapsedMs,
+				statusTotals,
+				inspectActiveTasksElapsedMs: inspectElapsedMs,
+				inspectActiveTasks: inspectMetrics,
+				reenqueueMissingPendingTasksElapsedMs: reenqueueElapsedMs,
+				reenqueueMissingPendingTasksCount: reenqueueCount,
+				backfillActiveGroupQueuesElapsedMs: groupBackfillElapsedMs,
+				backfillActiveGroupQueuesLaunchedCount: groupBackfillLaunchedCount,
+				stageBackfillTimings,
+				launchedCount: totalLaunchedCount,
+				progressed,
+				quiescent: true,
+				slept: false,
+				sleepElapsedMs: 0,
+			});
 			return;
 		}
+		let slept = false;
+		let sleepElapsedMs = 0;
 		if (!progressed) {
 			const version = runtime.wakeSignal.current();
+			const sleepStartedAt = Date.now();
 			await Promise.race([
 				runtime.wakeSignal.wait(version),
 				sleep(JOB_LOOP_IDLE_SLEEP_MS),
 			]);
+			slept = true;
+			sleepElapsedMs = Date.now() - sleepStartedAt;
 		}
+		logPipelineEvent("loop.timing", {
+			scanJobId: runtime.ctx.scanJobId,
+			pipelineName: runtime.pipeline.name,
+			iteration: loopIteration,
+			totalElapsedMs: Date.now() - loopStartedAt,
+			statusCountsElapsedMs,
+			statusTotals,
+			inspectActiveTasksElapsedMs: inspectElapsedMs,
+			inspectActiveTasks: inspectMetrics,
+			reenqueueMissingPendingTasksElapsedMs: reenqueueElapsedMs,
+			reenqueueMissingPendingTasksCount: reenqueueCount,
+			backfillActiveGroupQueuesElapsedMs: groupBackfillElapsedMs,
+			backfillActiveGroupQueuesLaunchedCount: groupBackfillLaunchedCount,
+			stageBackfillTimings,
+			launchedCount: totalLaunchedCount,
+			progressed,
+			quiescent: false,
+			slept,
+			sleepElapsedMs,
+		});
 	}
 };
 
@@ -2856,6 +3260,17 @@ const dispatchPipelineDownstream = async <
 					stageOutput: selectedStageOutput,
 				})
 			: [];
+		if (downstreamInputs.length === 0) {
+			logPipelineEvent("downstream.tasks.created", {
+				scanJobId: runtime.ctx.scanJobId,
+				pipelineName: runtime.pipeline.name,
+				edgeName: edge.name,
+				fromStageName: stageName,
+				toStageName: edge.to.id,
+				taskCount: 0,
+			});
+			continue;
+		}
 		if (!edge.createTasks) {
 			continue;
 		}
@@ -2912,7 +3327,7 @@ const dispatchPipelineDownstream = async <
 			toStageName: edge.to.id,
 			taskCount: taskIds.length,
 		});
-		await refreshPipelineState(runtime.ctx);
+		schedulePipelineStateRefresh(runtime.ctx);
 
 		const downstreamStageState = runtime.stageStates.get(edge.to.id);
 		const downstreamQueue = edge.to.queue;

@@ -52,6 +52,7 @@ const makeTask = (overrides?: Partial<Task>): Task => ({
 	attempt: 0,
 	agentProfile: null,
 	containerName: null,
+	containerIndex: null,
 	threadId: null,
 	runtimeMode: "new_session",
 	forkedFromTaskId: null,

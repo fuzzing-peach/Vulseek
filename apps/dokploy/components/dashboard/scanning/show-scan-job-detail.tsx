@@ -1,4 +1,3 @@
-import { motion } from "framer-motion";
 import {
 	AlertCircle,
 	ChevronRight,
@@ -37,7 +36,6 @@ import {
 	VERIFY_RESULT_OPTIONS,
 } from "@/components/dashboard/scanning/candidate-list-query-state";
 import {
-	LiveTaskActivity,
 	LiveTaskActivityBadge,
 	LiveTaskActivityButton,
 	LiveTaskTextButton,
@@ -74,10 +72,7 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import {
-	idleSandboxAgentActivity,
-	type SandboxAgentActivity,
-} from "@/lib/scan/sandbox-agent-activity";
+import { idleSandboxAgentActivity } from "@/lib/scan/sandbox-agent-activity";
 import { api } from "@/utils/api";
 
 interface Props {
@@ -101,14 +96,7 @@ type DirectoryCacheEntry = {
 	status: "idle" | "loading" | "loaded" | "error";
 };
 
-type ScanJobTab =
-	| "overview"
-	| "tasks"
-	| "analysis"
-	| "verify"
-	| "candidates"
-	| "monitoring"
-	| "files";
+type ScanJobTab = "overview" | "tasks" | "candidates" | "monitoring" | "files";
 
 const RESULT_SHORT_LABELS: Record<string, string> = {
 	real_vulnerability: "Real",
@@ -264,7 +252,7 @@ const formatTokenUsageWithCache = (
 	const cachedValue = formatTokenCount(cached);
 	return cachedValue === "-"
 		? `${totalValue} tokens`
-		: `${totalValue} / (${cachedValue} ${cacheLabel})`;
+		: `${totalValue} / ${cachedValue} ${cacheLabel}`;
 };
 
 const resolveRequestedTab = (
@@ -275,8 +263,6 @@ const resolveRequestedTab = (
 	if (
 		rawTab === "overview" ||
 		rawTab === "tasks" ||
-		rawTab === "analysis" ||
-		rawTab === "verify" ||
 		rawTab === "candidates" ||
 		rawTab === "monitoring" ||
 		rawTab === "files"
@@ -286,8 +272,8 @@ const resolveRequestedTab = (
 	if (rawTab === "stream") {
 		return "tasks";
 	}
-	if (rawTab === "status") {
-		return "analysis";
+	if (rawTab === "status" || rawTab === "analysis" || rawTab === "verify") {
+		return "candidates";
 	}
 	return "overview";
 };
@@ -423,135 +409,6 @@ const LazyFileTree = ({
 		<div className="h-[65vh] overflow-auto p-2">{renderItems(rootItems)}</div>
 	);
 };
-
-const CandidateWorkflowSection = ({
-	title,
-	description,
-	summaryCards,
-	inProgressCandidates,
-	activitiesByTaskId,
-	activityConnectedTaskIds,
-}: {
-	title: string;
-	description: string;
-	summaryCards: Array<{
-		title: string;
-		value: ReactNode;
-		progress?: number;
-		progressClassName?: string;
-	}>;
-	inProgressCandidates: Array<{
-		taskId: string;
-		vulnerabilityCandidateId: string;
-		title: string;
-		filePath: string | null;
-		line: number | null;
-		stage: string;
-	}>;
-	activitiesByTaskId: Record<string, SandboxAgentActivity>;
-	activityConnectedTaskIds: Set<string>;
-}) => (
-	<div className="flex flex-col gap-6">
-		<div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-			{summaryCards.map((card, index) => (
-				<motion.div
-					key={card.title}
-					layout
-					initial={{ opacity: 0, y: 10 }}
-					animate={{ opacity: 1, y: 0 }}
-					whileHover={{ y: -2, scale: 1.01 }}
-					transition={{
-						duration: 0.18,
-						ease: "easeOut",
-						delay: index * 0.03,
-					}}
-					className="rounded-lg border p-4"
-				>
-					<div className="text-sm text-muted-foreground">{card.title}</div>
-					<div className="mt-2 text-2xl font-semibold">{card.value}</div>
-					{typeof card.progress === "number" ? (
-						<div className="mt-3">
-							<Progress
-								value={card.progress}
-								className={`h-3 bg-secondary/70 ${card.progressClassName || "[&>div]:bg-emerald-500"}`}
-							/>
-						</div>
-					) : null}
-				</motion.div>
-			))}
-		</div>
-
-		<div className="rounded-lg border">
-			<div className="border-b px-4 py-3">
-				<div className="font-medium">{title} In Progress</div>
-				<div className="text-sm text-muted-foreground">{description}</div>
-			</div>
-			<div className="overflow-x-auto">
-				<table className="w-full text-sm">
-					<thead className="border-b bg-muted/30 text-left">
-						<tr>
-							<th className="w-[24%] px-4 py-3 font-medium">Candidate</th>
-							<th className="w-[10%] px-4 py-3 font-medium">Stage</th>
-							<th className="w-[66%] px-4 py-3 font-medium">
-								Current Activity
-							</th>
-						</tr>
-					</thead>
-					<tbody>
-						{inProgressCandidates.length === 0 ? (
-							<tr>
-								<td
-									colSpan={3}
-									className="px-4 py-6 text-center text-muted-foreground"
-								>
-									No active candidates
-								</td>
-							</tr>
-						) : (
-							inProgressCandidates.map((candidate) => (
-								<tr
-									key={candidate.vulnerabilityCandidateId}
-									className="border-b last:border-b-0"
-								>
-									<td className="w-[24%] px-4 py-3 align-top">
-										<div className="line-clamp-2 font-medium">
-											{candidate.title}
-										</div>
-										<div className="text-xs text-muted-foreground break-all">
-											{candidate.filePath || "-"}
-											{candidate.line ? `:${candidate.line}` : ""}
-										</div>
-									</td>
-									<td className="w-[10%] px-4 py-3 align-top capitalize">
-										{candidate.stage}
-									</td>
-									<td className="w-[66%] px-4 py-3 align-top">
-										<LiveTaskActivity
-											taskId={candidate.taskId}
-											title={candidate.title}
-											subtitle={
-												candidate.filePath
-													? `${candidate.filePath}${candidate.line ? `:${candidate.line}` : ""}`
-													: "Live candidate task operations"
-											}
-											activity={
-												activitiesByTaskId[candidate.taskId] ||
-												idleSandboxAgentActivity
-											}
-											isConnected={activityConnectedTaskIds.has(
-												candidate.taskId,
-											)}
-										/>
-									</td>
-								</tr>
-							))
-						)}
-					</tbody>
-				</table>
-			</div>
-		</div>
-	</div>
-);
 
 const getScanJobStatusLabel = (status?: string) => {
 	if (status === "pending") {
@@ -860,12 +717,8 @@ export const ShowScanJobDetail = ({
 		{ enabled: !!scanJobId, refetchInterval: 1000 },
 	);
 	const shouldLoadStatusView =
-		activeTab === "overview" ||
-		activeTab === "tasks" ||
-		activeTab === "analysis" ||
-		activeTab === "verify";
-	const shouldLoadJobActivities =
-		activeTab === "tasks" || activeTab === "analysis" || activeTab === "verify";
+		activeTab === "overview" || activeTab === "tasks";
+	const shouldLoadJobActivities = activeTab === "tasks";
 	const { data: candidates, isLoading: isLoadingCandidates } =
 		api.scan.candidates.useQuery(
 			{
@@ -885,17 +738,14 @@ export const ShowScanJobDetail = ({
 				keepPreviousData: true,
 			},
 		);
-	const {
-		data: statusView,
-		isLoading: isLoadingStatusView,
-		error: statusViewError,
-	} = api.scan.statusView.useQuery(
-		{ scanJobId },
-		{
-			enabled: !!scanJobId && shouldLoadStatusView,
-			refetchInterval: shouldLoadStatusView ? 1000 : false,
-		},
-	);
+	const { data: statusView, error: statusViewError } =
+		api.scan.statusView.useQuery(
+			{ scanJobId },
+			{
+				enabled: !!scanJobId && shouldLoadStatusView,
+				refetchInterval: shouldLoadStatusView ? 1000 : false,
+			},
+		);
 	const { data: terminalTasks, isLoading: isLoadingTerminalTasks } =
 		api.scan.terminalTasks.useQuery(
 			{
@@ -1068,62 +918,6 @@ export const ShowScanJobDetail = ({
 		currentCandidateListStateSerialized,
 		router,
 	]);
-	const repositoryScanningProgress = useMemo(() => {
-		const completed =
-			statusView?.scan.repositoryTaskStatus === "completed" ? 1 : 0;
-		return {
-			completed,
-			total: 1,
-			percent: completed * 100,
-			status: statusView?.scan.repositoryTaskStatus || "pending",
-		};
-	}, [statusView?.scan.repositoryTaskStatus]);
-	const moduleScanningProgress = useMemo(() => {
-		const completed = statusView?.summary.moduleTasksCompleted || 0;
-		const total = statusView?.summary.moduleTasksTotal || 0;
-		const failed = statusView?.summary.moduleTasksFailed || 0;
-		return {
-			completed,
-			total,
-			percent:
-				total > 0 ? Math.max(0, Math.min(100, (completed / total) * 100)) : 0,
-			status:
-				total > 0 && completed >= total
-					? "completed"
-					: failed > 0
-						? "failed"
-						: total > 0
-							? "running"
-							: "pending",
-		};
-	}, [
-		statusView?.summary.moduleTasksCompleted,
-		statusView?.summary.moduleTasksFailed,
-		statusView?.summary.moduleTasksTotal,
-	]);
-	const functionScanningProgress = useMemo(() => {
-		const completed = statusView?.summary.functionTasksCompleted || 0;
-		const total = statusView?.summary.functionTasksTotal || 0;
-		const failed = statusView?.summary.functionTasksFailed || 0;
-		return {
-			completed,
-			total,
-			percent:
-				total > 0 ? Math.max(0, Math.min(100, (completed / total) * 100)) : 0,
-			status:
-				total > 0 && completed >= total
-					? "completed"
-					: failed > 0
-						? "failed"
-						: total > 0
-							? "running"
-							: "pending",
-		};
-	}, [
-		statusView?.summary.functionTasksCompleted,
-		statusView?.summary.functionTasksFailed,
-		statusView?.summary.functionTasksTotal,
-	]);
 	const totalFailedTasks = useMemo(
 		() =>
 			(statusView?.queuePendingCounts ?? []).reduce(
@@ -1165,20 +959,6 @@ export const ShowScanJobDetail = ({
 			title: `Queued ${queued}, Running ${running}, Failed ${failed}, Done ${done}, Total ${queue.totalCount}`,
 		};
 	};
-	const analysisInProgressCandidates = useMemo(
-		() =>
-			(statusView?.inProgressCandidates || []).filter(
-				(candidate) => candidate.stage === "analyzing",
-			),
-		[statusView?.inProgressCandidates],
-	);
-	const verifyInProgressCandidates = useMemo(
-		() =>
-			(statusView?.inProgressCandidates || []).filter(
-				(candidate) => candidate.stage === "verifying",
-			),
-		[statusView?.inProgressCandidates],
-	);
 	const sortedInProgressTasks = useMemo(() => {
 		return [...(statusView?.inProgressTasks || [])].sort((left, right) => {
 			const stageRankDiff =
@@ -1272,19 +1052,6 @@ export const ShowScanJobDetail = ({
 		return () => window.clearInterval(timer);
 	}, [sortedInProgressTasks.length]);
 
-	const analysisQueuedCount = statusView?.summary.analysisQueuedCandidates ?? 0;
-	const verifyQueuedCount =
-		statusView?.summary.verificationQueuedCandidates ?? 0;
-	const analysisCompletedCandidates =
-		statusView?.summary.analysisCompletedCandidates ?? 0;
-	const failedAnalysisCandidatesCount =
-		statusView?.summary.analysisFailedCandidates ?? 0;
-	const verifyEligibleCandidates =
-		statusView?.summary.verificationEligibleCandidates ?? 0;
-	const verifyCompletedCandidates =
-		statusView?.summary.verificationCompletedCandidates ?? 0;
-	const failedVerificationCandidatesCount =
-		statusView?.summary.verificationFailedCandidates ?? 0;
 	const handleRetryFailedTasks = async () => {
 		try {
 			const result = await retryFailedTasksMutation.mutateAsync({
@@ -1561,8 +1328,7 @@ export const ShowScanJobDetail = ({
 			triageCvssSeverity: latestTriageResult?.cvssSeverity ?? null,
 			triageExploitability: latestTriageResult?.exploitability ?? null,
 			triageIsExploitable: latestTriageResult?.isExploitable ?? null,
-			triageEpssProbability30d:
-				latestTriageResult?.epssProbability30d ?? null,
+			triageEpssProbability30d: latestTriageResult?.epssProbability30d ?? null,
 			triageEpssSource: latestTriageResult?.epssSource ?? null,
 			triageSummary: latestTriageResult?.summary ?? null,
 			triageReportHostPath: latestTriageResult?.reportHostPath ?? null,
@@ -1846,12 +1612,6 @@ export const ShowScanJobDetail = ({
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="tasks">
 								Tasks
 							</TabsTrigger>
-							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="analysis">
-								Analysis
-							</TabsTrigger>
-							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="verify">
-								Verify
-							</TabsTrigger>
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="candidates">
 								Candidates
 							</TabsTrigger>
@@ -2099,152 +1859,6 @@ export const ShowScanJobDetail = ({
 											/>
 										</div>
 									</div>
-								</div>
-							)}
-						</TabsContent>
-
-						<TabsContent value="analysis" className="pt-4">
-							{isLoadingStatusView ? (
-								<div className="flex items-center gap-2 text-muted-foreground">
-									<Loader2 className="size-4 animate-spin" />
-									Loading status...
-								</div>
-							) : !statusView ? (
-								<div className="flex items-center gap-2 text-muted-foreground">
-									<AlertCircle className="size-4" />
-									Status not available
-								</div>
-							) : (
-								<div className="flex flex-col gap-4">
-									{failedAnalysisCandidatesCount > 0 ? (
-										<div className="flex justify-end">
-											<Button
-												type="button"
-												disabled={retryFailedTasksMutation.isLoading}
-												onClick={handleRetryFailedTasks}
-											>
-												{retryFailedTasksMutation.isLoading ? (
-													<>
-														<Loader2 className="mr-2 size-4 animate-spin" />
-														Retrying...
-													</>
-												) : (
-													`Retry All Failed Tasks (${totalFailedTasks})`
-												)}
-											</Button>
-										</div>
-									) : null}
-									<CandidateWorkflowSection
-										title="Analysis"
-										description="Candidates currently being analyzed and pending analysis."
-										summaryCards={[
-											{
-												title: "Candidate Analysis",
-												value: `${analysisCompletedCandidates} / ${statusView.summary.totalCandidates}`,
-												progress:
-													statusView.summary.totalCandidates > 0
-														? Math.max(
-																0,
-																Math.min(
-																	100,
-																	(analysisCompletedCandidates /
-																		statusView.summary.totalCandidates) *
-																		100,
-																),
-															)
-														: 0,
-												progressClassName: "[&>div]:bg-emerald-500",
-											},
-											{
-												title: "Analysis Likely / Confirmed",
-												value:
-													statusView.summary
-														.analysisLikelyOrConfirmedCandidates,
-											},
-											{
-												title: "Queued / Running",
-												value: `${analysisQueuedCount} / ${analysisInProgressCandidates.length}`,
-											},
-										]}
-										inProgressCandidates={analysisInProgressCandidates}
-										activitiesByTaskId={activitiesByTaskId}
-										activityConnectedTaskIds={activityConnectedTaskIds}
-									/>
-								</div>
-							)}
-						</TabsContent>
-
-						<TabsContent value="verify" className="pt-4">
-							{isLoadingStatusView ? (
-								<div className="flex items-center gap-2 text-muted-foreground">
-									<Loader2 className="size-4 animate-spin" />
-									Loading status...
-								</div>
-							) : !statusView ? (
-								<div className="flex items-center gap-2 text-muted-foreground">
-									<AlertCircle className="size-4" />
-									Status not available
-								</div>
-							) : (
-								<div className="flex flex-col gap-4">
-									{failedVerificationCandidatesCount > 0 ? (
-										<div className="flex justify-end">
-											<Button
-												type="button"
-												disabled={retryFailedTasksMutation.isLoading}
-												onClick={handleRetryFailedTasks}
-											>
-												{retryFailedTasksMutation.isLoading ? (
-													<>
-														<Loader2 className="mr-2 size-4 animate-spin" />
-														Retrying...
-													</>
-												) : (
-													`Retry All Failed Tasks (${totalFailedTasks})`
-												)}
-											</Button>
-										</div>
-									) : null}
-									<CandidateWorkflowSection
-										title="Verify"
-										description="Candidates currently being sanity-checked and pending verification."
-										summaryCards={[
-											{
-												title: "Candidate Verify",
-												value: `${verifyCompletedCandidates} / ${verifyEligibleCandidates}`,
-												progress:
-													verifyEligibleCandidates > 0
-														? Math.max(
-																0,
-																Math.min(
-																	100,
-																	(verifyCompletedCandidates /
-																		verifyEligibleCandidates) *
-																		100,
-																),
-															)
-														: 0,
-												progressClassName: "[&>div]:bg-sky-500",
-											},
-											{
-												title: "Facts True/Likely",
-												value: statusView.summary.verifiedZeroDayCandidates,
-											},
-											{
-												title: "Triaged",
-												value:
-													statusView.summary.triageCompletedCandidates ??
-													0,
-											},
-											{
-												title: "Queued / Running",
-												value: `${verifyQueuedCount} / ${verifyInProgressCandidates.length}`,
-											},
-										]}
-										inProgressCandidates={verifyInProgressCandidates}
-										activitiesByTaskId={activitiesByTaskId}
-										activityConnectedTaskIds={activityConnectedTaskIds}
-									/>
 								</div>
 							)}
 						</TabsContent>
@@ -2687,7 +2301,9 @@ export const ShowScanJobDetail = ({
 																				{verificationTruthBadge ? (
 																					<Badge
 																						variant="outline"
-																						className={verificationTruthBadge.className}
+																						className={
+																							verificationTruthBadge.className
+																						}
 																					>
 																						{verificationTruthBadge.label}
 																					</Badge>
@@ -2710,11 +2326,13 @@ export const ShowScanJobDetail = ({
 																					<Badge
 																						variant="outline"
 																						className={getTriageResultBadgeClassName(
-																							candidate.latestTriageResult.result,
+																							candidate.latestTriageResult
+																								.result,
 																						)}
 																					>
 																						{getShortResultLabel(
-																							candidate.latestTriageResult.result,
+																							candidate.latestTriageResult
+																								.result,
 																						)}
 																					</Badge>
 																				) : (

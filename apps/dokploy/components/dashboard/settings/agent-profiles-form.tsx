@@ -19,6 +19,11 @@ const PROVIDER_LABEL: Record<string, string> = {
 	claude_code: "Claude Code",
 };
 
+const HOME_LABEL: Record<string, string> = {
+	codex: "codex home",
+	claude_code: "claude home",
+};
+
 export const AgentProfilesForm = () => {
 	const { data: agentProfiles, refetch, isLoading } =
 		api.ai.getAgentProfiles.useQuery();
@@ -72,9 +77,10 @@ export const AgentProfilesForm = () => {
 													{" · "}
 													{profile.model}
 													{" · "}
-													{profile.provider === "codex" &&
-													profile.codexAuthMode === "codex_home"
-														? `codex home: ${profile.codexHomePath || "env"}`
+													{profile.authMode === "host_home"
+														? `${HOME_LABEL[profile.provider] ?? "host home"}: ${
+																profile.homePath || "env"
+															}`
 														: "api key"}
 													{" · "}
 													{profile.thinkingLevelEnabled

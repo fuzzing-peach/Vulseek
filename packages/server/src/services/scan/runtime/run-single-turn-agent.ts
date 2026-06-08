@@ -139,30 +139,30 @@ const CODEX_AUTO_APPROVE_CONFIG_TOML = [
 	`sandbox_mode = "danger-full-access"`,
 	"",
 ].join("\n");
-const CODEX_HOME_HOST_MOUNT_PATH = "/host-codex-home";
+const AGENT_HOME_HOST_MOUNT_PATH = "/host-agent-home";
 
-const resolveCodexAuthMode = (
+const resolveAgentAuthMode = (
 	agentProfile: AgentProfileLike | null | undefined,
-) => (agentProfile?.codexAuthMode === "codex_home" ? "codex_home" : "api_key");
+) => (agentProfile?.authMode === "host_home" ? "host_home" : "api_key");
 
-const resolveCodexHomeHostPath = (
+const resolveAgentHomeHostPath = (
 	agentProfile: AgentProfileLike | null | undefined,
-) => agentProfile?.codexHomePath?.trim() || "";
+) => agentProfile?.homePath?.trim() || "";
 
-const buildCodexHomeHostMountArg = (
+const buildAgentHomeHostMountArg = (
 	agentProfile: AgentProfileLike | null | undefined,
 ) => {
-	if (agentProfile?.provider !== "codex") {
+	if (!agentProfile) {
 		return "";
 	}
-	if (resolveCodexAuthMode(agentProfile) !== "codex_home") {
+	if (resolveAgentAuthMode(agentProfile) !== "host_home") {
 		return "";
 	}
-	const hostPath = resolveCodexHomeHostPath(agentProfile);
+	const hostPath = resolveAgentHomeHostPath(agentProfile);
 	if (!hostPath) {
 		return "";
 	}
-	return `-v '${escapeSingleQuotes(hostPath)}:${CODEX_HOME_HOST_MOUNT_PATH}:ro'`;
+	return `-v '${escapeSingleQuotes(hostPath)}:${AGENT_HOME_HOST_MOUNT_PATH}:ro'`;
 };
 
 const withCodexAutoApproveConfigToml = (configToml: string) => {
@@ -288,64 +288,26 @@ const buildCodexAuthJson = (agentProfile: AgentProfileLike) =>
 		2,
 	);
 
-const resolveCodexHomeSource = async (
-	agentProfile: AgentProfileLike | null | undefined,
-) => {
-	const source =
-		process.env.DOKPLOY_CODEX_HOME_SOURCE?.trim() ||
-		process.env.CODEX_HOME?.trim() ||
-		"/home/dkzou/.codex";
-	const stat = await fs.stat(source).catch(() => null);
-	if (!stat?.isDirectory()) {
-		throw new Error(
-			`Codex home auth mode is enabled but the source directory was not found: ${source}. Set Codex Home Path on the agent profile, or set DOKPLOY_CODEX_HOME_SOURCE to a path visible to dokploy-dev.`,
-		);
-	}
-	return source;
-};
-
-const copyMountedCodexHomeCredentialFilesToContainer = async (input: {
+const copyMountedFileToContainer = async (input: {
 	containerName: string;
-	sourceDir: string;
-	targetDir: string;
+	sourcePath: string;
+	targetPath: string;
+	description: string;
 }) => {
 	await execAsync(
-		`docker exec ${input.containerName} bash -lc "test -d '${escapeSingleQuotes(
-			input.sourceDir,
-		)}' && test -f '${escapeSingleQuotes(
-			path.posix.join(input.sourceDir, "auth.json"),
-		)}' && mkdir -p '${escapeSingleQuotes(
-			input.targetDir,
-		)}' && cp -a '${escapeSingleQuotes(
-			path.posix.join(input.sourceDir, "auth.json"),
-		)}' '${escapeSingleQuotes(path.posix.join(input.targetDir, "auth.json"))}'"`,
-	);
-};
-
-const copyCodexHomeCredentialFilesToContainer = async (input: {
-	containerName: string;
-	sourceDir: string;
-	targetDir: string;
-}) => {
-	await fs.stat(path.join(input.sourceDir, "auth.json"));
-	await execAsync(
-		`docker exec ${input.containerName} bash -lc "mkdir -p '${escapeSingleQuotes(
-			input.targetDir,
+		`docker exec ${input.containerName} bash -lc "test -s '${escapeSingleQuotes(
+			input.sourcePath,
+		)}' || { echo 'Missing ${escapeSingleQuotes(
+			input.description,
+		)}: ${escapeSingleQuotes(
+			input.sourcePath,
+		)}' >&2; exit 1; }; mkdir -p '${escapeSingleQuotes(
+			path.posix.dirname(input.targetPath),
+		)}' && cp -a '${escapeSingleQuotes(input.sourcePath)}' '${escapeSingleQuotes(
+			input.targetPath,
 		)}'"`,
 	);
-	await execAsync(
-		`docker cp '${escapeSingleQuotes(
-			path.join(input.sourceDir, "auth.json"),
-		)}' ${input.containerName}:'${escapeSingleQuotes(
-			path.posix.join(input.targetDir, "auth.json"),
-		)}'`,
-	);
 };
-
-const loadCodexHomeSourceConfigToml = async (sourceDir: string) =>
-	await fs
-		.readFile(path.join(sourceDir, "config.toml"), "utf-8")
-		.catch(() => "");
 
 const loadMountedCodexHomeSourceConfigToml = async (
 	containerName: string,
@@ -377,12 +339,19 @@ const parseAgentProfileEnvPairs = (agentProfile: AgentProfileLike) =>
 			return [`${key}=${value}`];
 		});
 
-const buildClaudeEnvPairs = (agentProfile: AgentProfileLike) => [
-	`CLAUDE_CONFIG_DIR=${CLAUDE_HOME_IN_CONTAINER}`,
-	`CLAUDE_HOME=${CLAUDE_HOME_IN_CONTAINER}`,
-	`ANTHROPIC_BASE_URL=${agentProfile.baseUrl}`,
-	`ANTHROPIC_API_KEY=${agentProfile.apiKey}`,
-	`ANTHROPIC_AUTH_TOKEN=${agentProfile.apiKey}`,
+const buildClaudeEnvPairs = (
+	agentProfile: AgentProfileLike,
+	claudeHome = CLAUDE_HOME_IN_CONTAINER,
+) => [
+	`CLAUDE_CONFIG_DIR=${claudeHome}`,
+	`CLAUDE_HOME=${claudeHome}`,
+	...(resolveAgentAuthMode(agentProfile) === "api_key"
+		? [
+				`ANTHROPIC_BASE_URL=${agentProfile.baseUrl}`,
+				`ANTHROPIC_API_KEY=${agentProfile.apiKey}`,
+				`ANTHROPIC_AUTH_TOKEN=${agentProfile.apiKey}`,
+			]
+		: []),
 	`ANTHROPIC_MODEL=${agentProfile.model}`,
 	`ANTHROPIC_DEFAULT_SONNET_MODEL=${agentProfile.model}`,
 	`ANTHROPIC_DEFAULT_OPUS_MODEL=${agentProfile.model}`,
@@ -595,26 +564,6 @@ const resolveMountedProjectProfilePath = (input: {
 		sanitizeContextPathPart(input.profileName),
 	);
 
-const remapServerRuntimeDirToDockerHostPath = (input: {
-	runtimeDir: string;
-	mountedProfileDir: string;
-	hostProfileDir: string;
-}) => {
-	const runtimeDir = path.resolve(input.runtimeDir);
-	const mountedProfileDir = path.resolve(input.mountedProfileDir);
-	const hostProfileDir = path.resolve(input.hostProfileDir);
-	const relativeToMounted = path.relative(mountedProfileDir, runtimeDir);
-	if (
-		relativeToMounted === "" ||
-		(!relativeToMounted.startsWith(`..${path.sep}`) &&
-			relativeToMounted !== ".." &&
-			!path.isAbsolute(relativeToMounted))
-	) {
-		return path.join(hostProfileDir, relativeToMounted);
-	}
-	return runtimeDir;
-};
-
 const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 	const isApplicationJob = Boolean(scanJob.applicationId);
 	const target = isApplicationJob
@@ -700,29 +649,23 @@ const copyCodexAssetsToContainerHome = async (
 
 	if (agentProfile) {
 		if (agentProfile.provider === "codex") {
-			if (resolveCodexAuthMode(agentProfile) === "codex_home") {
-				const hostPath = resolveCodexHomeHostPath(agentProfile);
-				const sourceConfigToml = hostPath
-					? await loadMountedCodexHomeSourceConfigToml(
-							containerName,
-							CODEX_HOME_HOST_MOUNT_PATH,
-						)
-					: await (async () => {
-							const sourceDir = await resolveCodexHomeSource(agentProfile);
-							await copyCodexHomeCredentialFilesToContainer({
-								containerName,
-								sourceDir,
-								targetDir: codexHome,
-							});
-							return await loadCodexHomeSourceConfigToml(sourceDir);
-						})();
-				if (hostPath) {
-					await copyMountedCodexHomeCredentialFilesToContainer({
-						containerName,
-						sourceDir: CODEX_HOME_HOST_MOUNT_PATH,
-						targetDir: codexHome,
-					});
+			if (resolveAgentAuthMode(agentProfile) === "host_home") {
+				const hostPath = resolveAgentHomeHostPath(agentProfile);
+				if (!hostPath) {
+					throw new Error(
+						"Codex host home auth mode is enabled but no home path was configured on the agent profile.",
+					);
 				}
+				const sourceConfigToml = await loadMountedCodexHomeSourceConfigToml(
+					containerName,
+					AGENT_HOME_HOST_MOUNT_PATH,
+				);
+				await copyMountedFileToContainer({
+					containerName,
+					sourcePath: path.posix.join(AGENT_HOME_HOST_MOUNT_PATH, "auth.json"),
+					targetPath: path.posix.join(codexHome, "auth.json"),
+					description: "Codex host home auth.json",
+				});
 				await writeContainerFile(
 					containerName,
 					`${codexHome}/config.toml`,
@@ -810,49 +753,177 @@ const copyCodexAssetsToContainerHome = async (
 	);
 };
 
+const CLAUDE_REQUIRED_SETTINGS = {
+	permissions: {
+		allow: [
+			"Bash",
+			"Bash(*)",
+			"Read",
+			"Read(*)",
+			"Write",
+			"Write(*)",
+			"Edit",
+			"Edit(*)",
+			"MultiEdit",
+			"MultiEdit(*)",
+			"Glob",
+			"Glob(*)",
+			"Grep",
+			"Grep(*)",
+			"LS",
+			"LS(*)",
+			"Task",
+			"Task(*)",
+			"TodoWrite",
+			"TodoWrite(*)",
+			"WebFetch",
+			"WebFetch(*)",
+			"WebSearch",
+			"WebSearch(*)",
+		],
+		deny: [],
+		ask: [],
+	},
+};
+
+const mergeUniqueStringArrays = (left: unknown, right: string[]) => [
+	...new Set([
+		...(Array.isArray(left)
+			? left.filter((value): value is string => typeof value === "string")
+			: []),
+		...right,
+	]),
+];
+
+const readContainerFileOrEmpty = async (
+	containerName: string,
+	filePath: string,
+) => {
+	const { stdout } = await execAsync(
+		`docker exec ${containerName} bash -lc "if [ -f '${escapeSingleQuotes(
+			filePath,
+		)}' ]; then base64 -w0 '${escapeSingleQuotes(filePath)}'; fi"`,
+	);
+	return stdout.trim()
+		? Buffer.from(stdout.trim(), "base64").toString("utf-8")
+		: "";
+};
+
+const buildClaudeProfileSettingsEnv = (
+	agentProfile: AgentProfileLike | null | undefined,
+) => {
+	if (agentProfile?.provider !== "claude_code" || !agentProfile.model) {
+		return {};
+	}
+	return {
+		ANTHROPIC_MODEL: agentProfile.model,
+		ANTHROPIC_SMALL_FAST_MODEL: agentProfile.model,
+		ANTHROPIC_DEFAULT_SONNET_MODEL: agentProfile.model,
+		ANTHROPIC_DEFAULT_OPUS_MODEL: agentProfile.model,
+		ANTHROPIC_DEFAULT_HAIKU_MODEL: agentProfile.model,
+		CLAUDE_CODE_SUBAGENT_MODEL: agentProfile.model,
+	};
+};
+
+const mergeClaudeSettingsJson = (
+	existingSettingsJson: string,
+	agentProfile?: AgentProfileLike | null,
+) => {
+	let existing: Record<string, unknown> = {};
+	if (existingSettingsJson.trim()) {
+		try {
+			const parsed = JSON.parse(existingSettingsJson) as unknown;
+			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+				existing = parsed as Record<string, unknown>;
+			}
+		} catch {}
+	}
+
+	const existingPermissions =
+		existing.permissions &&
+		typeof existing.permissions === "object" &&
+		!Array.isArray(existing.permissions)
+			? (existing.permissions as Record<string, unknown>)
+			: {};
+	const existingEnv =
+		existing.env && typeof existing.env === "object" && !Array.isArray(existing.env)
+			? (existing.env as Record<string, unknown>)
+			: {};
+	const profileEnv = buildClaudeProfileSettingsEnv(agentProfile);
+	return {
+		...existing,
+		env: {
+			...existingEnv,
+			...profileEnv,
+		},
+		permissions: {
+			...existingPermissions,
+			allow: mergeUniqueStringArrays(
+				existingPermissions.allow,
+				CLAUDE_REQUIRED_SETTINGS.permissions.allow,
+			),
+			deny: mergeUniqueStringArrays(
+				existingPermissions.deny,
+				CLAUDE_REQUIRED_SETTINGS.permissions.deny,
+			),
+			ask: mergeUniqueStringArrays(
+				existingPermissions.ask,
+				CLAUDE_REQUIRED_SETTINGS.permissions.ask,
+			),
+		},
+	};
+};
+
 const initializeClaudeHomeInContainer = async (
 	containerName: string,
 	claudeHome: string,
+	agentProfile?: AgentProfileLike | null,
 ) => {
+	const settingsPath = `${claudeHome}/settings.json`;
+	const existingSettingsJson = await readContainerFileOrEmpty(
+		containerName,
+		settingsPath,
+	);
 	await writeContainerFile(
 		containerName,
-		`${claudeHome}/settings.json`,
+		settingsPath,
 		`${JSON.stringify(
-			{
-				permissions: {
-					allow: [
-						"Bash",
-						"Bash(*)",
-						"Read",
-						"Read(*)",
-						"Write",
-						"Write(*)",
-						"Edit",
-						"Edit(*)",
-						"MultiEdit",
-						"MultiEdit(*)",
-						"Glob",
-						"Glob(*)",
-						"Grep",
-						"Grep(*)",
-						"LS",
-						"LS(*)",
-						"Task",
-						"Task(*)",
-						"TodoWrite",
-						"TodoWrite(*)",
-						"WebFetch",
-						"WebFetch(*)",
-						"WebSearch",
-						"WebSearch(*)",
-					],
-					deny: [],
-					ask: [],
-				},
-			},
+			mergeClaudeSettingsJson(existingSettingsJson, agentProfile),
 			null,
 			2,
 		)}\n`,
+	);
+};
+
+const copyClaudeAssetsToContainerHome = async (
+	containerName: string,
+	claudeHome: string,
+	agentProfile?: AgentProfileLike | null,
+) => {
+	if (
+		agentProfile?.provider === "claude_code" &&
+		resolveAgentAuthMode(agentProfile) === "host_home"
+	) {
+		const hostPath = resolveAgentHomeHostPath(agentProfile);
+		if (!hostPath) {
+			throw new Error(
+				"Claude Code host home auth mode is enabled but no home path was configured on the agent profile.",
+			);
+		}
+		await copyMountedFileToContainer({
+			containerName,
+			sourcePath: path.posix.join(AGENT_HOME_HOST_MOUNT_PATH, "settings.json"),
+			targetPath: path.posix.join(claudeHome, "settings.json"),
+			description:
+				"Claude Code host home settings.json. Configure homePath as the host user home directory.",
+		});
+	}
+
+	await initializeClaudeHomeInContainer(containerName, claudeHome, agentProfile);
+	await execAsync(
+		`docker exec ${containerName} bash -lc "test -s '${escapeSingleQuotes(
+			path.posix.join(claudeHome, "settings.json"),
+		)}'"`,
 	);
 };
 
@@ -864,7 +935,9 @@ export type StageContainerInput = {
 	codexHome: string;
 	stageDirPath: string;
 	stageRootInContainer: string;
+	taskRealRootInContainer?: string;
 	persistent?: boolean;
+	reuseContainer?: boolean;
 	groupedPersistent?: boolean;
 	allowAgentExit?: boolean;
 		runtimeFileNames?: {
@@ -882,6 +955,7 @@ export type RunSingleTurnAgentInput = StageContainerInput & {
 	prompt: string | ((containerName: string) => Promise<string>);
 	taskStageDirPath?: string;
 	taskStageRootInContainer?: string;
+	taskRealRootInContainer?: string;
 	laneThreadId?: string | null;
 	outputSchema?: ZodTypeAny;
 	routeOutputSchemas?: Array<{
@@ -1060,17 +1134,11 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		projectName,
 		profileName: serviceName,
 	});
-	const runtimeMountSource = remapServerRuntimeDirToDockerHostPath({
-		runtimeDir: input.stageDirPath,
-		mountedProfileDir,
-		hostProfileDir,
-	});
-	await fs.mkdir(runtimeMountSource, { recursive: true });
 	await fs.mkdir(input.stageDirPath, { recursive: true });
 	const containerEnvPairs = [
 		...getGlobalContainerEnvironmentPairs(),
-		`VULSEEK_PROJECT_PROFILE_DIR=${input.stageRootInContainer}`,
-		`VULSEEK_PROJECT_CACHE_DIR=${path.posix.join(input.stageRootInContainer, "cache")}`,
+		`VULSEEK_PROJECT_PROFILE_DIR=${mountedProfileDir}`,
+		`VULSEEK_PROJECT_CACHE_DIR=${path.posix.join(mountedProfileDir, "cache")}`,
 	];
 	const runtimeFileNames = {
 		...SANDBOX_AGENT_RUNTIME_FILE_NAMES,
@@ -1102,11 +1170,11 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		imageTag,
 		agentsDir,
 		taskRuntimeMount: {
-			mountSource: runtimeMountSource,
-			mountDescription: `host_path:${runtimeMountSource}`,
-			dockerMountArg: `-v '${escapeSingleQuotes(runtimeMountSource)}':${input.stageRootInContainer}`,
+			mountSource: hostProfileDir,
+			mountDescription: `host_path:${hostProfileDir}`,
+			dockerMountArg: `-v '${escapeSingleQuotes(hostProfileDir)}':${mountedProfileDir}`,
 		},
-		codexHomeHostMountArg: buildCodexHomeHostMountArg(input.agentProfile),
+		agentHomeHostMountArg: buildAgentHomeHostMountArg(input.agentProfile),
 		agentHome: {
 			codexContainerDir: CODEX_HOME_IN_CONTAINER,
 			claudeContainerDir: CLAUDE_HOME_IN_CONTAINER,
@@ -1134,7 +1202,7 @@ export const startContainer = async (input: StageContainerInput) => {
 		)}`,
 	);
 
-	if (input.persistent) {
+	if ((input.reuseContainer ?? true) || input.persistent) {
 		const running = await execAsync(
 			`docker inspect -f '{{.State.Running}}' ${input.containerName}`,
 		)
@@ -1143,13 +1211,20 @@ export const startContainer = async (input: StageContainerInput) => {
 		if (running) {
 			await withHostBootstrapLog(
 				logPath,
-				"persistent_container_reuse",
+				"container_reuse",
 				"",
 				() =>
 					execAsync(
 						`docker exec ${input.containerName} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}'"`,
 					),
 			);
+			if (input.taskRealRootInContainer) {
+				await updateTaskAliasSymlinkInContainer({
+					containerName: input.containerName,
+					taskRootInContainer: input.taskRealRootInContainer,
+					logPath,
+				});
+			}
 			return;
 		}
 		await execAsync(`docker rm -f ${input.containerName}`).catch(() => {});
@@ -1183,9 +1258,9 @@ export const startContainer = async (input: StageContainerInput) => {
 				containerName: input.containerName,
 				taskId: input.taskId,
 				logPath,
-				command: `docker run -d --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.codexHomeHostMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
-			}),
-	);
+					command: `docker run -d --init --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.agentHomeHostMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
+				}),
+		);
 
 	await withHostBootstrapLog(
 		logPath,
@@ -1215,20 +1290,6 @@ export const startContainer = async (input: StageContainerInput) => {
 				writeContainerFile,
 			}),
 	);
-	await withHostBootstrapLog(logPath, "copy_codex_assets", "", () =>
-		copyCodexAssetsToContainerHome(
-			input.containerName,
-			runtime.agentHome.codexContainerDir,
-			runtime.agentsDir,
-			input.agentProfile,
-		),
-	);
-	await withHostBootstrapLog(logPath, "initialize_claude_home", "", () =>
-		initializeClaudeHomeInContainer(
-			input.containerName,
-			runtime.agentHome.claudeContainerDir,
-		),
-	);
 	await withHostBootstrapLog(logPath, "install_runtime_skills", "", () =>
 		installRuntimeSkillsInContainer({
 			containerName: input.containerName,
@@ -1238,6 +1299,13 @@ export const startContainer = async (input: StageContainerInput) => {
 		}),
 	);
 	await appendHostBootstrapLog(logPath, "start_container_done");
+	if (input.taskRealRootInContainer) {
+		await updateTaskAliasSymlinkInContainer({
+			containerName: input.containerName,
+			taskRootInContainer: input.taskRealRootInContainer,
+			logPath,
+		});
+	}
 };
 
 export const stopContainer = async (containerName: string) => {
@@ -1246,6 +1314,35 @@ export const stopContainer = async (containerName: string) => {
 
 export const removeContainer = async (containerName: string) => {
 	await execAsync(`docker rm -f ${containerName}`).catch(() => {});
+};
+
+const updateTaskAliasSymlinkInContainer = async (input: {
+	containerName: string;
+	taskRootInContainer: string;
+	logPath?: string | null;
+}) => {
+	const script = [
+		"set -euo pipefail",
+		`task_root='${escapeSingleQuotes(input.taskRootInContainer)}'`,
+		`alias_root='${TASK_ALIAS_ROOT_IN_CONTAINER}'`,
+		'mkdir -p "$task_root"',
+		'if [ -L "$alias_root" ]; then',
+		'  rm "$alias_root"',
+		'elif [ -e "$alias_root" ]; then',
+		'  echo "$alias_root exists but is not a symlink" >&2',
+		"  exit 1",
+		"fi",
+		'ln -s "$task_root" "$alias_root"',
+	].join("\n");
+	await withHostBootstrapLog(
+		input.logPath,
+		"task_alias_symlink",
+		`target=${JSON.stringify(input.taskRootInContainer)}`,
+		() =>
+			execAsync(
+				`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(script)}'`,
+			),
+	);
 };
 
 const SANDBOX_AGENT_DRIVER_FILE_NAME = "sandbox-agent-driver.mjs";
@@ -1257,6 +1354,8 @@ const SANDBOX_AGENT_DRIVER_LIFECYCLE_FILE_NAME =
 	"sandbox-agent-driver-lifecycle.log";
 const SANDBOX_AGENT_DRIVER_TASK_DIR_NAME = "sandbox-agent-driver-tasks";
 const SANDBOX_AGENT_AGENT_HOME_DIR_NAME = "agent-home";
+const SANDBOX_AGENT_ACP_REQUEST_TIMEOUT_MS = 30 * 60 * 1000;
+const SANDBOX_AGENT_DRIVER_VERSION = "2026-06-01-fork-model-alias-v1";
 
 const buildSandboxAgentDriverScript =
 	() => String.raw`import fsSync from "node:fs";
@@ -1267,6 +1366,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 
+const SANDBOX_AGENT_DRIVER_VERSION = "${SANDBOX_AGENT_DRIVER_VERSION}";
 const SANDBOX_AGENT_PROMPT_TIMEOUT_MS = 30 * 60 * 1000;
 const SANDBOX_AGENT_POST_PROMPT_EVENT_IDLE_MS = 30 * 1000;
 const SANDBOX_AGENT_POST_PROMPT_EVENT_POLL_MS = 100;
@@ -2308,6 +2408,24 @@ const createNewSession = async (client, input) =>
     mode: input.provider === "codex" ? "full-access" : undefined,
   });
 
+const resolveForkSessionModel = (input) => {
+  const model = asString(input.model);
+  if (!model || input.provider !== "claude") {
+    return model || undefined;
+  }
+  const normalized = model.toLowerCase();
+  if (normalized.includes("flash") || normalized.includes("haiku")) {
+    return "haiku";
+  }
+  if (normalized.includes("sonnet")) {
+    return "sonnet";
+  }
+  if (normalized.includes("opus")) {
+    return "opus";
+  }
+  return model;
+};
+
 const resolveParentAgentSessionId = (input) => {
   const parentSessionId = asString(input.parentSessionId);
   if (!parentSessionId) {
@@ -2330,7 +2448,7 @@ const forkParentSessionAsChild = async (client, input) => {
     agent: input.provider,
     agentSessionId: parentAgentSessionId,
     cwd: input.cwd,
-    model: input.model || undefined,
+    model: resolveForkSessionModel(input),
     thoughtLevel: input.thinkingLevel || undefined,
     mode: input.provider === "codex" ? "full-access" : undefined,
   });
@@ -2711,46 +2829,77 @@ const main = async () => {
     return state;
   };
 
-  await runPromptTask(input);
-  let lastIdleLifecycleLogAt = 0;
-  while (input.persistent && !state.exitRequested) {
-    activeInput = input;
-    activeTaskId = "";
-    activePhase = "idle";
-    const now = Date.now();
-    if (now - lastIdleLifecycleLogAt >= 30000) {
-      lastIdleLifecycleLogAt = now;
-      await appendDriverLifecycleLog(
+  try {
+    await runPromptTask(input);
+    let lastIdleLifecycleLogAt = 0;
+    while (input.persistent && !state.exitRequested) {
+      activeInput = input;
+      activeTaskId = "";
+      activePhase = "idle";
+      const now = Date.now();
+      if (now - lastIdleLifecycleLogAt >= 30000) {
+        lastIdleLifecycleLogAt = now;
+        await appendDriverLifecycleLog(
+          input,
+          "persistent_idle queue_dir=" + String(input.taskQueueDir || ""),
+        );
+      }
+      const nextTaskInput = await readNextPersistentTaskInput(
+        input.taskQueueDir,
         input,
-        "persistent_idle queue_dir=" + String(input.taskQueueDir || ""),
       );
+      if (!nextTaskInput) {
+        await sleep(500);
+        continue;
+      }
+      nextTaskInput.driverLifecyclePath =
+        nextTaskInput.driverLifecyclePath || input.driverLifecyclePath;
+      await appendDriverLifecycleLog(
+        nextTaskInput,
+        "queue_task_claimed task_id=" +
+          String(nextTaskInput.taskId || "") +
+          " queue_entry=" +
+          String(nextTaskInput.__queueEntry || "") +
+          " running_path=" +
+          String(nextTaskInput.__queueRunningPath || ""),
+      );
+      await runPromptTask(nextTaskInput, "");
     }
-    const nextTaskInput = await readNextPersistentTaskInput(
-      input.taskQueueDir,
-      input,
-    );
-    if (!nextTaskInput) {
-      await sleep(500);
-      continue;
-    }
-    nextTaskInput.driverLifecyclePath =
-      nextTaskInput.driverLifecyclePath || input.driverLifecyclePath;
+    activePhase = "complete";
     await appendDriverLifecycleLog(
-      nextTaskInput,
-      "queue_task_claimed task_id=" +
-        String(nextTaskInput.taskId || "") +
-        " queue_entry=" +
-        String(nextTaskInput.__queueEntry || "") +
-        " running_path=" +
-        String(nextTaskInput.__queueRunningPath || ""),
+      input,
+      "driver_loop_complete exit_requested=" + String(Boolean(state.exitRequested)),
     );
-    await runPromptTask(nextTaskInput, "");
+  } finally {
+    activePhase = "cleanup";
+    await appendDriverLifecycleLog(input, "cleanup_start");
+    try {
+      await session.close();
+      await appendDriverLifecycleLog(input, "session_close_done");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await appendDriverLifecycleLog(input, "session_close_failed error=" + message).catch(() => {});
+      await appendScanRuntimeFile(
+        input.stderrPath,
+        "[sandbox-agent-cleanup] session.close failed: " + message + "\\n",
+      ).catch(() => {});
+    }
+    if (typeof client.close === "function") {
+      try {
+        await client.close();
+        await appendDriverLifecycleLog(input, "client_close_done");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await appendDriverLifecycleLog(input, "client_close_failed error=" + message).catch(() => {});
+        await appendScanRuntimeFile(
+          input.stderrPath,
+          "[sandbox-agent-cleanup] client.close failed: " + message + "\\n",
+        ).catch(() => {});
+      }
+    } else {
+      await appendDriverLifecycleLog(input, "client_close_skipped");
+    }
   }
-  activePhase = "complete";
-  await appendDriverLifecycleLog(
-    input,
-    "driver_loop_complete exit_requested=" + String(Boolean(state.exitRequested)),
-  );
 };
 
 main().catch(async (error) => {
@@ -2916,6 +3065,18 @@ const quarantinePersistentDriverTaskQueue = async (input: {
 	await execAsync(
 		`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(script)}'`,
 	).catch(() => {});
+};
+
+const persistentDriverScriptMatchesCurrentVersion = async (input: {
+	containerName: string;
+	driverScriptPath: string;
+}) => {
+	const { stdout } = await execAsync(
+		`docker exec ${input.containerName} bash -lc "grep -F '${escapeSingleQuotes(
+			SANDBOX_AGENT_DRIVER_VERSION,
+		)}' '${escapeSingleQuotes(input.driverScriptPath)}' >/dev/null 2>&1 && echo yes || echo no"`,
+	);
+	return stdout.trim() === "yes";
 };
 
 const buildTaskSessionPersistPathInContainer = (taskRootInContainer: string) =>
@@ -3096,11 +3257,9 @@ const prepareForkRuntimeArtifactsOnHost = async (input: {
 		input.runInput,
 	);
 	if (!parentRuntimeRootOnHost) {
-		return {
-			parentRuntimeRootPathInContainer: null,
-			parentSessionPersistPathInContainer: undefined,
-			parentAgentHomePathInContainer: undefined,
-		};
+		throw new Error(
+			`Fork session requested but parent task runtime root could not be resolved for task '${input.runInput.parentTaskId}'`,
+		);
 	}
 
 	const parentAgentHomeOnHost = path.join(
@@ -3248,11 +3407,6 @@ const resolveParentSessionPersistPathInContainer = async (
 		: null;
 };
 
-const resolveAgentHomeLinkPathInContainer = (agentProvider: string) =>
-	agentProvider === "claude_code"
-		? CLAUDE_HOME_IN_CONTAINER
-		: CODEX_HOME_IN_CONTAINER;
-
 const prepareTaskAgentHomeInContainer = async (input: {
 	containerName: string;
 	agentProvider: string;
@@ -3267,17 +3421,13 @@ const prepareTaskAgentHomeInContainer = async (input: {
 	const agentHomePathInContainer = buildTaskAgentHomePathInContainer(
 		input.agentHomeRootInContainer,
 	);
-	const agentHomeLinkPathInContainer = resolveAgentHomeLinkPathInContainer(
-		input.agentProvider,
-	);
 	const isFork = input.sessionMode === "fork";
 	const setupScript = [
 		"set -euo pipefail",
 		`agent_home='${escapeSingleQuotes(agentHomePathInContainer)}'`,
-		`agent_home_link='${escapeSingleQuotes(agentHomeLinkPathInContainer)}'`,
 		`parent_agent_home='${escapeSingleQuotes(input.parentAgentHomePathInContainer || "")}'`,
 		`reuse_existing='${input.reuseExistingAgentHome ? "1" : "0"}'`,
-		'mkdir -p "$(dirname "$agent_home")" "$(dirname "$agent_home_link")"',
+		'mkdir -p "$(dirname "$agent_home")"',
 		'if [ "$reuse_existing" = "1" ] && [ -d "$agent_home" ]; then',
 		"  :",
 		"else",
@@ -3295,8 +3445,6 @@ const prepareTaskAgentHomeInContainer = async (input: {
 				].join("\n")
 			: '  rm -rf "$agent_home" && mkdir -p "$agent_home"',
 		"fi",
-		'rm -rf "$agent_home_link"',
-		'ln -s "$agent_home" "$agent_home_link"',
 		'mkdir -p "$agent_home/skills"',
 	].join("\n");
 
@@ -3314,18 +3462,19 @@ const prepareTaskAgentHomeInContainer = async (input: {
 			),
 	);
 
-	if (input.agentProvider === "claude_code") {
+	if (input.agentProvider === "claude_code" && !isFork) {
 		await withHostBootstrapLog(
 			input.logPath,
-			"agent_home_initialize_claude",
+			"agent_home_copy_claude_assets",
 			"",
 			() =>
-				initializeClaudeHomeInContainer(
+				copyClaudeAssetsToContainerHome(
 					input.containerName,
 					agentHomePathInContainer,
+					input.agentProfile,
 				),
 		);
-	} else {
+	} else if (!isFork) {
 		await withHostBootstrapLog(
 			input.logPath,
 			"agent_home_copy_codex_assets",
@@ -3342,7 +3491,7 @@ const prepareTaskAgentHomeInContainer = async (input: {
 
 	return {
 		agentHomePathInContainer,
-		agentHomeLinkPathInContainer,
+		agentHomeLinkPathInContainer: agentHomePathInContainer,
 		parentAgentHomePathInContainer: input.parentAgentHomePathInContainer,
 		agentHomeCopiedFromParent: isFork,
 	};
@@ -3354,6 +3503,14 @@ export const runSingleTurnAgentInContainer = async (
 	const taskStageDirPath = input.taskStageDirPath || input.stageDirPath;
 	const taskStageRootInContainer =
 		input.taskStageRootInContainer || input.stageRootInContainer;
+	const realTaskRootInContainer =
+		input.taskRealRootInContainer ||
+		(taskStageRootInContainer !== TASK_ALIAS_ROOT_IN_CONTAINER
+			? taskStageRootInContainer
+			: null);
+	if (!realTaskRootInContainer) {
+		throw new Error("Task real root in container is required when /task is an alias");
+	}
 	const structuredOutputSchemaPathOnHost = path.join(
 		taskStageDirPath,
 		STRUCTURED_OUTPUT_SCHEMA_FILE_NAME,
@@ -3444,6 +3601,11 @@ export const runSingleTurnAgentInContainer = async (
 	await initializeCodexRuntimeMetadataFiles({
 		cursorPath: taskRuntimeArtifacts.cursorPath,
 		statePath: taskRuntimeArtifacts.statePath,
+	});
+	await updateTaskAliasSymlinkInContainer({
+		containerName: input.containerName,
+		taskRootInContainer: realTaskRootInContainer,
+		logPath: taskStderrPath,
 	});
 	await withHostBootstrapLog(
 		taskStderrPath,
@@ -3539,9 +3701,36 @@ export const runSingleTurnAgentInContainer = async (
 			}`,
 		);
 	}
-	const persistentDriverAlive = Boolean(
+	let persistentDriverAlive = Boolean(
 		input.persistent && persistentDriverHealth?.alive,
 	);
+	if (persistentDriverAlive) {
+		const driverScriptCurrent = await withHostBootstrapLog(
+			taskStderrPath,
+			"inspect_persistent_driver_script_version",
+			`expected=${SANDBOX_AGENT_DRIVER_VERSION}`,
+			() =>
+				persistentDriverScriptMatchesCurrentVersion({
+					containerName: input.containerName,
+					driverScriptPath,
+				}),
+		).catch(() => false);
+		if (!driverScriptCurrent) {
+			await appendHostBootstrapLog(
+				taskStderrPath,
+				`persistent_driver_script_stale expected=${SANDBOX_AGENT_DRIVER_VERSION}; restarting driver`,
+			);
+			await stopPersistentDriver({
+				containerName: input.containerName,
+				driverPidPath,
+			});
+			await quarantinePersistentDriverTaskQueue({
+				containerName: input.containerName,
+				taskQueueDir,
+			});
+			persistentDriverAlive = false;
+		}
+	}
 	const agentHomeRootInContainer = input.persistent
 		? input.stageRootInContainer
 		: taskStageRootInContainer;
@@ -3561,8 +3750,9 @@ export const runSingleTurnAgentInContainer = async (
 				agentHomePathInContainer: buildTaskAgentHomePathInContainer(
 					agentHomeRootInContainer,
 				),
-				agentHomeLinkPathInContainer:
-					resolveAgentHomeLinkPathInContainer(agentProvider),
+				agentHomeLinkPathInContainer: buildTaskAgentHomePathInContainer(
+					agentHomeRootInContainer,
+				),
 				parentAgentHomePathInContainer,
 				agentHomeCopiedFromParent: false,
 			}
@@ -3587,29 +3777,6 @@ export const runSingleTurnAgentInContainer = async (
 		)}`,
 	);
 
-	const sandboxRuntime = await withHostBootstrapLog(
-		taskStderrPath,
-		"prepare_sandbox_agent_runtime",
-		`provider=${agentProvider} reuse_existing=${String(Boolean(input.persistent))}`,
-		() =>
-			prepareSandboxAgentRuntime({
-				containerName: input.containerName,
-				stageDirPath: input.stageDirPath,
-				stageDirInContainer: input.stageRootInContainer,
-				provider: input.agentProfile?.provider || "codex",
-				homeDir: "/root",
-				envPairs:
-					agentProvider === "claude_code" && input.agentProfile
-						? buildClaudeEnvPairs(input.agentProfile)
-						: [
-								`CODEX_HOME=${CODEX_HOME_IN_CONTAINER}`,
-								...(input.agentProfile
-									? parseAgentProfileEnvPairs(input.agentProfile)
-									: []),
-							],
-				reuseExisting: input.persistent,
-			}),
-	);
 	const sessionPersistPathInContainer = buildTaskSessionPersistPathInContainer(
 		input.stageRootInContainer,
 	);
@@ -3617,9 +3784,9 @@ export const runSingleTurnAgentInContainer = async (
 		forkRuntimeArtifacts.parentSessionPersistPathInContainer !== undefined
 			? forkRuntimeArtifacts.parentSessionPersistPathInContainer
 			: await resolveParentSessionPersistPathInContainer(input);
-	const driverTaskInput = {
+	const buildDriverTaskInput = (baseUrl: string) => ({
 		taskId: input.taskId || undefined,
-		baseUrl: sandboxRuntime.server.baseUrl,
+		baseUrl,
 		provider:
 			input.agentProfile?.provider === "claude_code" ? "claude" : "codex",
 		cwd: input.cwd,
@@ -3663,8 +3830,9 @@ export const runSingleTurnAgentInContainer = async (
 		parentAgentHomePathInContainer:
 			taskAgentHome.parentAgentHomePathInContainer,
 		agentHomeCopiedFromParent: taskAgentHome.agentHomeCopiedFromParent,
-	};
+	});
 	if (persistentDriverAlive) {
+		const driverTaskInput = buildDriverTaskInput("");
 		const requestPath = path.posix.join(
 			taskQueueDir,
 			`${Date.now()}-${input.scanJob.scanJobId}-${Math.random().toString(16).slice(2)}.json`,
@@ -3693,6 +3861,36 @@ export const runSingleTurnAgentInContainer = async (
 			threadId: input.laneThreadId || null,
 		};
 	}
+	const sandboxRuntime = await withHostBootstrapLog(
+		taskStderrPath,
+		"prepare_sandbox_agent_runtime",
+		`provider=${agentProvider} reuse_existing=false`,
+		() =>
+			prepareSandboxAgentRuntime({
+				containerName: input.containerName,
+				stageDirPath: input.stageDirPath,
+				stageDirInContainer: input.stageRootInContainer,
+				provider: input.agentProfile?.provider || "codex",
+				homeDir: "/root",
+				envPairs:
+					agentProvider === "claude_code" && input.agentProfile
+						? buildClaudeEnvPairs(
+								input.agentProfile,
+								taskAgentHome.agentHomePathInContainer,
+							).concat([
+								`SANDBOX_AGENT_ACP_REQUEST_TIMEOUT_MS=${SANDBOX_AGENT_ACP_REQUEST_TIMEOUT_MS}`,
+							])
+						: [
+								`CODEX_HOME=${taskAgentHome.agentHomePathInContainer}`,
+								`SANDBOX_AGENT_ACP_REQUEST_TIMEOUT_MS=${SANDBOX_AGENT_ACP_REQUEST_TIMEOUT_MS}`,
+								...(input.agentProfile
+									? parseAgentProfileEnvPairs(input.agentProfile)
+									: []),
+							],
+				reuseExisting: false,
+			}),
+	);
+	const driverTaskInput = buildDriverTaskInput(sandboxRuntime.server.baseUrl);
 	if (input.persistent && input.laneThreadId && persistentDriverHealth) {
 		await appendContainerFile(
 			input.containerName,

@@ -141,8 +141,8 @@ export type AgentProfileLike = {
 	agentProfileId: string;
 	name: string;
 	provider: "codex" | "claude_code";
-	codexAuthMode?: "api_key" | "codex_home";
-	codexHomePath?: string;
+	authMode: "api_key" | "host_home";
+	homePath: string;
 	baseUrl: string;
 	apiKey: string;
 	model: string;

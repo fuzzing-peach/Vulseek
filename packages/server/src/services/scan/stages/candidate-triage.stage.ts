@@ -88,10 +88,11 @@ const executeCandidateTriageStage = async (
 	const triageAgentProfile = await ctx.agentProfile();
 	const taskStageDirPath = await ctx.taskDir();
 	const taskStageRootInContainer = await ctx.taskDirContainer();
-	const stageDirPath = ctx.persistent ? await ctx.laneDir() : taskStageDirPath;
-	const stageRootInContainer = ctx.persistent
+	const taskRealRootInContainer = await ctx.taskDirRealContainer();
+	const stageDirPath = ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
+	const stageRootInContainer = ctx.laneIndex !== null
 		? await ctx.laneDirContainer()
-		: taskStageRootInContainer;
+		: taskRealRootInContainer;
 	const reportPath = `${taskStageRootInContainer}/01_triage_report.md`;
 	const [candidate, analysisResult, verifyResult] = await Promise.all([
 		readTaskJsonArtifact<Candidate>({
@@ -111,6 +112,7 @@ const executeCandidateTriageStage = async (
 	await bindTaskRuntimeRepo({
 		taskId: ctx.taskId,
 		containerName,
+		containerIndex: ctx.containerIndex,
 		agentProfile:
 			buildTaskAgentProfileSnapshot(triageAgentProfile).agentProfile,
 	});
@@ -122,7 +124,9 @@ const executeCandidateTriageStage = async (
 		codexHome: `${stageRootInContainer}/.codex-triage`,
 		stageDirPath,
 		stageRootInContainer,
+		taskRealRootInContainer,
 		persistent: ctx.persistent,
+		reuseContainer: ctx.reuseContainer,
 		runtimeFileNames: SANDBOX_AGENT_RUNTIME_FILE_NAMES,
 	});
 
@@ -136,7 +140,9 @@ const executeCandidateTriageStage = async (
 		taskId: ctx.taskId,
 		taskStageDirPath,
 		taskStageRootInContainer,
+		taskRealRootInContainer,
 		persistent: ctx.persistent,
+		reuseContainer: ctx.reuseContainer,
 		groupedPersistent: ctx.groupedPersistent,
 		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
@@ -169,6 +175,7 @@ export const createTriageStageDefinition = <
 	name: string;
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
+	reuseContainer?: boolean;
 	queue?: StageQueueBinding<TPipelineContext, CandidateTriageStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -181,6 +188,7 @@ export const createTriageStageDefinition = <
 		name: input.name,
 		mode: input.mode || "fanout",
 		persistent: input.persistent,
+		reuseContainer: input.reuseContainer,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
 			await resolveStageConcurrencySetting(

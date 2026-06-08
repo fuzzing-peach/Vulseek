@@ -36,19 +36,31 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/utils/api";
 
-const Schema = z.object({
-	name: z.string().min(1, { message: "Name is required" }),
-	provider: z.enum(["codex", "claude_code"]),
-	codexAuthMode: z.enum(["api_key", "codex_home"]),
-	codexHomePath: z.string(),
-	baseUrl: z.string().url({ message: "Please enter a valid URL" }),
-	apiKey: z.string(),
-	model: z.string().min(1, { message: "Model is required" }),
-	thinkingLevel: z.string().min(1, { message: "Thinking level is required" }),
-	thinkingLevelEnabled: z.boolean(),
-	envs: z.string(),
-	isEnabled: z.boolean(),
-});
+const Schema = z
+	.object({
+		name: z.string().min(1, { message: "Name is required" }),
+		provider: z.enum(["codex", "claude_code"]),
+		authMode: z.enum(["api_key", "host_home"]),
+		homePath: z.string(),
+		baseUrl: z.string().url({ message: "Please enter a valid URL" }),
+		apiKey: z.string(),
+		model: z.string().min(1, { message: "Model is required" }),
+		thinkingLevel: z
+			.string()
+			.min(1, { message: "Thinking level is required" }),
+		thinkingLevelEnabled: z.boolean(),
+		envs: z.string(),
+		isEnabled: z.boolean(),
+	})
+	.superRefine((value, ctx) => {
+		if (value.authMode === "host_home" && !value.homePath.trim()) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ["homePath"],
+				message: "Home path is required",
+			});
+		}
+	});
 
 type Schema = z.infer<typeof Schema>;
 
@@ -113,8 +125,8 @@ export const HandleAgentProfile = ({
 		defaultValues: {
 			name: "",
 			provider: "codex",
-			codexAuthMode: "api_key",
-			codexHomePath: "",
+			authMode: "api_key",
+			homePath: "",
 			baseUrl: "https://api.openai.com/v1",
 			apiKey: "",
 			model: "gpt-5.4",
@@ -129,9 +141,9 @@ export const HandleAgentProfile = ({
 		control: form.control,
 		name: "provider",
 	});
-	const codexAuthMode = useWatch({
+	const authMode = useWatch({
 		control: form.control,
-		name: "codexAuthMode",
+		name: "authMode",
 	});
 	const envsValue = useWatch({
 		control: form.control,
@@ -154,8 +166,8 @@ export const HandleAgentProfile = ({
 				? `${duplicateProfile.name} Copy`
 				: (data?.name ?? ""),
 			provider: source?.provider ?? "codex",
-			codexAuthMode: source?.codexAuthMode ?? "api_key",
-			codexHomePath: source?.codexHomePath ?? "",
+			authMode: source?.authMode ?? "api_key",
+			homePath: source?.homePath ?? "",
 			baseUrl: source?.baseUrl ?? "https://api.openai.com/v1",
 			apiKey: source?.apiKey ?? "",
 			model: source?.model ?? "gpt-5.4",
@@ -168,7 +180,6 @@ export const HandleAgentProfile = ({
 
 	useEffect(() => {
 		if (provider === "claude_code" && !agentProfileId && !data?.baseUrl) {
-			form.setValue("codexAuthMode", "api_key");
 			form.setValue("baseUrl", "https://api.anthropic.com");
 			form.setValue("model", "claude-sonnet-4-5");
 		}
@@ -197,10 +208,8 @@ export const HandleAgentProfile = ({
 		try {
 			await mutateAsync({
 				...values,
-				codexAuthMode:
-					values.provider === "codex" ? values.codexAuthMode : "api_key",
-				codexHomePath:
-					values.provider === "codex" ? values.codexHomePath.trim() : "",
+				homePath:
+					values.authMode === "host_home" ? values.homePath.trim() : "",
 				agentProfileId: agentProfileId || "",
 			});
 			await utils.ai.getAgentProfiles.invalidate();
@@ -297,49 +306,59 @@ export const HandleAgentProfile = ({
 							)}
 						/>
 
-						{provider === "codex" && (
-							<FormField
-								control={form.control}
-								name="codexAuthMode"
-								render={({ field }) => (
-									<FormItem>
-										<FormLabel>Codex Auth</FormLabel>
-										<Select onValueChange={field.onChange} value={field.value}>
-											<FormControl>
-												<SelectTrigger>
-													<SelectValue placeholder="Select Codex auth" />
-												</SelectTrigger>
-											</FormControl>
-											<SelectContent>
-												<SelectItem value="api_key">API Key</SelectItem>
-												<SelectItem value="codex_home">
-													Copy Codex Home
-												</SelectItem>
-											</SelectContent>
-										</Select>
-										<FormDescription>
-											Copy Codex Home bind-mounts the host path below into each
-											task container.
-										</FormDescription>
-										<FormMessage />
-									</FormItem>
-								)}
-							/>
-						)}
-
-						{provider === "codex" && codexAuthMode === "codex_home" ? (
-							<FormField
-								control={form.control}
-								name="codexHomePath"
-								render={({ field }) => (
-									<FormItem>
-										<FormLabel>Codex Home Path</FormLabel>
+						<FormField
+							control={form.control}
+							name="authMode"
+							render={({ field }) => (
+								<FormItem>
+									<FormLabel>
+										{provider === "claude_code" ? "Claude Auth" : "Codex Auth"}
+									</FormLabel>
+									<Select onValueChange={field.onChange} value={field.value}>
 										<FormControl>
-											<Input placeholder="/home/user/.codex" {...field} />
+											<SelectTrigger>
+												<SelectValue placeholder="Select auth mode" />
+											</SelectTrigger>
+										</FormControl>
+										<SelectContent>
+											<SelectItem value="api_key">API Key</SelectItem>
+											<SelectItem value="host_home">Host Home</SelectItem>
+										</SelectContent>
+									</Select>
+									<FormDescription>
+										Host Home bind-mounts the provider home path below into each
+										task container.
+									</FormDescription>
+									<FormMessage />
+								</FormItem>
+							)}
+						/>
+
+						{authMode === "host_home" ? (
+							<FormField
+								control={form.control}
+								name="homePath"
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel>
+											{provider === "claude_code"
+												? "Claude Home Path"
+												: "Codex Home Path"}
+										</FormLabel>
+										<FormControl>
+											<Input
+												placeholder={
+													provider === "claude_code"
+														? "/home/user"
+														: "/home/user/.codex"
+												}
+												{...field}
+											/>
 										</FormControl>
 										<FormDescription>
-											Absolute path on the Docker host that contains Codex
-											auth.json and config.toml.
+											{provider === "claude_code"
+												? "Absolute host user home path containing settings.json."
+												: "Absolute Codex home path containing auth.json."}
 										</FormDescription>
 										<FormMessage />
 									</FormItem>
@@ -347,7 +366,7 @@ export const HandleAgentProfile = ({
 							/>
 						) : null}
 
-						{provider !== "codex" || codexAuthMode === "api_key" ? (
+						{authMode === "api_key" ? (
 							<FormField
 								control={form.control}
 								name="baseUrl"
@@ -366,7 +385,7 @@ export const HandleAgentProfile = ({
 							/>
 						) : null}
 
-						{provider !== "codex" || codexAuthMode === "api_key" ? (
+						{authMode === "api_key" ? (
 							<FormField
 								control={form.control}
 								name="apiKey"
@@ -387,7 +406,7 @@ export const HandleAgentProfile = ({
 							/>
 						) : (
 							<AlertBlock type="info">
-								Dokploy will copy this Codex home into each task container
+								Dokploy will copy this provider home into each task container
 								instead of writing an API key.
 							</AlertBlock>
 						)}

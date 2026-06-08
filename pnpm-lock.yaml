@@ -10,7 +10,7 @@ overrides:
 
 patchedDependencies:
   sandbox-agent@0.4.2:
-    hash: cbbjha3y7suq2xzi332knsnnfe
+    hash: iadp2axocftaqb4vb7zefcg2hm
     path: packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch
 
 importers:
@@ -425,7 +425,7 @@ importers:
         version: 3.2.3
       sandbox-agent:
         specifier: 0.4.x
-        version: 0.4.2(patch_hash=cbbjha3y7suq2xzi332knsnnfe)(dockerode@4.0.2)(zod@3.25.32)
+        version: 0.4.2(patch_hash=iadp2axocftaqb4vb7zefcg2hm)(dockerode@4.0.2)(zod@3.25.32)
       slugify:
         specifier: ^1.6.6
         version: 1.6.6
@@ -757,7 +757,7 @@ importers:
         version: 3.2.3
       sandbox-agent:
         specifier: 0.4.x
-        version: 0.4.2(patch_hash=cbbjha3y7suq2xzi332knsnnfe)(dockerode@4.0.2)(zod@3.25.32)
+        version: 0.4.2(patch_hash=iadp2axocftaqb4vb7zefcg2hm)(dockerode@4.0.2)(zod@3.25.32)
       slugify:
         specifier: ^1.6.6
         version: 1.6.6
@@ -14993,7 +14993,7 @@ snapshots:
 
   safer-buffer@2.1.2: {}
 
-  sandbox-agent@0.4.2(patch_hash=cbbjha3y7suq2xzi332knsnnfe)(dockerode@4.0.2)(zod@3.25.32):
+  sandbox-agent@0.4.2(patch_hash=iadp2axocftaqb4vb7zefcg2hm)(dockerode@4.0.2)(zod@3.25.32):
     dependencies:
       '@sandbox-agent/cli-shared': 0.4.2
       acp-http-client: 0.4.2(zod@3.25.32)

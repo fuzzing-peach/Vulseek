@@ -74,10 +74,11 @@ const executeCandidateAnalysisStage = async (
 	const analysisAgentProfile = await ctx.agentProfile();
 	const taskStageDirPath = await ctx.taskDir();
 	const taskStageRootInContainer = await ctx.taskDirContainer();
-	const stageDirPath = ctx.persistent ? await ctx.laneDir() : taskStageDirPath;
-	const stageRootInContainer = ctx.persistent
+	const taskRealRootInContainer = await ctx.taskDirRealContainer();
+	const stageDirPath = ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
+	const stageRootInContainer = ctx.laneIndex !== null
 		? await ctx.laneDirContainer()
-		: taskStageRootInContainer;
+		: taskRealRootInContainer;
 	const reportPath = `${taskStageRootInContainer}/01_report.md`;
 	const candidate = await readTaskJsonArtifact<Candidate>({
 		taskDir: taskStageDirPath,
@@ -87,6 +88,7 @@ const executeCandidateAnalysisStage = async (
 	await bindTaskRuntimeRepo({
 		taskId: ctx.taskId,
 		containerName,
+		containerIndex: ctx.containerIndex,
 		agentProfile:
 			buildTaskAgentProfileSnapshot(analysisAgentProfile).agentProfile,
 	});
@@ -98,7 +100,9 @@ const executeCandidateAnalysisStage = async (
 		codexHome: `${stageRootInContainer}/.codex`,
 		stageDirPath,
 		stageRootInContainer,
+		taskRealRootInContainer,
 		persistent: ctx.persistent,
+		reuseContainer: ctx.reuseContainer,
 	});
 
 	return await runSingleTurnAgentInContainer({
@@ -111,7 +115,9 @@ const executeCandidateAnalysisStage = async (
 		taskId: ctx.taskId,
 		taskStageDirPath,
 		taskStageRootInContainer,
+		taskRealRootInContainer,
 		persistent: ctx.persistent,
+		reuseContainer: ctx.reuseContainer,
 		groupedPersistent: ctx.groupedPersistent,
 		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
@@ -142,6 +148,7 @@ export const createAnalysisStageDefinition = <
 	name: string;
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
+	reuseContainer?: boolean;
 	queue?: StageQueueBinding<TPipelineContext, CandidateAnalysisStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -154,6 +161,7 @@ export const createAnalysisStageDefinition = <
 		name: input.name,
 		mode: input.mode || "fanout",
 		persistent: input.persistent,
+		reuseContainer: input.reuseContainer,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
 			await resolveStageConcurrencySetting(

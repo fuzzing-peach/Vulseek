@@ -254,6 +254,27 @@ export const resetStageLaneRuntimeForExitRepo = async (input: {
 		.returning();
 };
 
+export const resetStageLaneRuntimeSessionForExitRepo = async (input: {
+	taskId: string;
+}) => {
+	const now = new Date().toISOString();
+	return await db
+		.update(scanStageLaneRuntimes)
+		.set({
+			threadId: null,
+			activeTaskId: null,
+			forkedFromTaskId: null,
+			forkedFromThreadId: null,
+			status: "idle",
+			lastExitTaskId: input.taskId,
+			lastExitAt: now,
+			updatedAt: now,
+		})
+		.where(eq(scanStageLaneRuntimes.activeTaskId, input.taskId))
+		.returning();
+};
+
+
 export const resetStageLaneRuntimeByLaneForExitRepo = async (input: {
 	scanJobId: string;
 	stageName: string;

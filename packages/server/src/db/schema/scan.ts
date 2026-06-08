@@ -19,8 +19,8 @@ type TaskAgentProfileSnapshot = {
 	agentProfileId: string | null;
 	name: string | null;
 	provider: "codex" | "claude_code" | null;
-	codexAuthMode?: "api_key" | "codex_home" | null;
-	codexHomePath?: string | null;
+	authMode: "api_key" | "host_home" | null;
+	homePath: string | null;
 	baseUrl: string | null;
 	model: string | null;
 	thinkingLevel: string | null;
@@ -65,6 +65,12 @@ export const scanJobs = pgTable("scan_jobs", {
 	functionTasksTotal: integer("functionTasksTotal").notNull().default(0),
 	functionTasksCompleted: integer("functionTasksCompleted").notNull().default(0),
 	functionTasksFailed: integer("functionTasksFailed").notNull().default(0),
+	inputTokens: integer("input_tokens").notNull().default(0),
+	outputTokens: integer("output_tokens").notNull().default(0),
+	thoughtTokens: integer("thought_tokens").notNull().default(0),
+	totalTokens: integer("total_tokens").notNull().default(0),
+	cachedReadTokens: integer("cached_read_tokens").notNull().default(0),
+	cachedWriteTokens: integer("cached_write_tokens").notNull().default(0),
 	applicationId: text("applicationId").references(
 		() => applications.applicationId,
 		{
@@ -108,6 +114,7 @@ export const tasks = pgTable(
 		attempt: integer("attempt").notNull().default(0),
 		agentProfile: jsonb("agentProfile").$type<TaskAgentProfileSnapshot | null>(),
 		containerName: text("containerName"),
+		containerIndex: integer("containerIndex"),
 		threadId: text("threadId"),
 		runtimeMode: text("runtimeMode").$type<
 			"new_session" | "fork_session" | null
@@ -165,6 +172,11 @@ export const tasks = pgTable(
 		),
 		threadIdx: index("tasks_thread_idx").on(table.threadId),
 		containerIdx: index("tasks_container_idx").on(table.containerName),
+		containerIndexIdx: index("tasks_container_index_idx").on(
+			table.scanJobId,
+			table.stageName,
+			table.containerIndex,
+		),
 	}),
 );
 

@@ -94,16 +94,18 @@ const executeRepositoryScanStage = async (
 	const scanAgentProfile = await ctx.agentProfile();
 	const taskStageDirPath = await ctx.taskDir();
 	const taskStageRootInContainer = await ctx.taskDirContainer();
-	const stageDirPath = ctx.persistent ? await ctx.laneDir() : taskStageDirPath;
-	const stageRootInContainer = ctx.persistent
+	const taskRealRootInContainer = await ctx.taskDirRealContainer();
+	const stageDirPath = ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
+	const stageRootInContainer = ctx.laneIndex !== null
 		? await ctx.laneDirContainer()
-		: taskStageRootInContainer;
+		: taskRealRootInContainer;
 	const repositoryRoot = taskStageRootInContainer;
 	const containerName = ctx.containerName();
 
 	await bindTaskRuntimeRepo({
 		taskId: ctx.taskId,
 		containerName,
+		containerIndex: ctx.containerIndex,
 		agentProfile: buildTaskAgentProfileSnapshot(scanAgentProfile).agentProfile,
 	});
 	await startContainer({
@@ -114,7 +116,9 @@ const executeRepositoryScanStage = async (
 		codexHome: `${stageRootInContainer}/.codex`,
 		stageDirPath,
 		stageRootInContainer,
+		taskRealRootInContainer,
 		persistent: ctx.persistent,
+		reuseContainer: ctx.reuseContainer,
 	});
 
 	const repositoryState = await prepareRepositoryForScanInContainer({
@@ -146,7 +150,9 @@ const executeRepositoryScanStage = async (
 		taskId: ctx.taskId,
 		taskStageDirPath,
 		taskStageRootInContainer,
+		taskRealRootInContainer,
 		persistent: ctx.persistent,
+		reuseContainer: ctx.reuseContainer,
 		groupedPersistent: ctx.groupedPersistent,
 		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
@@ -178,6 +184,7 @@ export const createRepositoryScanningStageDefinition = <
 	name: string;
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
+	reuseContainer?: boolean;
 	queue?: StageQueueBinding<TPipelineContext, RepositoryScanningStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -190,6 +197,7 @@ export const createRepositoryScanningStageDefinition = <
 		name: input.name,
 		mode: input.mode || "serial",
 		persistent: input.persistent,
+		reuseContainer: input.reuseContainer,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
 			await resolveStageConcurrencySetting(ctx.scanJobId, input.id, () => 1),

@@ -1,8 +1,18 @@
-diff --git a/dist/chunk-TVCDKGSM.js b/dist/chunk-TVCDKGSM.js
-index 29a0a22210d39ae9d886c0ccd7059cd9af0e26f0..3cd5a4965c2417bd13db7f1b3cbec586408cd485 100644
 --- a/dist/chunk-TVCDKGSM.js
 +++ b/dist/chunk-TVCDKGSM.js
-@@ -810,6 +810,15 @@ var LiveAcpConnection = class _LiveAcpConnection {
+@@ -678,6 +678,11 @@
+     this.apply(updated.session.toRecord());
+     return updated.response;
+   }
++  async close() {
++    await this.rawSend("session/close", {
++      sessionId: this.id
++    });
++  }
+   async prompt(prompt) {
+     const response = await this.rawSend("session/prompt", { prompt });
+     return response;
+@@ -810,6 +815,15 @@
      this.sessionByLocalId.set(localSessionId, agentSessionId);
      this.localByAgentSessionId.set(agentSessionId, localSessionId);
    }
@@ -18,7 +28,7 @@ index 29a0a22210d39ae9d886c0ccd7059cd9af0e26f0..3cd5a4965c2417bd13db7f1b3cbec586
    queueReplay(localSessionId, replayText) {
      if (!replayText) {
        this.pendingReplayByLocalSessionId.delete(localSessionId);
-@@ -837,6 +846,45 @@ var LiveAcpConnection = class _LiveAcpConnection {
+@@ -837,6 +851,45 @@
        throw error;
      }
    }
@@ -64,7 +74,19 @@ index 29a0a22210d39ae9d886c0ccd7059cd9af0e26f0..3cd5a4965c2417bd13db7f1b3cbec586
    async sendSessionMethod(localSessionId, method, params, options) {
      const agentSessionId = this.sessionByLocalId.get(localSessionId);
      if (!agentSessionId) {
-@@ -904,6 +952,9 @@ var LiveAcpConnection = class _LiveAcpConnection {
+@@ -859,6 +912,11 @@
+       await this.acp.cancel(mappedParams);
+       return void 0;
+     }
++    if (method === "session/close") {
++      this.unbindSession(localSessionId, agentSessionId);
++      await this.close();
++      return void 0;
++    }
+     if (method === "session/set_mode") {
+       return this.acp.setSessionMode(mappedParams);
+     }
+@@ -904,6 +960,9 @@
          }
          return localSessionId;
        }
@@ -74,7 +96,7 @@ index 29a0a22210d39ae9d886c0ccd7059cd9af0e26f0..3cd5a4965c2417bd13db7f1b3cbec586
        const localFromParams = this.localFromEnvelopeParams(envelope);
        if (id && localFromParams) {
          this.pendingRequestSessionById.set(id, localFromParams);
-@@ -1284,14 +1335,19 @@ var SandboxAgent = class _SandboxAgent {
+@@ -1284,14 +1343,19 @@
      if (!request.agent.trim()) {
        throw new Error("createSession requires a non-empty agent");
      }
@@ -97,7 +119,7 @@ index 29a0a22210d39ae9d886c0ccd7059cd9af0e26f0..3cd5a4965c2417bd13db7f1b3cbec586
        lastConnectionId: live.connectionId,
        createdAt: nowMs(),
        sandboxId: this.sandboxProviderId,
-@@ -1300,6 +1356,110 @@ var SandboxAgent = class _SandboxAgent {
+@@ -1300,6 +1364,110 @@
        modes: cloneModes(response.modes)
      };
      await this.persist.updateSession(record);
@@ -208,8 +230,6 @@ index 29a0a22210d39ae9d886c0ccd7059cd9af0e26f0..3cd5a4965c2417bd13db7f1b3cbec586
      live.bindSession(record.id, record.agentSessionId);
      let session = this.upsertSessionHandle(record);
      try {
-diff --git a/dist/index.d.ts b/dist/index.d.ts
-index e67d588032a085d28adc82252199e389722b86d2..ef11f95fe2ffa0b720904644b794a9409e13e724 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
 @@ -1,4 +1,4 @@
@@ -218,7 +238,7 @@ index e67d588032a085d28adc82252199e389722b86d2..ef11f95fe2ffa0b720904644b794a940
  export { AcpRpcError } from 'acp-http-client';
  import { S as SandboxProvider } from './types-DdcvY5CI.js';
  export { S as SandboxAgentSpawnLogMode, a as SandboxAgentSpawnOptions } from './spawn-76JDF5d3.js';
-@@ -2806,6 +2806,7 @@ interface SessionPersistDriver {
+@@ -2806,6 +2806,7 @@
      updateSession(session: SessionRecord): Promise<void>;
      listEvents(request: ListEventsRequest): Promise<ListPage<SessionEvent>>;
      insertEvent(sessionId: string, event: SessionEvent): Promise<void>;
@@ -226,7 +246,7 @@ index e67d588032a085d28adc82252199e389722b86d2..ef11f95fe2ffa0b720904644b794a940
  }
  interface InMemorySessionPersistDriverOptions {
      maxSessions?: number;
-@@ -2958,6 +2959,31 @@ interface SessionCreateRequest {
+@@ -2958,6 +2959,31 @@
      mode?: string;
      thoughtLevel?: string;
  }
@@ -258,7 +278,15 @@ index e67d588032a085d28adc82252199e389722b86d2..ef11f95fe2ffa0b720904644b794a940
  interface SessionResumeOrCreateRequest {
      id: string;
      agent: string;
-@@ -3172,6 +3198,8 @@ declare class SandboxAgent {
+@@ -3060,6 +3086,7 @@
+     get destroyedAt(): number | undefined;
+     refresh(): Promise<Session>;
+     rawSend(method: string, params?: Record<string, unknown>, options?: SessionSendOptions): Promise<unknown>;
++    close(): Promise<void>;
+     prompt(prompt: PromptRequest["prompt"]): Promise<PromptResponse>;
+     setMode(modeId: string): Promise<SetSessionModeResponse | void>;
+     setConfigOption(configId: string, value: string): Promise<SetSessionConfigOptionResponse>;
+@@ -3172,6 +3199,8 @@
      getSession(id: string): Promise<Session | null>;
      getEvents(request: ListEventsRequest): Promise<ListPage<SessionEvent>>;
      createSession(request: SessionCreateRequest): Promise<Session>;
@@ -267,7 +295,7 @@ index e67d588032a085d28adc82252199e389722b86d2..ef11f95fe2ffa0b720904644b794a940
      resumeSession(id: string): Promise<Session>;
      resumeOrCreateSession(request: SessionResumeOrCreateRequest): Promise<Session>;
      destroySession(id: string): Promise<Session>;
-@@ -3322,4 +3350,4 @@ interface InspectorUrlOptions {
+@@ -3322,4 +3351,4 @@
   */
  declare function buildInspectorUrl(options: InspectorUrlOptions): string;
  

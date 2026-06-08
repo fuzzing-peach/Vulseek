@@ -1,7 +1,7 @@
 import { db } from "@dokploy/server/db";
-import { type taskStatusEnum, tasks } from "@dokploy/server/db/schema";
+import { scanJobs, type taskStatusEnum, tasks } from "@dokploy/server/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import {
 	analysisSchema,
 	triageSchema,
@@ -10,6 +10,65 @@ import {
 import { createShortTaskId } from "../task-id";
 import type { AnalysisResult, TriageResult, VerificationResult } from "../types";
 import { readCandidateIdFromTaskInputArtifact } from "./task-artifact-resolver";
+
+const tokenUsageKeys = [
+	"inputTokens",
+	"outputTokens",
+	"thoughtTokens",
+	"totalTokens",
+	"cachedReadTokens",
+	"cachedWriteTokens",
+] as const;
+
+type TaskTokenUsageKey = (typeof tokenUsageKeys)[number];
+
+const hasTokenUsagePatch = (patch: Partial<typeof tasks.$inferSelect>) =>
+	tokenUsageKeys.some((key) => key in patch);
+
+const toTokenCount = (value: number | null | undefined) =>
+	typeof value === "number" && Number.isFinite(value) ? value : 0;
+
+const tokenUsageDelta = (
+	before: Pick<typeof tasks.$inferSelect, TaskTokenUsageKey>,
+	after: Pick<typeof tasks.$inferSelect, TaskTokenUsageKey>,
+) => ({
+	inputTokens: toTokenCount(after.inputTokens) - toTokenCount(before.inputTokens),
+	outputTokens:
+		toTokenCount(after.outputTokens) - toTokenCount(before.outputTokens),
+	thoughtTokens:
+		toTokenCount(after.thoughtTokens) - toTokenCount(before.thoughtTokens),
+	totalTokens: toTokenCount(after.totalTokens) - toTokenCount(before.totalTokens),
+	cachedReadTokens:
+		toTokenCount(after.cachedReadTokens) -
+		toTokenCount(before.cachedReadTokens),
+	cachedWriteTokens:
+		toTokenCount(after.cachedWriteTokens) -
+		toTokenCount(before.cachedWriteTokens),
+});
+
+const hasNonZeroTokenUsageDelta = (delta: ReturnType<typeof tokenUsageDelta>) =>
+	Object.values(delta).some((value) => value !== 0);
+
+const applyScanJobTokenUsageDelta = async (
+	tx: typeof db,
+	scanJobId: string,
+	delta: ReturnType<typeof tokenUsageDelta>,
+) => {
+	if (!hasNonZeroTokenUsageDelta(delta)) {
+		return;
+	}
+	await tx
+		.update(scanJobs)
+		.set({
+			inputTokens: sql`${scanJobs.inputTokens} + ${delta.inputTokens}`,
+			outputTokens: sql`${scanJobs.outputTokens} + ${delta.outputTokens}`,
+			thoughtTokens: sql`${scanJobs.thoughtTokens} + ${delta.thoughtTokens}`,
+			totalTokens: sql`${scanJobs.totalTokens} + ${delta.totalTokens}`,
+			cachedReadTokens: sql`${scanJobs.cachedReadTokens} + ${delta.cachedReadTokens}`,
+			cachedWriteTokens: sql`${scanJobs.cachedWriteTokens} + ${delta.cachedWriteTokens}`,
+		})
+		.where(eq(scanJobs.scanJobId, scanJobId));
+};
 
 const buildAnalysisTaskResultView = async (
 	task: typeof tasks.$inferSelect,
@@ -127,6 +186,7 @@ export const createTaskRepo = async (input: {
 	attempt?: number;
 	agentProfile?: typeof tasks.$inferSelect.agentProfile;
 	containerName?: string | null;
+	containerIndex?: number | null;
 	threadId?: string | null;
 	runtimeMode?: typeof tasks.$inferSelect.runtimeMode;
 	forkedFromTaskId?: string | null;
@@ -164,6 +224,7 @@ export const createTaskRepo = async (input: {
 					attempt: input.attempt ?? 0,
 					agentProfile: input.agentProfile ?? null,
 					containerName: input.containerName ?? null,
+					containerIndex: input.containerIndex ?? null,
 					threadId: input.threadId ?? null,
 					runtimeMode: input.runtimeMode ?? "new_session",
 					forkedFromTaskId: input.forkedFromTaskId ?? null,
@@ -204,6 +265,24 @@ export const createTaskRepo = async (input: {
 			code: "BAD_REQUEST",
 			message: `Error creating task${lastError ? `: ${String(lastError)}` : ""}`,
 		});
+	}
+
+	if (hasTokenUsagePatch(input)) {
+		await applyScanJobTokenUsageDelta(
+			db,
+			created[0].scanJobId,
+			tokenUsageDelta(
+				{
+					inputTokens: null,
+					outputTokens: null,
+					thoughtTokens: null,
+					totalTokens: null,
+					cachedReadTokens: null,
+					cachedWriteTokens: null,
+				},
+				created[0],
+			),
+		);
 	}
 
 	return created[0];
@@ -407,7 +486,7 @@ export const listActiveTasksByScanJobAndStageRepo = async (input: {
 				inArray(tasks.status, ["launching", "running"]),
 			),
 		)
-		.orderBy(desc(tasks.createdAt));
+		.orderBy(asc(tasks.createdAt));
 
 export const countActiveTasksByScanJobAndStageRepo = async (input: {
 	scanJobId: string;
@@ -434,50 +513,119 @@ export const transitionTaskStatusRepo = async (input: {
 	patch?: Partial<typeof tasks.$inferSelect>;
 }) => {
 	const now = new Date().toISOString();
-	const updated = await db
-		.update(tasks)
-		.set({
-			...input.patch,
-			status: input.to,
-			updatedAt: now,
-			...(input.to === "launching" || input.to === "running"
-				? { startedAt: now, completedAt: null }
-				: {}),
-			...(input.to === "completed" ||
-			input.to === "failed" ||
-			input.to === "exited"
-				? { completedAt: now }
-				: {}),
-		})
-		.where(
-			and(eq(tasks.taskId, input.taskId), inArray(tasks.status, input.from)),
-		)
-		.returning();
+	const patch = {
+		...input.patch,
+		status: input.to,
+		updatedAt: now,
+		...(input.to === "launching" || input.to === "running"
+			? { startedAt: now, completedAt: null }
+			: {}),
+		...(input.to === "completed" ||
+		input.to === "failed" ||
+		input.to === "exited"
+			? { completedAt: now }
+			: {}),
+	};
 
-	return updated[0] || null;
+	const updated = hasTokenUsagePatch(input.patch || {})
+		? await db.transaction(async (tx) => {
+				const previous = await tx
+					.select()
+					.from(tasks)
+					.where(
+						and(
+							eq(tasks.taskId, input.taskId),
+							inArray(tasks.status, input.from),
+						),
+					)
+					.limit(1)
+					.then((rows) => rows[0] || null);
+				if (!previous) {
+					return null;
+				}
+				const rows = await tx
+					.update(tasks)
+					.set(patch)
+					.where(
+						and(
+							eq(tasks.taskId, input.taskId),
+							inArray(tasks.status, input.from),
+						),
+					)
+					.returning();
+				const updatedTask = rows[0] || null;
+				if (!updatedTask) {
+					return null;
+				}
+				await applyScanJobTokenUsageDelta(
+					tx,
+					updatedTask.scanJobId,
+					tokenUsageDelta(previous, updatedTask),
+				);
+				return updatedTask;
+			})
+		: await db
+				.update(tasks)
+				.set(patch)
+				.where(
+					and(eq(tasks.taskId, input.taskId), inArray(tasks.status, input.from)),
+				)
+				.returning()
+				.then((rows) => rows[0] || null);
+
+	return updated;
 };
 
 export const updateTaskRepo = async (
 	taskId: string,
 	patch: Partial<typeof tasks.$inferSelect>,
 ) => {
-	const updated = await db
-		.update(tasks)
-		.set({
-			...patch,
-			updatedAt: new Date().toISOString(),
-		})
-		.where(eq(tasks.taskId, taskId))
-		.returning();
+	const nextPatch = {
+		...patch,
+		updatedAt: new Date().toISOString(),
+	};
+	const updated = hasTokenUsagePatch(patch)
+		? await db.transaction(async (tx) => {
+				const previous = await tx
+					.select()
+					.from(tasks)
+					.where(eq(tasks.taskId, taskId))
+					.limit(1)
+					.then((rows) => rows[0] || null);
+				if (!previous) {
+					return null;
+				}
+				const rows = await tx
+					.update(tasks)
+					.set(nextPatch)
+					.where(eq(tasks.taskId, taskId))
+					.returning();
+				const updatedTask = rows[0] || null;
+				if (!updatedTask) {
+					return null;
+				}
+				await applyScanJobTokenUsageDelta(
+					tx,
+					updatedTask.scanJobId,
+					tokenUsageDelta(previous, updatedTask),
+				);
+				return updatedTask;
+			})
+		: await db
+				.update(tasks)
+				.set(nextPatch)
+				.where(eq(tasks.taskId, taskId))
+				.returning()
+				.then((rows) => rows[0] || null);
 
-	if (!updated[0]) {
+	if (!updated) {
 		throw new TRPCError({
 			code: "NOT_FOUND",
 			message: "Task not found",
 		});
 	}
 
-	return updated[0];
+	return updated;
 };
 
 export const updateTaskStatusRepo = async (input: {
@@ -509,11 +657,15 @@ export const updateTaskStatusRepo = async (input: {
 export const bindTaskRuntimeRepo = async (input: {
 	taskId: string;
 	containerName?: string | null;
+	containerIndex?: number | null;
 	threadId?: string | null;
 	agentProfile?: typeof tasks.$inferSelect.agentProfile;
 }) =>
 	await updateTaskRepo(input.taskId, {
 		containerName: input.containerName,
+		...(input.containerIndex !== undefined
+			? { containerIndex: input.containerIndex }
+			: {}),
 		threadId: input.threadId,
 		agentProfile: input.agentProfile,
 	});
@@ -529,69 +681,113 @@ export const storeTaskOutputRepo = async (
 ) => await updateTaskRepo(taskId, { output });
 
 export const resetFailedTaskForRetryRepo = async (taskId: string) => {
-	const updated = await db
-		.update(tasks)
-		.set({
-			status: "pending",
-			errorMessage: null,
-			startedAt: null,
-			completedAt: null,
-			containerName: null,
-			threadId: null,
-			output: null,
-			inputTokens: null,
-			outputTokens: null,
-			thoughtTokens: null,
-			totalTokens: null,
-			cachedReadTokens: null,
-			cachedWriteTokens: null,
-			attempt: sql`${tasks.attempt} + 1`,
-			updatedAt: new Date().toISOString(),
-		})
-		.where(eq(tasks.taskId, taskId))
-		.returning();
+	const updated = await db.transaction(async (tx) => {
+		const previous = await tx
+			.select()
+			.from(tasks)
+			.where(eq(tasks.taskId, taskId))
+			.limit(1)
+			.then((rows) => rows[0] || null);
+		if (!previous) {
+			return null;
+		}
+		const rows = await tx
+			.update(tasks)
+			.set({
+				status: "pending",
+				errorMessage: null,
+				startedAt: null,
+				completedAt: null,
+				containerName: null,
+				containerIndex: null,
+				threadId: null,
+				output: null,
+				inputTokens: null,
+				outputTokens: null,
+				thoughtTokens: null,
+				totalTokens: null,
+				cachedReadTokens: null,
+				cachedWriteTokens: null,
+				attempt: sql`${tasks.attempt} + 1`,
+				updatedAt: new Date().toISOString(),
+			})
+			.where(eq(tasks.taskId, taskId))
+			.returning();
+		const updatedTask = rows[0] || null;
+		if (!updatedTask) {
+			return null;
+		}
+		await applyScanJobTokenUsageDelta(
+			tx,
+			updatedTask.scanJobId,
+			tokenUsageDelta(previous, updatedTask),
+		);
+		return updatedTask;
+	});
 
-	if (!updated[0]) {
+	if (!updated) {
 		throw new TRPCError({
 			code: "NOT_FOUND",
 			message: "Task not found",
 		});
 	}
 
-	return updated[0];
+	return updated;
 };
 
 export const requeueTaskRepo = async (taskId: string) => {
-	const updated = await db
-		.update(tasks)
-		.set({
-			status: "pending",
-			errorMessage: null,
-			startedAt: null,
-			completedAt: null,
-			containerName: null,
-			threadId: null,
-			output: null,
-			inputTokens: null,
-			outputTokens: null,
-			thoughtTokens: null,
-			totalTokens: null,
-			cachedReadTokens: null,
-			cachedWriteTokens: null,
-			attempt: sql`${tasks.attempt} + 1`,
-			updatedAt: new Date().toISOString(),
-		})
-		.where(eq(tasks.taskId, taskId))
-		.returning();
+	const updated = await db.transaction(async (tx) => {
+		const previous = await tx
+			.select()
+			.from(tasks)
+			.where(eq(tasks.taskId, taskId))
+			.limit(1)
+			.then((rows) => rows[0] || null);
+		if (!previous) {
+			return null;
+		}
+		const rows = await tx
+			.update(tasks)
+			.set({
+				status: "pending",
+				errorMessage: null,
+				startedAt: null,
+				completedAt: null,
+				containerName: null,
+				containerIndex: null,
+				threadId: null,
+				output: null,
+				inputTokens: null,
+				outputTokens: null,
+				thoughtTokens: null,
+				totalTokens: null,
+				cachedReadTokens: null,
+				cachedWriteTokens: null,
+				attempt: sql`${tasks.attempt} + 1`,
+				updatedAt: new Date().toISOString(),
+			})
+			.where(eq(tasks.taskId, taskId))
+			.returning();
+		const updatedTask = rows[0] || null;
+		if (!updatedTask) {
+			return null;
+		}
+		await applyScanJobTokenUsageDelta(
+			tx,
+			updatedTask.scanJobId,
+			tokenUsageDelta(previous, updatedTask),
+		);
+		return updatedTask;
+	});
 
-	if (!updated[0]) {
+	if (!updated) {
 		throw new TRPCError({
 			code: "NOT_FOUND",
 			message: "Task not found",
 		});
 	}
 
-	return updated[0];
+	return updated;
 };
 
 export const listAnalysisResultsByScanJobIdRepo = async (

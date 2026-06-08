@@ -58,10 +58,11 @@ const executeFuzzRunStage = async (
 	const agentProfile = await ctx.agentProfile();
 	const taskStageDirPath = await ctx.taskDir();
 	const taskStageRootInContainer = await ctx.taskDirContainer();
-	const stageDirPath = ctx.persistent ? await ctx.laneDir() : taskStageDirPath;
-	const stageRootInContainer = ctx.persistent
+	const taskRealRootInContainer = await ctx.taskDirRealContainer();
+	const stageDirPath = ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
+	const stageRootInContainer = ctx.laneIndex !== null
 		? await ctx.laneDirContainer()
-		: taskStageRootInContainer;
+		: taskRealRootInContainer;
 	const candidate = await readTaskJsonArtifact<Candidate>({
 		taskDir: taskStageDirPath,
 		containerPath: stageInput.candidatePath,
@@ -73,6 +74,7 @@ const executeFuzzRunStage = async (
 	await bindTaskRuntimeRepo({
 		taskId: ctx.taskId,
 		containerName,
+		containerIndex: ctx.containerIndex,
 		agentProfile: buildTaskAgentProfileSnapshot(agentProfile).agentProfile,
 	});
 	await startContainer({
@@ -83,7 +85,9 @@ const executeFuzzRunStage = async (
 		codexHome: `${stageRootInContainer}/.codex-fuzz-run`,
 		stageDirPath,
 		stageRootInContainer,
+		taskRealRootInContainer,
 		persistent: ctx.persistent,
+		reuseContainer: ctx.reuseContainer,
 	});
 
 	return await runSingleTurnAgentInContainer({
@@ -96,7 +100,9 @@ const executeFuzzRunStage = async (
 		taskId: ctx.taskId,
 		taskStageDirPath,
 		taskStageRootInContainer,
+		taskRealRootInContainer,
 		persistent: ctx.persistent,
+		reuseContainer: ctx.reuseContainer,
 		groupedPersistent: ctx.groupedPersistent,
 		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
@@ -125,6 +131,7 @@ export const createFuzzRunStageDefinition = <
 	name: string;
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
+	reuseContainer?: boolean;
 	queue?: StageQueueBinding<TPipelineContext, FuzzRunStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -137,6 +144,7 @@ export const createFuzzRunStageDefinition = <
 		name: input.name,
 		mode: input.mode || "fanout",
 		persistent: input.persistent,
+		reuseContainer: input.reuseContainer,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
 			await resolveStageConcurrencySetting(

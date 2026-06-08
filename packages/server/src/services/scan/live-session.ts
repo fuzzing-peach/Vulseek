@@ -263,6 +263,7 @@ const resolveScannerTaskSession = async (input: {
 			threadId: repositoryTask.threadId,
 			containerName: repositoryTask.containerName,
 			agentProfile: repositoryTask.agentProfile,
+			status: repositoryTask.status,
 		};
 	}
 	return {
@@ -270,6 +271,7 @@ const resolveScannerTaskSession = async (input: {
 		threadId: task.threadId,
 		containerName: task.containerName,
 		agentProfile: task.agentProfile,
+		status: task.status,
 	};
 };
 
@@ -278,7 +280,7 @@ export const findScanJobSandboxAgentSession = async (input: {
 	taskId: string;
 }): Promise<SandboxAgentLiveSession | null> => {
 	const task = await resolveScannerTaskSession(input);
-	if (!task?.threadId || !task.containerName) {
+	if (!task?.threadId || !task.containerName || !isLiveTaskStatus(task.status)) {
 		return null;
 	}
 
@@ -318,6 +320,9 @@ const buildSandboxAgentRuntimeFiles = (runtimeDir: string) => ({
 
 const toPublicBaseUrl = (containerName: string | null) =>
 	containerName ? `/sandbox-agent/${containerName}` : null;
+
+const isLiveTaskStatus = (status: string | null | undefined) =>
+	status === "launching" || status === "running";
 
 export const findSandboxAgentTaskRuntimeByTaskId = async (
 	taskId: string,
@@ -378,7 +383,7 @@ const buildSandboxAgentTaskRuntime = async (
 		status: task.status,
 		containerName: task.containerName,
 		sessionId: task.threadId,
-		baseUrl: toPublicBaseUrl(task.containerName),
+		baseUrl: isLiveTaskStatus(task.status) ? toPublicBaseUrl(task.containerName) : null,
 		provider: resolveTaskSandboxAgentProvider(task.agentProfile),
 		...buildSandboxAgentRuntimeFiles(runtimeDir),
 		updatedAt: task.updatedAt || null,
@@ -414,7 +419,7 @@ export const findCandidateSandboxAgentSession = async (input: {
 			getNestedRecord(getNestedRecord(inputRecord, "analysisResult"), "candidate");
 		return getNestedString(candidateRecord, ["id"]) === input.candidateId;
 	});
-	if (!task?.threadId || !task.containerName) {
+	if (!task?.threadId || !task.containerName || !isLiveTaskStatus(task.status)) {
 		return null;
 	}
 	const baseDir = await resolveScanJobBaseDir(candidate.scanJobId);

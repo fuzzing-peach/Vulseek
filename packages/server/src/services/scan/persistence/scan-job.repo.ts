@@ -1,7 +1,7 @@
-import { TRPCError } from "@trpc/server";
-import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@dokploy/server/db";
 import { scanJobs, tasks } from "@dokploy/server/db/schema";
+import { TRPCError } from "@trpc/server";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { createTaskRepo } from "./task.repo";
 
 const selectScanJobWithRepositoryTaskStatus = {
@@ -30,12 +30,12 @@ const selectScanJobWithRepositoryTaskStatus = {
 	finishedAt: scanJobs.finishedAt,
 	errorMessage: scanJobs.errorMessage,
 	scanningThreadId: scanJobs.scanningThreadId,
-	inputTokens: sql<number>`coalesce((select sum("token_tasks"."input_tokens")::int from "tasks" as "token_tasks" where "token_tasks"."scanJobId" = ${scanJobs.scanJobId}), 0)`,
-	outputTokens: sql<number>`coalesce((select sum("token_tasks"."output_tokens")::int from "tasks" as "token_tasks" where "token_tasks"."scanJobId" = ${scanJobs.scanJobId}), 0)`,
-	thoughtTokens: sql<number>`coalesce((select sum("token_tasks"."thought_tokens")::int from "tasks" as "token_tasks" where "token_tasks"."scanJobId" = ${scanJobs.scanJobId}), 0)`,
-	totalTokens: sql<number>`coalesce((select sum("token_tasks"."total_tokens")::int from "tasks" as "token_tasks" where "token_tasks"."scanJobId" = ${scanJobs.scanJobId}), 0)`,
-	cachedReadTokens: sql<number>`coalesce((select sum("token_tasks"."cached_read_tokens")::int from "tasks" as "token_tasks" where "token_tasks"."scanJobId" = ${scanJobs.scanJobId}), 0)`,
-	cachedWriteTokens: sql<number>`coalesce((select sum("token_tasks"."cached_write_tokens")::int from "tasks" as "token_tasks" where "token_tasks"."scanJobId" = ${scanJobs.scanJobId}), 0)`,
+	inputTokens: scanJobs.inputTokens,
+	outputTokens: scanJobs.outputTokens,
+	thoughtTokens: scanJobs.thoughtTokens,
+	totalTokens: scanJobs.totalTokens,
+	cachedReadTokens: scanJobs.cachedReadTokens,
+	cachedWriteTokens: scanJobs.cachedWriteTokens,
 	repositoryTaskId: tasks.taskId,
 	repositoryTaskStatus: sql<
 		typeof tasks.$inferSelect.status

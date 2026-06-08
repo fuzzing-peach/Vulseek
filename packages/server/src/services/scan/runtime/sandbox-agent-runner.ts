@@ -308,11 +308,25 @@ export const runSandboxAgentHeadlessTurnInContainer = async (input: {
     throw error;
   } finally {
     try {
-      await session.close?.();
-    } catch {}
+      await (session as { close: () => Promise<void> }).close();
+    } catch (error) {
+      await appendScanRuntimeFile(
+        input.stderrPath,
+        `[sandbox-agent-cleanup] session.close failed: ${
+          error instanceof Error ? error.message : "unknown error"
+        }\n`,
+      ).catch(() => {});
+    }
     try {
-      await client.disconnect?.();
-    } catch {}
+      await (client as { close: () => Promise<void> }).close();
+    } catch (error) {
+      await appendScanRuntimeFile(
+        input.stderrPath,
+        `[sandbox-agent-cleanup] client.close failed: ${
+          error instanceof Error ? error.message : "unknown error"
+        }\n`,
+      ).catch(() => {});
+    }
   }
 
   return {

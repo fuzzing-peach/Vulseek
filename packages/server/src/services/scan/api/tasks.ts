@@ -1,4 +1,3 @@
-import type { Task } from "../types";
 import {
 	bindTaskRuntimeRepo,
 	countTasksByScanJobAndStatusRepo,
@@ -14,39 +13,50 @@ import {
 	updateTaskRepo,
 	updateTaskStatusRepo,
 } from "../persistence/task.repo";
+import type { Task } from "../types";
+import {
+	normalizeTaskApiTokenUsage,
+	normalizeTasksApiTokenUsage,
+} from "./token-usage";
 
-export const createTask = async (
-	input: Parameters<typeof createTaskRepo>[0],
-) => await createTaskRepo(input);
+export const createTask = async (input: Parameters<typeof createTaskRepo>[0]) =>
+	await createTaskRepo(input);
 
 export const findTaskById = async (taskId: string) =>
-	await findTaskByIdRepo(taskId);
+	normalizeTaskApiTokenUsage(await findTaskByIdRepo(taskId));
 
 export const findTasksByScanJobId = async (scanJobId: string) =>
-	await listTasksByScanJobIdRepo(scanJobId);
+	normalizeTasksApiTokenUsage(await listTasksByScanJobIdRepo(scanJobId));
 
 export const findChildTasksByParentTaskId = async (parentTaskId: string) =>
-	await listChildTasksByParentTaskIdRepo(parentTaskId);
+	normalizeTasksApiTokenUsage(
+		await listChildTasksByParentTaskIdRepo(parentTaskId),
+	);
 
 export const findTasksByScanJobAndStage = async (input: {
 	scanJobId: string;
 	stageName: string;
-}) => await listTasksByScanJobAndStageRepo(input);
+}) => normalizeTasksApiTokenUsage(await listTasksByScanJobAndStageRepo(input));
 
-export const updateTask = async (
-	taskId: string,
-	patch: Partial<Task>,
-) => await updateTaskRepo(taskId, patch);
+export const updateTask = async (taskId: string, patch: Partial<Task>) =>
+	await updateTaskRepo(taskId, patch);
 
 export const updateTaskStatus = async (
 	taskId: string,
-	status: "pending" | "launching" | "running" | "completed" | "failed" | "exited",
+	status:
+		| "pending"
+		| "launching"
+		| "running"
+		| "completed"
+		| "failed"
+		| "exited",
 	errorMessage?: string | null,
 ) => await updateTaskStatusRepo({ taskId, status, errorMessage });
 
 export const bindTaskRuntime = async (input: {
 	taskId: string;
 	containerName?: string | null;
+	containerIndex?: number | null;
 	threadId?: string | null;
 	agentProfile?: Task["agentProfile"];
 }) => await bindTaskRuntimeRepo(input);

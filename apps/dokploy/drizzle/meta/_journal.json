@@ -1247,6 +1247,27 @@
       "when": 1779743000000,
       "tag": "0177_drop_task_usage_compat_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 178,
+      "version": "7",
+      "when": 1779743100000,
+      "tag": "0178_agent_profile_generic_auth",
+      "breakpoints": true
+    },
+    {
+      "idx": 179,
+      "version": "7",
+      "when": 1779743200000,
+      "tag": "0179_tasks_container_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 180,
+      "version": "7",
+      "when": 1779743300000,
+      "tag": "0180_scan_job_token_usage_totals",
+      "breakpoints": true
     }
   ]
 }

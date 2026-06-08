@@ -46,20 +46,63 @@ const executeFunctionScanStage = async (
 	ctx: StageContext,
 	stageInput: FunctionScanningStageInput,
 ) => {
+	const startedAt = Date.now();
+	const logTiming = (
+		step: string,
+		stepStartedAt: number,
+		extra: Record<string, unknown> = {},
+	) => {
+		console.log(
+			"[scan-stage]",
+			JSON.stringify({
+				event: "function_scan.launch_timing",
+				scanJobId: stageInput.scanJob.scanJobId,
+				stageName: ctx.stageName,
+				taskId: ctx.taskId,
+				taskName: ctx.taskName,
+				functionId: stageInput.functionId,
+				functionName: stageInput.functionName,
+				laneIndex: ctx.laneIndex,
+				containerIndex: ctx.containerIndex,
+				step,
+				elapsedMs: Date.now() - stepStartedAt,
+				totalElapsedMs: Date.now() - startedAt,
+				...extra,
+			}),
+		);
+	};
+	let stepStartedAt = Date.now();
 	const scanAgentProfile = await ctx.agentProfile();
+	logTiming("agent_profile", stepStartedAt, {
+		provider: scanAgentProfile?.provider ?? null,
+		model: scanAgentProfile?.model ?? null,
+	});
+	stepStartedAt = Date.now();
 	const taskStageDirPath = await ctx.taskDir();
 	const taskStageRootInContainer = await ctx.taskDirContainer();
-	const stageDirPath = ctx.persistent ? await ctx.laneDir() : taskStageDirPath;
-	const stageRootInContainer = ctx.persistent
+	const taskRealRootInContainer = await ctx.taskDirRealContainer();
+	const stageDirPath = ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
+	const stageRootInContainer = ctx.laneIndex !== null
 		? await ctx.laneDirContainer()
-		: taskStageRootInContainer;
+		: taskRealRootInContainer;
 	const containerName = ctx.containerName(stageInput.functionId.slice(0, 24));
+	logTiming("resolve_paths", stepStartedAt, {
+		containerName,
+		stageDirPath,
+		taskStageDirPath,
+	});
 
+	stepStartedAt = Date.now();
 	await bindTaskRuntimeRepo({
 		taskId: ctx.taskId,
 		containerName,
+		containerIndex: ctx.containerIndex,
 		agentProfile: buildTaskAgentProfileSnapshot(scanAgentProfile).agentProfile,
 	});
+	logTiming("bind_task_runtime", stepStartedAt, {
+		containerName,
+	});
+	stepStartedAt = Date.now();
 	await startContainer({
 		scanJob: stageInput.scanJob,
 		taskId: ctx.taskId,
@@ -68,9 +111,17 @@ const executeFunctionScanStage = async (
 		codexHome: `${stageRootInContainer}/.codex`,
 		stageDirPath,
 		stageRootInContainer,
+		taskRealRootInContainer,
 		persistent: ctx.persistent,
+		reuseContainer: ctx.reuseContainer,
 	});
-	return await runSingleTurnAgentInContainer({
+	logTiming("start_container", stepStartedAt, {
+		containerName,
+		persistent: ctx.persistent,
+		reuseContainer: ctx.reuseContainer,
+	});
+	stepStartedAt = Date.now();
+	const result = await runSingleTurnAgentInContainer({
 		scanJob: stageInput.scanJob,
 		agentProfile: scanAgentProfile,
 		containerName,
@@ -80,7 +131,9 @@ const executeFunctionScanStage = async (
 		taskId: ctx.taskId,
 		taskStageDirPath,
 		taskStageRootInContainer,
+		taskRealRootInContainer,
 		persistent: ctx.persistent,
+		reuseContainer: ctx.reuseContainer,
 		groupedPersistent: ctx.groupedPersistent,
 		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
@@ -110,6 +163,11 @@ const executeFunctionScanStage = async (
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
 	});
+	logTiming("run_single_turn_agent", stepStartedAt, {
+		containerName,
+		threadId: result.threadId ?? null,
+	});
+	return result;
 };
 
 export const createFunctionScanningStageDefinition = <
@@ -121,6 +179,7 @@ export const createFunctionScanningStageDefinition = <
 	name: string;
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
+	reuseContainer?: boolean;
 	queue?: StageQueueBinding<TPipelineContext, FunctionScanningStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -133,6 +192,7 @@ export const createFunctionScanningStageDefinition = <
 		name: input.name,
 		mode: input.mode || "fanout",
 		persistent: input.persistent,
+		reuseContainer: input.reuseContainer,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
 			await resolveStageConcurrencySetting(

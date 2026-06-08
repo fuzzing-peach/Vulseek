@@ -167,7 +167,7 @@ const formatTokenUsageWithCache = (
 	const cachedValue = formatTokenCount(cached);
 	return cachedValue === "-"
 		? `${totalValue} tokens`
-		: `${totalValue} / (${cachedValue} ${cacheLabel})`;
+		: `${totalValue} / ${cachedValue} ${cacheLabel}`;
 };
 
 const stringifyJson = (value: unknown) => {

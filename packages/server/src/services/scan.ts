@@ -1800,23 +1800,23 @@ const CODEX_AUTO_APPROVE_CONFIG_TOML = [
 	`sandbox_mode = "danger-full-access"`,
 	"",
 ].join("\n");
-const CODEX_HOME_HOST_MOUNT_PATH = "/host-codex-home";
+const CODEX_HOME_HOST_MOUNT_PATH = "/host-agent-home";
 
 const resolveCodexAuthMode = (
 	agentProfile: AgentProfileLike | null | undefined,
-) => (agentProfile?.codexAuthMode === "codex_home" ? "codex_home" : "api_key");
+) => (agentProfile?.authMode === "host_home" ? "host_home" : "api_key");
 
 const resolveCodexHomeHostPath = (
 	agentProfile: AgentProfileLike | null | undefined,
-) => agentProfile?.codexHomePath?.trim() || "";
+) => agentProfile?.homePath?.trim() || "";
 
 const buildCodexHomeHostMountArg = (
 	agentProfile: AgentProfileLike | null | undefined,
 ) => {
-	if (agentProfile?.provider !== "codex") {
+	if (!agentProfile) {
 		return "";
 	}
-	if (resolveCodexAuthMode(agentProfile) !== "codex_home") {
+	if (resolveCodexAuthMode(agentProfile) !== "host_home") {
 		return "";
 	}
 	const hostPath = resolveCodexHomeHostPath(agentProfile);
@@ -1949,22 +1949,6 @@ const buildCodexAuthJson = (agentProfile: AgentProfileLike) =>
 		2,
 	);
 
-const resolveCodexHomeSource = async (
-	agentProfile: AgentProfileLike | null | undefined,
-) => {
-	const source =
-		process.env.DOKPLOY_CODEX_HOME_SOURCE?.trim() ||
-		process.env.CODEX_HOME?.trim() ||
-		"/home/dkzou/.codex";
-	const stat = await fs.stat(source).catch(() => null);
-	if (!stat?.isDirectory()) {
-		throw new Error(
-			`Codex home auth mode is enabled but the source directory was not found: ${source}. Set Codex Home Path on the agent profile, or set DOKPLOY_CODEX_HOME_SOURCE to a path visible to dokploy-dev.`,
-		);
-	}
-	return source;
-};
-
 const copyMountedCodexHomeCredentialFilesToContainer = async (input: {
 	containerName: string;
 	sourceDir: string;
@@ -1982,31 +1966,6 @@ const copyMountedCodexHomeCredentialFilesToContainer = async (input: {
 		)}' '${escapeSingleQuotes(path.posix.join(input.targetDir, "auth.json"))}'"`,
 	);
 };
-
-const copyCodexHomeCredentialFilesToContainer = async (input: {
-	containerName: string;
-	sourceDir: string;
-	targetDir: string;
-}) => {
-	await fs.stat(path.join(input.sourceDir, "auth.json"));
-	await execAsync(
-		`docker exec ${input.containerName} bash -lc "mkdir -p '${escapeSingleQuotes(
-			input.targetDir,
-		)}'"`,
-	);
-	await execAsync(
-		`docker cp '${escapeSingleQuotes(
-			path.join(input.sourceDir, "auth.json"),
-		)}' ${input.containerName}:'${escapeSingleQuotes(
-			path.posix.join(input.targetDir, "auth.json"),
-		)}'`,
-	);
-};
-
-const loadCodexHomeSourceConfigToml = async (sourceDir: string) =>
-	await fs
-		.readFile(path.join(sourceDir, "config.toml"), "utf-8")
-		.catch(() => "");
 
 const loadMountedCodexHomeSourceConfigToml = async (
 	containerName: string,
@@ -2040,9 +1999,13 @@ const parseAgentProfileEnvPairs = (agentProfile: AgentProfileLike) =>
 
 const buildClaudeEnvPairs = (agentProfile: AgentProfileLike) => {
 	const envPairs = [
-		`ANTHROPIC_BASE_URL=${agentProfile.baseUrl}`,
-		`ANTHROPIC_API_KEY=${agentProfile.apiKey}`,
-		`ANTHROPIC_AUTH_TOKEN=${agentProfile.apiKey}`,
+		...(resolveCodexAuthMode(agentProfile) === "api_key"
+			? [
+					`ANTHROPIC_BASE_URL=${agentProfile.baseUrl}`,
+					`ANTHROPIC_API_KEY=${agentProfile.apiKey}`,
+					`ANTHROPIC_AUTH_TOKEN=${agentProfile.apiKey}`,
+				]
+			: []),
 		`ANTHROPIC_MODEL=${agentProfile.model}`,
 		`ANTHROPIC_DEFAULT_SONNET_MODEL=${agentProfile.model}`,
 		`ANTHROPIC_DEFAULT_OPUS_MODEL=${agentProfile.model}`,
@@ -2180,29 +2143,22 @@ const copyCodexAssetsToContainerHome = async (
 
 	if (agentProfile) {
 		if (agentProfile.provider === "codex") {
-			if (resolveCodexAuthMode(agentProfile) === "codex_home") {
+			if (resolveCodexAuthMode(agentProfile) === "host_home") {
 				const hostPath = resolveCodexHomeHostPath(agentProfile);
-				const sourceConfigToml = hostPath
-					? await loadMountedCodexHomeSourceConfigToml(
-							containerName,
-							CODEX_HOME_HOST_MOUNT_PATH,
-						)
-					: await (async () => {
-							const sourceDir = await resolveCodexHomeSource(agentProfile);
-							await copyCodexHomeCredentialFilesToContainer({
-								containerName,
-								sourceDir,
-								targetDir: codexHome,
-							});
-							return await loadCodexHomeSourceConfigToml(sourceDir);
-						})();
-				if (hostPath) {
-					await copyMountedCodexHomeCredentialFilesToContainer({
-						containerName,
-						sourceDir: CODEX_HOME_HOST_MOUNT_PATH,
-						targetDir: codexHome,
-					});
+				if (!hostPath) {
+					throw new Error(
+						"Codex host home auth mode is enabled but no home path was configured on the agent profile.",
+					);
 				}
+				const sourceConfigToml = await loadMountedCodexHomeSourceConfigToml(
+					containerName,
+					CODEX_HOME_HOST_MOUNT_PATH,
+				);
+				await copyMountedCodexHomeCredentialFilesToContainer({
+					containerName,
+					sourceDir: CODEX_HOME_HOST_MOUNT_PATH,
+					targetDir: codexHome,
+				});
 				await writeContainerFile(
 					containerName,
 					`${codexHome}/config.toml`,
@@ -5085,13 +5041,7 @@ const prepareRepositoryForScanInContainer = async (input: {
 		"}",
 		"cd /workspace/repo",
 		'CURRENT_BRANCH="$(git symbolic-ref --quiet --short HEAD || true)"',
-		"run git fetch --all --tags --prune",
-		'if [ -n "$CURRENT_BRANCH" ]; then',
-		'  CURRENT_CMD="git pull --ff-only origin $CURRENT_BRANCH"',
-		'  if ! git pull --ff-only origin "$CURRENT_BRANCH"; then',
-		'    echo "[warn] command failed but ignored: $CURRENT_CMD" >&2',
-		"  fi",
-		"fi",
+		'echo "[info] using repository state from checkout image; skipping remote fetch/pull"',
 		`TARGET_REF='${escapeSingleQuotes(targetRef)}'`,
 		`TARGET_TAG='${escapeSingleQuotes(targetTag)}'`,
 		`REQUESTED_COMMIT='${escapeSingleQuotes(requestedCommit)}'`,
@@ -5492,11 +5442,28 @@ const runSandboxAgentHeadlessTurnInContainer = async (input: {
 		throw error;
 	} finally {
 		try {
-			await session.close?.();
-		} catch {}
-		try {
-			await client.disconnect?.();
-		} catch {}
+			await (session as { close: () => Promise<void> }).close();
+		} catch (error) {
+			await appendScanRuntimeFile(
+				input.stderrPath,
+				`[sandbox-agent-cleanup] session.close failed: ${
+					error instanceof Error ? error.message : "unknown error"
+				}\n`,
+			).catch(() => {});
+		}
+		const maybeClose = (client as { close?: () => Promise<void> }).close;
+		if (typeof maybeClose === "function") {
+			try {
+				await maybeClose.call(client);
+			} catch (error) {
+				await appendScanRuntimeFile(
+					input.stderrPath,
+					`[sandbox-agent-cleanup] client.close failed: ${
+						error instanceof Error ? error.message : "unknown error"
+					}\n`,
+				).catch(() => {});
+			}
+		}
 	}
 
 	return {
@@ -5736,6 +5703,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			id: SCAN_STAGE_METADATA.repositoryScan.id,
 			name: SCAN_STAGE_METADATA.repositoryScan.name,
 			persistent: false,
+			reuseContainer: true,
 			queue: createStageQueueBinding({
 				queue: repositoryScanQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -5779,6 +5747,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			id: SCAN_STAGE_METADATA.moduleScan.id,
 			name: SCAN_STAGE_METADATA.moduleScan.name,
 			persistent: false,
+			reuseContainer: true,
 			queue: createStageQueueBinding({
 				queue: moduleScanQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -5819,6 +5788,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			id: SCAN_STAGE_METADATA.functionScan.id,
 			name: SCAN_STAGE_METADATA.functionScan.name,
 			persistent: true,
+			reuseContainer: true,
 			queue: createStageQueueBinding({
 				queue: functionScanQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -5861,6 +5831,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 		id: SCAN_STAGE_METADATA.analysis.id,
 		name: SCAN_STAGE_METADATA.analysis.name,
 		persistent: false,
+		reuseContainer: true,
 		queue: createStageQueueBinding({
 			queue: analysisQueue,
 			getGroupQueue: (groupInstanceId) =>
@@ -5900,6 +5871,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			id: SCAN_STAGE_METADATA.fuzzBuild.id,
 			name: SCAN_STAGE_METADATA.fuzzBuild.name,
 			persistent: false,
+			reuseContainer: false,
 			queue: createStageQueueBinding({
 				queue: fuzzBuildQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -5942,6 +5914,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 		id: SCAN_STAGE_METADATA.fuzzRun.id,
 		name: SCAN_STAGE_METADATA.fuzzRun.name,
 		persistent: false,
+		reuseContainer: false,
 		queue: createStageQueueBinding({
 			queue: fuzzRunQueue,
 			getGroupQueue: (groupInstanceId) =>
@@ -5981,6 +5954,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			id: SCAN_STAGE_METADATA.analysisCritic.id,
 			name: SCAN_STAGE_METADATA.analysisCritic.name,
 			persistent: false,
+			reuseContainer: true,
 			queue: createStageQueueBinding({
 				queue: analysisCriticQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -6024,6 +5998,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			id: SCAN_STAGE_METADATA.verification.id,
 			name: SCAN_STAGE_METADATA.verification.name,
 			persistent: true,
+			reuseContainer: true,
 			queue: createStageQueueBinding({
 				queue: verificationQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -6066,6 +6041,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 		id: SCAN_STAGE_METADATA.triage.id,
 		name: SCAN_STAGE_METADATA.triage.name,
 		persistent: true,
+		reuseContainer: true,
 		queue: createStageQueueBinding({
 			queue: triageQueue,
 			getGroupQueue: (groupInstanceId) =>
@@ -7175,8 +7151,8 @@ export const runScanJobInContainer = async (
 		const namespaceEnabledContainerArgs = buildNamespaceEnabledContainerArgs();
 		const codexHomeHostMountArg = buildCodexHomeHostMountArg(scanAgentProfile);
 		await execAsync(
-			`docker run -d --rm --name ${containerName} ${namespaceEnabledContainerArgs} ${scanContextMount.dockerMountArg} ${codexHomeHostMountArg} ${containerEnvArgs} ${imageTag} bash -lc "sleep infinity"`,
-		);
+				`docker run -d --rm --init --name ${containerName} ${namespaceEnabledContainerArgs} ${scanContextMount.dockerMountArg} ${codexHomeHostMountArg} ${containerEnvArgs} ${imageTag} bash -lc "sleep infinity"`,
+			);
 
 		stageSummary.push(`- container: ${containerName}`);
 		stageSummary.push(`- image: ${imageTag}`);
