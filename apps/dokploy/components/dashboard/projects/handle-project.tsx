@@ -56,9 +56,10 @@ type AddProject = z.infer<typeof AddProjectSchema>;
 
 interface Props {
 	projectId?: string;
+	trigger?: "dropdown" | "button";
 }
 
-export const HandleProject = ({ projectId }: Props) => {
+export const HandleProject = ({ projectId, trigger = "dropdown" }: Props) => {
 	const utils = api.useUtils();
 	const [isOpen, setIsOpen] = useState(false);
 
@@ -127,7 +128,7 @@ export const HandleProject = ({ projectId }: Props) => {
 	return (
 		<Dialog open={isOpen} onOpenChange={setIsOpen}>
 			<DialogTrigger asChild>
-				{projectId ? (
+				{projectId && trigger === "dropdown" ? (
 					<DropdownMenuItem
 						className="w-full cursor-pointer space-x-3"
 						onSelect={(e) => e.preventDefault()}
@@ -135,6 +136,11 @@ export const HandleProject = ({ projectId }: Props) => {
 						<SquarePen className="size-4" />
 						<span>Update</span>
 					</DropdownMenuItem>
+				) : projectId ? (
+					<Button variant="outline">
+						<SquarePen className="h-4 w-4" />
+						Edit Project
+					</Button>
 				) : (
 					<Button>
 						<PlusIcon className="h-4 w-4" />
@@ -171,25 +177,25 @@ export const HandleProject = ({ projectId }: Props) => {
 							/>
 						</div>
 
-						<FormField
-							control={form.control}
-							name="description"
-							render={({ field }) => (
-								<FormItem>
-									<FormLabel>Description</FormLabel>
-									<FormControl>
-										<Textarea
-											placeholder="Description about your project..."
-											className="resize-none"
-											{...field}
-										/>
-									</FormControl>
+							<FormField
+								control={form.control}
+								name="description"
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel>Note</FormLabel>
+										<FormControl>
+											<Textarea
+												placeholder="Notes about this project..."
+												className="resize-none"
+												{...field}
+											/>
+										</FormControl>
 
-									<FormMessage />
-								</FormItem>
-							)}
-						/>
-					</form>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+						</form>
 
 					<DialogFooter>
 						<Button

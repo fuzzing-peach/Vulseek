@@ -36,6 +36,7 @@ import { AdvancedEnvironmentSelector } from "@/components/dashboard/project/adva
 import { DuplicateProject } from "@/components/dashboard/project/duplicate-project";
 import { EnvironmentVariables } from "@/components/dashboard/project/environment-variables";
 import { ProjectEnvironment } from "@/components/dashboard/projects/project-environment";
+import { HandleProject } from "@/components/dashboard/projects/handle-project";
 import {
 	MariadbIcon,
 	MongodbIcon,
@@ -787,9 +788,15 @@ const EnvironmentPage = (
 								<CardDescription>
 									{currentEnvironment.description || "No description provided"}
 								</CardDescription>
+								{projectData?.description ? (
+									<p className="mt-2 max-w-3xl whitespace-pre-wrap text-sm text-muted-foreground">
+										{projectData.description}
+									</p>
+								) : null}
 							</CardHeader>
 							<div className="flex flex-row gap-4 flex-wrap justify-between items-center">
 								<div className="flex flex-row gap-4 flex-wrap">
+									<HandleProject projectId={projectId} trigger="button" />
 									<ProjectEnvironment projectId={projectId}>
 										<Button variant="outline">Project Environment</Button>
 									</ProjectEnvironment>

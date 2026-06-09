@@ -133,10 +133,10 @@ export const UpdatePostgres = ({ postgresId }: Props) => {
 									name="description"
 									render={({ field }) => (
 										<FormItem>
-											<FormLabel>Description</FormLabel>
+											<FormLabel>Note</FormLabel>
 											<FormControl>
 												<Textarea
-													placeholder="Description about your project..."
+													placeholder="Notes about this profile..."
 													className="resize-none"
 													{...field}
 												/>
