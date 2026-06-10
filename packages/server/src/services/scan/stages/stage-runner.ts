@@ -1,6 +1,4 @@
-export const runOptionalStageHook = async (
-	hook?: () => Promise<unknown>,
-) => {
+export const runOptionalStageHook = async (hook?: () => Promise<unknown>) => {
 	await hook?.().catch(() => {});
 };
 

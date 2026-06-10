@@ -37,7 +37,7 @@ export type FunctionScanningStageInput = {
 export type FunctionScanningStageOutput = FunctionScanManifest;
 
 type FunctionStageContext = StageContext & {
-	executionContext?: { fullScanFunctionConcurrency?: number };
+	executionContext?: unknown;
 };
 
 const functionScanningOutputSchema = functionScanManifestSchema;
@@ -81,10 +81,12 @@ const executeFunctionScanStage = async (
 	const taskStageDirPath = await ctx.taskDir();
 	const taskStageRootInContainer = await ctx.taskDirContainer();
 	const taskRealRootInContainer = await ctx.taskDirRealContainer();
-	const stageDirPath = ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
-	const stageRootInContainer = ctx.laneIndex !== null
-		? await ctx.laneDirContainer()
-		: taskRealRootInContainer;
+	const stageDirPath =
+		ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
+	const stageRootInContainer =
+		ctx.laneIndex !== null
+			? await ctx.laneDirContainer()
+			: taskRealRootInContainer;
 	const containerName = ctx.containerName(stageInput.functionId.slice(0, 24));
 	logTiming("resolve_paths", stepStartedAt, {
 		containerName,
@@ -134,6 +136,7 @@ const executeFunctionScanStage = async (
 		taskRealRootInContainer,
 		persistent: ctx.persistent,
 		reuseContainer: ctx.reuseContainer,
+		nullableOutput: ctx.nullableOutput,
 		groupedPersistent: ctx.groupedPersistent,
 		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
@@ -172,7 +175,7 @@ const executeFunctionScanStage = async (
 
 export const createFunctionScanningStageDefinition = <
 	TPipelineContext extends PipelineContext & {
-		executionContext?: { fullScanFunctionConcurrency?: number };
+		executionContext?: unknown;
 	},
 >(input: {
 	id: string;
@@ -184,7 +187,7 @@ export const createFunctionScanningStageDefinition = <
 }): StageDefinition<
 	TPipelineContext,
 	FunctionScanningStageInput,
-	FunctionScanningStageOutput,
+	FunctionScanningStageOutput | null,
 	FunctionStageContext
 > =>
 	createStageDefinition({
@@ -193,13 +196,10 @@ export const createFunctionScanningStageDefinition = <
 		mode: input.mode || "fanout",
 		persistent: input.persistent,
 		reuseContainer: input.reuseContainer,
+		nullableOutput: true,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
-			await resolveStageConcurrencySetting(
-				ctx.scanJobId,
-				input.id,
-				(settings) => settings.fullScanFunctionConcurrency,
-			),
+			await resolveStageConcurrencySetting(ctx.scanJobId, input.id, () => 4),
 		run: async (ctx, stageInput) => {
 			const result = await executeFunctionScanStage(
 				ctx as unknown as StageContext,

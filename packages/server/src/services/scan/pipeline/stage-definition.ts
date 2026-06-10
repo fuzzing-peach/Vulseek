@@ -69,6 +69,7 @@ export type StageDefinition<
 	mode: StageRunMode;
 	persistent?: boolean;
 	reuseContainer?: boolean;
+	nullableOutput?: boolean;
 	queue?: StageQueueBinding<TPipelineContext, TInput>;
 	validateInput?: (ctx: TStageContext, input: TInput) => Promise<boolean>;
 	run: (
@@ -105,6 +106,7 @@ export const createStageDefinition = <
 	...stage,
 	persistent: stage.persistent ?? true,
 	reuseContainer: stage.reuseContainer ?? true,
+	nullableOutput: stage.nullableOutput ?? false,
 });
 
 export const isFanoutStage = <

@@ -15,6 +15,8 @@ import type {
 
 const DEFAULT_SANDBOX_AGENT_CONTAINER_PORT = 2468;
 const DEFAULT_SANDBOX_AGENT_STARTUP_TIMEOUT_MS = 15000;
+const SANDBOX_AGENT_BOOTSTRAP_LOG_FILE_NAME =
+	"sandbox-agent-runtime-bootstrap.log";
 
 const escapeSingleQuotes = (value: string) => value.replace(/'/g, `'\\''`);
 
@@ -36,6 +38,48 @@ const coerceProvider = (provider: string): SandboxAgentProvider | null => {
 		return "claude";
 	}
 	return null;
+};
+
+const appendSandboxBootstrapLog = async (
+	stageDirPath: string,
+	message: string,
+) => {
+	await fs
+		.appendFile(
+			path.join(stageDirPath, SANDBOX_AGENT_BOOTSTRAP_LOG_FILE_NAME),
+			`[sandbox-agent-runtime] ${new Date().toISOString()} ${message}\n`,
+			"utf-8",
+		)
+		.catch(() => {});
+};
+
+const withSandboxBootstrapLog = async <T>(
+	stageDirPath: string,
+	step: string,
+	details: string,
+	callback: () => Promise<T>,
+): Promise<T> => {
+	const startedAt = Date.now();
+	await appendSandboxBootstrapLog(
+		stageDirPath,
+		`${step}_start${details ? ` ${details}` : ""}`,
+	);
+	try {
+		const result = await callback();
+		await appendSandboxBootstrapLog(
+			stageDirPath,
+			`${step}_done elapsed_ms=${Date.now() - startedAt}`,
+		);
+		return result;
+	} catch (error) {
+		await appendSandboxBootstrapLog(
+			stageDirPath,
+			`${step}_failed elapsed_ms=${Date.now() - startedAt} error=${
+				error instanceof Error ? JSON.stringify(error.message) : JSON.stringify(String(error))
+			}`,
+		);
+		throw error;
+	}
 };
 
 const inspectContainerIpAddress = async (containerName: string) => {
@@ -81,7 +125,19 @@ const startSandboxAgentServerInContainer = async (
 ) => {
 	const artifacts = createSandboxAgentRuntimeArtifacts(input.stageDirPath);
 
-	await initializeSandboxAgentRuntimeFiles(artifacts);
+	await fs
+		.writeFile(
+			path.join(input.stageDirPath, SANDBOX_AGENT_BOOTSTRAP_LOG_FILE_NAME),
+			"",
+			"utf-8",
+		)
+		.catch(() => {});
+	await withSandboxBootstrapLog(
+		input.stageDirPath,
+		"initialize_runtime_files",
+		"",
+		() => initializeSandboxAgentRuntimeFiles(artifacts),
+	);
 
 	const exportLines = buildShellExports([
 		`HOME=${input.homeDir || "/root"}`,
@@ -98,24 +154,58 @@ const startSandboxAgentServerInContainer = async (
 		artifacts.serverLogFileName,
 	);
 
-	await execAsync(
-		`docker exec ${input.containerName} bash -lc "mkdir -p '${input.stageDirInContainer}' && if [ -s '${stagePidPath}' ]; then kill \\$(cat '${stagePidPath}') 2>/dev/null || true; fi && rm -f '${stagePidPath}'"`,
+	await withSandboxBootstrapLog(
+		input.stageDirPath,
+		"cleanup_stage_pid",
+		"",
+		() =>
+			execAsync(
+				`docker exec ${input.containerName} bash -lc "mkdir -p '${input.stageDirInContainer}' && if [ -s '${stagePidPath}' ]; then kill \\$(cat '${stagePidPath}') 2>/dev/null || true; fi && rm -f '${stagePidPath}'"`,
+			),
 	);
-	await execAsync(
-		`docker exec ${input.containerName} bash -lc "pkill -f '[s]andbox-agent server --no-token --host 0.0.0.0 --port ${DEFAULT_SANDBOX_AGENT_CONTAINER_PORT}' 2>/dev/null || true"`,
+	await withSandboxBootstrapLog(
+		input.stageDirPath,
+		"pkill_existing_server",
+		"",
+		() =>
+			execAsync(
+				`docker exec ${input.containerName} bash -lc "pkill -f '[s]andbox-agent server --no-token --host 0.0.0.0 --port ${DEFAULT_SANDBOX_AGENT_CONTAINER_PORT}' 2>/dev/null || true"`,
+			),
 	);
-	await execAsync(
-		`docker exec ${input.containerName} bash -lc ": > '${stageLogPath}' && ${exportLines}${exportLines ? "; " : ""}nohup sandbox-agent server --no-token --host 0.0.0.0 --port ${DEFAULT_SANDBOX_AGENT_CONTAINER_PORT} > '${stageLogPath}' 2>&1 < /dev/null & echo \\$! > '${stagePidPath}'"`,
+	await withSandboxBootstrapLog(
+		input.stageDirPath,
+		"start_server_process",
+		"",
+		() =>
+			execAsync(
+				`docker exec ${input.containerName} bash -lc ": > '${stageLogPath}' && ${exportLines}${exportLines ? "; " : ""}nohup sandbox-agent server --no-token --host 0.0.0.0 --port ${DEFAULT_SANDBOX_AGENT_CONTAINER_PORT} > '${stageLogPath}' 2>&1 < /dev/null & echo \\$! > '${stagePidPath}'"`,
+			),
 	);
 
-	const containerIp = await inspectContainerIpAddress(input.containerName);
+	const containerIp = await withSandboxBootstrapLog(
+		input.stageDirPath,
+		"inspect_container_ip",
+		"",
+		() => inspectContainerIpAddress(input.containerName),
+	);
 	const baseUrl = `http://${containerIp}:${DEFAULT_SANDBOX_AGENT_CONTAINER_PORT}`;
-	await waitForSandboxAgentHealth(baseUrl);
-	const traefikProxy = await configureSandboxAgentTraefikProxy({
-		routeId: input.containerName,
-		targetHost: containerIp,
-		targetPort: DEFAULT_SANDBOX_AGENT_CONTAINER_PORT,
-	});
+	await withSandboxBootstrapLog(
+		input.stageDirPath,
+		"wait_for_health",
+		`base_url=${baseUrl}`,
+		() => waitForSandboxAgentHealth(baseUrl),
+	);
+	const traefikProxy = await withSandboxBootstrapLog(
+		input.stageDirPath,
+		"configure_traefik_proxy",
+		"",
+		() =>
+			configureSandboxAgentTraefikProxy({
+				routeId: input.containerName,
+				targetHost: containerIp,
+				targetPort: DEFAULT_SANDBOX_AGENT_CONTAINER_PORT,
+			}),
+	);
 
 	return {
 		artifacts,
@@ -195,7 +285,12 @@ export const prepareSandboxAgentRuntime = async (input: {
 				await fs.readFile(artifacts.metadataPath, "utf-8"),
 			) as PrepareSandboxAgentRuntimeResult & { runtime?: string };
 			if (metadata.server?.baseUrl) {
-				await waitForSandboxAgentHealth(metadata.server.baseUrl);
+				await withSandboxBootstrapLog(
+					input.stageDirPath,
+					"reuse_existing_health_check",
+					`base_url=${metadata.server.baseUrl}`,
+					() => waitForSandboxAgentHealth(metadata.server.baseUrl),
+				);
 				return {
 					artifacts,
 					server: metadata.server,
@@ -212,11 +307,17 @@ export const prepareSandboxAgentRuntime = async (input: {
 		homeDir: input.homeDir,
 	});
 
-	await persistSandboxAgentRuntimeMetadata({
-		artifacts: result.artifacts,
-		server: result.server,
-		provider: normalizedProvider,
-	});
+	await withSandboxBootstrapLog(
+		input.stageDirPath,
+		"persist_runtime_metadata",
+		`provider=${normalizedProvider}`,
+		() =>
+			persistSandboxAgentRuntimeMetadata({
+				artifacts: result.artifacts,
+				server: result.server,
+				provider: normalizedProvider,
+			}),
+	);
 
 	return result;
 };

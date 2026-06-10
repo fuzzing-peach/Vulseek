@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ZodTypeAny } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import type { ScanJob, AgentProfileLike } from "../types";
+import { getAgentProfileById } from "../../ai";
 import { findApplicationById } from "../../application";
 import { findComposeById } from "../../compose";
 import { execAsync } from "../../../utils/process/execAsync";
@@ -25,6 +26,7 @@ import {
 } from "../stages/full-scan-stage.runtime";
 import { resolveStageTaskName } from "../stage-task-name";
 import { getArtifactSchemaAnnotations } from "../artifacts/artifact-schema-annotations";
+import { SCAN_STAGE_IDS } from "../stage-metadata";
 
 const RUNTIME_CUSTOM_SKILLS = [
 	"codeql",
@@ -48,10 +50,6 @@ const RUNTIME_CUSTOM_SKILLS = [
 	"serena",
 ] as const;
 
-const DEFAULT_ANALYSIS_CONCURRENCY = 2;
-const DEFAULT_VERIFY_CONCURRENCY = 1;
-const DEFAULT_FULL_SCAN_MODULE_CONCURRENCY = 4;
-const DEFAULT_FULL_SCAN_FUNCTION_CONCURRENCY = 4;
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
 const TASK_ALIAS_ROOT_IN_CONTAINER = "/task";
 const TASK_PARENT_SESSION_STORE_ROOT_IN_CONTAINER =
@@ -569,8 +567,12 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 	const target = isApplicationJob
 		? await findApplicationById(scanJob.applicationId as string)
 		: await findComposeById(scanJob.composeId as string);
-	const targetDefaultAgentProfile =
-		("agentProfile" in target && target.agentProfile) || null;
+	const repositoryScanAgentProfileId =
+		target.scanStageSettings?.[SCAN_STAGE_IDS.repositoryScan]?.agentProfileId ||
+		null;
+	const scanAgentProfile = repositoryScanAgentProfileId
+		? await getAgentProfileById(repositoryScanAgentProfileId).catch(() => null)
+		: null;
 
 	const appName = target.appName;
 	const imageTag = toImageTagFromAppName(appName);
@@ -604,38 +606,7 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 		serviceName,
 		projectProfileContextRoot,
 		projectProfileCacheRoot,
-		scanAgentProfile:
-			("scanAgentProfile" in target && target.scanAgentProfile) ||
-			targetDefaultAgentProfile ||
-			null,
-		analysisAgentProfile:
-			("analysisAgentProfile" in target && target.analysisAgentProfile) ||
-			targetDefaultAgentProfile ||
-			null,
-		verifierAgentProfile:
-			("verifierAgentProfile" in target && target.verifierAgentProfile) ||
-			targetDefaultAgentProfile ||
-			null,
-		analysisConcurrency:
-			"analysisConcurrency" in target &&
-			typeof target.analysisConcurrency === "number"
-				? target.analysisConcurrency
-				: DEFAULT_ANALYSIS_CONCURRENCY,
-		verifyConcurrency:
-			"verifyConcurrency" in target &&
-			typeof target.verifyConcurrency === "number"
-				? target.verifyConcurrency
-				: DEFAULT_VERIFY_CONCURRENCY,
-		fullScanModuleConcurrency:
-			"fullScanModuleConcurrency" in target &&
-			typeof target.fullScanModuleConcurrency === "number"
-				? target.fullScanModuleConcurrency
-				: DEFAULT_FULL_SCAN_MODULE_CONCURRENCY,
-		fullScanFunctionConcurrency:
-			"fullScanFunctionConcurrency" in target &&
-			typeof target.fullScanFunctionConcurrency === "number"
-				? target.fullScanFunctionConcurrency
-				: DEFAULT_FULL_SCAN_FUNCTION_CONCURRENCY,
+		scanAgentProfile,
 	};
 };
 
@@ -846,7 +817,9 @@ const mergeClaudeSettingsJson = (
 			? (existing.permissions as Record<string, unknown>)
 			: {};
 	const existingEnv =
-		existing.env && typeof existing.env === "object" && !Array.isArray(existing.env)
+		existing.env &&
+		typeof existing.env === "object" &&
+		!Array.isArray(existing.env)
 			? (existing.env as Record<string, unknown>)
 			: {};
 	const profileEnv = buildClaudeProfileSettingsEnv(agentProfile);
@@ -919,7 +892,11 @@ const copyClaudeAssetsToContainerHome = async (
 		});
 	}
 
-	await initializeClaudeHomeInContainer(containerName, claudeHome, agentProfile);
+	await initializeClaudeHomeInContainer(
+		containerName,
+		claudeHome,
+		agentProfile,
+	);
 	await execAsync(
 		`docker exec ${containerName} bash -lc "test -s '${escapeSingleQuotes(
 			path.posix.join(claudeHome, "settings.json"),
@@ -938,15 +915,16 @@ export type StageContainerInput = {
 	taskRealRootInContainer?: string;
 	persistent?: boolean;
 	reuseContainer?: boolean;
+	nullableOutput?: boolean;
 	groupedPersistent?: boolean;
 	allowAgentExit?: boolean;
-		runtimeFileNames?: {
-			jsonl: string;
-			text: string;
-			stderr: string;
-			stdout: string;
-			usage?: string;
-		};
+	runtimeFileNames?: {
+		jsonl: string;
+		text: string;
+		stderr: string;
+		stdout: string;
+		usage?: string;
+	};
 };
 
 export type RunSingleTurnAgentInput = StageContainerInput & {
@@ -982,12 +960,21 @@ const buildStructuredOutputEnvelopeJsonSchema = (
 		schema: ZodTypeAny;
 		default?: boolean;
 	}>,
+	options?: {
+		nullableOutput?: boolean;
+	},
 ) => {
 	const buildOutputSchema = (outputSchema: ZodTypeAny) =>
 		zodToJsonSchema(outputSchema, {
 			target: "jsonSchema7",
 			$refStrategy: "none",
 		});
+	const buildEnvelopeOutputSchema = (outputSchema: ZodTypeAny) => {
+		const jsonSchema = buildOutputSchema(outputSchema);
+		return options?.nullableOutput
+			? { anyOf: [jsonSchema, { type: "null" }] }
+			: jsonSchema;
+	};
 	const buildEnvelopeSchema = (input: {
 		route: string | null;
 		outputSchema: ZodTypeAny;
@@ -999,7 +986,7 @@ const buildStructuredOutputEnvelopeJsonSchema = (
 					? { type: "null" }
 					: { type: "string", const: input.route },
 			exit: { type: "boolean" },
-			output: buildOutputSchema(input.outputSchema),
+			output: buildEnvelopeOutputSchema(input.outputSchema),
 		},
 		required: ["route", "exit", "output"],
 		additionalProperties: false,
@@ -1069,11 +1056,13 @@ export const buildStructuredOutputPromptSuffix = (
 		persistent?: boolean;
 		groupedPersistent?: boolean;
 		allowAgentExit?: boolean;
+		nullableOutput?: boolean;
 	},
 ) => {
 	const jsonSchema = buildStructuredOutputEnvelopeJsonSchema(
 		schema,
 		routeOutputSchemas,
+		{ nullableOutput: options?.nullableOutput },
 	);
 	const artifactSchemaLines = buildArtifactSchemaPromptLines(
 		schema,
@@ -1086,6 +1075,12 @@ export const buildStructuredOutputPromptSuffix = (
 		`- Write the final structured result to ${outputFilePath}.`,
 		"- The output file content must be only a JSON object, with no markdown fences, comments, or prose.",
 		"- The top-level JSON object must be an envelope with exactly these fields: route, exit, output.",
+		...(options?.nullableOutput
+			? [
+					"- If this stage has no structured result to return, output may be null.",
+					"- Even when output is null, you must still write the complete route/exit/output envelope to output.json.",
+				]
+			: []),
 		...(options?.allowAgentExit
 			? [
 					"- Set exit to true only when the stage prompt explicitly instructs this analysis workflow to exit; otherwise set exit to false.",
@@ -1154,17 +1149,21 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 
 	const jsonlPath = path.join(input.stageDirPath, runtimeFileNames.jsonl);
 	const textPath = path.join(input.stageDirPath, runtimeFileNames.text);
-		const stderrPath = path.join(input.stageDirPath, runtimeFileNames.stderr);
-		const stdoutPath = path.join(input.stageDirPath, runtimeFileNames.stdout);
-		const usagePath = path.join(input.stageDirPath, runtimeFileNames.usage);
-		const runtimeArtifacts = createCodexRuntimeArtifacts({
-			runtimeDir: input.stageDirPath,
-			jsonlFileName: runtimeFileNames.jsonl,
-			textFileName: runtimeFileNames.text,
-			stderrFileName: runtimeFileNames.stderr,
-			stdoutFileName: runtimeFileNames.stdout,
-			usageFileName: runtimeFileNames.usage,
-		});
+	const stderrPath = path.join(input.stageDirPath, runtimeFileNames.stderr);
+	const stdoutPath = path.join(input.stageDirPath, runtimeFileNames.stdout);
+	const usagePath = path.join(input.stageDirPath, runtimeFileNames.usage);
+	const containerBootstrapPath = path.join(
+		input.stageDirPath,
+		CONTAINER_BOOTSTRAP_LOG_FILE_NAME,
+	);
+	const runtimeArtifacts = createCodexRuntimeArtifacts({
+		runtimeDir: input.stageDirPath,
+		jsonlFileName: runtimeFileNames.jsonl,
+		textFileName: runtimeFileNames.text,
+		stderrFileName: runtimeFileNames.stderr,
+		stdoutFileName: runtimeFileNames.stdout,
+		usageFileName: runtimeFileNames.usage,
+	});
 
 	return {
 		imageTag,
@@ -1183,16 +1182,18 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		containerEnvArgs,
 		jsonlPath,
 		textPath,
-			stderrPath,
-			stdoutPath,
-			usagePath,
-			runtimeArtifacts,
-		};
+		stderrPath,
+		stdoutPath,
+		usagePath,
+		containerBootstrapPath,
+		runtimeArtifacts,
+	};
 };
 
 export const startContainer = async (input: StageContainerInput) => {
 	const runtime = await resolveStageContainerRuntime(input);
-	const logPath = runtime.stderrPath;
+	const logPath = runtime.containerBootstrapPath;
+	await fs.writeFile(logPath, "", "utf-8").catch(() => {});
 	await appendHostBootstrapLog(
 		logPath,
 		`start_container task_id=${input.taskId || ""} container=${input.containerName} persistent=${String(
@@ -1209,14 +1210,10 @@ export const startContainer = async (input: StageContainerInput) => {
 			.then(({ stdout }) => stdout.trim() === "true")
 			.catch(() => false);
 		if (running) {
-			await withHostBootstrapLog(
-				logPath,
-				"container_reuse",
-				"",
-				() =>
-					execAsync(
-						`docker exec ${input.containerName} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}'"`,
-					),
+			await withHostBootstrapLog(logPath, "container_reuse", "", () =>
+				execAsync(
+					`docker exec ${input.containerName} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}'"`,
+				),
 			);
 			if (input.taskRealRootInContainer) {
 				await updateTaskAliasSymlinkInContainer({
@@ -1225,28 +1222,36 @@ export const startContainer = async (input: StageContainerInput) => {
 					logPath,
 				});
 			}
+			await appendHostBootstrapLog(logPath, "start_container_done reused=true");
 			return;
 		}
-		await execAsync(`docker rm -f ${input.containerName}`).catch(() => {});
+		await withHostBootstrapLog(logPath, "remove_stale_container", "", () =>
+			execAsync(`docker rm -f ${input.containerName}`).catch(() => {}),
+		);
 	} else {
 		// Recovery/retry may encounter leftover containers with the same deterministic
 		// name. Remove them first so restart logic can safely recreate the runtime.
-		await execAsync(`docker rm -f ${input.containerName}`).catch(() => {});
+		await withHostBootstrapLog(logPath, "remove_existing_container", "", () =>
+			execAsync(`docker rm -f ${input.containerName}`).catch(() => {}),
+		);
 	}
 
-	await initializeRuntimeFiles({
-		runtimeDir: input.stageDirPath,
+	await withHostBootstrapLog(logPath, "runtime_files_initialized_on_host", "", () =>
+		initializeRuntimeFiles({
+			runtimeDir: input.stageDirPath,
 			jsonlPath: runtime.jsonlPath,
 			textPath: runtime.textPath,
 			stderrPath: runtime.stderrPath,
 			stdoutPath: runtime.stdoutPath,
 			usagePath: runtime.runtimeArtifacts.usagePath,
-		});
-	await appendHostBootstrapLog(logPath, "runtime_files_initialized_on_host");
-	await initializeCodexRuntimeMetadataFiles({
-		cursorPath: runtime.runtimeArtifacts.cursorPath,
-		statePath: runtime.runtimeArtifacts.statePath,
-	});
+		}),
+	);
+	await withHostBootstrapLog(logPath, "metadata_files_initialized_on_host", "", () =>
+		initializeCodexRuntimeMetadataFiles({
+			cursorPath: runtime.runtimeArtifacts.cursorPath,
+			statePath: runtime.runtimeArtifacts.statePath,
+		}),
+	);
 	await withHostBootstrapLog(
 		logPath,
 		"docker_run",
@@ -1258,9 +1263,9 @@ export const startContainer = async (input: StageContainerInput) => {
 				containerName: input.containerName,
 				taskId: input.taskId,
 				logPath,
-					command: `docker run -d --init --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.agentHomeHostMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
-				}),
-		);
+				command: `docker run -d --init --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.agentHomeHostMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
+			}),
+	);
 
 	await withHostBootstrapLog(
 		logPath,
@@ -1271,11 +1276,11 @@ export const startContainer = async (input: StageContainerInput) => {
 				containerName: input.containerName,
 				runtimeDirInContainer: input.stageRootInContainer,
 				jsonlFileName: runtime.runtimeArtifacts.jsonlFileName,
-					textFileName: runtime.runtimeArtifacts.textFileName,
-					stderrFileName: runtime.runtimeArtifacts.stderrFileName,
-					stdoutFileName: runtime.runtimeArtifacts.stdoutFileName,
-					usageFileName: runtime.runtimeArtifacts.usageFileName,
-				}),
+				textFileName: runtime.runtimeArtifacts.textFileName,
+				stderrFileName: runtime.runtimeArtifacts.stderrFileName,
+				stdoutFileName: runtime.runtimeArtifacts.stdoutFileName,
+				usageFileName: runtime.runtimeArtifacts.usageFileName,
+			}),
 	);
 	await withHostBootstrapLog(
 		logPath,
@@ -1298,7 +1303,7 @@ export const startContainer = async (input: StageContainerInput) => {
 			logPath,
 		}),
 	);
-	await appendHostBootstrapLog(logPath, "start_container_done");
+	await appendHostBootstrapLog(logPath, "start_container_runtime_ready");
 	if (input.taskRealRootInContainer) {
 		await updateTaskAliasSymlinkInContainer({
 			containerName: input.containerName,
@@ -1306,6 +1311,7 @@ export const startContainer = async (input: StageContainerInput) => {
 			logPath,
 		});
 	}
+	await appendHostBootstrapLog(logPath, "start_container_done reused=false");
 };
 
 export const stopContainer = async (containerName: string) => {
@@ -1352,6 +1358,7 @@ const SANDBOX_AGENT_DRIVER_LAUNCH_FILE_NAME = "sandbox-agent-driver-launch.sh";
 const SANDBOX_AGENT_DRIVER_PID_FILE_NAME = "sandbox-agent-driver.pid";
 const SANDBOX_AGENT_DRIVER_LIFECYCLE_FILE_NAME =
 	"sandbox-agent-driver-lifecycle.log";
+const CONTAINER_BOOTSTRAP_LOG_FILE_NAME = "container-bootstrap.log";
 const SANDBOX_AGENT_DRIVER_TASK_DIR_NAME = "sandbox-agent-driver-tasks";
 const SANDBOX_AGENT_AGENT_HOME_DIR_NAME = "agent-home";
 const SANDBOX_AGENT_ACP_REQUEST_TIMEOUT_MS = 30 * 60 * 1000;
@@ -1762,6 +1769,30 @@ const inspectOutputEnvelopeFile = async (filePath) => {
     result.error = "output.json not found or unreadable: " + (error instanceof Error ? error.message : String(error));
     return result;
   }
+};
+
+const writeNullableOutputFallbackIfMissing = async (taskInput, state) => {
+  if (!taskInput.nullableOutput || !state.endTurnReceived) {
+    return null;
+  }
+  const outputFile = await inspectOutputEnvelopeFile(
+    taskInput.structuredOutputResultPathInContainer,
+  );
+  if (outputFile.exists) {
+    return outputFile;
+  }
+  await fs.writeFile(
+    taskInput.structuredOutputResultPathInContainer,
+    JSON.stringify({ route: null, exit: false, output: null }, null, 2) + "\\n",
+    "utf-8",
+  );
+  await appendDriverLog(
+    taskInput.stderrPath,
+    "nullable output fallback wrote output.json with output=null",
+  );
+  return await inspectOutputEnvelopeFile(
+    taskInput.structuredOutputResultPathInContainer,
+  );
 };
 
 const writeTaskStateFile = async (taskInput, state, extra = {}) => {
@@ -2787,9 +2818,11 @@ const main = async () => {
     state.promptFinished = true;
     activePhase = "post_prompt_drain";
     await waitForPostPromptEventDrain(taskInput, state, () => eventWriteChain);
-    state.outputFile = await inspectOutputEnvelopeFile(
-      taskInput.structuredOutputResultPathInContainer,
-    );
+    state.outputFile =
+      (await writeNullableOutputFallbackIfMissing(taskInput, state)) ||
+      (await inspectOutputEnvelopeFile(
+        taskInput.structuredOutputResultPathInContainer,
+      ));
     const rawExitRequested = Boolean(state.outputFile?.validEnvelope && state.outputFile.exit);
     state.exitRequested = Boolean(taskInput.allowAgentExit && rawExitRequested);
     state.completedAt = new Date().toISOString();
@@ -3237,13 +3270,13 @@ const copyDirectoryReplacing = async (source: string, target: string) => {
 const prepareForkRuntimeArtifactsOnHost = async (input: {
 	runInput: RunSingleTurnAgentInput;
 	taskStageDirPath: string;
-		runtimeFileNames: {
-			jsonl: string;
-			text: string;
-			stderr: string;
-			stdout: string;
-			usage?: string;
-		};
+	runtimeFileNames: {
+		jsonl: string;
+		text: string;
+		stderr: string;
+		stdout: string;
+		usage?: string;
+	};
 }) => {
 	if (input.runInput.sessionMode !== "fork" || !input.runInput.parentTaskId) {
 		return {
@@ -3500,6 +3533,9 @@ const prepareTaskAgentHomeInContainer = async (input: {
 export const runSingleTurnAgentInContainer = async (
 	input: RunSingleTurnAgentInput,
 ): Promise<RunSingleTurnAgentResult> => {
+	const runSingleTurnStartedAt = Date.now();
+	let outputSchemaElapsedMs = 0;
+	let promptResolveElapsedMs = 0;
 	const taskStageDirPath = input.taskStageDirPath || input.stageDirPath;
 	const taskStageRootInContainer =
 		input.taskStageRootInContainer || input.stageRootInContainer;
@@ -3509,7 +3545,9 @@ export const runSingleTurnAgentInContainer = async (
 			? taskStageRootInContainer
 			: null);
 	if (!realTaskRootInContainer) {
-		throw new Error("Task real root in container is required when /task is an alias");
+		throw new Error(
+			"Task real root in container is required when /task is an alias",
+		);
 	}
 	const structuredOutputSchemaPathOnHost = path.join(
 		taskStageDirPath,
@@ -3528,9 +3566,11 @@ export const runSingleTurnAgentInContainer = async (
 		STRUCTURED_OUTPUT_RESULT_FILE_NAME,
 	);
 	if (input.outputSchema || input.routeOutputSchemas?.length) {
+		const stepStartedAt = Date.now();
 		const jsonSchema = buildStructuredOutputEnvelopeJsonSchema(
 			input.outputSchema || input.routeOutputSchemas![0]!.schema,
 			input.routeOutputSchemas,
+			{ nullableOutput: input.nullableOutput },
 		);
 		const serializedJsonSchema = `${JSON.stringify(jsonSchema, null, 2)}\n`;
 		await fs.mkdir(taskStageDirPath, { recursive: true });
@@ -3547,12 +3587,15 @@ export const runSingleTurnAgentInContainer = async (
 				"utf-8",
 			);
 		}
+		outputSchemaElapsedMs = Date.now() - stepStartedAt;
 	}
 
+	const promptResolveStartedAt = Date.now();
 	const resolvedPrompt =
 		typeof input.prompt === "string"
 			? input.prompt
 			: await input.prompt(input.containerName);
+	promptResolveElapsedMs = Date.now() - promptResolveStartedAt;
 	const promptWithOutputSchema =
 		input.outputSchema || input.routeOutputSchemas?.length
 			? `${resolvedPrompt.trimEnd()}\n${buildStructuredOutputPromptSuffix(
@@ -3564,30 +3607,31 @@ export const runSingleTurnAgentInContainer = async (
 						persistent: input.persistent,
 						groupedPersistent: input.groupedPersistent,
 						allowAgentExit: input.allowAgentExit,
+						nullableOutput: input.nullableOutput,
 					},
 				)}`
 			: resolvedPrompt;
-		const runtimeFileNames = {
-			...SANDBOX_AGENT_RUNTIME_FILE_NAMES,
-			...(input.runtimeFileNames || {}),
-		};
+	const runtimeFileNames = {
+		...SANDBOX_AGENT_RUNTIME_FILE_NAMES,
+		...(input.runtimeFileNames || {}),
+	};
 	const taskStderrPath = path.join(taskStageDirPath, runtimeFileNames.stderr);
 	const taskRuntimeArtifacts = createCodexRuntimeArtifacts({
 		runtimeDir: taskStageDirPath,
-			jsonlFileName: runtimeFileNames.jsonl,
-			textFileName: runtimeFileNames.text,
-			stderrFileName: runtimeFileNames.stderr,
-			stdoutFileName: runtimeFileNames.stdout,
-			usageFileName: runtimeFileNames.usage,
-		});
+		jsonlFileName: runtimeFileNames.jsonl,
+		textFileName: runtimeFileNames.text,
+		stderrFileName: runtimeFileNames.stderr,
+		stdoutFileName: runtimeFileNames.stdout,
+		usageFileName: runtimeFileNames.usage,
+	});
 	await initializeRuntimeFiles({
 		runtimeDir: taskStageDirPath,
 		jsonlPath: path.join(taskStageDirPath, runtimeFileNames.jsonl),
 		textPath: path.join(taskStageDirPath, runtimeFileNames.text),
-			stderrPath: path.join(taskStageDirPath, runtimeFileNames.stderr),
-			stdoutPath: path.join(taskStageDirPath, runtimeFileNames.stdout),
-			usagePath: path.join(taskStageDirPath, runtimeFileNames.usage),
-		});
+		stderrPath: path.join(taskStageDirPath, runtimeFileNames.stderr),
+		stdoutPath: path.join(taskStageDirPath, runtimeFileNames.stdout),
+		usagePath: path.join(taskStageDirPath, runtimeFileNames.usage),
+	});
 	await appendHostBootstrapLog(
 		taskStderrPath,
 		`run_single_turn_start task_id=${input.taskId || ""} container=${input.containerName} persistent=${String(
@@ -3596,7 +3640,7 @@ export const runSingleTurnAgentInContainer = async (
 			taskStageDirPath,
 		)} task_root=${JSON.stringify(taskStageRootInContainer)} stage_root=${JSON.stringify(
 			input.stageRootInContainer,
-		)}`,
+		)} elapsed_before_runtime_ms=${Date.now() - runSingleTurnStartedAt} output_schema_ms=${outputSchemaElapsedMs} prompt_resolve_ms=${promptResolveElapsedMs}`,
 	);
 	await initializeCodexRuntimeMetadataFiles({
 		cursorPath: taskRuntimeArtifacts.cursorPath,
@@ -3616,11 +3660,11 @@ export const runSingleTurnAgentInContainer = async (
 				containerName: input.containerName,
 				runtimeDirInContainer: taskStageRootInContainer,
 				jsonlFileName: runtimeFileNames.jsonl,
-					textFileName: runtimeFileNames.text,
-					stderrFileName: runtimeFileNames.stderr,
-					stdoutFileName: runtimeFileNames.stdout,
-					usageFileName: runtimeFileNames.usage,
-				}),
+				textFileName: runtimeFileNames.text,
+				stderrFileName: runtimeFileNames.stderr,
+				stdoutFileName: runtimeFileNames.stdout,
+				usageFileName: runtimeFileNames.usage,
+			}),
 	);
 	await withHostBootstrapLog(
 		taskStderrPath,
@@ -3794,6 +3838,8 @@ export const runSingleTurnAgentInContainer = async (
 		taskStageRootInContainer,
 		taskAliasRootInContainer: TASK_ALIAS_ROOT_IN_CONTAINER,
 		structuredOutputResultPathInContainer,
+		nullableOutput: Boolean(input.nullableOutput),
+		allowAgentExit: Boolean(input.allowAgentExit),
 		model: input.agentProfile?.model || null,
 		thinkingLevel: input.agentProfile?.thinkingLevelEnabled
 			? input.agentProfile.thinkingLevel
@@ -3812,18 +3858,18 @@ export const runSingleTurnAgentInContainer = async (
 			taskStageRootInContainer,
 			runtimeFileNames.stderr,
 		),
-			stdoutPath: path.posix.join(
-				taskStageRootInContainer,
-				runtimeFileNames.stdout,
-			),
-			usagePath: path.posix.join(
-				taskStageRootInContainer,
-				runtimeFileNames.usage,
-			),
-			statePath: path.posix.join(
-				taskStageRootInContainer,
-				taskRuntimeArtifacts.stateFileName,
-			),
+		stdoutPath: path.posix.join(
+			taskStageRootInContainer,
+			runtimeFileNames.stdout,
+		),
+		usagePath: path.posix.join(
+			taskStageRootInContainer,
+			runtimeFileNames.usage,
+		),
+		statePath: path.posix.join(
+			taskStageRootInContainer,
+			taskRuntimeArtifacts.stateFileName,
+		),
 		driverLifecyclePath,
 		agentHomePathInContainer: taskAgentHome.agentHomePathInContainer,
 		agentHomeLinkPathInContainer: taskAgentHome.agentHomeLinkPathInContainer,

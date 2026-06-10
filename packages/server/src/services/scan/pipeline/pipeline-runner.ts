@@ -100,6 +100,82 @@ const schedulePipelineStateRefresh = (ctx: unknown) => {
 const getErrorMessage = (error: unknown) =>
 	error instanceof Error ? error.message : String(error);
 
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+	value && typeof value === "object"
+		? (value as Record<string, unknown>)
+		: null;
+
+const stringField = (
+	record: Record<string, unknown> | null,
+	key: string,
+): string | null => {
+	const value = record?.[key];
+	return typeof value === "string" && value.trim().length > 0
+		? value.trim()
+		: null;
+};
+
+const extractJsonRpcErrorMessage = (record: unknown): string | null => {
+	const envelope = asRecord(record);
+	const payload = asRecord(envelope?.payload) ?? envelope;
+	const error = asRecord(payload?.error);
+	if (!error) {
+		return null;
+	}
+
+	const data = asRecord(error.data);
+	const dataMessage = stringField(data, "message");
+	const errorInfo =
+		stringField(data, "codex_error_info") ||
+		stringField(data, "error_info") ||
+		stringField(data, "type");
+	const rpcMessage = stringField(error, "message");
+	const code =
+		typeof error.code === "number" || typeof error.code === "string"
+			? String(error.code)
+			: null;
+
+	if (errorInfo && dataMessage) {
+		return `ACP JSON-RPC error: ${errorInfo}: ${dataMessage}`;
+	}
+	if (dataMessage) {
+		return `ACP JSON-RPC error: ${dataMessage}`;
+	}
+	if (errorInfo && rpcMessage) {
+		return `ACP JSON-RPC error: ${errorInfo}: ${rpcMessage}`;
+	}
+	if (rpcMessage && code) {
+		return `ACP JSON-RPC error ${code}: ${rpcMessage}`;
+	}
+	if (rpcMessage) {
+		return `ACP JSON-RPC error: ${rpcMessage}`;
+	}
+	if (code) {
+		return `ACP JSON-RPC error ${code}`;
+	}
+	return null;
+};
+
+const readLastJsonRpcErrorMessageFromJsonl = async (jsonlPath: string) => {
+	const content = await fs.readFile(jsonlPath, "utf-8").catch(() => "");
+	const lines = content.split(/\r?\n/);
+	for (let index = lines.length - 1; index >= 0; index -= 1) {
+		const line = lines[index]?.trim();
+		if (!line) {
+			continue;
+		}
+		try {
+			const message = extractJsonRpcErrorMessage(JSON.parse(line));
+			if (message) {
+				return message;
+			}
+		} catch {
+			continue;
+		}
+	}
+	return null;
+};
+
 const MAX_TRANSIENT_LAUNCH_RETRIES = 5;
 
 const isTransientRuntimeLaunchError = (error: unknown) => {
@@ -242,7 +318,8 @@ const updateTaskDefault = async (
 			| "running"
 			| "completed"
 			| "failed"
-			| "exited";
+			| "exited"
+			| "canceled";
 		errorMessage?: string;
 		exitReason?: "agent_exit" | "leader_exit" | null;
 		exitNote?: string | null;
@@ -269,7 +346,8 @@ const updateTaskDefault = async (
 						: {}),
 					...(patch.status === "completed" ||
 					patch.status === "failed" ||
-					patch.status === "exited"
+					patch.status === "exited" ||
+					patch.status === "canceled"
 						? { completedAt: new Date().toISOString() }
 						: {}),
 				}
@@ -1399,6 +1477,7 @@ const createTaskStageContext = <
 		routeOutputSchemas: taskRuntime?.routeOutputSchemas,
 		persistent: stage.persistent ?? true,
 		reuseContainer: stage.reuseContainer ?? true,
+		nullableOutput: stage.nullableOutput ?? false,
 		groupedPersistent: taskRuntime?.groupedPersistent ?? false,
 		allowAgentExit:
 			taskRuntime?.allowAgentExit ?? stage.id === SCAN_STAGE_IDS.analysis,
@@ -1568,7 +1647,9 @@ const prepareStageSuccess = async <
 	}
 	await assertScanJobNotCancelled(stageCtx);
 	const output = stage.validateOutput
-		? await stage.validateOutput(stageCtx, input, rawOutput)
+		? stage.nullableOutput && rawOutput.trim() === "null"
+			? (null as TOutput)
+			: await stage.validateOutput(stageCtx, input, rawOutput)
 		: await defaultValidateOutput<TOutput>(stage.id, rawOutput);
 	await copyPersistentLaneArtifactsToTaskDir(stageCtx);
 	await updateTaskDefault(stageCtx.taskId, { output });
@@ -2716,20 +2797,30 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 	const exitCode = extractDriverExitCode(rawStderrContent);
 	if (exitCode !== null) {
 		stepStartedAt = Date.now();
+		const { jsonlPath } = await getTaskRuntimePaths(stageCtx);
+		const jsonRpcErrorMessage =
+			await readLastJsonRpcErrorMessageFromJsonl(jsonlPath);
+		const driverExitMessage =
+			exitCode === 0
+				? "Sandbox agent driver exited before end_turn/output.json completion"
+				: `Sandbox agent driver exited with code ${exitCode}`;
 		await persistTerminalFailure(
 			stageState.stage,
 			runtime.ctx,
 			stageCtx,
 			input,
-			exitCode === 0
-				? new Error(
-						"Sandbox agent driver exited before end_turn/output.json completion",
-					)
-				: new Error(`Sandbox agent driver exited with code ${exitCode}`),
+			new Error(
+				jsonRpcErrorMessage
+					? `${driverExitMessage}; ${jsonRpcErrorMessage}`
+					: driverExitMessage,
+			),
 			{ exitLane: hasExitSignal },
 		);
 		await maybeMarkTaskStageGroupExited(task.taskId, runtime);
-		logInspectTiming("persist_driver_exit_failure", stepStartedAt, { exitCode });
+		logInspectTiming("persist_driver_exit_failure", stepStartedAt, {
+			exitCode,
+			jsonRpcErrorMessage,
+		});
 		return true;
 	}
 
@@ -3034,6 +3125,9 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 				if (row.status === "exited") {
 					acc.exited += countValue;
 				}
+				if (row.status === "canceled") {
+					acc.canceled += countValue;
+				}
 				return acc;
 			},
 			{
@@ -3044,6 +3138,7 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 				completed: 0,
 				failed: 0,
 				exited: 0,
+				canceled: 0,
 			},
 		);
 

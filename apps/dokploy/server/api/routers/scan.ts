@@ -11,6 +11,7 @@ import {
 	findComposeById,
 	findRunningCheckoutTask,
 	findScanJobById,
+	findFullScanStageGraph,
 	findScanJobSandboxAgentSession,
 	findScanJobStageGraph,
 	findScanJobStatusView,
@@ -56,15 +57,21 @@ const apiFindVulnerabilityCandidatesPageByScanJob = z
 		page: z.number().int().min(1).default(1),
 		pageSize: z.number().int().min(1).max(100).default(20),
 		query: z.string().default(""),
-		analysisResults: z.array(z.string()).default([]),
-		verifyResults: z.array(z.string()).default([]),
-		triageResults: z.array(z.string()).default([]),
+		analysisResults: z.string().default(""),
+		verifyResults: z.string().default(""),
+		triageResults: z.string().default(""),
 		sortKey: z
 			.enum(["candidate", "analysis", "verify", "score"])
 			.default("candidate"),
 		sortDirection: z.enum(["asc", "desc"]).default("asc"),
 	})
 	.required();
+
+const parseCsvFilter = (value: string) =>
+	value
+		.split(",")
+		.map((item) => item.trim())
+		.filter(Boolean);
 
 const apiFindScanJobTerminalTasksPage = z
 	.object({
@@ -76,6 +83,19 @@ const apiFindScanJobTerminalTasksPage = z
 		status: z.string().default("all"),
 	})
 	.required();
+
+const apiFindFullScanStageGraph = z
+	.object({
+		applicationId: z.string().min(1).optional(),
+		composeId: z.string().min(1).optional(),
+	})
+	.refine(
+		(value) => Boolean(value.applicationId) !== Boolean(value.composeId),
+		{
+			message: "Provide exactly one target: applicationId or composeId",
+			path: ["applicationId"],
+		},
+	);
 
 export const scanRouter = createTRPCRouter({
 	checkout: protectedProcedure
@@ -577,7 +597,12 @@ export const scanRouter = createTRPCRouter({
 			}
 
 			return await findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId(
-				input,
+				{
+					...input,
+					analysisResults: parseCsvFilter(input.analysisResults),
+					verifyResults: parseCsvFilter(input.verifyResults),
+					triageResults: parseCsvFilter(input.triageResults),
+				},
 			);
 		}),
 
@@ -1194,6 +1219,36 @@ export const scanRouter = createTRPCRouter({
 			}
 
 			return await findScanJobTerminalTasksPage(input);
+		}),
+
+	fullScanStageGraph: protectedProcedure
+		.input(apiFindFullScanStageGraph)
+		.query(async ({ input, ctx }) => {
+			let organizationId: string | undefined;
+			if (input.applicationId) {
+				const application = await findApplicationById(input.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (input.composeId) {
+				const compose = await findComposeById(input.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message:
+						"You are not authorized to access stage graph for this scan target",
+				});
+			}
+
+			return await findFullScanStageGraph(input);
 		}),
 
 	stageGraph: protectedProcedure

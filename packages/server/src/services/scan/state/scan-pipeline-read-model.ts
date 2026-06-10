@@ -16,18 +16,21 @@ export const getPendingScanTaskStateView = <
 	const repositoryPending =
 		input.scanJob.repositoryTaskStatus !== "completed" &&
 		input.scanJob.repositoryTaskStatus !== "failed" &&
-		input.scanJob.repositoryTaskStatus !== "exited";
+		input.scanJob.repositoryTaskStatus !== "exited" &&
+		input.scanJob.repositoryTaskStatus !== "canceled";
 	const modulePending = input.moduleTasks.filter(
 		(moduleTask) =>
 			moduleTask.status !== "completed" &&
 			moduleTask.status !== "failed" &&
-			moduleTask.status !== "exited",
+			moduleTask.status !== "exited" &&
+			moduleTask.status !== "canceled",
 	);
 	const functionPending = input.functionTasks.filter(
 		(functionTask) =>
 			functionTask.status !== "completed" &&
 			functionTask.status !== "failed" &&
-			functionTask.status !== "exited",
+			functionTask.status !== "exited" &&
+			functionTask.status !== "canceled",
 	);
 
 	return {

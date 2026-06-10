@@ -55,12 +55,28 @@ import { appRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
 
 type TabState =
+	| "general"
+	| "environment"
 	| "projects"
 	| "settings"
 	| "advanced"
 	| "deployments"
 	| "monitoring"
 	| "volume-backups";
+
+const HIDDEN_JOB_TABS = new Set([
+	"schedules",
+	"volume-backups",
+	"logs",
+	"monitoring",
+]);
+
+const normalizeApplicationTab = (value: unknown): TabState => {
+	if (typeof value === "string" && !HIDDEN_JOB_TABS.has(value)) {
+		return value as TabState;
+	}
+	return "general";
+};
 
 const Service = (
 	props: InferGetServerSidePropsType<typeof getServerSideProps>,
@@ -69,11 +85,11 @@ const Service = (
 	const { applicationId, activeTab } = props;
 	const router = useRouter();
 	const { projectId, environmentId } = router.query;
-	const [tab, setTab] = useState<TabState>(activeTab);
+	const [tab, setTab] = useState<TabState>(normalizeApplicationTab(activeTab));
 
 	useEffect(() => {
 		if (router.query.tab) {
-			setTab(router.query.tab as TabState);
+			setTab(normalizeApplicationTab(router.query.tab));
 		}
 	}, [router.query.tab]);
 
@@ -223,14 +239,6 @@ const Service = (
 											<TabsTrigger value="general">General</TabsTrigger>
 											<TabsTrigger value="environment">Environment</TabsTrigger>
 											<TabsTrigger value="deployments">Jobs</TabsTrigger>
-											<TabsTrigger value="schedules">Schedules</TabsTrigger>
-											<TabsTrigger value="volume-backups">
-												Volume Backups
-											</TabsTrigger>
-											<TabsTrigger value="logs">Logs</TabsTrigger>
-											{((data?.serverId && isCloud) || !data?.server) && (
-												<TabsTrigger value="monitoring">Monitoring</TabsTrigger>
-											)}
 											<TabsTrigger value="advanced">Advanced</TabsTrigger>
 										</TabsList>
 									</div>

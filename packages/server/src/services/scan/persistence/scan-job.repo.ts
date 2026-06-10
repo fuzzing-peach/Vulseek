@@ -267,7 +267,8 @@ export const updateScanJobRepositoryTaskStatusRepo = async (
 	if (
 		repositoryTaskStatus === "completed" ||
 		repositoryTaskStatus === "failed" ||
-		repositoryTaskStatus === "exited"
+		repositoryTaskStatus === "exited" ||
+		repositoryTaskStatus === "canceled"
 	) {
 		repositoryTaskPatch.completedAt = new Date().toISOString();
 	}

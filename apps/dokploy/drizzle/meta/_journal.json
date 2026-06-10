@@ -1268,6 +1268,27 @@
       "when": 1779743300000,
       "tag": "0180_scan_job_token_usage_totals",
       "breakpoints": true
+    },
+    {
+      "idx": 181,
+      "version": "7",
+      "when": 1779743400000,
+      "tag": "0181_task_status_canceled",
+      "breakpoints": true
+    },
+    {
+      "idx": 182,
+      "version": "7",
+      "when": 1779743500000,
+      "tag": "0182_triage_concurrency",
+      "breakpoints": true
+    },
+    {
+      "idx": 183,
+      "version": "7",
+      "when": 1779743600000,
+      "tag": "0183_drop_legacy_scan_stage_settings",
+      "breakpoints": true
     }
   ]
 }

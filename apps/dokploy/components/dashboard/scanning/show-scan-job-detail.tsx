@@ -69,7 +69,6 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
-import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { idleSandboxAgentActivity } from "@/lib/scan/sandbox-agent-activity";
@@ -243,16 +242,23 @@ const formatTokenCount = (value?: number | null) => {
 const formatTokenUsageWithCache = (
 	total?: number | null,
 	cached?: number | null,
-	cacheLabel = "cache read",
 ) => {
 	const totalValue = formatTokenCount(total);
 	if (totalValue === "-") {
 		return "-";
 	}
 	const cachedValue = formatTokenCount(cached);
-	return cachedValue === "-"
-		? `${totalValue} tokens`
-		: `${totalValue} / ${cachedValue} ${cacheLabel}`;
+	if (
+		cachedValue === "-" ||
+		typeof total !== "number" ||
+		total <= 0 ||
+		typeof cached !== "number" ||
+		!Number.isFinite(cached)
+	) {
+		return `${totalValue} tokens`;
+	}
+	const cachedPercent = (cached / total) * 100;
+	return `${totalValue} / ${cachedValue} (${cachedPercent.toFixed(2)}% cached)`;
 };
 
 const resolveRequestedTab = (
@@ -451,15 +457,15 @@ const formatTriggerSourceLabel = (triggerSource?: string) =>
 
 const getAnalysisResultBadgeClassName = (result?: string | null) => {
 	if (result === "real_vulnerability") {
-		return "border-red-200 bg-red-100 text-red-700";
+		return "border-red-200 bg-red-100 text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100";
 	}
 
 	if (result === "likely_vulnerability") {
-		return "border-orange-200 bg-orange-100 text-orange-700";
+		return "border-orange-200 bg-orange-100 text-orange-700 dark:border-orange-500/60 dark:bg-orange-950/50 dark:text-orange-100";
 	}
 
 	if (result === "plausible_but_unproven") {
-		return "border-yellow-200 bg-yellow-100 text-yellow-700";
+		return "border-yellow-200 bg-yellow-100 text-yellow-700 dark:border-yellow-500/60 dark:bg-yellow-950/50 dark:text-yellow-100";
 	}
 
 	if (result === "false_positive") {
@@ -467,7 +473,7 @@ const getAnalysisResultBadgeClassName = (result?: string | null) => {
 	}
 
 	if (result === "api_misuse") {
-		return "border-slate-200 bg-slate-100 text-slate-700";
+		return "border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-500/60 dark:bg-slate-900/70 dark:text-slate-100";
 	}
 
 	return "border-muted-foreground/20 bg-muted text-muted-foreground";
@@ -483,14 +489,16 @@ const getVerificationTruthBadge = (
 	if (result === "true") {
 		return {
 			label: "True",
-			className: "border-emerald-200 bg-emerald-100 text-emerald-700",
+			className:
+				"border-emerald-200 bg-emerald-100 text-emerald-700 dark:border-emerald-500/60 dark:bg-emerald-950/50 dark:text-emerald-100",
 		};
 	}
 
 	if (result === "likely") {
 		return {
 			label: "Likely",
-			className: "border-amber-200 bg-amber-100 text-amber-700",
+			className:
+				"border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100",
 		};
 	}
 
@@ -502,7 +510,7 @@ const getVerificationTruthBadge = (
 
 const getTriageResultBadgeClassName = (result?: string | null) => {
 	if (result === "security_issue") {
-		return "border-red-200 bg-red-100 text-red-700";
+		return "border-red-200 bg-red-100 text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100";
 	}
 
 	if (result === "non_security") {
@@ -510,7 +518,7 @@ const getTriageResultBadgeClassName = (result?: string | null) => {
 	}
 
 	if (result === "needs_more_information") {
-		return "border-amber-200 bg-amber-100 text-amber-700";
+		return "border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100";
 	}
 
 	return "border-muted-foreground/20 bg-muted text-muted-foreground";
@@ -567,7 +575,12 @@ const getTaskStageLabel = (stage?: string) => {
 	return "Task";
 };
 
-const TERMINAL_CANDIDATE_STATUSES = new Set(["completed", "failed", "exited"]);
+const TERMINAL_CANDIDATE_STATUSES = new Set([
+	"completed",
+	"failed",
+	"exited",
+	"canceled",
+]);
 const RERUNNABLE_TASK_STATUSES = new Set(["completed", "failed", "exited"]);
 
 const getTaskStatusLabel = (status?: string) => {
@@ -581,13 +594,13 @@ const getTaskStatusLabel = (status?: string) => {
 
 const getTaskStatusBadgeClassName = (status?: string) => {
 	if (status === "completed") {
-		return "border-emerald-200 bg-emerald-100 text-emerald-700";
+		return "border-emerald-200 bg-emerald-100 text-emerald-700 dark:border-emerald-500/60 dark:bg-emerald-950/50 dark:text-emerald-100";
 	}
 	if (status === "failed") {
-		return "border-red-200 bg-red-100 text-red-700";
+		return "border-red-200 bg-red-100 text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100";
 	}
 	if (status === "canceled") {
-		return "border-amber-200 bg-amber-100 text-amber-700";
+		return "border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100";
 	}
 	return "border-muted-foreground/20 bg-muted text-muted-foreground";
 };
@@ -604,38 +617,39 @@ const RUNNING_TASK_STAGE_ORDER: Record<string, number> = {
 };
 
 const TASK_STAGE_OPTIONS = Object.keys(RUNNING_TASK_STAGE_ORDER);
-const TERMINAL_TASK_STATUS_OPTIONS = ["completed", "failed", "exited"];
+const TERMINAL_TASK_STATUS_OPTIONS = [
+	"completed",
+	"failed",
+	"exited",
+	"canceled",
+];
 const TASK_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
-const getQueueProgressClassName = (queueId: string) => {
-	if (queueId === "repository") {
-		return "h-3 bg-secondary/70 [&>div]:bg-sky-500";
-	}
-	if (queueId === "module") {
-		return "h-3 bg-secondary/70 [&>div]:bg-amber-500";
-	}
-	if (queueId === "function") {
-		return "h-3 bg-secondary/70 [&>div]:bg-zinc-500";
-	}
-	if (queueId === "analysis") {
-		return "h-3 bg-secondary/70 [&>div]:bg-emerald-500";
-	}
-	if (queueId === "fuzz-build") {
-		return "h-3 bg-secondary/70 [&>div]:bg-cyan-500";
-	}
-	if (queueId === "fuzz-run") {
-		return "h-3 bg-secondary/70 [&>div]:bg-orange-500";
-	}
-	if (queueId === "analysis-critic") {
-		return "h-3 bg-secondary/70 [&>div]:bg-rose-500";
-	}
-	if (queueId === "verification") {
-		return "h-3 bg-secondary/70 [&>div]:bg-violet-500";
-	}
-	if (queueId === "triage") {
-		return "h-3 bg-secondary/70 [&>div]:bg-indigo-500";
-	}
-	return "h-3 bg-secondary/70 [&>div]:bg-primary";
+const RunningCapacityBars = ({
+	running,
+	limit,
+}: {
+	running: number;
+	limit: number;
+}) => {
+	const blockCount = Math.max(1, limit, running);
+	return (
+		<div className="flex items-center justify-end gap-2">
+			<div className="flex min-h-3 items-center gap-1">
+				{Array.from({ length: blockCount }, (_, index) => (
+					<span
+						key={index}
+						className={`h-3 w-1 rounded-[1px] shadow-[0_0_0_1px_hsl(var(--background))] ${
+							index < running ? "bg-sky-500" : "bg-muted-foreground/20"
+						}`}
+					/>
+				))}
+			</div>
+			<span className="min-w-12 text-right tabular-nums">
+				{running} / {Math.max(1, limit)}
+			</span>
+		</div>
+	);
 };
 
 export const ShowScanJobDetail = ({
@@ -726,9 +740,9 @@ export const ShowScanJobDetail = ({
 				page: candidatePage,
 				pageSize: candidatePageSize,
 				query: candidateQuery,
-				analysisResults: analysisFilters,
-				verifyResults: verifyFilters,
-				triageResults: triageFilters,
+				analysisResults: analysisFilters.join(","),
+				verifyResults: verifyFilters.join(","),
+				triageResults: triageFilters.join(","),
 				sortKey: candidateSortKey,
 				sortDirection: candidateSortDirection,
 			},
@@ -772,7 +786,6 @@ export const ShowScanJobDetail = ({
 			{ scanJobId, filePath: selectedFilePath || "" },
 			{ enabled: !!scanJobId && !!selectedFilePath },
 		);
-	const retryFailedTasksMutation = api.scan.retryFailedTasks.useMutation();
 	const rerunTaskMutation = api.scan.rerunTask.useMutation();
 	const cancelScanJobMutation = api.scan.cancel.useMutation();
 	const updateNoteMutation = api.scan.updateNote.useMutation();
@@ -918,45 +931,25 @@ export const ShowScanJobDetail = ({
 		currentCandidateListStateSerialized,
 		router,
 	]);
-	const totalFailedTasks = useMemo(
-		() =>
-			(statusView?.queuePendingCounts ?? []).reduce(
-				(total, queue) => total + queue.failedCount,
-				0,
-			),
-		[statusView?.queuePendingCounts],
-	);
-	const canRetryFailedTasks =
-		scanJob?.scanType === "full" &&
-		totalFailedTasks > 0 &&
-		(statusView?.inProgressTasks.length || 0) === 0 &&
-		scanJob?.status === "finished";
-	const shouldShowRetryFailedTasks = totalFailedTasks > 0;
 	const queuePendingCounts = statusView?.queuePendingCounts ?? [];
-	const getQueueTerminalProgressValue = (
-		queue: (typeof queuePendingCounts)[number],
-	) =>
-		queue.totalCount > 0
-			? ((queue.completedCount + queue.failedCount + (queue.exitedCount ?? 0)) /
-					queue.totalCount) *
-				100
-			: 0;
 	const getQueueTaskMetrics = (queue: (typeof queuePendingCounts)[number]) => {
 		const queued =
 			(queue.queuedCount ?? queue.pendingCount ?? 0) +
 			(queue.launchingCount ?? 0);
 		const running = queue.runningCount ?? 0;
-		const failed = queue.failedCount ?? 0;
 		const done = queue.completedCount + (queue.exitedCount ?? 0);
-		const terminal = done + failed;
+		const concurrencyLimit = Math.max(
+			1,
+			Number(
+				(queue as { concurrencyLimit?: number | null }).concurrencyLimit ?? 1,
+			) || 1,
+		);
 		return {
 			queued,
 			running,
-			failed,
 			done,
-			terminal,
-			total: queue.totalCount,
-			title: `Queued ${queued}, Running ${running}, Failed ${failed}, Done ${done}, Total ${queue.totalCount}`,
+			concurrencyLimit,
+			title: `Queued ${queued}, Running ${running} / ${concurrencyLimit}, Done ${done}`,
 		};
 	};
 	const sortedInProgressTasks = useMemo(() => {
@@ -1052,23 +1045,6 @@ export const ShowScanJobDetail = ({
 		return () => window.clearInterval(timer);
 	}, [sortedInProgressTasks.length]);
 
-	const handleRetryFailedTasks = async () => {
-		try {
-			const result = await retryFailedTasksMutation.mutateAsync({
-				scanJobId,
-			});
-			toast.success(`Requeued ${result.retriedTaskCount} failed tasks`);
-			await Promise.all([
-				utils.scan.one.invalidate({ scanJobId }),
-				utils.scan.statusView.invalidate({ scanJobId }),
-				utils.scan.candidates.invalidate({ scanJobId }),
-			]);
-		} catch (error) {
-			toast.error(
-				error instanceof Error ? error.message : "Failed to retry failed tasks",
-			);
-		}
-	};
 	const handleAnalyzeCandidate = async (vulnerabilityCandidateId: string) => {
 		setReanalyzingCandidateId(vulnerabilityCandidateId);
 		try {
@@ -1735,7 +1711,6 @@ export const ShowScanJobDetail = ({
 														{formatTokenUsageWithCache(
 															scanJob.outputTokens,
 															scanJob.cachedWriteTokens,
-															"write cache",
 														)}
 													</div>
 												</div>
@@ -2560,28 +2535,6 @@ export const ShowScanJobDetail = ({
 
 						<TabsContent value="tasks" className="pt-4">
 							<div className="flex flex-col gap-4">
-								{shouldShowRetryFailedTasks ? (
-									<div className="flex justify-end">
-										<Button
-											type="button"
-											disabled={
-												retryFailedTasksMutation.isLoading ||
-												!canRetryFailedTasks
-											}
-											onClick={handleRetryFailedTasks}
-										>
-											{retryFailedTasksMutation.isLoading ? (
-												<>
-													<Loader2 className="mr-2 size-4 animate-spin" />
-													Retrying...
-												</>
-											) : (
-												`Retry All Failed Tasks (${totalFailedTasks})`
-											)}
-										</Button>
-									</div>
-								) : null}
-
 								<div className="rounded-lg border">
 									<div className="border-b px-4 py-3">
 										<div className="font-medium">Task Queues</div>
@@ -2606,14 +2559,17 @@ export const ShowScanJobDetail = ({
 											<table className="w-full text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
-														<th className="w-[28%] px-4 py-3 font-medium">
+														<th className="w-[46%] px-4 py-3 font-medium">
 															Queue
 														</th>
-														<th className="w-[36%] px-4 py-3 font-medium">
-															Tasks
+														<th className="w-[18%] px-4 py-3 text-right font-medium">
+															Queued
 														</th>
-														<th className="w-[36%] px-4 py-3 font-medium">
-															Progress
+														<th className="w-[18%] px-4 py-3 text-right font-medium">
+															Running
+														</th>
+														<th className="w-[18%] px-4 py-3 text-right font-medium">
+															Done
 														</th>
 													</tr>
 												</thead>
@@ -2625,59 +2581,33 @@ export const ShowScanJobDetail = ({
 																key={queue.id}
 																className="border-b last:border-b-0"
 															>
-																<td className="px-4 py-3 align-top font-medium">
+																<td className="w-[46%] px-4 py-3 align-top font-medium">
 																	{queue.title}
 																</td>
 																<td
-																	className="px-4 py-3 align-top"
+																	className="w-[18%] px-4 py-3 text-right align-top"
 																	title={metrics.title}
 																>
-																	<div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-																		<span className="whitespace-nowrap">
-																			<span className="font-medium tabular-nums text-foreground">
-																				{metrics.queued}
-																			</span>{" "}
-																			<span className="text-muted-foreground">
-																				queued
-																			</span>
-																		</span>
-																		<span className="whitespace-nowrap">
-																			<span className="font-medium tabular-nums text-foreground">
-																				{metrics.running}
-																			</span>{" "}
-																			<span className="text-muted-foreground">
-																				running
-																			</span>
-																		</span>
-																		{metrics.failed > 0 ? (
-																			<span className="whitespace-nowrap">
-																				<span className="font-medium tabular-nums text-red-600">
-																					{metrics.failed}
-																				</span>{" "}
-																				<span className="text-red-600">
-																					failed
-																				</span>
-																			</span>
-																		) : null}
-																	</div>
+																	<span className="tabular-nums">
+																		{metrics.queued}
+																	</span>
 																</td>
 																<td
-																	className="px-4 py-3 align-top"
+																	className="w-[18%] px-4 py-3 text-right align-top"
 																	title={metrics.title}
 																>
-																	<div className="flex items-center gap-3">
-																		<Progress
-																			value={getQueueTerminalProgressValue(
-																				queue,
-																			)}
-																			className={getQueueProgressClassName(
-																				queue.id,
-																			)}
-																		/>
-																		<span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-																			{metrics.terminal} / {metrics.total}
-																		</span>
-																	</div>
+																	<RunningCapacityBars
+																		running={metrics.running}
+																		limit={metrics.concurrencyLimit}
+																	/>
+																</td>
+																<td
+																	className="w-[18%] px-4 py-3 text-right align-top"
+																	title={metrics.title}
+																>
+																	<span className="tabular-nums">
+																		{metrics.done}
+																	</span>
 																</td>
 															</tr>
 														);

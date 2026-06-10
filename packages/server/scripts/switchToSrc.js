@@ -19,6 +19,8 @@ pkg.exports = {
 		import: "./src/db/index.ts",
 		require: "./dist/db/index.cjs.js",
 	},
+	"./db/schema": "./src/db/schema/index.ts",
+	"./db/schema/*": "./src/db/schema/*.ts",
 	"./setup/*": {
 		import: "./src/setup/*.ts",
 		require: "./dist/setup/index.cjs.js",

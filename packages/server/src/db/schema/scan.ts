@@ -41,6 +41,7 @@ export const taskStatusEnum = pgEnum("taskStatus", [
 	"completed",
 	"failed",
 	"exited",
+	"canceled",
 ]);
 
 export const scanJobs = pgTable("scan_jobs", {

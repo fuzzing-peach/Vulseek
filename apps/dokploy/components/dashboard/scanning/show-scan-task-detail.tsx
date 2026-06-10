@@ -117,16 +117,19 @@ const getTaskStatusLabel = (status?: string | null) => {
 
 const getTaskStatusBadgeClassName = (status?: string | null) => {
 	if (status === "completed") {
-		return "border-emerald-200 bg-emerald-100 text-emerald-700";
+		return "border-emerald-200 bg-emerald-100 text-emerald-700 dark:border-emerald-500/60 dark:bg-emerald-950/50 dark:text-emerald-100";
 	}
 	if (status === "failed") {
-		return "border-red-200 bg-red-100 text-red-700";
+		return "border-red-200 bg-red-100 text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100";
 	}
 	if (status === "running" || status === "launching") {
-		return "border-sky-200 bg-sky-100 text-sky-700";
+		return "border-sky-200 bg-sky-100 text-sky-700 dark:border-sky-500/60 dark:bg-sky-950/50 dark:text-sky-100";
 	}
 	if (status === "pending") {
-		return "border-amber-200 bg-amber-100 text-amber-700";
+		return "border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100";
+	}
+	if (status === "canceled") {
+		return "border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100";
 	}
 	if (status === "exited") {
 		return "border-muted-foreground/20 bg-muted text-muted-foreground";
@@ -158,16 +161,23 @@ const formatTokenCount = (value?: number | null) => {
 const formatTokenUsageWithCache = (
 	total?: number | null,
 	cached?: number | null,
-	cacheLabel = "cache read",
 ) => {
 	const totalValue = formatTokenCount(total);
 	if (totalValue === "-") {
 		return "-";
 	}
 	const cachedValue = formatTokenCount(cached);
-	return cachedValue === "-"
-		? `${totalValue} tokens`
-		: `${totalValue} / ${cachedValue} ${cacheLabel}`;
+	if (
+		cachedValue === "-" ||
+		typeof total !== "number" ||
+		total <= 0 ||
+		typeof cached !== "number" ||
+		!Number.isFinite(cached)
+	) {
+		return `${totalValue} tokens`;
+	}
+	const cachedPercent = (cached / total) * 100;
+	return `${totalValue} / ${cachedValue} (${cachedPercent.toFixed(2)}% cached)`;
 };
 
 const stringifyJson = (value: unknown) => {
@@ -802,7 +812,6 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 												value={formatTokenUsageWithCache(
 													task.outputTokens,
 													task.cachedWriteTokens,
-													"write cache",
 												)}
 												copyLabel="Output / Cache Write"
 											/>

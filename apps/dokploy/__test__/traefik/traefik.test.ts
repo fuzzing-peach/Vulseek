@@ -3,10 +3,6 @@ import { createRouterConfig } from "@dokploy/server";
 import { expect, test } from "vitest";
 
 const baseApp: ApplicationNested = {
-	agentProfileId: null,
-	scanAgentProfileId: null,
-	analysisAgentProfileId: null,
-	verifierAgentProfileId: null,
 	railpackVersion: "0.2.2",
 	rollbackActive: false,
 	applicationId: "",
@@ -22,10 +18,6 @@ const baseApp: ApplicationNested = {
 	appName: "",
 	autoDeploy: true,
 	autoDeltaScan: true,
-	analysisConcurrency: 2,
-	verifyConcurrency: 1,
-	fullScanModuleConcurrency: 4,
-	fullScanFunctionConcurrency: 4,
 	fuzzingBudgetSeconds: 600,
 	scanStageSettings: {},
 	enableSubmodules: false,

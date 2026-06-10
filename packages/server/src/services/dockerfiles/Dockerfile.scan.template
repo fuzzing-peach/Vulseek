@@ -111,6 +111,11 @@ RUN --mount=type=cache,id=dokploy-npm-cache,target=/root/.npm,sharing=locked \
     npm install -g @sandbox-agent/cli@0.4.x \
     && sandbox-agent --help >/dev/null
 RUN --mount=type=cache,id=dokploy-npm-cache,target=/root/.npm,sharing=locked \
+    npm install -g skills@1.5.10 \
+    && command -v skills >/dev/null \
+    && command -v add-skill >/dev/null \
+    && node -e "const p=require(require('child_process').execSync('npm root -g').toString().trim() + '/skills/package.json'); if (p.version !== '1.5.10') process.exit(1)"
+RUN --mount=type=cache,id=dokploy-npm-cache,target=/root/.npm,sharing=locked \
     npm install -g @openai/codex \
     && codex --version
 RUN --mount=type=cache,id=dokploy-npm-cache,target=/root/.npm,sharing=locked \

@@ -403,11 +403,11 @@ export const FuzzingStatusPanel = ({ taskId }: FuzzingStatusPanelProps) => {
 					className={cn(
 						"w-fit",
 						connectionStatus === "connected" &&
-							"border-emerald-200 bg-emerald-100 text-emerald-700",
+							"border-emerald-200 bg-emerald-100 text-emerald-700 dark:border-emerald-500/60 dark:bg-emerald-950/50 dark:text-emerald-100",
 						connectionStatus === "waiting" &&
-							"border-amber-200 bg-amber-100 text-amber-700",
+							"border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100",
 						connectionStatus === "error" &&
-							"border-red-200 bg-red-100 text-red-700",
+							"border-red-200 bg-red-100 text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100",
 					)}
 				>
 					{statusLabel}
@@ -421,7 +421,7 @@ export const FuzzingStatusPanel = ({ taskId }: FuzzingStatusPanelProps) => {
 			) : null}
 
 			{connectionStatus === "waiting" ? (
-				<div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+				<div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100">
 					Waiting for {metadata?.progressFileName || "fuzz-progress.jsonl"} in
 					the task runtime directory.
 				</div>
@@ -438,7 +438,7 @@ export const FuzzingStatusPanel = ({ taskId }: FuzzingStatusPanelProps) => {
 				/>
 				<MetricCard label="Coverage" value={formatCoverage(latestRecord)} />
 				<MetricCard label="Runtime" value={formatRuntime(latestRecord)} />
-				<MetricCard label="Records" value={formatNumber(records.length)} />
+				<MetricCard label="Log Records" value={formatNumber(records.length)} />
 				<MetricCard label="Task State" value={metadata?.status || "-"} />
 			</div>
 
@@ -508,7 +508,7 @@ export const FuzzingStatusPanel = ({ taskId }: FuzzingStatusPanelProps) => {
 									key={record.line}
 									className={cn(
 										"whitespace-pre-wrap break-words py-0.5",
-										record.parseError && "text-red-600",
+										record.parseError && "text-red-600 dark:text-red-300",
 									)}
 								>
 									<span className="select-none text-muted-foreground">

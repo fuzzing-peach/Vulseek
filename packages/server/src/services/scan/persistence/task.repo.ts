@@ -353,6 +353,7 @@ export const listTerminalTasksPageByScanJobIdRepo = async (input: {
 		"completed",
 		"failed",
 		"exited",
+		"canceled",
 	];
 	const trimmedQuery = input.query?.trim() || "";
 	const conditions = [
@@ -522,7 +523,8 @@ export const transitionTaskStatusRepo = async (input: {
 			: {}),
 		...(input.to === "completed" ||
 		input.to === "failed" ||
-		input.to === "exited"
+		input.to === "exited" ||
+		input.to === "canceled"
 			? { completedAt: now }
 			: {}),
 	};
@@ -646,7 +648,8 @@ export const updateTaskStatusRepo = async (input: {
 	if (
 		input.status === "completed" ||
 		input.status === "failed" ||
-		input.status === "exited"
+		input.status === "exited" ||
+		input.status === "canceled"
 	) {
 		patch.completedAt = new Date().toISOString();
 	}

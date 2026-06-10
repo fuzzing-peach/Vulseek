@@ -50,15 +50,15 @@ interface Props {
 
 const getAnalysisResultBadgeClassName = (result?: string | null) => {
 	if (result === "real_vulnerability") {
-		return "border-red-200 bg-red-100 text-red-700";
+		return "border-red-200 bg-red-100 text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100";
 	}
 
 	if (result === "likely_vulnerability") {
-		return "border-orange-200 bg-orange-100 text-orange-700";
+		return "border-orange-200 bg-orange-100 text-orange-700 dark:border-orange-500/60 dark:bg-orange-950/50 dark:text-orange-100";
 	}
 
 	if (result === "plausible_but_unproven") {
-		return "border-yellow-200 bg-yellow-100 text-yellow-700";
+		return "border-yellow-200 bg-yellow-100 text-yellow-700 dark:border-yellow-500/60 dark:bg-yellow-950/50 dark:text-yellow-100";
 	}
 
 	if (result === "false_positive") {
@@ -66,7 +66,7 @@ const getAnalysisResultBadgeClassName = (result?: string | null) => {
 	}
 
 	if (result === "api_misuse") {
-		return "border-slate-200 bg-slate-100 text-slate-700";
+		return "border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-500/60 dark:bg-slate-900/70 dark:text-slate-100";
 	}
 
 	return "border-muted-foreground/20 bg-muted text-muted-foreground";
@@ -82,14 +82,16 @@ const getVerificationTruthBadge = (
 	if (result === "true") {
 		return {
 			label: "Facts True",
-			className: "border-emerald-200 bg-emerald-100 text-emerald-700",
+			className:
+				"border-emerald-200 bg-emerald-100 text-emerald-700 dark:border-emerald-500/60 dark:bg-emerald-950/50 dark:text-emerald-100",
 		};
 	}
 
 	if (result === "likely") {
 		return {
 			label: "Facts Likely",
-			className: "border-amber-200 bg-amber-100 text-amber-700",
+			className:
+				"border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100",
 		};
 	}
 
@@ -147,16 +149,19 @@ const getTaskStageLabel = (stage?: string | null) => {
 
 const getTaskStatusBadgeClassName = (status?: string | null) => {
 	if (status === "completed") {
-		return "border-emerald-200 bg-emerald-100 text-emerald-700";
+		return "border-emerald-200 bg-emerald-100 text-emerald-700 dark:border-emerald-500/60 dark:bg-emerald-950/50 dark:text-emerald-100";
 	}
 	if (status === "failed") {
-		return "border-red-200 bg-red-100 text-red-700";
+		return "border-red-200 bg-red-100 text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100";
 	}
 	if (status === "running" || status === "launching") {
-		return "border-sky-200 bg-sky-100 text-sky-700";
+		return "border-sky-200 bg-sky-100 text-sky-700 dark:border-sky-500/60 dark:bg-sky-950/50 dark:text-sky-100";
 	}
 	if (status === "pending") {
-		return "border-amber-200 bg-amber-100 text-amber-700";
+		return "border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100";
+	}
+	if (status === "canceled") {
+		return "border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100";
 	}
 	return "border-muted-foreground/20 bg-muted text-muted-foreground";
 };
@@ -393,7 +398,7 @@ const CandidateTaskLineagePanel = ({
 
 							<TabsContent value="activities" className="pt-4">
 								{activityState.errorMessage ? (
-									<div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+									<div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100">
 										{activityState.errorMessage}
 									</div>
 								) : null}
@@ -438,7 +443,7 @@ const CandidateTaskLineagePanel = ({
 									<span>{textState.text.length.toLocaleString()} chars</span>
 								</div>
 								{textState.errorMessage ? (
-									<div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+									<div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100">
 										{textState.errorMessage}
 									</div>
 								) : null}

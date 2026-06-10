@@ -84,6 +84,47 @@ export const ScanStageSettingsSchema = z.record(ScanStageSettingSchema);
 export type ScanStageSetting = z.infer<typeof ScanStageSettingSchema>;
 export type ScanStageSettings = z.infer<typeof ScanStageSettingsSchema>;
 
+export const buildDefaultScanStageSettings = (
+	agentProfileId?: string | null,
+): ScanStageSettings => ({
+	"repository-scan": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 1,
+	},
+	"module-scan": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	"function-scan": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	analyze: {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 2,
+	},
+	"build-fuzzer": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 2,
+	},
+	"run-fuzzer": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 2,
+	},
+	criticize: {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 2,
+	},
+	verify: {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 1,
+	},
+	triage: {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 1,
+	},
+});
+
 export const HealthCheckSwarmSchema = z
 	.object({
 		Test: z.array(z.string()).optional(),

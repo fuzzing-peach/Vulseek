@@ -1,11 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { db } from "@dokploy/server/db";
-import {
-	applications,
-	compose,
-	scanJobs,
-} from "@dokploy/server/db/schema";
+import { applications, compose, scanJobs } from "@dokploy/server/db/schema";
 import { eq } from "drizzle-orm";
 import type { ZodTypeAny } from "zod";
 import { getAgentProfileById } from "../../ai";
@@ -25,15 +21,15 @@ export type PipelineContext = {
 };
 
 export type ScanProfileConcurrencySettings = {
-	analysisConcurrency: number | null;
-	verifyConcurrency: number | null;
-	fullScanModuleConcurrency: number | null;
-	fullScanFunctionConcurrency: number | null;
 	fuzzingBudgetSeconds: number | null;
 	scanStageSettings: ScanStageSettings;
 };
 
 export type StageAgentKind = "scan" | "analysis" | "verification";
+type ScanTargetRef = {
+	applicationId?: string | null;
+	composeId?: string | null;
+};
 type ScanJobRef = Pick<ScanJob, "scanJobId" | "applicationId" | "composeId">;
 
 const sanitizeContainerNamePart = (value: string) =>
@@ -43,7 +39,9 @@ const sanitizeContainerNamePart = (value: string) =>
 		.replace(/-+/g, "-")
 		.replace(/^-|-$/g, "") || "x";
 
-const resolveStageAgentKindFromStageName = (stageName: string): StageAgentKind => {
+const resolveStageAgentKindFromStageName = (
+	stageName: string,
+): StageAgentKind => {
 	switch (stageName) {
 		case SCAN_STAGE_IDS.analysis:
 		case SCAN_STAGE_IDS.fuzzBuild:
@@ -158,48 +156,70 @@ const resolveScanContextMount = async (
 	};
 };
 
-export const resolveStageAgentProfile = async (
-	scanJob: ScanJobRef,
-	kind: StageAgentKind,
+export const resolveStageAgentProfileFromTarget = async (
+	targetRef: ScanTargetRef,
+	_kind: StageAgentKind,
 	stageName?: string,
 ): Promise<AgentProfileLike | null> => {
-	const target = scanJob.applicationId
-		? await findApplicationById(scanJob.applicationId)
-		: await findComposeById(scanJob.composeId as string);
-	const targetDefaultAgentProfile =
-		("agentProfile" in target && target.agentProfile) || null;
+	const target = targetRef.applicationId
+		? await findApplicationById(targetRef.applicationId)
+		: await findComposeById(targetRef.composeId as string);
 	const stageAgentProfileId =
 		stageName && "scanStageSettings" in target
 			? target.scanStageSettings?.[stageName]?.agentProfileId
 			: null;
 	if (stageAgentProfileId) {
 		return (
-			(await getAgentProfileById(stageAgentProfileId).catch(() => null)) ||
-			targetDefaultAgentProfile ||
-			null
+			(await getAgentProfileById(stageAgentProfileId).catch(() => null)) || null
 		);
 	}
+	return null;
+};
 
-	switch (kind) {
-		case "scan":
-			return (
-				("scanAgentProfile" in target && target.scanAgentProfile) ||
-				targetDefaultAgentProfile ||
-				null
-			);
-		case "analysis":
-			return (
-				("analysisAgentProfile" in target && target.analysisAgentProfile) ||
-				targetDefaultAgentProfile ||
-				null
-			);
-		case "verification":
-			return (
-				("verifierAgentProfile" in target && target.verifierAgentProfile) ||
-				targetDefaultAgentProfile ||
-				null
-			);
+export const resolveStageAgentProfile = async (
+	scanJob: ScanJobRef,
+	kind: StageAgentKind,
+	stageName?: string,
+): Promise<AgentProfileLike | null> =>
+	await resolveStageAgentProfileFromTarget(scanJob, kind, stageName);
+
+export const resolveScanProfileConcurrencySettingsFromTarget = async (
+	targetRef: ScanTargetRef,
+): Promise<ScanProfileConcurrencySettings> => {
+	if (targetRef.applicationId) {
+		const [row] = await db
+			.select({
+				fuzzingBudgetSeconds: applications.fuzzingBudgetSeconds,
+				scanStageSettings: applications.scanStageSettings,
+			})
+			.from(applications)
+			.where(eq(applications.applicationId, targetRef.applicationId))
+			.limit(1);
+		return {
+			fuzzingBudgetSeconds: row?.fuzzingBudgetSeconds ?? null,
+			scanStageSettings: row?.scanStageSettings ?? {},
+		};
 	}
+
+	if (targetRef.composeId) {
+		const [row] = await db
+			.select({
+				fuzzingBudgetSeconds: compose.fuzzingBudgetSeconds,
+				scanStageSettings: compose.scanStageSettings,
+			})
+			.from(compose)
+			.where(eq(compose.composeId, targetRef.composeId))
+			.limit(1);
+		return {
+			fuzzingBudgetSeconds: row?.fuzzingBudgetSeconds ?? null,
+			scanStageSettings: row?.scanStageSettings ?? {},
+		};
+	}
+
+	return {
+		fuzzingBudgetSeconds: null,
+		scanStageSettings: {},
+	};
 };
 
 export const resolveScanProfileConcurrencySettings = async (
@@ -214,63 +234,7 @@ export const resolveScanProfileConcurrencySettings = async (
 		.where(eq(scanJobs.scanJobId, scanJobId))
 		.limit(1);
 
-	if (scanJob?.applicationId) {
-		const [row] = await db
-			.select({
-				analysisConcurrency: applications.analysisConcurrency,
-				verifyConcurrency: applications.verifyConcurrency,
-				fuzzingBudgetSeconds: applications.fuzzingBudgetSeconds,
-				fullScanModuleConcurrency: applications.fullScanModuleConcurrency,
-				fullScanFunctionConcurrency:
-					applications.fullScanFunctionConcurrency,
-				scanStageSettings: applications.scanStageSettings,
-			})
-			.from(applications)
-			.where(eq(applications.applicationId, scanJob.applicationId))
-			.limit(1);
-		return {
-			analysisConcurrency: row?.analysisConcurrency ?? null,
-			verifyConcurrency: row?.verifyConcurrency ?? null,
-			fuzzingBudgetSeconds: row?.fuzzingBudgetSeconds ?? null,
-			fullScanModuleConcurrency: row?.fullScanModuleConcurrency ?? null,
-			fullScanFunctionConcurrency:
-				row?.fullScanFunctionConcurrency ?? null,
-			scanStageSettings: row?.scanStageSettings ?? {},
-		};
-	}
-
-	if (scanJob?.composeId) {
-		const [row] = await db
-			.select({
-				analysisConcurrency: compose.analysisConcurrency,
-				verifyConcurrency: compose.verifyConcurrency,
-				fuzzingBudgetSeconds: compose.fuzzingBudgetSeconds,
-				fullScanModuleConcurrency: compose.fullScanModuleConcurrency,
-				fullScanFunctionConcurrency: compose.fullScanFunctionConcurrency,
-				scanStageSettings: compose.scanStageSettings,
-			})
-			.from(compose)
-			.where(eq(compose.composeId, scanJob.composeId))
-			.limit(1);
-		return {
-			analysisConcurrency: row?.analysisConcurrency ?? null,
-			verifyConcurrency: row?.verifyConcurrency ?? null,
-			fuzzingBudgetSeconds: row?.fuzzingBudgetSeconds ?? null,
-			fullScanModuleConcurrency: row?.fullScanModuleConcurrency ?? null,
-			fullScanFunctionConcurrency:
-				row?.fullScanFunctionConcurrency ?? null,
-			scanStageSettings: row?.scanStageSettings ?? {},
-		};
-	}
-
-	return {
-		analysisConcurrency: null,
-		verifyConcurrency: null,
-		fullScanModuleConcurrency: null,
-		fullScanFunctionConcurrency: null,
-		fuzzingBudgetSeconds: null,
-		scanStageSettings: {},
-	};
+	return await resolveScanProfileConcurrencySettingsFromTarget(scanJob ?? {});
 };
 
 export const resolveStageConcurrencySetting = async (
@@ -358,6 +322,7 @@ export type StageContext = PipelineContext & {
 	taskName: string;
 	persistent: boolean;
 	reuseContainer: boolean;
+	nullableOutput: boolean;
 	groupedPersistent: boolean;
 	allowAgentExit: boolean;
 	containerIndex: number | null;
@@ -374,15 +339,17 @@ export type StageContext = PipelineContext & {
 	parentTaskId: string | null;
 	agentProfile: () => Promise<AgentProfileLike | null>;
 	containerName: (...parts: Array<string | null | undefined>) => string;
-	taskDir: (input?:
-		| string
-		| {
-		moduleId?: string;
-		functionId?: string;
-		candidateId?: string;
-		taskName?: string;
-		stageName?: string;
-	}) => Promise<string>;
+	taskDir: (
+		input?:
+			| string
+			| {
+					moduleId?: string;
+					functionId?: string;
+					candidateId?: string;
+					taskName?: string;
+					stageName?: string;
+			  },
+	) => Promise<string>;
 	taskDirContainer: () => Promise<string>;
 	taskDirRealContainer: () => Promise<string>;
 	laneDir: () => Promise<string>;
@@ -408,6 +375,7 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 	}>;
 	persistent?: boolean;
 	reuseContainer?: boolean;
+	nullableOutput?: boolean;
 	groupedPersistent?: boolean;
 	allowAgentExit?: boolean;
 	containerIndex?: number | null;
@@ -423,6 +391,7 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 	taskName: input.taskName,
 	persistent: input.persistent ?? false,
 	reuseContainer: input.reuseContainer ?? true,
+	nullableOutput: input.nullableOutput ?? false,
 	groupedPersistent: input.groupedPersistent ?? false,
 	allowAgentExit: input.allowAgentExit ?? false,
 	containerIndex: input.containerIndex ?? null,
@@ -471,7 +440,8 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 			typeof runtimeInput === "string"
 				? { taskName: runtimeInput, stageName: input.stageName }
 				: runtimeInput;
-		const targetStageName = normalizedRuntimeInput?.stageName || input.stageName;
+		const targetStageName =
+			normalizedRuntimeInput?.stageName || input.stageName;
 		const targetTaskName = normalizedRuntimeInput?.taskName || input.taskName;
 		await resolveScanContextMount(input.base);
 		const defaultStageDirPath = path.join(
@@ -501,10 +471,12 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 	},
 	laneDir: async () => {
 		if (input.laneIndex === undefined || input.laneIndex === null) {
-			return await (createStageContext({
-				...input,
-				persistent: false,
-			}) as TBase & StageContext).taskDir();
+			return await (
+				createStageContext({
+					...input,
+					persistent: false,
+				}) as TBase & StageContext
+			).taskDir();
 		}
 		await resolveScanContextMount(input.base);
 		const laneDirPath = path.join(
@@ -518,11 +490,13 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 	},
 	laneDirContainer: async () => {
 		if (input.laneIndex === undefined || input.laneIndex === null) {
-			return await (createStageContext({
-				...input,
-				persistent: false,
-				reuseContainer: false,
-			}) as TBase & StageContext).taskDirRealContainer();
+			return await (
+				createStageContext({
+					...input,
+					persistent: false,
+					reuseContainer: false,
+				}) as TBase & StageContext
+			).taskDirRealContainer();
 		}
 		return path.posix.join(
 			resolveMountedProfileDir(input.base).split(path.sep).join("/"),

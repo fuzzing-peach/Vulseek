@@ -1,11 +1,5 @@
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import {
-	Ban,
-	GitBranch,
-	PackageSearch,
-	Shield,
-	Terminal,
-} from "lucide-react";
+import { Ban, PackageSearch, Shield, Terminal } from "lucide-react";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -145,7 +139,7 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 		<>
 			<Card className="bg-background">
 				<CardHeader>
-					<CardTitle className="text-xl">Scan Settings</CardTitle>
+					<CardTitle className="text-xl">Actions</CardTitle>
 				</CardHeader>
 				<CardContent className="flex flex-row gap-4 flex-wrap">
 					<TooltipProvider delayDuration={0} disableHoverableContent={false}>
@@ -154,6 +148,7 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 							description="Configure ref and tag for this full scan. If tag is empty, Dokploy will scan the most recent tag version."
 							isLoading={isCreatingScanJob}
 							showCommitWindow={false}
+							showFullScanPreview
 							serviceData={
 								data ? (data as unknown as Record<string, unknown>) : undefined
 							}
@@ -191,65 +186,27 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 									});
 							}}
 							trigger={
-							<Button
-								variant="default"
-								isLoading={isCreatingScanJob}
-								className="flex items-center gap-1.5 border border-black bg-black text-white hover:bg-black/90 focus-visible:ring-2 focus-visible:ring-offset-2 dark:border-black dark:bg-black dark:text-white dark:hover:bg-black/90"
-							>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<div className="flex items-center">
-											<Shield className="size-4 mr-1" />
-											Full Scan
-										</div>
-									</TooltipTrigger>
-									<TooltipPrimitive.Portal>
-										<TooltipContent sideOffset={5} className="z-[60]">
-											<p>
-												Scans the full codebase from the current source
-											</p>
-										</TooltipContent>
-									</TooltipPrimitive.Portal>
-								</Tooltip>
-							</Button>
+								<Button
+									variant="default"
+									isLoading={isCreatingScanJob}
+									className="flex items-center gap-1.5 border border-black bg-black text-white hover:bg-black/90 focus-visible:ring-2 focus-visible:ring-offset-2 dark:border-white dark:bg-white dark:text-black dark:hover:bg-white/90"
+								>
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<div className="flex items-center">
+												<Shield className="size-4 mr-1" />
+												Full Scan
+											</div>
+										</TooltipTrigger>
+										<TooltipPrimitive.Portal>
+											<TooltipContent sideOffset={5} className="z-[60]">
+												<p>Scans the full codebase from the current source</p>
+											</TooltipContent>
+										</TooltipPrimitive.Portal>
+									</Tooltip>
+								</Button>
 							}
 						/>
-						<Button
-							variant="secondary"
-							isLoading={isCreatingScanJob}
-							onClick={async () => {
-								await createScanJob({
-									applicationId: applicationId,
-									scanType: "delta",
-									triggerSource: "manual",
-								})
-									.then(() => {
-										toast.success("Delta scan started successfully");
-										refetch();
-										router.push(
-											`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/profiles/application/${applicationId}?tab=deployments`,
-										);
-									})
-									.catch(() => {
-										toast.error("Error starting delta scan");
-									});
-							}}
-							className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
-						>
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<div className="flex items-center">
-										<GitBranch className="size-4 mr-1" />
-										Delta Scan
-									</div>
-								</TooltipTrigger>
-								<TooltipPrimitive.Portal>
-									<TooltipContent sideOffset={5} className="z-[60]">
-										<p>Scans recent code changes incrementally</p>
-									</TooltipContent>
-								</TooltipPrimitive.Portal>
-							</Tooltip>
-						</Button>
 
 						{data?.applicationStatus === "idle" ? (
 							isCheckouting ? (
@@ -380,28 +337,6 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 							Open Terminal
 						</Button>
 					</DockerTerminalModal>
-					<div className="flex flex-row items-center gap-2 rounded-md px-4 py-2 border">
-						<span className="text-sm font-medium">Auto Delta Scan</span>
-						<Switch
-							aria-label="Toggle auto delta scan"
-							checked={data?.autoDeltaScan || false}
-							onCheckedChange={async (enabled) => {
-								await update({
-									applicationId,
-									autoDeltaScan: enabled,
-								})
-									.then(async () => {
-										toast.success("Auto Delta Scan Updated");
-										await refetch();
-									})
-									.catch(() => {
-										toast.error("Error updating Auto Delta Scan");
-									});
-							}}
-							className="flex flex-row gap-2 items-center data-[state=checked]:bg-primary"
-						/>
-					</div>
-
 					<div className="flex flex-row items-center gap-2 rounded-md px-4 py-2 border">
 						<span className="text-sm font-medium">Clean Cache</span>
 						<Switch

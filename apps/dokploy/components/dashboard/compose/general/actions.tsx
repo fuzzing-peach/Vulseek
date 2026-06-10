@@ -1,5 +1,5 @@
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import { Ban, GitBranch, PackageSearch, Shield, Terminal } from "lucide-react";
+import { Ban, PackageSearch, Shield, Terminal } from "lucide-react";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -7,7 +7,6 @@ import { CreateScanDialog } from "@/components/dashboard/scanning/create-scan-di
 import { CheckoutLogModal } from "@/components/dashboard/scanning/checkout-log-modal";
 import { DialogAction } from "@/components/shared/dialog-action";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import {
 	Tooltip,
 	TooltipContent,
@@ -133,103 +132,70 @@ export const ComposeActions = ({ composeId }: Props) => {
 		<>
 			<div className="flex flex-row gap-4 w-full flex-wrap ">
 				<TooltipProvider delayDuration={0} disableHoverableContent={false}>
-				<CreateScanDialog
-					title="Full Scan"
-					description="Configure ref and tag for this full scan. If tag is empty, Dokploy will scan the most recent tag version."
-					isLoading={isCreatingScanJob}
-					showCommitWindow={false}
-					serviceData={data ? (data as unknown as Record<string, unknown>) : undefined}
-					onSubmit={async ({ targetRef, targetTag, commitWindow }) => {
-						const scanJobsResult = await refetchScanJobs();
-						const hasPendingFullScan = Boolean(
-							scanJobsResult.data?.some(
-								(scanJob) =>
-									scanJob.scanType === "full" &&
-									(scanJob.status === "pending" ||
-										scanJob.status === "running"),
-							),
-						);
-						if (hasPendingFullScan) {
-							toast.error("A full scan is already pending");
-							return;
+					<CreateScanDialog
+						title="Full Scan"
+						description="Configure ref and tag for this full scan. If tag is empty, Dokploy will scan the most recent tag version."
+						isLoading={isCreatingScanJob}
+						showCommitWindow={false}
+						showFullScanPreview
+						serviceData={
+							data ? (data as unknown as Record<string, unknown>) : undefined
 						}
-						await createScanJob({
-							composeId: composeId,
-							scanType: "full",
-							triggerSource: "manual",
-							targetRef,
-							targetTag,
-							commitWindow,
-						})
-							.then(() => {
-								toast.success("Full scan started successfully");
-								refetch();
-								router.push(
-									`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/profiles/compose/${composeId}?tab=deployments`,
-								);
-							})
-							.catch(() => {
-								toast.error("Error starting full scan");
-							});
-					}}
-					trigger={
-					<Button
-						variant="default"
-						isLoading={isCreatingScanJob}
-						className="flex items-center gap-1.5 border border-black bg-black text-white hover:bg-black/90 focus-visible:ring-2 focus-visible:ring-offset-2 dark:border-black dark:bg-black dark:text-white dark:hover:bg-black/90"
-					>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<div className="flex items-center">
-									<Shield className="size-4 mr-1" />
-									Full Scan
-								</div>
-							</TooltipTrigger>
-							<TooltipPrimitive.Portal>
-								<TooltipContent sideOffset={5} className="z-[60]">
-									<p>Scans the full codebase from the current source</p>
-								</TooltipContent>
-							</TooltipPrimitive.Portal>
-						</Tooltip>
-					</Button>
-					}
-				/>
-					<Button
-						variant="secondary"
-						isLoading={isCreatingScanJob}
-						onClick={async () => {
+						onSubmit={async ({ targetRef, targetTag, commitWindow }) => {
+							const scanJobsResult = await refetchScanJobs();
+							const hasPendingFullScan = Boolean(
+								scanJobsResult.data?.some(
+									(scanJob) =>
+										scanJob.scanType === "full" &&
+										(scanJob.status === "pending" ||
+											scanJob.status === "running"),
+								),
+							);
+							if (hasPendingFullScan) {
+								toast.error("A full scan is already pending");
+								return;
+							}
 							await createScanJob({
 								composeId: composeId,
-								scanType: "delta",
+								scanType: "full",
 								triggerSource: "manual",
+								targetRef,
+								targetTag,
+								commitWindow,
 							})
 								.then(() => {
-									toast.success("Delta scan started successfully");
+									toast.success("Full scan started successfully");
 									refetch();
 									router.push(
 										`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/profiles/compose/${composeId}?tab=deployments`,
 									);
 								})
 								.catch(() => {
-									toast.error("Error starting delta scan");
+									toast.error("Error starting full scan");
 								});
 						}}
-						className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
-					>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<div className="flex items-center">
-									<GitBranch className="size-4 mr-1" />
-									Delta Scan
-								</div>
-							</TooltipTrigger>
-							<TooltipPrimitive.Portal>
-								<TooltipContent sideOffset={5} className="z-[60]">
-									<p>Scans recent code changes incrementally</p>
-								</TooltipContent>
-							</TooltipPrimitive.Portal>
-						</Tooltip>
-					</Button>
+						trigger={
+							<Button
+								variant="default"
+								isLoading={isCreatingScanJob}
+								className="flex items-center gap-1.5 border border-black bg-black text-white hover:bg-black/90 focus-visible:ring-2 focus-visible:ring-offset-2 dark:border-white dark:bg-white dark:text-black dark:hover:bg-white/90"
+							>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<div className="flex items-center">
+											<Shield className="size-4 mr-1" />
+											Full Scan
+										</div>
+									</TooltipTrigger>
+									<TooltipPrimitive.Portal>
+										<TooltipContent sideOffset={5} className="z-[60]">
+											<p>Scans the full codebase from the current source</p>
+										</TooltipContent>
+									</TooltipPrimitive.Portal>
+								</Tooltip>
+							</Button>
+						}
+					/>
 					{data?.composeType === "docker-compose" &&
 					data?.composeStatus === "idle" ? (
 						isCheckouting ? (
@@ -275,7 +241,9 @@ export const ComposeActions = ({ composeId }: Props) => {
 										})
 										.catch((error) => {
 											const message =
-												error instanceof Error ? error.message : "Checkout failed";
+												error instanceof Error
+													? error.message
+													: "Checkout failed";
 											setCheckoutLogs(message);
 											setCheckoutFinalized(true);
 											toast.error("Error during checkout build");
@@ -308,42 +276,42 @@ export const ComposeActions = ({ composeId }: Props) => {
 							</DialogAction>
 						)
 					) : (
-					<DialogAction
-						title="Stop Compose"
-						description="Are you sure you want to stop this compose?"
-						onClick={async () => {
-							await stop({
-								composeId: composeId,
-							})
-								.then(() => {
-									toast.success("Compose stopped successfully");
-									refetch();
+						<DialogAction
+							title="Stop Compose"
+							description="Are you sure you want to stop this compose?"
+							onClick={async () => {
+								await stop({
+									composeId: composeId,
 								})
-								.catch(() => {
-									toast.error("Error stopping compose");
-								});
-						}}
-					>
-						<Button
-							variant="destructive"
-							isLoading={isStopping}
-							className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
+									.then(() => {
+										toast.success("Compose stopped successfully");
+										refetch();
+									})
+									.catch(() => {
+										toast.error("Error stopping compose");
+									});
+							}}
 						>
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<div className="flex items-center">
-										<Ban className="size-4 mr-1" />
-										Stop
-									</div>
-								</TooltipTrigger>
-								<TooltipPrimitive.Portal>
-									<TooltipContent sideOffset={5} className="z-[60]">
-										<p>Stop the currently running compose</p>
-									</TooltipContent>
-								</TooltipPrimitive.Portal>
-							</Tooltip>
-						</Button>
-					</DialogAction>
+							<Button
+								variant="destructive"
+								isLoading={isStopping}
+								className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
+							>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<div className="flex items-center">
+											<Ban className="size-4 mr-1" />
+											Stop
+										</div>
+									</TooltipTrigger>
+									<TooltipPrimitive.Portal>
+										<TooltipContent sideOffset={5} className="z-[60]">
+											<p>Stop the currently running compose</p>
+										</TooltipContent>
+									</TooltipPrimitive.Portal>
+								</Tooltip>
+							</Button>
+						</DialogAction>
 					)}
 				</TooltipProvider>
 				<DockerTerminalModal
@@ -359,27 +327,6 @@ export const ComposeActions = ({ composeId }: Props) => {
 						Open Terminal
 					</Button>
 				</DockerTerminalModal>
-				<div className="flex flex-row items-center gap-2 rounded-md px-4 py-2 border">
-					<span className="text-sm font-medium">Auto Delta Scan</span>
-					<Switch
-						aria-label="Toggle auto delta scan"
-						checked={data?.autoDeltaScan || false}
-						onCheckedChange={async (enabled) => {
-							await update({
-								composeId,
-								autoDeltaScan: enabled,
-							})
-								.then(async () => {
-									toast.success("Auto Delta Scan Updated");
-									await refetch();
-								})
-								.catch(() => {
-									toast.error("Error updating Auto Delta Scan");
-								});
-						}}
-						className="flex flex-row gap-2 items-center data-[state=checked]:bg-primary"
-					/>
-				</div>
 			</div>
 			<CheckoutLogModal
 				open={checkoutModalOpen}

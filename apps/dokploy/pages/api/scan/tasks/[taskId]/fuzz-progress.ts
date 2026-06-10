@@ -83,13 +83,28 @@ const normalizeTimestamp = (value: unknown) => {
 
 const extractCoverage = (data: Record<string, unknown>) => {
 	const coverage = asRecord(data.coverage);
-	const edgesHit = asNumber(data.edgesHit ?? coverage?.edgesHit);
-	const edgesTotal = asNumber(data.edgesTotal ?? coverage?.edgesTotal);
+	const userStats = asRecord(data.userStats);
+	const signalParts =
+		typeof userStats?.signals === "string"
+			? userStats.signals.split("/", 2).map((item) => Number(item.trim()))
+			: [];
+	const signalEdgesHit =
+		Number.isFinite(signalParts[0]) && signalParts[0] !== undefined
+			? signalParts[0]
+			: undefined;
+	const signalEdgesTotal =
+		Number.isFinite(signalParts[1]) && signalParts[1] !== undefined
+			? signalParts[1]
+			: undefined;
+	const edgesHit = asNumber(data.edgesHit ?? coverage?.edgesHit) ?? signalEdgesHit;
+	const edgesTotal =
+		asNumber(data.edgesTotal ?? coverage?.edgesTotal) ?? signalEdgesTotal;
 	const edgeCoveragePercent = asNumber(
 		data.edgeCoveragePercent ??
 			data.coveragePercent ??
 			coverage?.edgeCoveragePercent ??
-			coverage?.coveragePercent,
+			coverage?.coveragePercent ??
+			userStats?.signalPct,
 	);
 
 	if (
@@ -131,10 +146,15 @@ const toFuzzProgressRecord = (
 			line,
 			raw,
 			timestamp: normalizeTimestamp(data.timestamp ?? data.createdAt),
-			runTimeMs: asNumber(data.runTimeMs),
+			runTimeMs:
+				asNumber(data.runTimeMs) ??
+				(() => {
+					const runtimeSeconds = asNumber(data.runtimeSeconds);
+					return runtimeSeconds === undefined ? undefined : runtimeSeconds * 1000;
+				})(),
 			runTimePretty: asString(data.runTimePretty),
 			totalExecs: asNumber(data.totalExecs ?? data.executions ?? data.execs),
-			execsPerSec: asNumber(data.execsPerSec),
+			execsPerSec: asNumber(data.execsPerSec ?? data.execPerSec),
 			corpusSize: asNumber(data.corpusSize),
 			objectiveSize: asNumber(data.objectiveSize),
 			coverage: extractCoverage(data),

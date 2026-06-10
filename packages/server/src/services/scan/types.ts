@@ -64,7 +64,8 @@ export type VulnerabilityCandidate = {
 		| "running"
 		| "completed"
 		| "failed"
-		| "exited";
+		| "exited"
+		| "canceled";
 	currentStage: "analyzing" | "fuzzing" | "verifying";
 	confidence: number | null;
 	score: number | null;

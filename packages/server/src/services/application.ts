@@ -4,6 +4,7 @@ import {
 	type apiCreateApplication,
 	applications,
 	buildAppName,
+	buildDefaultScanStageSettings,
 	renameAppNameBase,
 } from "@dokploy/server/db/schema";
 import { getAdvancedStats } from "@dokploy/server/monitoring/utils";
@@ -44,10 +45,7 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { encodeBase64 } from "../utils/docker/utils";
 import { getDokployUrl } from "./admin";
-import {
-	getAgentProfileById,
-	getAgentProfilesByOrganizationId,
-} from "./ai";
+import { getAgentProfilesByOrganizationId } from "./ai";
 import {
 	createDeployment,
 	createDeploymentPreview,
@@ -67,6 +65,7 @@ import {
 } from "./preview-deployment";
 import { validUniqueServerAppName } from "./project";
 import { createRollback } from "./rollbacks";
+import { validateForkStageAgentProviderCompatibility } from "./scan/stage-agent-settings-validation";
 export type Application = typeof applications.$inferSelect;
 
 export const createApplication = async (
@@ -76,9 +75,7 @@ export const createApplication = async (
 	const environment = await findEnvironmentById(input.environmentId);
 	const defaultAgentProfile =
 		(
-			await getAgentProfilesByOrganizationId(
-				environment.project.organizationId,
-			)
+			await getAgentProfilesByOrganizationId(environment.project.organizationId)
 		).find((profile) => profile.isEnabled) || null;
 
 	const valid = await validUniqueServerAppName(appName);
@@ -95,12 +92,9 @@ export const createApplication = async (
 			.values({
 				...input,
 				appName,
-				agentProfileId: defaultAgentProfile?.agentProfileId ?? null,
-				analysisConcurrency: 2,
-				verifyConcurrency: 1,
-				fullScanModuleConcurrency: 4,
-				fullScanFunctionConcurrency: 4,
-				scanStageSettings: {},
+				scanStageSettings: buildDefaultScanStageSettings(
+					defaultAgentProfile?.agentProfileId ?? null,
+				),
 			})
 			.returning({
 				applicationId: applications.applicationId,
@@ -158,29 +152,7 @@ export const findApplicationById = async (applicationId: string) => {
 		});
 	}
 
-	const [agentProfile, scanAgentProfile, analysisAgentProfile, verifierAgentProfile] =
-		await Promise.all([
-			application.agentProfileId
-				? getAgentProfileById(application.agentProfileId).catch(() => null)
-				: Promise.resolve(null),
-			application.scanAgentProfileId
-				? getAgentProfileById(application.scanAgentProfileId).catch(() => null)
-				: Promise.resolve(null),
-			application.analysisAgentProfileId
-				? getAgentProfileById(application.analysisAgentProfileId).catch(() => null)
-				: Promise.resolve(null),
-			application.verifierAgentProfileId
-				? getAgentProfileById(application.verifierAgentProfileId).catch(() => null)
-				: Promise.resolve(null),
-		]);
-
-	return {
-		...application,
-		agentProfile,
-		scanAgentProfile,
-		analysisAgentProfile,
-		verifierAgentProfile,
-	};
+	return application;
 };
 
 export const findApplicationByName = async (appName: string) => {
@@ -197,6 +169,7 @@ export const updateApplication = async (
 ) => {
 	const currentApplication = await findApplicationById(applicationId);
 	const { appName, ...rest } = applicationData;
+	const updatesScanAgentSettings = "scanStageSettings" in rest;
 	const nextName = rest.name?.trim();
 	const shouldRenameAppName =
 		typeof nextName === "string" &&
@@ -214,6 +187,13 @@ export const updateApplication = async (
 				message: "Application with this 'AppName' already exists",
 			});
 		}
+	}
+
+	if (updatesScanAgentSettings) {
+		await validateForkStageAgentProviderCompatibility({
+			scanStageSettings: currentApplication.scanStageSettings,
+			...rest,
+		});
 	}
 
 	const application = await db

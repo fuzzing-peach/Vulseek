@@ -102,9 +102,9 @@ export const installRuntimeSkillsInContainer = async (input: {
       .map((skillName) => `--skill '${escapeSingleQuotes(skillName)}'`)
       .join(" ");
 
-    await timed("npx_skills_add", () =>
+    await timed("skills_add", () =>
       execAsync(
-        `docker exec ${input.containerName} bash -lc "mkdir -p /workspace/repo/.agents && cd /workspace/repo && npx -y skills add '${containerRepoRoot}' ${skillFlags} -a claude-code -a codex --copy -y"`,
+        `docker exec ${input.containerName} bash -lc "mkdir -p /workspace/repo/.agents && cd /workspace/repo && skills add '${containerRepoRoot}' ${skillFlags} -a claude-code -a codex --copy -y"`,
       ),
     );
 

@@ -46,7 +46,7 @@ const hasModernDokploySchema = async (sql: Sql) => {
 				from information_schema.columns
 				where table_schema = 'public'
 					and table_name = 'application'
-					and column_name = 'verifyConcurrency'
+					and column_name = 'scanStageSettings'
 			)
 			and exists (
 				select 1

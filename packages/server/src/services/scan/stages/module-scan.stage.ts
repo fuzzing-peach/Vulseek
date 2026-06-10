@@ -37,10 +37,12 @@ const executeModuleScanStage = async (
 	const taskStageDirPath = await ctx.taskDir();
 	const taskStageRootInContainer = await ctx.taskDirContainer();
 	const taskRealRootInContainer = await ctx.taskDirRealContainer();
-	const stageDirPath = ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
-	const stageRootInContainer = ctx.laneIndex !== null
-		? await ctx.laneDirContainer()
-		: taskRealRootInContainer;
+	const stageDirPath =
+		ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
+	const stageRootInContainer =
+		ctx.laneIndex !== null
+			? await ctx.laneDirContainer()
+			: taskRealRootInContainer;
 	const containerName = ctx.containerName(stageInput.moduleId.slice(0, 24));
 
 	await bindTaskRuntimeRepo({
@@ -100,7 +102,7 @@ const executeModuleScanStage = async (
 
 export const createModuleScanningStageDefinition = <
 	TPipelineContext extends PipelineContext & {
-		executionContext?: { fullScanModuleConcurrency?: number };
+		executionContext?: unknown;
 	},
 >(input: {
 	id: string;
@@ -123,11 +125,7 @@ export const createModuleScanningStageDefinition = <
 		reuseContainer: input.reuseContainer,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
-			await resolveStageConcurrencySetting(
-				ctx.scanJobId,
-				input.id,
-				(settings) => settings.fullScanModuleConcurrency,
-			),
+			await resolveStageConcurrencySetting(ctx.scanJobId, input.id, () => 4),
 		run: async (ctx, stageInput) => {
 			const result = await executeModuleScanStage(
 				ctx as unknown as StageContext,

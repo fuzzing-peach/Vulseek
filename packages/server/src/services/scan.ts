@@ -11,6 +11,7 @@ import { SandboxAgent } from "sandbox-agent";
 import { Agent, type Dispatcher } from "undici";
 import { getGlobalContainerEnvironmentPairs } from "../utils/docker/utils";
 import { execAsync } from "../utils/process/execAsync";
+import { getAgentProfileById } from "./ai";
 import { findApplicationById } from "./application";
 import { findComposeById } from "./compose";
 import { prepareSandboxAgentRuntime } from "./sandbox-agent/runtime";
@@ -90,6 +91,7 @@ import {
 	buildKnownQueueJobIdsForTask,
 	buildQueueTaskJobId,
 } from "./scan/queue-job-ids";
+import { buildTaskAgentProfileSnapshot } from "./scan/agent-profile-snapshot";
 import {
 	isRetryableTaskStageName,
 	retryFailedScanJobTasksWithDeps,
@@ -112,10 +114,16 @@ import {
 	type CandidateVerificationStageInput,
 	createVerifyingStageDefinition,
 } from "./scan/stages/candidate-verification.stage";
-import type { PipelineContext } from "./scan/stages/full-scan-stage.runtime";
 import {
+	resolveScanProfileConcurrencySettingsFromTarget,
+	resolveStageAgentProfile,
+	resolveStageAgentProfileFromTarget,
 	resolveTaskRootSegment,
 	resolveTaskRuntimeDirForTask,
+} from "./scan/stages/full-scan-stage.runtime";
+import type {
+	PipelineContext,
+	StageAgentKind,
 } from "./scan/stages/full-scan-stage.runtime";
 import {
 	createFunctionScanningStageDefinition,
@@ -160,6 +168,7 @@ const DEFAULT_FULL_SCAN_MODULE_CONCURRENCY = 4;
 const DEFAULT_FULL_SCAN_FUNCTION_CONCURRENCY = 4;
 const DEFAULT_ANALYSIS_CONCURRENCY = 2;
 const DEFAULT_VERIFY_CONCURRENCY = 1;
+const DEFAULT_TRIAGE_CONCURRENCY = 1;
 const ACP_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
 const PREINSTALLED_TOOL_SKILLS = [] as const;
 const RUNTIME_CUSTOM_SKILLS = [
@@ -285,6 +294,7 @@ type QueuePendingCountView = {
 	title: string;
 	stageName: Task["stageName"];
 	queueName: string;
+	concurrencyLimit: number;
 	waitingCount: number;
 	queuedCount: number;
 	launchingCount: number;
@@ -292,6 +302,7 @@ type QueuePendingCountView = {
 	completedCount: number;
 	failedCount: number;
 	exitedCount: number;
+	canceledCount: number;
 	totalCount: number;
 	pendingCount: number;
 };
@@ -990,6 +1001,7 @@ const listQueuePendingCountsByScanJobId = async (
 		status: Task["status"];
 		count: number;
 	}>,
+	concurrencyLimitByStageName = new Map<Task["stageName"], number>(),
 ): Promise<QueuePendingCountView[]> => {
 	const activeStageGroups = (
 		await listStageGroupInstancesByScanJobIdRepo(scanJobId).catch(() => [])
@@ -1109,6 +1121,10 @@ const listQueuePendingCountsByScanJobId = async (
 				title,
 				stageName,
 				queueName: queue.name,
+				concurrencyLimit: Math.max(
+					1,
+					concurrencyLimitByStageName.get(stageName) ?? 1,
+				),
 				waitingCount,
 				queuedCount,
 				launchingCount,
@@ -1116,6 +1132,7 @@ const listQueuePendingCountsByScanJobId = async (
 				completedCount: getStatusCount("completed"),
 				failedCount: getStatusCount("failed"),
 				exitedCount: getStatusCount("exited"),
+				canceledCount: getStatusCount("canceled"),
 				totalCount: stageCounts.reduce((total, row) => total + row.count, 0),
 				pendingCount: queuedCount,
 			};
@@ -2063,8 +2080,12 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 	const target = isApplicationJob
 		? await findApplicationById(scanJob.applicationId as string)
 		: await findComposeById(scanJob.composeId as string);
-	const targetDefaultAgentProfile =
-		("agentProfile" in target && target.agentProfile) || null;
+	const repositoryScanAgentProfileId =
+		target.scanStageSettings?.[SCAN_STAGE_IDS.repositoryScan]?.agentProfileId ||
+		null;
+	const scanAgentProfile = repositoryScanAgentProfileId
+		? await getAgentProfileById(repositoryScanAgentProfileId).catch(() => null)
+		: null;
 
 	const appName = target.appName;
 	const imageTag = toImageTagFromAppName(appName);
@@ -2098,38 +2119,7 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 		serviceName,
 		projectProfileContextRoot,
 		projectProfileCacheRoot,
-		scanAgentProfile:
-			("scanAgentProfile" in target && target.scanAgentProfile) ||
-			targetDefaultAgentProfile ||
-			null,
-		analysisAgentProfile:
-			("analysisAgentProfile" in target && target.analysisAgentProfile) ||
-			targetDefaultAgentProfile ||
-			null,
-		verifierAgentProfile:
-			("verifierAgentProfile" in target && target.verifierAgentProfile) ||
-			targetDefaultAgentProfile ||
-			null,
-		analysisConcurrency:
-			"analysisConcurrency" in target &&
-			typeof target.analysisConcurrency === "number"
-				? target.analysisConcurrency
-				: DEFAULT_ANALYSIS_CONCURRENCY,
-		verifyConcurrency:
-			"verifyConcurrency" in target &&
-			typeof target.verifyConcurrency === "number"
-				? target.verifyConcurrency
-				: DEFAULT_VERIFY_CONCURRENCY,
-		fullScanModuleConcurrency:
-			"fullScanModuleConcurrency" in target &&
-			typeof target.fullScanModuleConcurrency === "number"
-				? target.fullScanModuleConcurrency
-				: DEFAULT_FULL_SCAN_MODULE_CONCURRENCY,
-		fullScanFunctionConcurrency:
-			"fullScanFunctionConcurrency" in target &&
-			typeof target.fullScanFunctionConcurrency === "number"
-				? target.fullScanFunctionConcurrency
-				: DEFAULT_FULL_SCAN_FUNCTION_CONCURRENCY,
+		scanAgentProfile,
 	};
 };
 
@@ -2935,9 +2925,9 @@ const installRuntimeSkillsInContainer = async (
 			.map((skillName) => `--skill '${escapeSingleQuotes(skillName)}'`)
 			.join(" ");
 
-		await execAsync(
-			`docker exec ${containerName} bash -lc "mkdir -p /workspace/repo/.agents && cd /workspace/repo && npx -y skills add '${containerRepoRoot}' ${skillFlags} -a claude-code -a codex --copy -y"`,
-		);
+			await execAsync(
+				`docker exec ${containerName} bash -lc "mkdir -p /workspace/repo/.agents && cd /workspace/repo && skills add '${containerRepoRoot}' ${skillFlags} -a claude-code -a codex --copy -y"`,
+			);
 
 		return copiedSkills;
 	} finally {
@@ -4364,9 +4354,24 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 		listTaskStatusCountsByScanJobIdRepo(scanJobId),
 	]);
 
+	const statusPipelineContext = await buildFullScanPipelineContext(scanJobId);
+	const statusPipeline = buildFullScanPipeline(statusPipelineContext);
+	const concurrencyLimitByStageName = new Map<Task["stageName"], number>();
+	await Promise.all(
+		statusPipeline.stages.map(async (stage) => {
+			concurrencyLimitByStageName.set(
+				stage.id as Task["stageName"],
+				Math.max(
+					1,
+					(await stage.getDesiredConcurrency?.(statusPipelineContext)) ?? 1,
+				),
+			);
+		}),
+	);
 	const queuePendingCounts = await listQueuePendingCountsByScanJobId(
 		scanJobId,
 		taskStatusCounts,
+		concurrencyLimitByStageName,
 	);
 
 	const latestAnalysisResultByCandidateId = new Map<string, AnalysisResult>();
@@ -4677,6 +4682,232 @@ const deriveStageGraphStatus = (
 	return "pending";
 };
 
+const resolveStageGraphAgentKind = (stageName: string): StageAgentKind => {
+	switch (stageName) {
+		case SCAN_STAGE_IDS.analysis:
+		case SCAN_STAGE_IDS.fuzzBuild:
+		case SCAN_STAGE_IDS.fuzzRun:
+		case SCAN_STAGE_IDS.analysisCritic:
+			return "analysis";
+		case SCAN_STAGE_IDS.verification:
+		case SCAN_STAGE_IDS.triage:
+			return "verification";
+		default:
+			return "scan";
+	}
+};
+
+type ScanStageGraphTargetInput = {
+	applicationId?: string | null;
+	composeId?: string | null;
+};
+
+const FULL_SCAN_STAGE_GRAPH_STAGES = [
+	SCAN_STAGE_METADATA.repositoryScan,
+	SCAN_STAGE_METADATA.moduleScan,
+	SCAN_STAGE_METADATA.functionScan,
+	SCAN_STAGE_METADATA.analysis,
+	SCAN_STAGE_METADATA.fuzzBuild,
+	SCAN_STAGE_METADATA.fuzzRun,
+	SCAN_STAGE_METADATA.analysisCritic,
+	SCAN_STAGE_METADATA.verification,
+	SCAN_STAGE_METADATA.triage,
+] as const;
+
+const FULL_SCAN_STAGE_GRAPH_EDGES = [
+	{
+		id: "repository-to-module",
+		name: "repository-to-module",
+		source: SCAN_STAGE_IDS.repositoryScan,
+		target: SCAN_STAGE_IDS.moduleScan,
+		fork: true,
+		routeKey: null,
+		isDefaultRoute: false,
+	},
+	{
+		id: "module-to-function",
+		name: "module-to-function",
+		source: SCAN_STAGE_IDS.moduleScan,
+		target: SCAN_STAGE_IDS.functionScan,
+		fork: true,
+		routeKey: null,
+		isDefaultRoute: false,
+	},
+	{
+		id: "function-to-analysis",
+		name: "function-to-analysis",
+		source: SCAN_STAGE_IDS.functionScan,
+		target: SCAN_STAGE_IDS.analysis,
+		fork: true,
+		routeKey: null,
+		isDefaultRoute: false,
+	},
+	{
+		id: "analysis-to-fuzz-build",
+		name: "analysis-to-fuzz-build",
+		source: SCAN_STAGE_IDS.analysis,
+		target: SCAN_STAGE_IDS.fuzzBuild,
+		fork: true,
+		routeKey: "build_fuzzer",
+		isDefaultRoute: true,
+	},
+	{
+		id: "analysis-to-critic",
+		name: "analysis-to-critic",
+		source: SCAN_STAGE_IDS.analysis,
+		target: SCAN_STAGE_IDS.analysisCritic,
+		fork: false,
+		routeKey: "critic",
+		isDefaultRoute: false,
+	},
+	{
+		id: "fuzz-build-to-fuzz-run",
+		name: "fuzz-build-to-fuzz-run",
+		source: SCAN_STAGE_IDS.fuzzBuild,
+		target: SCAN_STAGE_IDS.fuzzRun,
+		fork: true,
+		routeKey: "run_fuzzer",
+		isDefaultRoute: false,
+	},
+	{
+		id: "fuzz-build-to-analysis",
+		name: "fuzz-build-to-analysis",
+		source: SCAN_STAGE_IDS.fuzzBuild,
+		target: SCAN_STAGE_IDS.analysis,
+		fork: false,
+		routeKey: "analysis",
+		isDefaultRoute: true,
+	},
+	{
+		id: "fuzz-run-to-analysis",
+		name: "fuzz-run-to-analysis",
+		source: SCAN_STAGE_IDS.fuzzRun,
+		target: SCAN_STAGE_IDS.analysis,
+		fork: false,
+		routeKey: "analysis",
+		isDefaultRoute: true,
+	},
+	{
+		id: "critic-to-analysis",
+		name: "critic-to-analysis",
+		source: SCAN_STAGE_IDS.analysisCritic,
+		target: SCAN_STAGE_IDS.analysis,
+		fork: false,
+		routeKey: null,
+		isDefaultRoute: false,
+	},
+	{
+		id: "analysis-to-verification",
+		name: "analysis-to-verification",
+		source: SCAN_STAGE_IDS.analysis,
+		target: SCAN_STAGE_IDS.verification,
+		fork: false,
+		routeKey: "verification",
+		isDefaultRoute: false,
+	},
+	{
+		id: "verification-to-triage",
+		name: "verification-to-triage",
+		source: SCAN_STAGE_IDS.verification,
+		target: SCAN_STAGE_IDS.triage,
+		fork: false,
+		routeKey: null,
+		isDefaultRoute: false,
+	},
+] as const;
+
+const FULL_SCAN_STAGE_GRAPH_GROUPS = [
+	{
+		id: "analysis-fuzzing-debate",
+		name: "analysis-fuzzing-debate",
+		leaderStageName: SCAN_STAGE_IDS.analysis,
+		memberStageNames: [
+			SCAN_STAGE_IDS.fuzzBuild,
+			SCAN_STAGE_IDS.fuzzRun,
+			SCAN_STAGE_IDS.analysisCritic,
+		],
+		stageNames: [
+			SCAN_STAGE_IDS.analysis,
+			SCAN_STAGE_IDS.fuzzBuild,
+			SCAN_STAGE_IDS.fuzzRun,
+			SCAN_STAGE_IDS.analysisCritic,
+		],
+	},
+] as const;
+
+const resolveStaticStageConcurrency = (
+	stageName: string,
+	settings: Awaited<
+		ReturnType<typeof resolveScanProfileConcurrencySettingsFromTarget>
+	>,
+) => {
+	const stageConcurrency = settings.scanStageSettings?.[stageName]?.concurrency;
+	if (stageConcurrency) {
+		return Math.max(1, stageConcurrency);
+	}
+	switch (stageName) {
+		case SCAN_STAGE_IDS.moduleScan:
+			return DEFAULT_FULL_SCAN_MODULE_CONCURRENCY;
+		case SCAN_STAGE_IDS.functionScan:
+			return DEFAULT_FULL_SCAN_FUNCTION_CONCURRENCY;
+		case SCAN_STAGE_IDS.analysis:
+		case SCAN_STAGE_IDS.fuzzBuild:
+		case SCAN_STAGE_IDS.fuzzRun:
+		case SCAN_STAGE_IDS.analysisCritic:
+			return DEFAULT_ANALYSIS_CONCURRENCY;
+		case SCAN_STAGE_IDS.verification:
+			return DEFAULT_VERIFY_CONCURRENCY;
+		case SCAN_STAGE_IDS.triage:
+			return DEFAULT_TRIAGE_CONCURRENCY;
+		default:
+			return 1;
+	}
+};
+
+export const findFullScanStageGraph = async (
+	target: ScanStageGraphTargetInput,
+) => {
+	const settings =
+		await resolveScanProfileConcurrencySettingsFromTarget(target);
+	return {
+		pipelineName: "full-scan-programmatic",
+		nodes: await Promise.all(
+			FULL_SCAN_STAGE_GRAPH_STAGES.map(async (stage, index) => {
+				const agentProfile = await resolveStageAgentProfileFromTarget(
+					target,
+					resolveStageGraphAgentKind(stage.id),
+					stage.id,
+				);
+				return {
+					id: stage.id,
+					stageId: stage.id,
+					stageName: stage.id,
+					name: stage.name,
+					title: stage.name,
+					queueId: null,
+					queueName: null,
+					status: "pending" as const,
+					counts: emptyStageGraphCounts(),
+					concurrencyLimit: resolveStaticStageConcurrency(stage.id, settings),
+					agentProfile:
+						buildTaskAgentProfileSnapshot(agentProfile).agentProfile,
+					groupId:
+						FULL_SCAN_STAGE_GRAPH_GROUPS.find((group) =>
+							group.stageNames.some((stageName) => stageName === stage.id),
+						)?.id ?? null,
+					order: index,
+				};
+			}),
+		),
+		edges: FULL_SCAN_STAGE_GRAPH_EDGES.map((edge) => ({ ...edge })),
+		groups: FULL_SCAN_STAGE_GRAPH_GROUPS.map((group) => ({
+			...group,
+			memberStageNames: [...group.memberStageNames],
+			stageNames: [...group.stageNames],
+		})),
+	};
+};
+
 export const findScanJobStageGraph = async (scanJobId: string) => {
 	const context = await buildFullScanPipelineContext(scanJobId);
 	const pipeline = buildFullScanPipeline(context);
@@ -4706,6 +4937,11 @@ export const findScanJobStageGraph = async (scanJobId: string) => {
 					1,
 					(await stage.getDesiredConcurrency?.(context)) ?? 1,
 				);
+				const agentProfile = await resolveStageAgentProfile(
+					context.scanJob,
+					resolveStageGraphAgentKind(stage.id),
+					stage.id,
+				);
 				return {
 					id: stage.id,
 					stageId: stage.id,
@@ -4717,6 +4953,8 @@ export const findScanJobStageGraph = async (scanJobId: string) => {
 					status: deriveStageGraphStatus(stage.id, counts, context.scanJob),
 					counts,
 					concurrencyLimit,
+					agentProfile:
+						buildTaskAgentProfileSnapshot(agentProfile).agentProfile,
 					groupId: groupNameByStageName.get(stage.id) ?? null,
 					order: index,
 				};
@@ -6260,7 +6498,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			to: analysisStage,
 			fork: true,
 			transformOutput: async ({ stageInput, stageOutput }) =>
-				stageOutput.candidates.map((candidatePath) => ({
+				(stageOutput?.candidates ?? []).map((candidatePath) => ({
 					scanJob: stageInput.scanJob,
 					repositoryPath: stageInput.repositoryPath,
 					modulePath: stageInput.modulePath,
@@ -7151,8 +7389,8 @@ export const runScanJobInContainer = async (
 		const namespaceEnabledContainerArgs = buildNamespaceEnabledContainerArgs();
 		const codexHomeHostMountArg = buildCodexHomeHostMountArg(scanAgentProfile);
 		await execAsync(
-				`docker run -d --rm --init --name ${containerName} ${namespaceEnabledContainerArgs} ${scanContextMount.dockerMountArg} ${codexHomeHostMountArg} ${containerEnvArgs} ${imageTag} bash -lc "sleep infinity"`,
-			);
+			`docker run -d --rm --init --name ${containerName} ${namespaceEnabledContainerArgs} ${scanContextMount.dockerMountArg} ${codexHomeHostMountArg} ${containerEnvArgs} ${imageTag} bash -lc "sleep infinity"`,
+		);
 
 		stageSummary.push(`- container: ${containerName}`);
 		stageSummary.push(`- image: ${imageTag}`);
@@ -7946,7 +8184,7 @@ export const cancelScanJob = async (scanJobId: string) => {
 		...tasksToCancel.map((task) =>
 			updateTaskStatusRepo({
 				taskId: task.taskId,
-				status: "failed",
+				status: "canceled",
 				errorMessage: stopMessage,
 			}).catch(() => null),
 		),
@@ -8026,9 +8264,9 @@ export const reconcileScanJobCandidatePipelineStatus = async (
 ) => {
 	const [scanState, analysisState, verificationState, triageState] =
 		await Promise.all([
-		getPendingScanTaskState(scanJobId),
-		getPendingAnalysisCandidates(scanJobId),
-		getPendingVerificationCandidates(scanJobId),
+			getPendingScanTaskState(scanJobId),
+			getPendingAnalysisCandidates(scanJobId),
+			getPendingVerificationCandidates(scanJobId),
 			getPendingTriageTaskState(scanJobId),
 		]);
 
@@ -8327,14 +8565,18 @@ export const startCandidateVerification = async (
 	}
 
 	const context = await buildFullScanPipelineContext(scanJob.scanJobId);
-	const latestAnalysisTask = await findTaskByIdRepo(latestAnalysisResult.taskId);
+	const latestAnalysisTask = await findTaskByIdRepo(
+		latestAnalysisResult.taskId,
+	);
 	const latestAnalysisTaskDir = await resolveExistingFullScanTaskRuntimeDir(
 		context,
 		latestAnalysisTask,
 	);
 	const analysisStageInput =
 		latestAnalysisTask.input as CandidateAnalysisStageInput | null;
-	const finalAnalysis = finalAnalysisSchema.safeParse(latestAnalysisTask.output);
+	const finalAnalysis = finalAnalysisSchema.safeParse(
+		latestAnalysisTask.output,
+	);
 	if (!analysisStageInput || !finalAnalysis.success) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",

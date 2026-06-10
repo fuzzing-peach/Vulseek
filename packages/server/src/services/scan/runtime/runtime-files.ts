@@ -103,10 +103,10 @@ export const initializeRuntimeFilesInContainer = async (input: {
   usageFileName?: string;
 }) => {
   const usageInit = input.usageFileName
-    ? ` && : > '${input.runtimeDirInContainer}/${input.usageFileName}'`
+    ? ` && : >> '${input.runtimeDirInContainer}/${input.usageFileName}'`
     : "";
   await execAsync(
-    `docker exec ${input.containerName} bash -lc "mkdir -p '${input.runtimeDirInContainer}' && : > '${input.runtimeDirInContainer}/${input.jsonlFileName}' && : > '${input.runtimeDirInContainer}/${input.textFileName}' && : > '${input.runtimeDirInContainer}/${input.stderrFileName}' && : > '${input.runtimeDirInContainer}/${input.stdoutFileName}'${usageInit}"`,
+    `docker exec ${input.containerName} bash -lc "mkdir -p '${input.runtimeDirInContainer}' && : >> '${input.runtimeDirInContainer}/${input.jsonlFileName}' && : >> '${input.runtimeDirInContainer}/${input.textFileName}' && : >> '${input.runtimeDirInContainer}/${input.stderrFileName}' && : >> '${input.runtimeDirInContainer}/${input.stdoutFileName}'${usageInit}"`,
   );
 };
 

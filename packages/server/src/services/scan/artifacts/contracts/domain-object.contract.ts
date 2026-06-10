@@ -11,6 +11,7 @@ export const scanTaskStatusSchema = z.enum([
 	"completed",
 	"failed",
 	"exited",
+	"canceled",
 ]);
 
 export const vulnerabilityCandidateStageSchema = z.enum([

@@ -7,7 +7,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
 	Card,
@@ -53,6 +52,7 @@ import {
 type AgentProfileOption = {
 	agentProfileId: string;
 	name: string;
+	provider?: "codex" | "claude_code" | string;
 	isEnabled: boolean;
 };
 
@@ -65,14 +65,6 @@ export type ScanStageSettings = Record<
 >;
 
 export type ScanStageSettingsTarget = {
-	agentProfileId?: string | null;
-	scanAgentProfileId?: string | null;
-	analysisAgentProfileId?: string | null;
-	verifierAgentProfileId?: string | null;
-	fullScanModuleConcurrency?: number | null;
-	fullScanFunctionConcurrency?: number | null;
-	analysisConcurrency?: number | null;
-	verifyConcurrency?: number | null;
 	scanStageSettings?: ScanStageSettings | null;
 };
 
@@ -160,6 +152,14 @@ const STAGES: StageDefinition[] = [
 	},
 ];
 
+const FORK_STAGE_EDGES = [
+	["repository-scan", "module-scan"],
+	["module-scan", "function-scan"],
+	["function-scan", "analyze"],
+	["analyze", "build-fuzzer"],
+	["build-fuzzer", "run-fuzzer"],
+] as const;
+
 const StageSettingsFormSchema = z.object({
 	agentProfileId: z.string().min(1),
 	concurrency: z.coerce.number().int().min(1).max(128),
@@ -167,50 +167,12 @@ const StageSettingsFormSchema = z.object({
 
 type StageSettingsForm = z.infer<typeof StageSettingsFormSchema>;
 
-const getLegacyAgentProfileId = (
-	target: ScanStageSettingsTarget,
-	stage: StageDefinition,
-) => {
-	if (stage.role === "verification") {
-		return target.verifierAgentProfileId || target.agentProfileId || "";
-	}
-	if (stage.role === "analysis") {
-		return target.analysisAgentProfileId || target.agentProfileId || "";
-	}
-	return target.scanAgentProfileId || target.agentProfileId || "";
-};
-
-const getLegacyConcurrency = (
-	target: ScanStageSettingsTarget,
-	stage: StageDefinition,
-) => {
-	if (stage.stageName === "module-scan") {
-		return target.fullScanModuleConcurrency ?? stage.defaultConcurrency;
-	}
-	if (stage.stageName === "function-scan") {
-		return target.fullScanFunctionConcurrency ?? stage.defaultConcurrency;
-	}
-	if (
-		stage.stageName === "analyze" ||
-		stage.stageName === "build-fuzzer" ||
-		stage.stageName === "run-fuzzer" ||
-		stage.stageName === "criticize"
-	) {
-		return target.analysisConcurrency ?? stage.defaultConcurrency;
-	}
-	if (stage.stageName === "verify") {
-		return target.verifyConcurrency ?? stage.defaultConcurrency;
-	}
-	return stage.defaultConcurrency;
-};
-
 const getStageAgentProfileId = (
 	target: ScanStageSettingsTarget,
 	stage: StageDefinition,
 	enabledProfiles: AgentProfileOption[],
 ) =>
 	target.scanStageSettings?.[stage.stageName]?.agentProfileId ||
-	getLegacyAgentProfileId(target, stage) ||
 	enabledProfiles[0]?.agentProfileId ||
 	"";
 
@@ -219,39 +181,56 @@ const getStageConcurrency = (
 	stage: StageDefinition,
 ) =>
 	target.scanStageSettings?.[stage.stageName]?.concurrency ||
-	getLegacyConcurrency(target, stage);
+	stage.defaultConcurrency;
 
-const getLegacyPatch = (stage: StageDefinition, values: StageSettingsForm) => {
-	if (stage.stageName === "module-scan") {
-		return {
-			scanAgentProfileId: values.agentProfileId,
-			fullScanModuleConcurrency: values.concurrency,
-		};
+const formatProvider = (provider: string | undefined) => {
+	if (provider === "claude_code") {
+		return "Claude Code";
 	}
-	if (stage.stageName === "function-scan") {
-		return {
-			scanAgentProfileId: values.agentProfileId,
-			fullScanFunctionConcurrency: values.concurrency,
-		};
+	if (provider === "codex") {
+		return "Codex";
 	}
-	if (stage.stageName === "repository-scan") {
-		return {
-			scanAgentProfileId: values.agentProfileId,
-		};
+	return provider || "Unknown";
+};
+
+const validateForkAgentProviders = (
+	target: ScanStageSettingsTarget,
+	enabledProfiles: AgentProfileOption[],
+) => {
+	for (const [parentStageName, childStageName] of FORK_STAGE_EDGES) {
+		const parentStage = STAGES.find(
+			(stage) => stage.stageName === parentStageName,
+		);
+		const childStage = STAGES.find(
+			(stage) => stage.stageName === childStageName,
+		);
+		if (!parentStage || !childStage) {
+			continue;
+		}
+		const parentProfileId = getStageAgentProfileId(
+			target,
+			parentStage,
+			enabledProfiles,
+		);
+		const childProfileId = getStageAgentProfileId(
+			target,
+			childStage,
+			enabledProfiles,
+		);
+		const parentProfile = enabledProfiles.find(
+			(profile) => profile.agentProfileId === parentProfileId,
+		);
+		const childProfile = enabledProfiles.find(
+			(profile) => profile.agentProfileId === childProfileId,
+		);
+		if (!parentProfile || !childProfile) {
+			return `Cannot verify fork compatibility for ${parentStage.label} -> ${childStage.label}. Select enabled agent profiles for both stages.`;
+		}
+		if (parentProfile.provider !== childProfile.provider) {
+			return `${parentStage.label} forks ${childStage.label}, so both stages must use the same agent type. Current types: ${parentStage.label} uses ${formatProvider(parentProfile.provider)}, ${childStage.label} uses ${formatProvider(childProfile.provider)}.`;
+		}
 	}
-	if (stage.stageName === "analyze") {
-		return {
-			analysisAgentProfileId: values.agentProfileId,
-			analysisConcurrency: values.concurrency,
-		};
-	}
-	if (stage.stageName === "verify") {
-		return {
-			verifierAgentProfileId: values.agentProfileId,
-			verifyConcurrency: values.concurrency,
-		};
-	}
-	return {};
+	return null;
 };
 
 export const ScanStageSettingsPanel = ({
@@ -263,7 +242,9 @@ export const ScanStageSettingsPanel = ({
 	agentProfiles?: AgentProfileOption[];
 	onSave: (payload: Record<string, unknown>) => Promise<void>;
 }) => {
-	const [selectedStageName, setSelectedStageName] = useState<string | null>(null);
+	const [selectedStageName, setSelectedStageName] = useState<string | null>(
+		null,
+	);
 	const [isSaving, setIsSaving] = useState(false);
 	const enabledProfiles = useMemo(
 		() => agentProfiles?.filter((profile) => profile.isEnabled) ?? [],
@@ -292,8 +273,9 @@ export const ScanStageSettingsPanel = ({
 					...stage,
 					agentProfileId,
 					agentProfileName: agentProfile?.name || "Default",
-					concurrency: target ? getStageConcurrency(target, stage) : stage.defaultConcurrency,
-					isCustom: Boolean(target?.scanStageSettings?.[stage.stageName]),
+					concurrency: target
+						? getStageConcurrency(target, stage)
+						: stage.defaultConcurrency,
 				};
 			}),
 		[target, enabledProfiles],
@@ -356,7 +338,6 @@ export const ScanStageSettingsPanel = ({
 							<TableHead>Stage</TableHead>
 							<TableHead>Agent Profile</TableHead>
 							<TableHead>Concurrency</TableHead>
-							<TableHead>Status</TableHead>
 							<TableHead className="w-16" />
 						</TableRow>
 					</TableHeader>
@@ -371,11 +352,6 @@ export const ScanStageSettingsPanel = ({
 								</TableCell>
 								<TableCell>{stage.agentProfileName}</TableCell>
 								<TableCell>{stage.concurrency}</TableCell>
-								<TableCell>
-									<Badge variant={stage.isCustom ? "blue" : "blank"}>
-										{stage.isCustom ? "custom" : "default"}
-									</Badge>
-								</TableCell>
 								<TableCell className="text-right">
 									<Button
 										type="button"
@@ -425,8 +401,18 @@ export const ScanStageSettingsPanel = ({
 												concurrency: values.concurrency,
 											},
 										};
+										const validationError = validateForkAgentProviders(
+											{
+												...target,
+												scanStageSettings: nextScanStageSettings,
+											},
+											enabledProfiles,
+										);
+										if (validationError) {
+											toast.error(validationError);
+											return;
+										}
 										await onSave({
-											...getLegacyPatch(selectedStage, values),
 											scanStageSettings: nextScanStageSettings,
 										});
 										toast.success("Stage settings updated");
@@ -444,7 +430,10 @@ export const ScanStageSettingsPanel = ({
 									render={({ field }) => (
 										<FormItem>
 											<FormLabel>Agent Profile</FormLabel>
-											<Select onValueChange={field.onChange} value={field.value}>
+											<Select
+												onValueChange={field.onChange}
+												value={field.value}
+											>
 												<FormControl>
 													<SelectTrigger>
 														<SelectValue placeholder="Select an agent profile" />

@@ -40,9 +40,6 @@ export const ShowScanningOverview = ({ resourceId, resourceType }: Props) => {
 						jobs and findings can be managed independently.
 					</p>
 					<div className="flex flex-wrap gap-2">
-						<Button variant="default" disabled>
-							Run Delta Scan
-						</Button>
 						<Button variant="secondary" disabled>
 							Run Full Scan
 						</Button>

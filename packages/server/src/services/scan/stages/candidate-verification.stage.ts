@@ -33,7 +33,7 @@ export type CandidateVerificationStageInput = {
 export type CandidateVerificationStageOutput = Verification;
 
 type VerificationStageContext = StageContext & {
-	executionContext?: { verifyConcurrency?: number };
+	executionContext?: unknown;
 };
 
 const buildCandidateVerificationPrompt = (
@@ -82,10 +82,12 @@ const executeCandidateVerificationStage = async (
 	const taskStageDirPath = await ctx.taskDir();
 	const taskStageRootInContainer = await ctx.taskDirContainer();
 	const taskRealRootInContainer = await ctx.taskDirRealContainer();
-	const stageDirPath = ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
-	const stageRootInContainer = ctx.laneIndex !== null
-		? await ctx.laneDirContainer()
-		: taskRealRootInContainer;
+	const stageDirPath =
+		ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
+	const stageRootInContainer =
+		ctx.laneIndex !== null
+			? await ctx.laneDirContainer()
+			: taskRealRootInContainer;
 	const reportPath = `${taskStageRootInContainer}/01_verify_report.md`;
 	const [candidate, analysisResult] = await Promise.all([
 		readTaskJsonArtifact<Candidate>({
@@ -156,7 +158,7 @@ const executeCandidateVerificationStage = async (
 
 export const createVerifyingStageDefinition = <
 	TPipelineContext extends PipelineContext & {
-		executionContext?: { verifyConcurrency?: number };
+		executionContext?: unknown;
 	},
 >(input: {
 	id: string;
@@ -179,11 +181,7 @@ export const createVerifyingStageDefinition = <
 		reuseContainer: input.reuseContainer,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
-			await resolveStageConcurrencySetting(
-				ctx.scanJobId,
-				input.id,
-				(settings) => settings.verifyConcurrency,
-			),
+			await resolveStageConcurrencySetting(ctx.scanJobId, input.id, () => 1),
 		run: async (ctx, stageInput) => ({
 			completion: "deferred",
 			threadId: (

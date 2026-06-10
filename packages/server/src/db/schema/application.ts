@@ -12,7 +12,6 @@ import {
 import { createInsertSchema } from "drizzle-zod";
 import { nanoid } from "nanoid";
 import { z } from "zod";
-import { agentProfiles } from "./ai";
 import { bitbucket } from "./bitbucket";
 import { deployments } from "./deployment";
 import { domains } from "./domain";
@@ -29,6 +28,7 @@ import { security } from "./security";
 import { server } from "./server";
 import {
 	applicationStatus,
+	buildDefaultScanStageSettings,
 	certificateType,
 	type HealthCheckSwarm,
 	HealthCheckSwarmSchema,
@@ -124,11 +124,7 @@ export const applications = pgTable("application", {
 	triggerType: triggerType("triggerType").default("push"),
 	autoDeploy: boolean("autoDeploy").$defaultFn(() => true),
 	autoDeltaScan: boolean("autoDeltaScan").$defaultFn(() => true),
-	analysisConcurrency: integer("analysisConcurrency").notNull().default(2),
-	verifyConcurrency: integer("verifyConcurrency").notNull().default(1),
-	fuzzingBudgetSeconds: integer("fuzzingBudgetSeconds")
-		.notNull()
-		.default(600),
+	fuzzingBudgetSeconds: integer("fuzzingBudgetSeconds").notNull().default(600),
 	// Gitlab
 	gitlabProjectId: integer("gitlabProjectId"),
 	gitlabRepository: text("gitlabRepository"),
@@ -211,40 +207,10 @@ export const applications = pgTable("application", {
 	serverId: text("serverId").references(() => server.serverId, {
 		onDelete: "cascade",
 	}),
-	agentProfileId: text("agentProfileId").references(
-		() => agentProfiles.agentProfileId,
-		{
-			onDelete: "set null",
-		},
-	),
-	scanAgentProfileId: text("scanAgentProfileId").references(
-		() => agentProfiles.agentProfileId,
-		{
-			onDelete: "set null",
-		},
-	),
-	analysisAgentProfileId: text("analysisAgentProfileId").references(
-		() => agentProfiles.agentProfileId,
-		{
-			onDelete: "set null",
-		},
-	),
-	verifierAgentProfileId: text("verifierAgentProfileId").references(
-		() => agentProfiles.agentProfileId,
-		{
-			onDelete: "set null",
-		},
-	),
-	fullScanModuleConcurrency: integer("fullScanModuleConcurrency")
-		.notNull()
-		.default(4),
-	fullScanFunctionConcurrency: integer("fullScanFunctionConcurrency")
-		.notNull()
-		.default(4),
 	scanStageSettings: jsonb("scanStageSettings")
 		.$type<ScanStageSettings>()
 		.notNull()
-		.default({}),
+		.default(buildDefaultScanStageSettings()),
 });
 
 export const applicationsRelations = relations(
@@ -288,26 +254,6 @@ export const applicationsRelations = relations(
 			fields: [applications.serverId],
 			references: [server.serverId],
 		}),
-		agentProfile: one(agentProfiles, {
-			fields: [applications.agentProfileId],
-			references: [agentProfiles.agentProfileId],
-			relationName: "applicationAgentProfile",
-		}),
-		scanAgentProfile: one(agentProfiles, {
-			fields: [applications.scanAgentProfileId],
-			references: [agentProfiles.agentProfileId],
-			relationName: "applicationScanAgentProfile",
-		}),
-		analysisAgentProfile: one(agentProfiles, {
-			fields: [applications.analysisAgentProfileId],
-			references: [agentProfiles.agentProfileId],
-			relationName: "applicationAnalysisAgentProfile",
-		}),
-		verifierAgentProfile: one(agentProfiles, {
-			fields: [applications.verifierAgentProfileId],
-			references: [agentProfiles.agentProfileId],
-			relationName: "applicationVerifierAgentProfile",
-		}),
 		previewDeployments: many(previewDeployments),
 	}),
 );
@@ -318,12 +264,10 @@ const createSchema = createInsertSchema(applications, {
 	applicationId: z.string(),
 	autoDeploy: z.boolean(),
 	autoDeltaScan: z.boolean(),
-	analysisConcurrency: z.number().int().min(1).max(16).default(2),
-	verifyConcurrency: z.number().int().min(1).max(16).default(1),
 	fuzzingBudgetSeconds: z.number().int().min(1).max(86400).default(600),
-	fullScanModuleConcurrency: z.number().int().min(1).max(32).default(4),
-	fullScanFunctionConcurrency: z.number().int().min(1).max(64).default(4),
-	scanStageSettings: ScanStageSettingsSchema.default({}),
+	scanStageSettings: ScanStageSettingsSchema.default(
+		buildDefaultScanStageSettings(),
+	),
 	env: z.string().optional(),
 	buildArgs: z.string().optional(),
 	buildSecrets: z.string().optional(),
@@ -389,11 +333,7 @@ const createSchema = createInsertSchema(applications, {
 	previewLabels: z.array(z.string()).optional(),
 	cleanCache: z.boolean().optional(),
 	stopGracePeriodSwarm: z.bigint().nullable(),
-	agentProfileId: z.string().nullable().optional(),
-		scanAgentProfileId: z.string().nullable().optional(),
-		analysisAgentProfileId: z.string().nullable().optional(),
-		verifierAgentProfileId: z.string().nullable().optional(),
-	});
+});
 
 export const apiCreateApplication = createSchema.pick({
 	name: true,

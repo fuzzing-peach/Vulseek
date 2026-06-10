@@ -558,7 +558,6 @@ export const ScanMonitoring = ({
 		1,
 		...tokenThroughput.taskRates.map((rate) => rate.tokensPerSecond),
 	);
-	const memoryLimit = currentData.memory.limitBytes || undefined;
 	const cpuCapacityPercent = currentData.cpu.capacityPercent || 100;
 	const cpuCapacityVcpu = cpuCapacityPercent / 100;
 	const cpuUsedVcpu = currentData.cpu.percent / 100;
@@ -586,7 +585,7 @@ export const ScanMonitoring = ({
 			</header>
 
 			{error ? (
-				<div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+				<div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100">
 					{error}
 				</div>
 			) : null}
@@ -701,7 +700,6 @@ export const ScanMonitoring = ({
 							<UsageChart
 								data={chartData}
 								keys={[{ key: "cpuVcpu", name: "CPU", color: "#27272A" }]}
-								max={cpuCapacityVcpu}
 								formatter={formatVcpu}
 								axisUnitLabel="vCPU"
 							/>
@@ -728,7 +726,6 @@ export const ScanMonitoring = ({
 								keys={[
 									{ key: "memoryBytes", name: "Memory", color: "#27272A" },
 								]}
-								max={memoryLimit}
 								formatter={formatBytes}
 								axisUnits={BYTE_AXIS_UNITS}
 							/>

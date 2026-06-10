@@ -40,7 +40,7 @@ export type CandidateTriageStageInput = {
 export type CandidateTriageStageOutput = Triage;
 
 type TriageStageContext = StageContext & {
-	executionContext?: { verifyConcurrency?: number };
+	executionContext?: unknown;
 };
 
 const buildCandidateTriagePrompt = (
@@ -89,10 +89,12 @@ const executeCandidateTriageStage = async (
 	const taskStageDirPath = await ctx.taskDir();
 	const taskStageRootInContainer = await ctx.taskDirContainer();
 	const taskRealRootInContainer = await ctx.taskDirRealContainer();
-	const stageDirPath = ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
-	const stageRootInContainer = ctx.laneIndex !== null
-		? await ctx.laneDirContainer()
-		: taskRealRootInContainer;
+	const stageDirPath =
+		ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
+	const stageRootInContainer =
+		ctx.laneIndex !== null
+			? await ctx.laneDirContainer()
+			: taskRealRootInContainer;
 	const reportPath = `${taskStageRootInContainer}/01_triage_report.md`;
 	const [candidate, analysisResult, verifyResult] = await Promise.all([
 		readTaskJsonArtifact<Candidate>({
@@ -168,7 +170,7 @@ const executeCandidateTriageStage = async (
 
 export const createTriageStageDefinition = <
 	TPipelineContext extends PipelineContext & {
-		executionContext?: { verifyConcurrency?: number };
+		executionContext?: unknown;
 	},
 >(input: {
 	id: string;
@@ -191,11 +193,7 @@ export const createTriageStageDefinition = <
 		reuseContainer: input.reuseContainer,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
-			await resolveStageConcurrencySetting(
-				ctx.scanJobId,
-				input.id,
-				(settings) => settings.verifyConcurrency,
-			),
+			await resolveStageConcurrencySetting(ctx.scanJobId, input.id, () => 1),
 		run: async (ctx, stageInput) => ({
 			completion: "deferred",
 			threadId: (

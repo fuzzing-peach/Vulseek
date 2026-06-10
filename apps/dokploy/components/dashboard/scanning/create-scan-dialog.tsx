@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { FullScanStageGraphPreview } from "@/components/dashboard/scanning/scan-stage-graph";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -12,7 +13,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-const deriveDefaultRef = (serviceData: Record<string, unknown> | null | undefined) => {
+const deriveDefaultRef = (
+	serviceData: Record<string, unknown> | null | undefined,
+) => {
 	if (!serviceData) {
 		return "";
 	}
@@ -43,6 +46,7 @@ interface Props {
 	serviceData?: Record<string, unknown> | null;
 	defaultCommitWindow?: number;
 	showCommitWindow?: boolean;
+	showFullScanPreview?: boolean;
 	onSubmit: (input: {
 		targetRef?: string;
 		targetTag?: string;
@@ -58,10 +62,14 @@ export const CreateScanDialog = ({
 	serviceData,
 	defaultCommitWindow = 3,
 	showCommitWindow = true,
+	showFullScanPreview = false,
 	onSubmit,
 }: Props) => {
 	const [open, setOpen] = useState(false);
-	const defaultRef = useMemo(() => deriveDefaultRef(serviceData), [serviceData]);
+	const defaultRef = useMemo(
+		() => deriveDefaultRef(serviceData),
+		[serviceData],
+	);
 	const [targetRef, setTargetRef] = useState(defaultRef);
 	const [targetTag, setTargetTag] = useState("");
 	const [commitWindow, setCommitWindow] = useState(String(defaultCommitWindow));
@@ -77,7 +85,9 @@ export const CreateScanDialog = ({
 	const handleSubmit = async () => {
 		const parsedWindow = Number.parseInt(commitWindow, 10);
 		const normalizedWindow =
-			Number.isNaN(parsedWindow) || parsedWindow < 1 ? defaultCommitWindow : parsedWindow;
+			Number.isNaN(parsedWindow) || parsedWindow < 1
+				? defaultCommitWindow
+				: parsedWindow;
 
 		await onSubmit({
 			targetRef: targetRef.trim() || undefined,
@@ -90,12 +100,25 @@ export const CreateScanDialog = ({
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
 			<DialogTrigger asChild>{trigger}</DialogTrigger>
-			<DialogContent className="sm:max-w-lg">
+			<DialogContent className="sm:max-w-3xl">
 				<DialogHeader>
 					<DialogTitle>{title}</DialogTitle>
 					<DialogDescription>{description}</DialogDescription>
 				</DialogHeader>
 				<div className="grid gap-4">
+					{showFullScanPreview ? (
+						<div className="rounded-lg border bg-background p-4">
+							<div className="text-sm font-semibold">What will run</div>
+							<p className="mt-1 text-sm text-muted-foreground">
+								Full Scan checks out the selected source, scans repository
+								structure, expands module and function tasks, analyzes candidate
+								findings, and only sends verified or likely findings to triage.
+							</p>
+						</div>
+					) : null}
+					{showFullScanPreview ? (
+						<FullScanStageGraphPreview serviceData={serviceData} />
+					) : null}
 					<div className="grid gap-2">
 						<Label htmlFor={`${title}-target-ref`}>Ref</Label>
 						<Input

@@ -55,10 +55,12 @@ const executeAnalysisCriticStage = async (
 	const taskStageDirPath = await ctx.taskDir();
 	const taskStageRootInContainer = await ctx.taskDirContainer();
 	const taskRealRootInContainer = await ctx.taskDirRealContainer();
-	const stageDirPath = ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
-	const stageRootInContainer = ctx.laneIndex !== null
-		? await ctx.laneDirContainer()
-		: taskRealRootInContainer;
+	const stageDirPath =
+		ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
+	const stageRootInContainer =
+		ctx.laneIndex !== null
+			? await ctx.laneDirContainer()
+			: taskRealRootInContainer;
 	const candidate = await readTaskJsonArtifact<Candidate>({
 		taskDir: taskStageDirPath,
 		containerPath: stageInput.candidatePath,
@@ -139,11 +141,7 @@ export const createAnalysisCriticStageDefinition = <
 		reuseContainer: input.reuseContainer,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
-			await resolveStageConcurrencySetting(
-				ctx.scanJobId,
-				input.id,
-				(settings) => settings.analysisConcurrency,
-			),
+			await resolveStageConcurrencySetting(ctx.scanJobId, input.id, () => 2),
 		run: async (ctx, stageInput) => ({
 			completion: "deferred",
 			threadId: (

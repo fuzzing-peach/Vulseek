@@ -16,22 +16,22 @@ import type { SandboxAgentActivity } from "@/lib/scan/sandbox-agent-activity";
 
 const getActivityBadgeClassName = (kind: string) => {
 	if (kind === "web") {
-		return "border-sky-200 bg-sky-100 text-sky-700";
+		return "border-sky-200 bg-sky-100 text-sky-700 dark:border-sky-500/60 dark:bg-sky-950/50 dark:text-sky-100";
 	}
 	if (kind === "tool" || kind === "command" || kind === "completed") {
-		return "border-emerald-200 bg-emerald-100 text-emerald-700";
+		return "border-emerald-200 bg-emerald-100 text-emerald-700 dark:border-emerald-500/60 dark:bg-emerald-950/50 dark:text-emerald-100";
 	}
 	if (kind === "usage" || kind === "result") {
-		return "border-slate-200 bg-slate-100 text-slate-700";
+		return "border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-500/60 dark:bg-slate-900/70 dark:text-slate-100";
 	}
 	if (kind === "reasoning" || kind === "planning") {
-		return "border-amber-200 bg-amber-100 text-amber-700";
+		return "border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100";
 	}
 	if (kind === "writing") {
-		return "border-violet-200 bg-violet-100 text-violet-700";
+		return "border-violet-200 bg-violet-100 text-violet-700 dark:border-violet-500/60 dark:bg-violet-950/50 dark:text-violet-100";
 	}
 	if (kind === "error") {
-		return "border-red-200 bg-red-100 text-red-700";
+		return "border-red-200 bg-red-100 text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100";
 	}
 	return "border-muted-foreground/20 bg-muted text-muted-foreground";
 };
@@ -372,7 +372,7 @@ export const LiveTaskActivityButton = ({
 						)}
 					</div>
 					{errorMessage ? (
-						<div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+						<div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100">
 							{errorMessage}
 						</div>
 					) : null}
@@ -479,7 +479,7 @@ export const LiveTaskTextButton = ({
 						<span>{textState.text.length.toLocaleString()} chars</span>
 					</div>
 					{textState.errorMessage ? (
-						<div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+						<div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100">
 							{textState.errorMessage}
 						</div>
 					) : null}
