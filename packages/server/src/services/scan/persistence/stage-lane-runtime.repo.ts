@@ -170,6 +170,16 @@ export const findStageLaneRuntimeRepo = async (input: {
 		.limit(1)
 		.then((rows) => rows[0] || null);
 
+export const listStageLaneRuntimesByScanJobIdRepo = async (scanJobId: string) =>
+	await db
+		.select()
+		.from(scanStageLaneRuntimes)
+		.where(eq(scanStageLaneRuntimes.scanJobId, scanJobId))
+		.orderBy(
+			asc(scanStageLaneRuntimes.stageName),
+			asc(scanStageLaneRuntimes.laneIndex),
+		);
+
 export const bindStageLaneRuntimeRepo = async (input: {
 	scanJobId: string;
 	stageName: string;
@@ -302,6 +312,26 @@ export const resetStageLaneRuntimeByLaneForExitRepo = async (input: {
 				eq(scanStageLaneRuntimes.laneIndex, input.laneIndex),
 			),
 		)
+		.returning();
+};
+
+export const resetStageLaneRuntimesByScanJobIdRepo = async (
+	scanJobId: string,
+) => {
+	const now = new Date().toISOString();
+	return await db
+		.update(scanStageLaneRuntimes)
+		.set({
+			containerName: null,
+			threadId: null,
+			activeTaskId: null,
+			forkedFromTaskId: null,
+			forkedFromThreadId: null,
+			status: "idle",
+			lastExitAt: now,
+			updatedAt: now,
+		})
+		.where(eq(scanStageLaneRuntimes.scanJobId, scanJobId))
 		.returning();
 };
 

@@ -61,6 +61,8 @@ export type VulnerabilityCandidate = {
 	status:
 		| "pending"
 		| "launching"
+		| "launched"
+		| "starting"
 		| "running"
 		| "completed"
 		| "failed"

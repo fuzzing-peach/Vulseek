@@ -602,6 +602,12 @@ const getTaskStatusBadgeClassName = (status?: string) => {
 	if (status === "canceled") {
 		return "border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100";
 	}
+	if (status === "running" || status === "starting") {
+		return "border-sky-200 bg-sky-100 text-sky-700 dark:border-sky-500/60 dark:bg-sky-950/50 dark:text-sky-100";
+	}
+	if (status === "launching" || status === "launched") {
+		return "border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100";
+	}
 	return "border-muted-foreground/20 bg-muted text-muted-foreground";
 };
 
@@ -935,8 +941,9 @@ export const ShowScanJobDetail = ({
 	const getQueueTaskMetrics = (queue: (typeof queuePendingCounts)[number]) => {
 		const queued =
 			(queue.queuedCount ?? queue.pendingCount ?? 0) +
-			(queue.launchingCount ?? 0);
-		const running = queue.runningCount ?? 0;
+			(queue.launchingCount ?? 0) +
+			(queue.launchedCount ?? 0);
+		const running = (queue.runningCount ?? 0) + (queue.startingCount ?? 0);
 		const done = queue.completedCount + (queue.exitedCount ?? 0);
 		const concurrencyLimit = Math.max(
 			1,
@@ -1612,8 +1619,10 @@ export const ShowScanJobDetail = ({
 								</div>
 							) : (
 								<div className="flex flex-col gap-3">
-									{canCancelScanJob ? (
-										<div className="flex justify-end">
+									<ScanStageGraph scanJobId={scanJobId} />
+									<div className="rounded-lg border p-4">
+										<div className="mb-3 text-lg font-semibold">Actions</div>
+										{canCancelScanJob ? (
 											<Button
 												type="button"
 												variant="destructive"
@@ -1657,9 +1666,12 @@ export const ShowScanJobDetail = ({
 													"Cancel"
 												)}
 											</Button>
-										</div>
-									) : null}
-									<ScanStageGraph scanJobId={scanJobId} />
+										) : (
+											<div className="text-sm text-muted-foreground">
+												No actions available for this job status.
+											</div>
+										)}
+									</div>
 									<div className="grid grid-cols-1 md:grid-cols-2 gap-3">
 										<div className="border rounded-lg p-3">
 											<div className="text-sm text-muted-foreground">
@@ -1705,13 +1717,10 @@ export const ShowScanJobDetail = ({
 												</div>
 												<div>
 													<div className="text-sm text-muted-foreground">
-														Output / Cache Write
+														Output Tokens
 													</div>
 													<div className="font-medium">
-														{formatTokenUsageWithCache(
-															scanJob.outputTokens,
-															scanJob.cachedWriteTokens,
-														)}
+														{formatTokenUsage(scanJob.outputTokens)}
 													</div>
 												</div>
 												<div>

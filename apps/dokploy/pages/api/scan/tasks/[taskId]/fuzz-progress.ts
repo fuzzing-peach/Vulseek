@@ -34,7 +34,13 @@ type FuzzProgressRecord = {
 	parseError?: string;
 };
 
-const ACTIVE_TASK_STATUSES = new Set(["pending", "launching", "running"]);
+const ACTIVE_TASK_STATUSES = new Set([
+	"pending",
+	"launching",
+	"launched",
+	"starting",
+	"running",
+]);
 const FUZZ_PROGRESS_FILE_NAME = "fuzz-progress.jsonl";
 
 const sendEvent = (

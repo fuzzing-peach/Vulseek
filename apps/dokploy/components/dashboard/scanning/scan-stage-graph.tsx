@@ -66,6 +66,8 @@ const emptyStageCounts = () => ({
 	waiting: 0,
 	queued: 0,
 	launching: 0,
+	launched: 0,
+	starting: 0,
 	running: 0,
 	completed: 0,
 	failed: 0,
@@ -154,10 +156,10 @@ const EDGE_TYPES = {
 } satisfies EdgeTypes;
 
 const getStatusClassName = (node: StageGraphNode) => {
-	if (node.counts.running > 0) {
+	if (node.counts.running > 0 || (node.counts.starting ?? 0) > 0) {
 		return "border-sky-300 bg-sky-50 text-sky-950 dark:border-sky-500/70 dark:bg-sky-950/55 dark:text-sky-100";
 	}
-	if (node.counts.launching > 0) {
+	if (node.counts.launching > 0 || (node.counts.launched ?? 0) > 0) {
 		return "border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-500/70 dark:bg-amber-950/55 dark:text-amber-100";
 	}
 	return "border-zinc-300 bg-zinc-50 text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900/85 dark:text-zinc-100";
@@ -167,7 +169,7 @@ const StageLabel = ({ node }: { node: StageGraphNode }) => {
 	const runningBlockCount = Math.max(
 		1,
 		node.concurrencyLimit,
-		node.counts.running,
+		node.counts.running + (node.counts.starting ?? 0),
 	);
 	const runningBlocks = Array.from(
 		{ length: runningBlockCount },
@@ -186,7 +188,7 @@ const StageLabel = ({ node }: { node: StageGraphNode }) => {
 						key={blockId}
 						className={`h-4 w-1.5 rounded-[1px] shadow-[0_0_0_1px_hsl(var(--background))] ${
 							Number(blockId.slice(blockId.lastIndexOf("-") + 1)) <
-							node.counts.running
+							node.counts.running + (node.counts.starting ?? 0)
 								? "bg-sky-500"
 								: "bg-muted-foreground/20"
 						}`}
@@ -237,8 +239,14 @@ const StageDetailDialog = ({
 								label="Concurrency Limit"
 								value={stage.concurrencyLimit}
 							/>
-							<DetailRow label="Running" value={stage.counts.running} />
-							<DetailRow label="Launching" value={stage.counts.launching} />
+							<DetailRow
+								label="Running"
+								value={stage.counts.running + (stage.counts.starting ?? 0)}
+							/>
+							<DetailRow
+								label="Launching"
+								value={stage.counts.launching + (stage.counts.launched ?? 0)}
+							/>
 							<DetailRow label="Queued" value={stage.counts.queued} />
 							<DetailRow label="Completed" value={stage.counts.completed} />
 						</div>

@@ -7,6 +7,7 @@ import {
 	listScanJobsByComposeIdRepo,
 	recalculateScanTaskCountsRepo,
 	resetScanJobForRetryRepo,
+	sumClaudeCodeCachedReadTokensByScanJobIdRepo,
 	updateScanJobNoteRepo,
 	updateScanJobRepositoryTaskStatusRepo,
 	updateScanJobStatusRepo,
@@ -18,8 +19,15 @@ export const createScanJob = async (input: typeof apiCreateScanJob._type) =>
 		defaultDeltaCommitWindow: DEFAULT_DELTA_COMMIT_WINDOW,
 	});
 
-export const findScanJobById = async (scanJobId: string) =>
-	await findScanJobByIdRepo(scanJobId);
+export const findScanJobById = async (scanJobId: string) => {
+	const scanJob = await findScanJobByIdRepo(scanJobId);
+	const claudeCachedReadTokens =
+		await sumClaudeCodeCachedReadTokensByScanJobIdRepo(scanJobId);
+	return {
+		...scanJob,
+		inputTokens: scanJob.inputTokens + claudeCachedReadTokens,
+	};
+};
 
 export const findAllScanJobsByApplicationId = async (applicationId: string) =>
 	await listScanJobsByApplicationIdRepo(applicationId);
@@ -43,13 +51,13 @@ export const resetScanJobForRetry = async (
 	input?: {
 		status?: "pending" | "running" | "finished" | "canceled";
 		errorMessage?: string | null;
-		repositoryTaskStatus?: "pending" | "launching" | "running" | "completed" | "failed" | "exited" | "canceled";
+		repositoryTaskStatus?: "pending" | "launching" | "launched" | "starting" | "running" | "completed" | "failed" | "exited" | "canceled";
 	},
 ) => await resetScanJobForRetryRepo(scanJobId, input);
 
 export const updateScanJobRepositoryTaskStatus = async (
 	scanJobId: string,
-	repositoryTaskStatus: "pending" | "launching" | "running" | "completed" | "failed" | "exited" | "canceled",
+	repositoryTaskStatus: "pending" | "launching" | "launched" | "starting" | "running" | "completed" | "failed" | "exited" | "canceled",
 ) => await updateScanJobRepositoryTaskStatusRepo(scanJobId, repositoryTaskStatus);
 
 export const recalculateScanTaskCounts = async (scanJobId: string) =>

@@ -65,7 +65,6 @@ import {
 } from "./preview-deployment";
 import { validUniqueServerAppName } from "./project";
 import { createRollback } from "./rollbacks";
-import { validateForkStageAgentProviderCompatibility } from "./scan/stage-agent-settings-validation";
 export type Application = typeof applications.$inferSelect;
 
 export const createApplication = async (
@@ -169,7 +168,6 @@ export const updateApplication = async (
 ) => {
 	const currentApplication = await findApplicationById(applicationId);
 	const { appName, ...rest } = applicationData;
-	const updatesScanAgentSettings = "scanStageSettings" in rest;
 	const nextName = rest.name?.trim();
 	const shouldRenameAppName =
 		typeof nextName === "string" &&
@@ -187,13 +185,6 @@ export const updateApplication = async (
 				message: "Application with this 'AppName' already exists",
 			});
 		}
-	}
-
-	if (updatesScanAgentSettings) {
-		await validateForkStageAgentProviderCompatibility({
-			scanStageSettings: currentApplication.scanStageSettings,
-			...rest,
-		});
 	}
 
 	const application = await db

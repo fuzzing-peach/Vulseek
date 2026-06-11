@@ -322,7 +322,10 @@ const toPublicBaseUrl = (containerName: string | null) =>
 	containerName ? `/sandbox-agent/${containerName}` : null;
 
 const isLiveTaskStatus = (status: string | null | undefined) =>
-	status === "launching" || status === "running";
+	status === "launching" ||
+	status === "launched" ||
+	status === "starting" ||
+	status === "running";
 
 export const findSandboxAgentTaskRuntimeByTaskId = async (
 	taskId: string,

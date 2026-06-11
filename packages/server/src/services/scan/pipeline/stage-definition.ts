@@ -72,6 +72,7 @@ export type StageDefinition<
 	nullableOutput?: boolean;
 	queue?: StageQueueBinding<TPipelineContext, TInput>;
 	validateInput?: (ctx: TStageContext, input: TInput) => Promise<boolean>;
+	launch?: (ctx: TStageContext, input: TInput) => Promise<void>;
 	run: (
 		ctx: TStageContext,
 		input: TInput,

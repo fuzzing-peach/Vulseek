@@ -152,14 +152,6 @@ const STAGES: StageDefinition[] = [
 	},
 ];
 
-const FORK_STAGE_EDGES = [
-	["repository-scan", "module-scan"],
-	["module-scan", "function-scan"],
-	["function-scan", "analyze"],
-	["analyze", "build-fuzzer"],
-	["build-fuzzer", "run-fuzzer"],
-] as const;
-
 const StageSettingsFormSchema = z.object({
 	agentProfileId: z.string().min(1),
 	concurrency: z.coerce.number().int().min(1).max(128),
@@ -182,56 +174,6 @@ const getStageConcurrency = (
 ) =>
 	target.scanStageSettings?.[stage.stageName]?.concurrency ||
 	stage.defaultConcurrency;
-
-const formatProvider = (provider: string | undefined) => {
-	if (provider === "claude_code") {
-		return "Claude Code";
-	}
-	if (provider === "codex") {
-		return "Codex";
-	}
-	return provider || "Unknown";
-};
-
-const validateForkAgentProviders = (
-	target: ScanStageSettingsTarget,
-	enabledProfiles: AgentProfileOption[],
-) => {
-	for (const [parentStageName, childStageName] of FORK_STAGE_EDGES) {
-		const parentStage = STAGES.find(
-			(stage) => stage.stageName === parentStageName,
-		);
-		const childStage = STAGES.find(
-			(stage) => stage.stageName === childStageName,
-		);
-		if (!parentStage || !childStage) {
-			continue;
-		}
-		const parentProfileId = getStageAgentProfileId(
-			target,
-			parentStage,
-			enabledProfiles,
-		);
-		const childProfileId = getStageAgentProfileId(
-			target,
-			childStage,
-			enabledProfiles,
-		);
-		const parentProfile = enabledProfiles.find(
-			(profile) => profile.agentProfileId === parentProfileId,
-		);
-		const childProfile = enabledProfiles.find(
-			(profile) => profile.agentProfileId === childProfileId,
-		);
-		if (!parentProfile || !childProfile) {
-			return `Cannot verify fork compatibility for ${parentStage.label} -> ${childStage.label}. Select enabled agent profiles for both stages.`;
-		}
-		if (parentProfile.provider !== childProfile.provider) {
-			return `${parentStage.label} forks ${childStage.label}, so both stages must use the same agent type. Current types: ${parentStage.label} uses ${formatProvider(parentProfile.provider)}, ${childStage.label} uses ${formatProvider(childProfile.provider)}.`;
-		}
-	}
-	return null;
-};
 
 export const ScanStageSettingsPanel = ({
 	target,
@@ -401,17 +343,6 @@ export const ScanStageSettingsPanel = ({
 												concurrency: values.concurrency,
 											},
 										};
-										const validationError = validateForkAgentProviders(
-											{
-												...target,
-												scanStageSettings: nextScanStageSettings,
-											},
-											enabledProfiles,
-										);
-										if (validationError) {
-											toast.error(validationError);
-											return;
-										}
 										await onSave({
 											scanStageSettings: nextScanStageSettings,
 										});

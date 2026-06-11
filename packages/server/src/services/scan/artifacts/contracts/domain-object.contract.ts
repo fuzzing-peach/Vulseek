@@ -7,6 +7,8 @@ import {
 export const scanTaskStatusSchema = z.enum([
 	"pending",
 	"launching",
+	"launched",
+	"starting",
 	"running",
 	"completed",
 	"failed",

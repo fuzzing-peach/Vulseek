@@ -36,7 +36,13 @@ interface Props {
 	routeSegment: "profiles" | "services";
 }
 
-const ACTIVE_TASK_STATUSES = new Set(["pending", "launching", "running"]);
+const ACTIVE_TASK_STATUSES = new Set([
+	"pending",
+	"launching",
+	"launched",
+	"starting",
+	"running",
+]);
 const RERUNNABLE_TASK_STATUSES = new Set(["completed", "failed", "exited"]);
 const ROOT_DIRECTORY_KEY = "__root__";
 
@@ -122,7 +128,12 @@ const getTaskStatusBadgeClassName = (status?: string | null) => {
 	if (status === "failed") {
 		return "border-red-200 bg-red-100 text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100";
 	}
-	if (status === "running" || status === "launching") {
+	if (
+		status === "running" ||
+		status === "starting" ||
+		status === "launched" ||
+		status === "launching"
+	) {
 		return "border-sky-200 bg-sky-100 text-sky-700 dark:border-sky-500/60 dark:bg-sky-950/50 dark:text-sky-100";
 	}
 	if (status === "pending") {
@@ -808,12 +819,9 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 												copyLabel="Input / Cache Read"
 											/>
 											<DetailField
-												label="Output / Cache Write"
-												value={formatTokenUsageWithCache(
-													task.outputTokens,
-													task.cachedWriteTokens,
-												)}
-												copyLabel="Output / Cache Write"
+												label="Output Tokens"
+												value={formatTokenUsage(task.outputTokens)}
+												copyLabel="Output Tokens"
 											/>
 											<DetailField
 												label="Total Tokens"

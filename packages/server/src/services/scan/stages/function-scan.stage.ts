@@ -1,4 +1,3 @@
-import { buildTaskAgentProfileSnapshot } from "../agent-profile-snapshot";
 import { functionScanManifestSchema } from "../artifacts/contracts/domain-object.contract";
 import { bindTaskRuntimeRepo } from "../persistence/task.repo";
 import {
@@ -7,11 +6,12 @@ import {
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
 import { buildFunctionScannerPrompt } from "../prompts/function-scanner.prompt";
-import {
-	runSingleTurnAgentInContainer,
-	startContainer,
-} from "../runtime/run-single-turn-agent";
+import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
 import type { FunctionScanManifest, ScanJob } from "../types";
+import {
+	launchAgentStageRuntime,
+	resolveAgentStageRuntime,
+} from "./agent-stage-runtime";
 import {
 	type PipelineContext,
 	resolveStageConcurrencySetting,
@@ -72,68 +72,32 @@ const executeFunctionScanStage = async (
 		);
 	};
 	let stepStartedAt = Date.now();
-	const scanAgentProfile = await ctx.agentProfile();
+	const runtime = await resolveAgentStageRuntime({
+		ctx,
+		containerNameParts: [stageInput.functionId.slice(0, 24)],
+	});
 	logTiming("agent_profile", stepStartedAt, {
-		provider: scanAgentProfile?.provider ?? null,
-		model: scanAgentProfile?.model ?? null,
+		provider: runtime.agentProfile?.provider ?? null,
+		model: runtime.agentProfile?.model ?? null,
 	});
 	stepStartedAt = Date.now();
-	const taskStageDirPath = await ctx.taskDir();
-	const taskStageRootInContainer = await ctx.taskDirContainer();
-	const taskRealRootInContainer = await ctx.taskDirRealContainer();
-	const stageDirPath =
-		ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
-	const stageRootInContainer =
-		ctx.laneIndex !== null
-			? await ctx.laneDirContainer()
-			: taskRealRootInContainer;
-	const containerName = ctx.containerName(stageInput.functionId.slice(0, 24));
 	logTiming("resolve_paths", stepStartedAt, {
-		containerName,
-		stageDirPath,
-		taskStageDirPath,
-	});
-
-	stepStartedAt = Date.now();
-	await bindTaskRuntimeRepo({
-		taskId: ctx.taskId,
-		containerName,
-		containerIndex: ctx.containerIndex,
-		agentProfile: buildTaskAgentProfileSnapshot(scanAgentProfile).agentProfile,
-	});
-	logTiming("bind_task_runtime", stepStartedAt, {
-		containerName,
-	});
-	stepStartedAt = Date.now();
-	await startContainer({
-		scanJob: stageInput.scanJob,
-		taskId: ctx.taskId,
-		agentProfile: scanAgentProfile,
-		containerName,
-		codexHome: `${stageRootInContainer}/.codex`,
-		stageDirPath,
-		stageRootInContainer,
-		taskRealRootInContainer,
-		persistent: ctx.persistent,
-		reuseContainer: ctx.reuseContainer,
-	});
-	logTiming("start_container", stepStartedAt, {
-		containerName,
-		persistent: ctx.persistent,
-		reuseContainer: ctx.reuseContainer,
+		containerName: runtime.containerName,
+		stageDirPath: runtime.stageDirPath,
+		taskStageDirPath: runtime.taskStageDirPath,
 	});
 	stepStartedAt = Date.now();
 	const result = await runSingleTurnAgentInContainer({
 		scanJob: stageInput.scanJob,
-		agentProfile: scanAgentProfile,
-		containerName,
-		codexHome: `${stageRootInContainer}/.codex`,
-		stageDirPath,
-		stageRootInContainer,
+		agentProfile: runtime.agentProfile,
+		containerName: runtime.containerName,
+		codexHome: runtime.codexHome,
+		stageDirPath: runtime.stageDirPath,
+		stageRootInContainer: runtime.stageRootInContainer,
 		taskId: ctx.taskId,
-		taskStageDirPath,
-		taskStageRootInContainer,
-		taskRealRootInContainer,
+		taskStageDirPath: runtime.taskStageDirPath,
+		taskStageRootInContainer: runtime.taskStageRootInContainer,
+		taskRealRootInContainer: runtime.taskRealRootInContainer,
 		persistent: ctx.persistent,
 		reuseContainer: ctx.reuseContainer,
 		nullableOutput: ctx.nullableOutput,
@@ -157,8 +121,8 @@ const executeFunctionScanStage = async (
 			repositoryJsonPath: stageInput.repositoryPath,
 			moduleJsonPath: stageInput.modulePath,
 			functionJsonPath: stageInput.functionPath,
-			thinkingLevel: scanAgentProfile?.thinkingLevelEnabled
-				? scanAgentProfile.thinkingLevel
+			thinkingLevel: runtime.agentProfile?.thinkingLevelEnabled
+				? runtime.agentProfile.thinkingLevel
 				: null,
 		}),
 		outputSchema: functionScanningOutputSchema,
@@ -167,7 +131,7 @@ const executeFunctionScanStage = async (
 		},
 	});
 	logTiming("run_single_turn_agent", stepStartedAt, {
-		containerName,
+		containerName: runtime.containerName,
 		threadId: result.threadId ?? null,
 	});
 	return result;
@@ -200,6 +164,28 @@ export const createFunctionScanningStageDefinition = <
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
 			await resolveStageConcurrencySetting(ctx.scanJobId, input.id, () => 4),
+		launch: async (ctx, stageInput) => {
+			const startedAt = Date.now();
+			await launchAgentStageRuntime({
+				ctx: ctx as unknown as StageContext,
+				scanJob: stageInput.scanJob,
+				containerNameParts: [stageInput.functionId.slice(0, 24)],
+			});
+			console.log(
+				"[scan-stage]",
+				JSON.stringify({
+					event: "function_scan.launch_timing",
+					scanJobId: stageInput.scanJob.scanJobId,
+					stageName: (ctx as unknown as StageContext).stageName,
+					taskId: (ctx as unknown as StageContext).taskId,
+					functionId: stageInput.functionId,
+					functionName: stageInput.functionName,
+					step: "launch_agent_runtime",
+					elapsedMs: Date.now() - startedAt,
+					totalElapsedMs: Date.now() - startedAt,
+				}),
+			);
+		},
 		run: async (ctx, stageInput) => {
 			const result = await executeFunctionScanStage(
 				ctx as unknown as StageContext,

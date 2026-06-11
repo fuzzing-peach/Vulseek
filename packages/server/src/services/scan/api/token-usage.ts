@@ -14,9 +14,7 @@ export const normalizeTaskApiTokenUsage = <T extends Task>(task: T): T => {
 	if (task.inputTokens == null) {
 		return task;
 	}
-	const cachedInputTokens =
-		positiveTokenCount(task.cachedReadTokens) +
-		positiveTokenCount(task.cachedWriteTokens);
+	const cachedInputTokens = positiveTokenCount(task.cachedReadTokens);
 	if (cachedInputTokens <= 0) {
 		return task;
 	}

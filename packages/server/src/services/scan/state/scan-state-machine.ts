@@ -9,6 +9,8 @@ export type ResolveScanPipelineStateInput = {
 	repositoryTaskStatus:
 		| "pending"
 		| "launching"
+		| "launched"
+		| "starting"
 		| "running"
 		| "completed"
 		| "failed"

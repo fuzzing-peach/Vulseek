@@ -342,7 +342,6 @@ const buildClaudeEnvPairs = (
 	claudeHome = CLAUDE_HOME_IN_CONTAINER,
 ) => [
 	`CLAUDE_CONFIG_DIR=${claudeHome}`,
-	`CLAUDE_HOME=${claudeHome}`,
 	...(resolveAgentAuthMode(agentProfile) === "api_key"
 		? [
 				`ANTHROPIC_BASE_URL=${agentProfile.baseUrl}`,
@@ -1478,32 +1477,83 @@ const extractPayloadText = (payload) => {
     extractTextValue(record.delta) ||
     extractTextValue(record.message) ||
     extractTextValue(record.result) ||
-    extractTextValue(record)
+    extractTextValue(record.text) ||
+    extractTextValue(record.value)
   );
 };
 
-const renderSandboxAgentEvent = (event) => {
+const getEventRenderKey = (event) => {
+  const update = getEventUpdate(event);
+  const record = asRecord(update);
+  const updateType = asString(record?.sessionUpdate);
+  const toolCallId = asString(record?.toolCallId);
+  const itemId =
+    asString(record?.itemId) ||
+    asString(record?.item?.id) ||
+    asString(record?.messageId) ||
+    asString(record?.id);
+  return [updateType || "event", toolCallId, itemId, asString(record?.kind)]
+    .filter(Boolean)
+    .join(":");
+};
+
+const filterRenderedSandboxAgentText = (state, event, rendered) => {
+  if (!rendered || !rendered.trim()) {
+    return "";
+  }
+  const key = getEventRenderKey(event);
+  if (key) {
+    const previous = state.renderedTextByKey[key] || "";
+    if (previous === rendered) {
+      return "";
+    }
+    state.renderedTextByKey[key] = rendered;
+    const updateType = asString(asRecord(getEventUpdate(event))?.sessionUpdate);
+    if (
+      previous &&
+      (updateType === "agent_message_chunk" ||
+        updateType === "agent_thought_chunk" ||
+        updateType === "user_message_chunk") &&
+      rendered.startsWith(previous)
+    ) {
+      return rendered.slice(previous.length);
+    }
+  }
+  if (state.lastRenderedText === rendered) {
+    return "";
+  }
+  state.lastRenderedText = rendered;
+  return rendered;
+};
+
+const renderSandboxAgentEvent = (event, state) => {
   const update = getEventUpdate(event);
   const record = asRecord(update);
   const updateType = asString(record?.sessionUpdate);
   const text = extractPayloadText(update);
+  let rendered = "";
   switch (updateType) {
     case "agent_message_chunk":
     case "agent_thought_chunk":
     case "user_message_chunk":
-      return text;
+      rendered = text;
+      break;
     case "tool_call":
     case "tool_call_update":
-      return text ? "\n[tool] " + text + "\n" : "";
+      rendered = text ? "\n[tool] " + text + "\n" : "";
+      break;
     case "plan":
-      return text ? "\n[plan] " + text + "\n" : "";
+      rendered = text ? "\n[plan] " + text + "\n" : "";
+      break;
     case "usage_update":
-      return "";
     case "session_info_update":
-      return text ? "\n[session] " + text + "\n" : "";
+      rendered = "";
+      break;
     default:
-      return text;
+      rendered = text;
+      break;
   }
+  return state ? filterRenderedSandboxAgentText(state, event, rendered) : rendered;
 };
 
 const byteLength = (value) => Buffer.byteLength(value, "utf-8");
@@ -1538,7 +1588,7 @@ const appendSessionEvent = async (paths, state, event) => {
   state.eventCount += 1;
   state.lastEventAt = Date.now();
   await appendScanRuntimeFile(paths.jsonlPath, formatSandboxAgentSessionEvent(event));
-  const rendered = renderSandboxAgentEvent(event);
+  const rendered = renderSandboxAgentEvent(event, state);
   if (rendered) {
     await appendScanRuntimeFile(paths.textPath, rendered);
   }
@@ -1721,6 +1771,8 @@ const createTaskState = () => ({
   eventCount: 0,
   lastEventAt: 0,
   lastEventSummary: null,
+  lastRenderedText: "",
+  renderedTextByKey: {},
   outputFile: null,
 });
 
@@ -2685,26 +2737,30 @@ const main = async () => {
   };
 
   session.onEvent((event) => {
+    const eventInput = activeInput || input;
+    const eventState = state;
+    const eventTaskId = activeTaskId;
+    const eventPhase = activePhase;
     onEventCount += 1;
     if (shouldLogEventDiagnostic(onEventCount, event)) {
       void appendDriverLifecycleLog(
-        activeInput || input,
+        eventInput,
         "session_on_event count=" +
           String(onEventCount) +
           " active_task_id=" +
-          String(activeTaskId || "") +
+          String(eventTaskId || "") +
           " active_phase=" +
-          String(activePhase || "") +
+          String(eventPhase || "") +
           " jsonl_path=" +
-          String((activeInput || input)?.jsonlPath || "") +
+          String(eventInput?.jsonlPath || "") +
           " state_event_count_before=" +
-          String(state.eventCount || 0) +
+          String(eventState.eventCount || 0) +
           " " +
           summarizeEventForDiagnostics(event),
       ).catch(() => {});
     }
     eventWriteChain = eventWriteChain
-      .then(() => appendSessionEvent(activeInput, state, event))
+      .then(() => appendSessionEvent(eventInput, eventState, event))
       .catch(async (error) => {
         await appendScanRuntimeFile(
           input.stderrPath,
@@ -2715,7 +2771,7 @@ const main = async () => {
       });
     void handlePermissionEvent(event).catch(async (error) => {
       await appendScanRuntimeFile(
-        activeInput.stderrPath || input.stderrPath,
+        eventInput.stderrPath || input.stderrPath,
         "[sandbox-agent-permission] " +
           (error instanceof Error ? error.message : String(error)) +
           "\n",
@@ -3306,10 +3362,11 @@ const prepareForkRuntimeArtifactsOnHost = async (input: {
 		childAgentHomeRootOnHost,
 		SANDBOX_AGENT_AGENT_HOME_DIR_NAME,
 	);
-	const copiedAgentHome = await copyDirectoryReplacing(
-		parentAgentHomeOnHost,
-		childAgentHomeOnHost,
-	);
+	const childAgentHomeExists = await pathExists(childAgentHomeOnHost);
+	const copiedAgentHome =
+		input.runInput.persistent && childAgentHomeExists
+			? true
+			: await copyDirectoryReplacing(parentAgentHomeOnHost, childAgentHomeOnHost);
 
 	const parentSessionStoreOnHost = path.join(
 		parentRuntimeRootOnHost,

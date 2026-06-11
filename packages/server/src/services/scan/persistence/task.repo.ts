@@ -484,7 +484,7 @@ export const listActiveTasksByScanJobAndStageRepo = async (input: {
 			and(
 				eq(tasks.scanJobId, input.scanJobId),
 				eq(tasks.stageName, input.stageName),
-				inArray(tasks.status, ["launching", "running"]),
+				inArray(tasks.status, ["launching", "launched", "starting", "running"]),
 			),
 		)
 		.orderBy(asc(tasks.createdAt));
@@ -500,7 +500,7 @@ export const countActiveTasksByScanJobAndStageRepo = async (input: {
 			and(
 				eq(tasks.scanJobId, input.scanJobId),
 				eq(tasks.stageName, input.stageName),
-				inArray(tasks.status, ["launching", "running"]),
+				inArray(tasks.status, ["launching", "launched", "starting", "running"]),
 			),
 		)
 		.then((rows) => rows[0]);
@@ -518,7 +518,10 @@ export const transitionTaskStatusRepo = async (input: {
 		...input.patch,
 		status: input.to,
 		updatedAt: now,
-		...(input.to === "launching" || input.to === "running"
+		...(input.to === "launching" ||
+		input.to === "launched" ||
+		input.to === "starting" ||
+		input.to === "running"
 			? { startedAt: now, completedAt: null }
 			: {}),
 		...(input.to === "completed" ||
@@ -640,7 +643,12 @@ export const updateTaskStatusRepo = async (input: {
 		errorMessage: input.errorMessage ?? null,
 	};
 
-	if (input.status === "launching" || input.status === "running") {
+	if (
+		input.status === "launching" ||
+		input.status === "launched" ||
+		input.status === "starting" ||
+		input.status === "running"
+	) {
 		patch.startedAt = new Date().toISOString();
 		patch.completedAt = null;
 	}

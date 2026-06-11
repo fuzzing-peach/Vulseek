@@ -306,6 +306,14 @@ const copyPersistentLaneArtifactsToTaskDir = async (ctx: StageContext) => {
 		const toPath = path.join(taskDir, entry.name);
 		await fs.rm(toPath, { recursive: true, force: true }).catch(() => {});
 		await fs.cp(fromPath, toPath, { recursive: true, force: true });
+		if (entry.name === "session-store") {
+			await fs
+				.rm(path.join(toPath, ".persist.lock"), {
+					recursive: true,
+					force: true,
+				})
+				.catch(() => {});
+		}
 	}
 };
 
@@ -315,6 +323,8 @@ const updateTaskDefault = async (
 		status?:
 			| "pending"
 			| "launching"
+			| "launched"
+			| "starting"
 			| "running"
 			| "completed"
 			| "failed"
@@ -338,7 +348,10 @@ const updateTaskDefault = async (
 					errorMessage: patch.errorMessage,
 					exitReason: patch.exitReason,
 					exitNote: patch.exitNote,
-					...(patch.status === "launching" || patch.status === "running"
+					...(patch.status === "launching" ||
+					patch.status === "launched" ||
+					patch.status === "starting" ||
+					patch.status === "running"
 						? {
 								startedAt: new Date().toISOString(),
 								completedAt: null,
@@ -425,6 +438,7 @@ const summarizeTaskState = (content: string) => {
 			exists: false,
 			promptFinished: null,
 			endTurnReceived: null,
+			completedAt: null,
 			eventCount: null,
 			lastEventAgeMs: null,
 			lastEventSummary: null,
@@ -442,6 +456,10 @@ const summarizeTaskState = (content: string) => {
 			endTurnReceived:
 				typeof parsed.endTurnReceived === "boolean"
 					? parsed.endTurnReceived
+					: null,
+			completedAt:
+				typeof parsed.completedAt === "string" && parsed.completedAt.trim()
+					? parsed.completedAt
 					: null,
 			eventCount:
 				typeof parsed.eventCount === "number" ? parsed.eventCount : null,
@@ -462,6 +480,7 @@ const summarizeTaskState = (content: string) => {
 			exists: true,
 			promptFinished: null,
 			endTurnReceived: null,
+			completedAt: null,
 			eventCount: null,
 			lastEventAgeMs: null,
 			lastEventSummary: null,
@@ -734,10 +753,8 @@ const extractDriverExitCode = (stderrContent: string) => {
 	return match ? Number.parseInt(match[1] || "", 10) : null;
 };
 
-const hasDriverCompletedWithoutEndTurn = (stderrContent: string) =>
-	stderrContent.includes(
-		"[sandbox-agent-driver] prompt completed without end_turn",
-	);
+const hasDriverCompletedWithoutOutput = (stderrContent: string) =>
+	stderrContent.includes("[sandbox-agent-driver] prompt completed without output");
 
 const extractThreadIdFromStdout = (stdoutContent: string) => {
 	const threadLine = stdoutContent
@@ -800,7 +817,7 @@ const markTaskExited = async (input: {
 }) =>
 	await transitionTaskStatusRepo({
 		taskId: input.taskId,
-		from: ["pending", "launching", "running"],
+		from: ["pending", "launching", "launched", "starting", "running"],
 		to: "exited",
 		patch: {
 			exitReason: input.exitReason,
@@ -881,6 +898,8 @@ const cleanupStageGroupForLeaderExit = async <
 			task.stageName === group.leaderStageName ||
 			(task.status !== "pending" &&
 				task.status !== "launching" &&
+				task.status !== "launched" &&
+				task.status !== "starting" &&
 				task.status !== "running")
 		) {
 			continue;
@@ -918,7 +937,11 @@ const releasePersistentLaneForTask = async (taskId: string) => {
 };
 
 const isOpenTaskStatus = (status: string) =>
-	status === "pending" || status === "launching" || status === "running";
+	status === "pending" ||
+	status === "launching" ||
+	status === "launched" ||
+	status === "starting" ||
+	status === "running";
 
 const cleanupStageGroupQueues = async <
 	TPipelineContext extends PipelineContext,
@@ -1520,18 +1543,6 @@ const isOutputEnvelope = (value: unknown): value is OutputEnvelope => {
 	);
 };
 
-const stateHasEndTurn = (stateContent: string) => {
-	if (!stateContent.trim()) {
-		return false;
-	}
-	try {
-		const parsed = JSON.parse(stateContent) as { endTurnReceived?: unknown };
-		return parsed.endTurnReceived === true;
-	} catch {
-		return false;
-	}
-};
-
 const resolveStageRawOutput = async (ctx: StageContext) => {
 	const { jsonlPath, textPath, stderrPath, stdoutPath, statePath, outputPath } =
 		await getTaskRuntimePaths(ctx);
@@ -1562,14 +1573,21 @@ const resolveStageRawOutput = async (ctx: StageContext) => {
 	);
 	const hasAgentOutput =
 		jsonlContent.trim().length > 0 || textContent.trim().length > 0;
-	const hasEndTurn =
-		stateHasEndTurn(stateContent) || hasEndTurnInJsonlContent(jsonlContent);
-	if (hasEndTurn) {
-		if (!outputContent.trim()) {
-			throw new Error(
-				`Task reached end_turn but ${outputPath} is missing or empty`,
-			);
-		}
+	const stateSummary = summarizeTaskState(stateContent);
+	if (!stateSummary.completedAt) {
+		return {
+			rawOutput: null,
+			stderrContent,
+			progressSignature,
+			hasAgentOutput,
+			hasExitSignal: false,
+			routeKey: null,
+		};
+	}
+	if (!outputContent.trim()) {
+		throw new Error("Sandbox agent prompt completed without output.json");
+	}
+	if (outputContent.trim()) {
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(outputContent);
@@ -1632,6 +1650,7 @@ const prepareStageSuccess = async <
 	if (
 		currentTask &&
 		currentTask.status !== "launching" &&
+		currentTask.status !== "starting" &&
 		currentTask.status !== "running"
 	) {
 		logPipelineEvent("stage.stale_completion_ignored", {
@@ -1651,7 +1670,6 @@ const prepareStageSuccess = async <
 			? (null as TOutput)
 			: await stage.validateOutput(stageCtx, input, rawOutput)
 		: await defaultValidateOutput<TOutput>(stage.id, rawOutput);
-	await copyPersistentLaneArtifactsToTaskDir(stageCtx);
 	await updateTaskDefault(stageCtx.taskId, { output });
 	await stage.onSuccess?.(stageCtx, input, output);
 	return output;
@@ -1696,6 +1714,7 @@ const persistTerminalSuccess = async <
 	if (
 		currentTask &&
 		currentTask.status !== "launching" &&
+		currentTask.status !== "starting" &&
 		currentTask.status !== "running"
 	) {
 		logPipelineEvent("stage.stale_completion_ignored", {
@@ -1726,7 +1745,7 @@ const persistTerminalSuccess = async <
 	stepStartedAt = Date.now();
 	const updated = await transitionTaskStatusRepo({
 		taskId: stageCtx.taskId,
-		from: ["launching", "running"],
+		from: ["launching", "starting", "running"],
 		to: shouldMarkTaskExited ? "exited" : "completed",
 		patch: options?.exitReason
 			? {
@@ -1745,6 +1764,9 @@ const persistTerminalSuccess = async <
 	if (!updated) {
 		return false;
 	}
+	stepStartedAt = Date.now();
+	await copyPersistentLaneArtifactsToTaskDir(stageCtx);
+	logPersistTiming("copy_persistent_lane_artifacts_to_task_dir", stepStartedAt);
 	if (!(stage.persistent ?? true) && (stage.reuseContainer ?? true)) {
 		stepStartedAt = Date.now();
 		await stopReusableSandboxAgentForTask(stageCtx.taskId);
@@ -1817,6 +1839,7 @@ const persistTerminalFailure = async <
 	if (
 		currentTask &&
 		currentTask.status !== "launching" &&
+		currentTask.status !== "starting" &&
 		currentTask.status !== "running"
 	) {
 		logPipelineEvent("stage.stale_failure_ignored", {
@@ -1839,7 +1862,7 @@ const persistTerminalFailure = async <
 	}));
 	const updated = await transitionTaskStatusRepo({
 		taskId: stageCtx.taskId,
-		from: ["launching", "running"],
+		from: ["launching", "starting", "running"],
 		to: "failed",
 		patch: { errorMessage: getErrorMessage(error), ...usagePatch },
 	}).catch(() => null);
@@ -2436,11 +2459,103 @@ const launchStageExecution = async <
 					`Stage ${stageState.stage.id} rejected input ${execution.taskId}`,
 				);
 			}
-		}
-		logLaunchTiming("ensure_runtime_and_validate", stepStartedAt);
+			}
+			logLaunchTiming("ensure_runtime_and_validate", stepStartedAt);
 
-		stepStartedAt = Date.now();
-		const runResult = await stageState.stage.run(stageCtx, execution.input);
+			if (stageState.stage.launch) {
+				void (async () => {
+					const asyncLaunchStartedAt = Date.now();
+					try {
+						await stageState.stage.launch!(stageCtx, execution.input);
+						logLaunchTiming("stage_launch", asyncLaunchStartedAt, {
+							laneIndex: laneRuntime?.laneIndex ?? null,
+							containerIndex,
+						});
+						const launchCompleted = await transitionTaskStatusRepo({
+							taskId: execution.taskId,
+							from: ["launching"],
+							to: "launched",
+							patch: { errorMessage: null },
+						});
+						logPipelineEvent("stage.launched", {
+							scanJobId: runtime.ctx.scanJobId,
+							pipelineName: runtime.pipeline.name,
+							stageName: stageState.stageName,
+							taskId: execution.taskId,
+							taskName: stageCtx.taskName,
+							transitioned: Boolean(launchCompleted),
+							elapsedMs: Date.now() - asyncLaunchStartedAt,
+						});
+					} catch (error) {
+						const nextAttempt = (launched.attempt ?? 0) + 1;
+						if (
+							isTransientRuntimeLaunchError(error) &&
+							nextAttempt <= MAX_TRANSIENT_LAUNCH_RETRIES
+						) {
+							const failedTask = await findTaskByIdRepo(execution.taskId).catch(
+								() => null,
+							);
+							const failedContainerName =
+								failedTask?.containerName || stageCtx.containerName();
+							if (failedContainerName) {
+								await removeContainer(failedContainerName).catch(() => {});
+							}
+							if (laneRuntime) {
+								await releaseStageLaneRuntimeRepo(execution.taskId).catch(
+									() => {},
+								);
+							}
+							await transitionTaskStatusRepo({
+								taskId: execution.taskId,
+								from: ["launching"],
+								to: "pending",
+								patch: {
+									attempt: nextAttempt,
+									containerName: null,
+									containerIndex: null,
+									threadId: null,
+									errorMessage: `Transient runtime launch failure; retry ${nextAttempt}/${MAX_TRANSIENT_LAUNCH_RETRIES}: ${getErrorMessage(error)}`,
+								},
+							});
+							await stageState.stage.queue
+								?.enqueue(execution.taskId, queueScope)
+								.catch(() => {});
+							logPipelineEvent("stage.launch_retry", {
+								scanJobId: runtime.ctx.scanJobId,
+								pipelineName: runtime.pipeline.name,
+								stageName: stageState.stageName,
+								taskId: execution.taskId,
+								taskName: stageCtx.taskName,
+								attempt: nextAttempt,
+								maxAttempts: MAX_TRANSIENT_LAUNCH_RETRIES,
+								errorMessage: getErrorMessage(error),
+							});
+						} else {
+							await persistTerminalFailure(
+								stageState.stage,
+								runtime.ctx,
+								stageCtx,
+								execution.input,
+								error,
+							);
+							await maybeMarkTaskStageGroupExited(execution.taskId, runtime);
+						}
+					} finally {
+						runtime.wakeSignal.notify();
+					}
+				})();
+				logPipelineEvent("loop.stage_launch_spawned", {
+					scanJobId: runtime.ctx.scanJobId,
+					pipelineName: runtime.pipeline.name,
+					stageName: stageState.stageName,
+					taskId: execution.taskId,
+					taskName: stageCtx.taskName,
+				});
+				return true;
+			}
+
+			stepStartedAt = Date.now();
+			const runResult = await stageState.stage.run(stageCtx, execution.input);
 		logLaunchTiming("stage_run", stepStartedAt, {
 			completion: runResult.completion,
 			threadId: "threadId" in runResult ? runResult.threadId : null,
@@ -2556,6 +2671,103 @@ const launchStageExecution = async <
 	return true;
 };
 
+const startStageRunAsync = <TPipelineContext extends PipelineContext>(
+	runtime: JobRuntime<TPipelineContext>,
+	stageState: RuntimeStageState<TPipelineContext>,
+	task: Awaited<ReturnType<typeof findTaskByIdRepo>>,
+	stageCtx: StageContext,
+	input: unknown,
+) => {
+	void (async () => {
+		const runStartedAt = Date.now();
+		try {
+			const runResult = await stageState.stage.run(stageCtx, input);
+			logPipelineEvent("stage.run_started", {
+				scanJobId: runtime.ctx.scanJobId,
+				pipelineName: runtime.pipeline.name,
+				stageName: stageState.stageName,
+				taskId: task.taskId,
+				taskName: stageCtx.taskName,
+				completion: runResult.completion,
+				threadId: "threadId" in runResult ? runResult.threadId : null,
+				elapsedMs: Date.now() - runStartedAt,
+			});
+			if (runResult.completion === "immediate") {
+				const output = await prepareStageSuccess(
+					stageState.stage,
+					runtime.ctx,
+					stageCtx,
+					input,
+					runResult.rawOutput,
+				);
+				validateSelectedDownstreamOutput(
+					runtime,
+					stageState.stageName,
+					output,
+					null,
+				);
+				const terminalUpdated = await persistTerminalSuccess(
+					stageState.stage,
+					runtime.ctx,
+					stageCtx,
+					runResult.rawOutput,
+					{ runtime },
+				);
+				if (terminalUpdated) {
+					await dispatchPipelineDownstream(
+						runtime,
+						stageState.stageName,
+						task.taskId,
+						input,
+						output,
+						null,
+					);
+					await maybeMarkTaskStageGroupExited(task.taskId, runtime);
+				}
+				return;
+			}
+			if (runResult.threadId) {
+				const lane = await findStageLaneRuntimeByActiveTaskIdRepo(task.taskId);
+				if (lane) {
+					await bindStageLaneRuntimeRepo({
+						scanJobId: lane.scanJobId,
+						stageName: lane.stageName,
+						laneIndex: lane.laneIndex,
+						containerName: task.containerName,
+						threadId: runResult.threadId,
+					});
+				}
+				await transitionTaskStatusRepo({
+					taskId: task.taskId,
+					from: ["starting"],
+					to: "running",
+					patch: { threadId: runResult.threadId, errorMessage: null },
+				});
+				runtime.runningStdoutSnapshots.delete(task.taskId);
+				logPipelineEvent("loop.task_running", {
+					scanJobId: runtime.ctx.scanJobId,
+					pipelineName: runtime.pipeline.name,
+					stageName: task.stageName,
+					taskId: task.taskId,
+					taskName: task.name,
+					threadId: runResult.threadId,
+				});
+			}
+		} catch (error) {
+			await persistTerminalFailure(
+				stageState.stage,
+				runtime.ctx,
+				stageCtx,
+				input,
+				error,
+			);
+			await maybeMarkTaskStageGroupExited(task.taskId, runtime);
+		} finally {
+			runtime.wakeSignal.notify();
+		}
+	})();
+};
+
 const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 	runtime: JobRuntime<TPipelineContext>,
 	stageState: RuntimeStageState<TPipelineContext>,
@@ -2590,7 +2802,30 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 	]);
 	logInspectTiming("load_runtime_logs", stepStartedAt);
 
-	if (task.status === "launching") {
+	if (task.status === "launched") {
+		stepStartedAt = Date.now();
+		const claimed = await transitionTaskStatusRepo({
+			taskId: task.taskId,
+			from: ["launched"],
+			to: "starting",
+			patch: { errorMessage: null },
+		});
+		logInspectTiming("transition_starting", stepStartedAt, {
+			claimed: Boolean(claimed),
+		});
+		if (claimed) {
+			startStageRunAsync(runtime, stageState, claimed, stageCtx, input);
+		}
+		return true;
+	}
+
+	if (task.status === "launching" || task.status === "starting") {
+		if (task.status === "launching") {
+			logInspectTiming("launching_waiting_for_launch", stepStartedAt, {
+				containerName: task.containerName ?? null,
+			});
+			return false;
+		}
 		stepStartedAt = Date.now();
 		const threadId = extractThreadIdFromStdout(stdoutContent);
 		if (threadId) {
@@ -2606,7 +2841,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			}
 			await transitionTaskStatusRepo({
 				taskId: task.taskId,
-				from: ["launching"],
+				from: [task.status],
 				to: "running",
 				patch: { threadId, errorMessage: null },
 			});
@@ -2644,7 +2879,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 
 		stepStartedAt = Date.now();
 		const containerAlive = await isContainerAlive(task.containerName);
-		logInspectTiming("launching_container_alive", stepStartedAt, {
+		logInspectTiming(`${task.status}_container_alive`, stepStartedAt, {
 			containerAlive,
 		});
 		if (!containerAlive) {
@@ -2802,7 +3037,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			await readLastJsonRpcErrorMessageFromJsonl(jsonlPath);
 		const driverExitMessage =
 			exitCode === 0
-				? "Sandbox agent driver exited before end_turn/output.json completion"
+				? "Sandbox agent driver exited before output.json completion"
 				: `Sandbox agent driver exited with code ${exitCode}`;
 		await persistTerminalFailure(
 			stageState.stage,
@@ -2824,14 +3059,14 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 		return true;
 	}
 
-	if (hasDriverCompletedWithoutEndTurn(rawStderrContent)) {
+	if (hasDriverCompletedWithoutOutput(rawStderrContent)) {
 		stepStartedAt = Date.now();
 		await persistTerminalFailure(
 			stageState.stage,
 			runtime.ctx,
 			stageCtx,
 			input,
-			new Error("Sandbox agent prompt completed without end_turn"),
+			new Error("Sandbox agent prompt completed without output.json"),
 			{ exitLane: hasExitSignal },
 		);
 		await maybeMarkTaskStageGroupExited(task.taskId, runtime);
@@ -2850,7 +3085,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			stageCtx,
 			input,
 			new Error(
-				"Task runtime container stopped before end_turn/output.json completion",
+				"Task runtime container stopped before output.json completion",
 			),
 		);
 		await maybeMarkTaskStageGroupExited(task.taskId, runtime);
@@ -2959,10 +3194,15 @@ const reenqueueMissingPendingTasks = async <
 	const tasks = await listTasksByScanJobIdRepo(runtime.ctx.scanJobId);
 	let reenqueueCount = 0;
 	for (const task of tasks) {
-		if (task.status !== "pending") {
-			if (task.status !== "launching" && task.status !== "running") {
-				runtime.runningStdoutSnapshots.delete(task.taskId);
-			}
+			if (task.status !== "pending") {
+				if (
+					task.status !== "launching" &&
+					task.status !== "launched" &&
+					task.status !== "starting" &&
+					task.status !== "running"
+				) {
+					runtime.runningStdoutSnapshots.delete(task.taskId);
+				}
 			continue;
 		}
 		const stageState = runtime.stageStates.get(task.stageName);
@@ -3029,7 +3269,7 @@ const backfillActiveGroupQueues = async <
 	return launchedCount;
 };
 
-const inspectActiveTasks = async <TPipelineContext extends PipelineContext>(
+const inspectTasks = async <TPipelineContext extends PipelineContext>(
 	runtime: JobRuntime<TPipelineContext>,
 ) => {
 	const metrics = {
@@ -3110,12 +3350,18 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 				if (row.status === "pending") {
 					acc.pending += countValue;
 				}
-				if (row.status === "launching") {
-					acc.launching += countValue;
-				}
-				if (row.status === "running") {
-					acc.running += countValue;
-				}
+					if (row.status === "launching") {
+						acc.launching += countValue;
+					}
+					if (row.status === "launched") {
+						acc.launched += countValue;
+					}
+					if (row.status === "starting") {
+						acc.starting += countValue;
+					}
+					if (row.status === "running") {
+						acc.running += countValue;
+					}
 				if (row.status === "completed") {
 					acc.completed += countValue;
 				}
@@ -3132,9 +3378,11 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 			},
 			{
 				total: 0,
-				pending: 0,
-				launching: 0,
-				running: 0,
+					pending: 0,
+					launching: 0,
+					launched: 0,
+					starting: 0,
+					running: 0,
 				completed: 0,
 				failed: 0,
 				exited: 0,
@@ -3143,7 +3391,7 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 		);
 
 		const inspectStartedAt = Date.now();
-		const inspectMetrics = await inspectActiveTasks(runtime);
+		const inspectMetrics = await inspectTasks(runtime);
 		const inspectElapsedMs = Date.now() - inspectStartedAt;
 		let progressed = inspectMetrics.progressed;
 
@@ -3185,8 +3433,8 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 				totalElapsedMs: Date.now() - loopStartedAt,
 				statusCountsElapsedMs,
 				statusTotals,
-				inspectActiveTasksElapsedMs: inspectElapsedMs,
-				inspectActiveTasks: inspectMetrics,
+				inspectTasksElapsedMs: inspectElapsedMs,
+				inspectTasks: inspectMetrics,
 				reenqueueMissingPendingTasksElapsedMs: reenqueueElapsedMs,
 				reenqueueMissingPendingTasksCount: reenqueueCount,
 				backfillActiveGroupQueuesElapsedMs: groupBackfillElapsedMs,
@@ -3219,8 +3467,8 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 			totalElapsedMs: Date.now() - loopStartedAt,
 			statusCountsElapsedMs,
 			statusTotals,
-			inspectActiveTasksElapsedMs: inspectElapsedMs,
-			inspectActiveTasks: inspectMetrics,
+			inspectTasksElapsedMs: inspectElapsedMs,
+			inspectTasks: inspectMetrics,
 			reenqueueMissingPendingTasksElapsedMs: reenqueueElapsedMs,
 			reenqueueMissingPendingTasksCount: reenqueueCount,
 			backfillActiveGroupQueuesElapsedMs: groupBackfillElapsedMs,

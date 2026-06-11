@@ -37,6 +37,8 @@ export const scanJobStatusEnum = pgEnum("scanJobStatus", [
 export const taskStatusEnum = pgEnum("taskStatus", [
 	"pending",
 	"launching",
+	"launched",
+	"starting",
 	"running",
 	"completed",
 	"failed",

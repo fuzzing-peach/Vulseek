@@ -154,7 +154,12 @@ const getTaskStatusBadgeClassName = (status?: string | null) => {
 	if (status === "failed") {
 		return "border-red-200 bg-red-100 text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100";
 	}
-	if (status === "running" || status === "launching") {
+	if (
+		status === "running" ||
+		status === "starting" ||
+		status === "launched" ||
+		status === "launching"
+	) {
 		return "border-sky-200 bg-sky-100 text-sky-700 dark:border-sky-500/60 dark:bg-sky-950/50 dark:text-sky-100";
 	}
 	if (status === "pending") {

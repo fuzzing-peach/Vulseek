@@ -63,6 +63,17 @@ export const findScanJobByIdRepo = async (scanJobId: string) => {
 	return scanJob;
 };
 
+export const sumClaudeCodeCachedReadTokensByScanJobIdRepo = async (
+	scanJobId: string,
+) =>
+	await db
+		.select({
+			cachedReadTokens: sql<number>`coalesce(sum(case when ${tasks.agentProfile}->>'provider' = 'claude_code' then coalesce(${tasks.cachedReadTokens}, 0) else 0 end), 0)`,
+		})
+		.from(tasks)
+		.where(eq(tasks.scanJobId, scanJobId))
+		.then((rows) => Number(rows[0]?.cachedReadTokens ?? 0));
+
 export const listScanJobsByApplicationIdRepo = async (applicationId: string) =>
 	await db
 		.select(selectScanJobWithRepositoryTaskStatus)
@@ -259,6 +270,8 @@ export const updateScanJobRepositoryTaskStatusRepo = async (
 	};
 	if (
 		repositoryTaskStatus === "launching" ||
+		repositoryTaskStatus === "launched" ||
+		repositoryTaskStatus === "starting" ||
 		repositoryTaskStatus === "running"
 	) {
 		repositoryTaskPatch.startedAt = new Date().toISOString();

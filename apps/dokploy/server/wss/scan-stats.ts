@@ -11,7 +11,12 @@ import {
 } from "@dokploy/server";
 import { WebSocketServer } from "ws";
 
-const ACTIVE_TASK_STATUSES = new Set(["launching", "running"]);
+const ACTIVE_TASK_STATUSES = new Set([
+	"launching",
+	"launched",
+	"starting",
+	"running",
+]);
 let cachedCpuCapacityPercent: number | null = null;
 
 type DockerStatsLine = {

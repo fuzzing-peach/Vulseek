@@ -1,4 +1,4 @@
-import { buildTaskAgentProfileSnapshot } from "../agent-profile-snapshot";
+import { execAsync } from "../../../utils/process/execAsync";
 import {
 	repositoryModuleSchema,
 	repositoryScanManifestSchema,
@@ -14,12 +14,16 @@ import {
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
 import { buildRepositoryScannerPrompt } from "../prompts/repository-scanner.prompt";
-import { prepareRepositoryForScanInContainer } from "../repository/prepare-repository";
 import {
-	runSingleTurnAgentInContainer,
-	startContainer,
-} from "../runtime/run-single-turn-agent";
+	prepareRepositoryForScanInContainer,
+	type PreparedRepositoryState,
+} from "../repository/prepare-repository";
+import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
 import type { RepositoryScanManifest, ScanJob } from "../types";
+import {
+	launchAgentStageRuntime,
+	resolveAgentStageRuntime,
+} from "./agent-stage-runtime";
 import {
 	type PipelineContext,
 	resolveStageConcurrencySetting,
@@ -91,68 +95,26 @@ const executeRepositoryScanStage = async (
 		baseSha: scanJob.baseSha,
 		commitWindow: scanJob.commitWindow || DEFAULT_DELTA_COMMIT_WINDOW,
 	};
-	const scanAgentProfile = await ctx.agentProfile();
-	const taskStageDirPath = await ctx.taskDir();
-	const taskStageRootInContainer = await ctx.taskDirContainer();
-	const taskRealRootInContainer = await ctx.taskDirRealContainer();
-	const stageDirPath =
-		ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
-	const stageRootInContainer =
-		ctx.laneIndex !== null
-			? await ctx.laneDirContainer()
-			: taskRealRootInContainer;
-	const repositoryRoot = taskStageRootInContainer;
-	const containerName = ctx.containerName();
-
-	await bindTaskRuntimeRepo({
-		taskId: ctx.taskId,
-		containerName,
-		containerIndex: ctx.containerIndex,
-		agentProfile: buildTaskAgentProfileSnapshot(scanAgentProfile).agentProfile,
-	});
-	await startContainer({
-		scanJob,
-		taskId: ctx.taskId,
-		agentProfile: scanAgentProfile,
-		containerName,
-		codexHome: `${stageRootInContainer}/.codex`,
-		stageDirPath,
-		stageRootInContainer,
-		taskRealRootInContainer,
-		persistent: ctx.persistent,
-		reuseContainer: ctx.reuseContainer,
-	});
-
-	const repositoryState = await prepareRepositoryForScanInContainer({
-		containerName,
-		scanType: scanJob.scanType,
-		targetRef: scanJob.targetRef,
-		targetTag: scanJob.targetTag,
-		commitSha: scanJob.commitSha,
-		baseSha: scanJob.baseSha,
-		commitWindow: scanJob.commitWindow || DEFAULT_DELTA_COMMIT_WINDOW,
-		scanRootDir: taskStageRootInContainer,
-	});
-
-	await updateScanJobTargetContextRepo(scanJob.scanJobId, {
-		targetRef: repositoryState.currentBranch || repositoryState.targetRef,
-		targetTag: repositoryState.currentExactTag || repositoryState.targetTag,
-		commitSha: repositoryState.resolvedTargetSha,
-		baseSha: repositoryState.resolvedBaseSha,
-		commitWindow: repositoryState.commitWindow,
-	});
+	const runtime = await resolveAgentStageRuntime({ ctx });
+	const repositoryRoot = runtime.taskStageRootInContainer;
+	const repositoryStateJson = await execAsync(
+		`docker exec ${runtime.containerName} bash -lc "cat '${repositoryRoot}/00_repository_state.json'"`,
+	);
+	const repositoryState = JSON.parse(
+		repositoryStateJson.stdout,
+	) as PreparedRepositoryState;
 
 	return await runSingleTurnAgentInContainer({
 		scanJob,
-		agentProfile: scanAgentProfile,
-		containerName,
-		codexHome: `${stageRootInContainer}/.codex`,
-		stageDirPath,
-		stageRootInContainer,
+		agentProfile: runtime.agentProfile,
+		containerName: runtime.containerName,
+		codexHome: runtime.codexHome,
+		stageDirPath: runtime.stageDirPath,
+		stageRootInContainer: runtime.stageRootInContainer,
 		taskId: ctx.taskId,
-		taskStageDirPath,
-		taskStageRootInContainer,
-		taskRealRootInContainer,
+		taskStageDirPath: runtime.taskStageDirPath,
+		taskStageRootInContainer: runtime.taskStageRootInContainer,
+		taskRealRootInContainer: runtime.taskRealRootInContainer,
 		persistent: ctx.persistent,
 		reuseContainer: ctx.reuseContainer,
 		groupedPersistent: ctx.groupedPersistent,
@@ -167,15 +129,42 @@ const executeRepositoryScanStage = async (
 			repositoryState,
 			repositoryStatePath: `${repositoryRoot}/00_repository_state.json`,
 			repository,
-			agentProvider: scanAgentProfile?.provider || "codex",
-			thinkingLevel: scanAgentProfile?.thinkingLevelEnabled
-				? scanAgentProfile.thinkingLevel
+			agentProvider: runtime.agentProfile?.provider || "codex",
+			thinkingLevel: runtime.agentProfile?.thinkingLevelEnabled
+				? runtime.agentProfile.thinkingLevel
 				: null,
 		}),
 		outputSchema: repositoryScanManifestSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
+	});
+};
+
+const launchRepositoryScanStage = async (ctx: StageContext) => {
+	const pipelineScanJob = (ctx as StageContext & { scanJob?: ScanJob }).scanJob;
+	if (!pipelineScanJob) {
+		throw new Error("Repository stage requires scanJob in pipeline context");
+	}
+	const scanJob = pipelineScanJob;
+	const runtime = await launchAgentStageRuntime({ ctx, scanJob });
+	const repositoryState = await prepareRepositoryForScanInContainer({
+		containerName: runtime.containerName,
+		scanType: scanJob.scanType,
+		targetRef: scanJob.targetRef,
+		targetTag: scanJob.targetTag,
+		commitSha: scanJob.commitSha,
+		baseSha: scanJob.baseSha,
+		commitWindow: scanJob.commitWindow || DEFAULT_DELTA_COMMIT_WINDOW,
+		scanRootDir: runtime.taskStageRootInContainer,
+	});
+
+	await updateScanJobTargetContextRepo(scanJob.scanJobId, {
+		targetRef: repositoryState.currentBranch || repositoryState.targetRef,
+		targetTag: repositoryState.currentExactTag || repositoryState.targetTag,
+		commitSha: repositoryState.resolvedTargetSha,
+		baseSha: repositoryState.resolvedBaseSha,
+		commitWindow: repositoryState.commitWindow,
 	});
 };
 
@@ -203,6 +192,9 @@ export const createRepositoryScanningStageDefinition = <
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
 			await resolveStageConcurrencySetting(ctx.scanJobId, input.id, () => 1),
+		launch: async (ctx) => {
+			await launchRepositoryScanStage(ctx as unknown as StageContext);
+		},
 		run: async (ctx, stageInput) => {
 			const result = await executeRepositoryScanStage(
 				ctx as unknown as StageContext,

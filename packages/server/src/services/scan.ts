@@ -55,7 +55,9 @@ import {
 } from "./scan/persistence/scan-job.repo";
 import {
 	findStageGroupInstanceByIdRepo,
+	listStageLaneRuntimesByScanJobIdRepo,
 	listStageGroupInstancesByScanJobIdRepo,
+	resetStageLaneRuntimesByScanJobIdRepo,
 } from "./scan/persistence/stage-lane-runtime.repo";
 import {
 	createTaskRepo,
@@ -298,6 +300,8 @@ type QueuePendingCountView = {
 	waitingCount: number;
 	queuedCount: number;
 	launchingCount: number;
+	launchedCount: number;
+	startingCount: number;
 	runningCount: number;
 	completedCount: number;
 	failedCount: number;
@@ -556,6 +560,20 @@ const stopScanContainer = async (containerName: string | null | undefined) => {
 	} catch {
 		return false;
 	}
+};
+
+const listDockerContainersForScanJob = async (scanJobId: string) => {
+	const scanJobNamePart = sanitizeContainerNamePart(scanJobId);
+	if (!scanJobNamePart) {
+		return [];
+	}
+	const { stdout } = await execAsync(
+		"docker ps -a --format '{{.Names}}'",
+	).catch(() => ({ stdout: "" }));
+	return stdout
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter((name) => name && name.includes(scanJobNamePart));
 };
 
 const sleep = async (ms: number) =>
@@ -1104,6 +1122,8 @@ const listQueuePendingCountsByScanJobId = async (
 				stageCounts.find((row) => row.status === status)?.count ?? 0;
 			const queuedCount = getStatusCount("pending");
 			const launchingCount = getStatusCount("launching");
+			const launchedCount = getStatusCount("launched");
+			const startingCount = getStatusCount("starting");
 			const waitingCount =
 				(counts.waiting || 0) +
 				(counts.prioritized || 0) +
@@ -1128,6 +1148,8 @@ const listQueuePendingCountsByScanJobId = async (
 				waitingCount,
 				queuedCount,
 				launchingCount,
+				launchedCount,
+				startingCount,
 				runningCount: getStatusCount("running"),
 				completedCount: getStatusCount("completed"),
 				failedCount: getStatusCount("failed"),
@@ -4601,6 +4623,8 @@ export const findScanJobTerminalTasksPage = async (input: {
 type ScanStageGraphNodeStatus =
 	| "pending"
 	| "launching"
+	| "launched"
+	| "starting"
 	| "running"
 	| "completed"
 	| "failed"
@@ -4610,6 +4634,8 @@ type ScanStageGraphCounts = {
 	waiting: number;
 	queued: number;
 	launching: number;
+	launched: number;
+	starting: number;
 	running: number;
 	completed: number;
 	failed: number;
@@ -4622,6 +4648,8 @@ const emptyStageGraphCounts = (): ScanStageGraphCounts => ({
 	waiting: 0,
 	queued: 0,
 	launching: 0,
+	launched: 0,
+	starting: 0,
 	running: 0,
 	completed: 0,
 	failed: 0,
@@ -4640,6 +4668,8 @@ const toStageGraphCounts = (
 		waiting: queue.waitingCount,
 		queued: queue.queuedCount,
 		launching: queue.launchingCount,
+		launched: queue.launchedCount,
+		starting: queue.startingCount,
 		running: queue.runningCount,
 		completed: queue.completedCount,
 		failed: queue.failedCount,
@@ -4659,6 +4689,8 @@ const deriveStageGraphStatus = (
 		if (
 			repositoryStatus === "pending" ||
 			repositoryStatus === "launching" ||
+			repositoryStatus === "launched" ||
+			repositoryStatus === "starting" ||
 			repositoryStatus === "running" ||
 			repositoryStatus === "completed" ||
 			repositoryStatus === "failed" ||
@@ -4670,10 +4702,10 @@ const deriveStageGraphStatus = (
 	if (counts.failed > 0) {
 		return "failed";
 	}
-	if (counts.running > 0) {
+	if (counts.running > 0 || counts.starting > 0) {
 		return "running";
 	}
-	if (counts.launching > 0) {
+	if (counts.launching > 0 || counts.launched > 0) {
 		return "launching";
 	}
 	if (counts.total > 0 && counts.completed + counts.exited >= counts.total) {
@@ -8098,7 +8130,11 @@ const isManuallyCancelledScanJob = (
 ) => Boolean(scanJob && scanJob.status === "canceled");
 
 const isOpenScanTaskStatus = (status: Task["status"]) =>
-	status === "pending" || status === "launching" || status === "running";
+	status === "pending" ||
+	status === "launching" ||
+	status === "launched" ||
+	status === "starting" ||
+	status === "running";
 
 const assertScanJobNotCancelled = async (scanJobId: string) => {
 	const scanJob = await findScanJobByIdRepo(scanJobId).catch(() => null);
@@ -8117,16 +8153,23 @@ export const cancelScanJob = async (scanJobId: string) => {
 		() => {},
 	);
 
-	const [repositoryTask, allTasks, candidates, stageGroups] = await Promise.all(
-		[
-			scanJob.repositoryTaskId
-				? findTaskByIdRepo(scanJob.repositoryTaskId).catch(() => null)
-				: null,
-			listTasksByScanJobIdRepo(scanJobId),
-			findVulnerabilityCandidatesByScanJobIdRepo(scanJobId),
-			listStageGroupInstancesByScanJobIdRepo(scanJobId),
-		],
-	);
+	const [
+		repositoryTask,
+		allTasks,
+		candidates,
+		stageGroups,
+		laneRuntimes,
+		dockerScanContainers,
+	] = await Promise.all([
+		scanJob.repositoryTaskId
+			? findTaskByIdRepo(scanJob.repositoryTaskId).catch(() => null)
+			: null,
+		listTasksByScanJobIdRepo(scanJobId),
+		findVulnerabilityCandidatesByScanJobIdRepo(scanJobId),
+		listStageGroupInstancesByScanJobIdRepo(scanJobId),
+		listStageLaneRuntimesByScanJobIdRepo(scanJobId).catch(() => []),
+		listDockerContainersForScanJob(scanJobId),
+	]);
 	const openTasks = allTasks.filter((task) =>
 		isOpenScanTaskStatus(task.status),
 	);
@@ -8148,10 +8191,23 @@ export const cancelScanJob = async (scanJobId: string) => {
 
 	const containerNames = new Set<string>();
 
+	for (const task of allTasks) {
+		if (task.containerName) {
+			containerNames.add(task.containerName);
+		}
+	}
 	for (const task of tasksToCancel) {
 		if (task.containerName) {
 			containerNames.add(task.containerName);
 		}
+	}
+	for (const lane of laneRuntimes) {
+		if (lane.containerName) {
+			containerNames.add(lane.containerName);
+		}
+	}
+	for (const containerName of dockerScanContainers) {
+		containerNames.add(containerName);
 	}
 
 	await Promise.all([
@@ -8190,6 +8246,7 @@ export const cancelScanJob = async (scanJobId: string) => {
 		),
 	]);
 
+	await resetStageLaneRuntimesByScanJobIdRepo(scanJobId).catch(() => []);
 	await recalculateScanTaskCountsRepo(scanJobId).catch(() => {});
 	await updateScanJobStatusRepo(scanJobId, "canceled", stopMessage);
 
@@ -8201,7 +8258,9 @@ export const cancelScanJob = async (scanJobId: string) => {
 		clearedModuleTasks: moduleTasks.length,
 		clearedFunctionTasks: functionTasks.length,
 		clearedCandidates: candidates.filter((candidate) =>
-			["pending", "launching", "running"].includes(candidate.status),
+			["pending", "launching", "launched", "starting", "running"].includes(
+				candidate.status,
+			),
 		).length,
 	};
 };
@@ -8239,7 +8298,9 @@ const getPendingTriageTaskState = async (scanJobId: string) => {
 	});
 	return {
 		pendingCount: triageTasks.filter((task) =>
-			["pending", "launching", "running"].includes(task.status),
+			["pending", "launching", "launched", "starting", "running"].includes(
+				task.status,
+			),
 		).length,
 		failed: triageTasks.filter((task) => task.status === "failed").length,
 	};
@@ -8547,7 +8608,9 @@ export const startCandidateVerification = async (
 	);
 	if (
 		candidate.currentStage === "verifying" &&
-		["pending", "launching", "running"].includes(candidate.status)
+		["pending", "launching", "launched", "starting", "running"].includes(
+			candidate.status,
+		)
 	) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
@@ -8739,7 +8802,11 @@ export const startCandidateAnalysis = async (
 			stageName: SCAN_STAGE_IDS.analysis,
 		})
 	).find((task) => {
-		if (!["pending", "launching", "running"].includes(task.status)) {
+		if (
+			!["pending", "launching", "launched", "starting", "running"].includes(
+				task.status,
+			)
+		) {
 			return false;
 		}
 		const taskInput = task.input as { candidatePath?: unknown } | null;

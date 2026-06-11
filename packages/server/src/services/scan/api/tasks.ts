@@ -46,6 +46,8 @@ export const updateTaskStatus = async (
 	status:
 		| "pending"
 		| "launching"
+		| "launched"
+		| "starting"
 		| "running"
 		| "completed"
 		| "failed"

@@ -59,7 +59,6 @@ import { getAgentProfilesByOrganizationId } from "./ai";
 import { createDeploymentCompose, updateDeploymentStatus } from "./deployment";
 import { findEnvironmentById } from "./environment";
 import { validUniqueServerAppName } from "./project";
-import { validateForkStageAgentProviderCompatibility } from "./scan/stage-agent-settings-validation";
 
 export type Compose = typeof compose.$inferSelect;
 
@@ -229,7 +228,6 @@ export const updateCompose = async (
 ) => {
 	const currentCompose = await findComposeById(composeId);
 	const { appName, ...rest } = composeData;
-	const updatesScanAgentSettings = "scanStageSettings" in rest;
 	const nextName = rest.name?.trim();
 	const shouldRenameAppName =
 		typeof nextName === "string" &&
@@ -247,13 +245,6 @@ export const updateCompose = async (
 				message: "Service with this 'AppName' already exists",
 			});
 		}
-	}
-
-	if (updatesScanAgentSettings) {
-		await validateForkStageAgentProviderCompatibility({
-			scanStageSettings: currentCompose.scanStageSettings,
-			...rest,
-		});
 	}
 
 	const composeResult = await db
