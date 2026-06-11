@@ -1458,6 +1458,11 @@ const getEventUpdate = (event) => {
   return paramsUpdate !== undefined ? paramsUpdate : event.payload;
 };
 
+const isAgentThoughtChunkEvent = (event) => {
+  const update = getEventUpdate(event);
+  return asString(asRecord(update)?.sessionUpdate) === "agent_thought_chunk";
+};
+
 const extractTextValue = (value) => {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map(extractTextValue).join("");
@@ -1587,7 +1592,9 @@ const withHeartbeat = async (promise, intervalMs, heartbeat) => {
 const appendSessionEvent = async (paths, state, event) => {
   state.eventCount += 1;
   state.lastEventAt = Date.now();
-  await appendScanRuntimeFile(paths.jsonlPath, formatSandboxAgentSessionEvent(event));
+  if (!isAgentThoughtChunkEvent(event)) {
+    await appendScanRuntimeFile(paths.jsonlPath, formatSandboxAgentSessionEvent(event));
+  }
   const rendered = renderSandboxAgentEvent(event, state);
   if (rendered) {
     await appendScanRuntimeFile(paths.textPath, rendered);

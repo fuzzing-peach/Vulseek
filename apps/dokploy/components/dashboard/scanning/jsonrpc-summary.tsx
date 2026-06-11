@@ -304,6 +304,10 @@ export const extractJsonRpcSummaryLines = (
 				continue;
 			}
 
+			if (sessionUpdate === "agent_thought_chunk") {
+				continue;
+			}
+
 			if (sessionUpdate === "tool_call") {
 				const toolCallId =
 					typeof update.toolCallId === "string"

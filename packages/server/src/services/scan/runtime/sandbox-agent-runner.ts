@@ -127,6 +127,11 @@ const getEventUpdate = (event: SandboxAgentSessionEvent) => {
   return event.payload as MaybeSandboxAgentSessionUpdate;
 };
 
+const isAgentThoughtChunkEvent = (event: SandboxAgentSessionEvent) => {
+  const update = getEventUpdate(event);
+  return asString(asRecord(update)?.sessionUpdate) === "agent_thought_chunk";
+};
+
 const extractTextValue = (value: unknown): string => {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map(extractTextValue).join("");
@@ -235,7 +240,9 @@ export const runSandboxAgentHeadlessTurnInContainer = async (input: {
   let agentMessageText = "";
 
   const appendSessionEvent = async (event: SandboxAgentSessionEvent) => {
-    await appendScanRuntimeFile(input.jsonlPath, formatSandboxAgentSessionEvent(event));
+    if (!isAgentThoughtChunkEvent(event)) {
+      await appendScanRuntimeFile(input.jsonlPath, formatSandboxAgentSessionEvent(event));
+    }
     const rendered = renderSandboxAgentEvent(event);
     if (rendered) {
       await appendScanRuntimeFile(input.textPath, rendered);

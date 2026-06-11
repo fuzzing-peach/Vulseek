@@ -528,7 +528,7 @@ const buildFlowElements = (graph: StageGraph) => {
 			source: edge.source,
 			target: edge.target,
 			type: "elkSection" as const,
-			animated: edge.fork,
+			animated: true,
 			zIndex: 1,
 			data: {
 				points: source && target ? buildEdgePoints(source, target) : [],
@@ -542,6 +542,7 @@ const buildFlowElements = (graph: StageGraph) => {
 			style: {
 				strokeWidth: 1.5,
 				stroke: "hsl(var(--foreground) / 0.62)",
+				strokeDasharray: "6 6",
 			},
 		};
 	});
@@ -649,16 +650,6 @@ const ScanStageGraphPanel = ({
 						}}
 						proOptions={{ hideAttribution: true }}
 					>
-						<div className="absolute right-3 top-3 z-10 flex items-center gap-4 rounded-md border bg-background/90 px-3 py-2 text-xs text-muted-foreground shadow-sm backdrop-blur">
-							<div className="flex items-center gap-2">
-								<span className="h-px w-8 bg-foreground/60" />
-								<span>normal</span>
-							</div>
-							<div className="flex items-center gap-2">
-								<span className="h-px w-8 border-t border-dashed border-foreground/60" />
-								<span>fork</span>
-							</div>
-						</div>
 						<Background color="hsl(var(--muted-foreground) / 0.28)" />
 						<Controls showInteractive={false} />
 					</ReactFlow>

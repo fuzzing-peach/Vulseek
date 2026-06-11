@@ -49,6 +49,11 @@ export const getEventUpdate = (event: SandboxAgentSessionEvent) => {
 	return event.payload as MaybeSandboxAgentSessionUpdate;
 };
 
+export const isAgentThoughtChunkEvent = (event: SandboxAgentSessionEvent) => {
+	const update = getEventUpdate(event);
+	return asString(asRecord(update)?.sessionUpdate) === "agent_thought_chunk";
+};
+
 const extractTextValue = (value: unknown): string => {
 	if (typeof value === "string") return value;
 	if (Array.isArray(value)) return value.map(extractTextValue).join("");

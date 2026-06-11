@@ -1619,7 +1619,6 @@ export const ShowScanJobDetail = ({
 								</div>
 							) : (
 								<div className="flex flex-col gap-3">
-									<ScanStageGraph scanJobId={scanJobId} />
 									<div className="rounded-lg border p-4">
 										<div className="mb-3 text-lg font-semibold">Actions</div>
 										{canCancelScanJob ? (
@@ -1672,6 +1671,7 @@ export const ShowScanJobDetail = ({
 											</div>
 										)}
 									</div>
+									<ScanStageGraph scanJobId={scanJobId} />
 									<div className="grid grid-cols-1 md:grid-cols-2 gap-3">
 										<div className="border rounded-lg p-3">
 											<div className="text-sm text-muted-foreground">

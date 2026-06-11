@@ -4752,7 +4752,7 @@ const FULL_SCAN_STAGE_GRAPH_EDGES = [
 		name: "repository-to-module",
 		source: SCAN_STAGE_IDS.repositoryScan,
 		target: SCAN_STAGE_IDS.moduleScan,
-		fork: true,
+		fork: false,
 		routeKey: null,
 		isDefaultRoute: false,
 	},
@@ -4761,7 +4761,7 @@ const FULL_SCAN_STAGE_GRAPH_EDGES = [
 		name: "module-to-function",
 		source: SCAN_STAGE_IDS.moduleScan,
 		target: SCAN_STAGE_IDS.functionScan,
-		fork: true,
+		fork: false,
 		routeKey: null,
 		isDefaultRoute: false,
 	},
@@ -4770,7 +4770,7 @@ const FULL_SCAN_STAGE_GRAPH_EDGES = [
 		name: "function-to-analysis",
 		source: SCAN_STAGE_IDS.functionScan,
 		target: SCAN_STAGE_IDS.analysis,
-		fork: true,
+		fork: false,
 		routeKey: null,
 		isDefaultRoute: false,
 	},
@@ -6368,7 +6368,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			name: "repository-to-module",
 			from: repositoryStage,
 			to: moduleStage,
-			fork: true,
+			fork: false,
 			transformOutput: async ({ ctx, stageOutput }) =>
 				stageOutput.modules.map((modulePath) => ({
 					scanJob: ctx.scanJob,
@@ -6440,7 +6440,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			name: "module-to-function",
 			from: moduleStage,
 			to: functionStage,
-			fork: true,
+			fork: false,
 			transformOutput: async ({ stageInput, stageOutput }) =>
 				(stageOutput.functions || []).map((functionPath) => ({
 					scanJob: stageInput.scanJob,
@@ -6528,7 +6528,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			name: "function-to-analysis",
 			from: functionStage,
 			to: analysisStage,
-			fork: true,
+			fork: false,
 			transformOutput: async ({ stageInput, stageOutput }) =>
 				(stageOutput?.candidates ?? []).map((candidatePath) => ({
 					scanJob: stageInput.scanJob,
