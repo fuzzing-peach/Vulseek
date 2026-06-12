@@ -1,7 +1,9 @@
 import { db } from "@dokploy/server/db";
 import { scanJobs, tasks } from "@dokploy/server/db/schema";
+import type { ScanRuntimeSettings } from "@dokploy/server/db/schema";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
+import { normalizeScanRuntimeSettings } from "../runtime-settings";
 import { createTaskRepo } from "./task.repo";
 
 const selectScanJobWithRepositoryTaskStatus = {
@@ -16,6 +18,7 @@ const selectScanJobWithRepositoryTaskStatus = {
 	baseSha: scanJobs.baseSha,
 	targetRef: scanJobs.targetRef,
 	targetTag: scanJobs.targetTag,
+	scanRuntimeSettings: scanJobs.scanRuntimeSettings,
 	commitWindow: scanJobs.commitWindow,
 	moduleTasksTotal: scanJobs.moduleTasksTotal,
 	moduleTasksCompleted: scanJobs.moduleTasksCompleted,
@@ -128,6 +131,7 @@ export const createScanJobRepo = async (input: {
 	baseSha?: string | null;
 	targetRef?: string | null;
 	targetTag?: string | null;
+	scanRuntimeSettings?: ScanRuntimeSettings | null;
 	commitWindow?: number | null;
 	defaultDeltaCommitWindow: number;
 }) => {
@@ -146,6 +150,9 @@ export const createScanJobRepo = async (input: {
 			baseSha: input.baseSha,
 			targetRef: input.targetRef,
 			targetTag: input.targetTag,
+			scanRuntimeSettings: normalizeScanRuntimeSettings(
+				input.scanRuntimeSettings ?? {},
+			),
 			commitWindow: input.commitWindow || input.defaultDeltaCommitWindow,
 			status: "pending",
 		})
@@ -166,6 +173,25 @@ export const createScanJobRepo = async (input: {
 	});
 
 	return created[0];
+};
+
+export const updateScanJobRuntimeSettingsRepo = async (
+	scanJobId: string,
+	scanRuntimeSettings: ScanRuntimeSettings,
+) => {
+	const updated = await db
+		.update(scanJobs)
+		.set({
+			scanRuntimeSettings: normalizeScanRuntimeSettings(scanRuntimeSettings),
+		})
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.returning();
+
+	if (!updated[0]) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Scan job not found" });
+	}
+
+	return updated[0];
 };
 
 export const updateScanJobNoteRepo = async (

@@ -152,7 +152,12 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 							serviceData={
 								data ? (data as unknown as Record<string, unknown>) : undefined
 							}
-							onSubmit={async ({ targetRef, targetTag, commitWindow }) => {
+							onSubmit={async ({
+								targetRef,
+								targetTag,
+								commitWindow,
+								scanRuntimeSettings,
+							}) => {
 								const scanJobsResult = await refetchScanJobs();
 								const hasPendingFullScan = Boolean(
 									scanJobsResult.data?.some(
@@ -173,6 +178,7 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 									targetRef,
 									targetTag,
 									commitWindow,
+									scanRuntimeSettings,
 								})
 									.then(() => {
 										toast.success("Full scan started successfully");

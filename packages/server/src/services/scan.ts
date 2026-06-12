@@ -99,6 +99,10 @@ import {
 	retryFailedScanJobTasksWithDeps,
 } from "./scan/retry-failed-tasks";
 import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "./scan/runtime/sandbox-agent-shared";
+import {
+	buildEffectiveDisabledStageSet,
+	getRuntimeStageSetting,
+} from "./scan/runtime-settings";
 import { SCAN_STAGE_IDS, SCAN_STAGE_METADATA } from "./scan/stage-metadata";
 import {
 	type AnalysisCriticStageInput,
@@ -4921,6 +4925,10 @@ export const findFullScanStageGraph = async (
 					status: "pending" as const,
 					counts: emptyStageGraphCounts(),
 					concurrencyLimit: resolveStaticStageConcurrency(stage.id, settings),
+					disabled: false,
+					effectiveDisabled: false,
+					configuredConcurrency: null,
+					configuredAgentProfileId: null,
 					agentProfile:
 						buildTaskAgentProfileSnapshot(agentProfile).agentProfile,
 					groupId:
@@ -4943,6 +4951,14 @@ export const findFullScanStageGraph = async (
 export const findScanJobStageGraph = async (scanJobId: string) => {
 	const context = await buildFullScanPipelineContext(scanJobId);
 	const pipeline = buildFullScanPipeline(context);
+	const disabledStages = buildEffectiveDisabledStageSet({
+		settings: context.scanJob.scanRuntimeSettings,
+		stageNames: pipeline.stages.map((stage) => stage.id),
+		edges: pipeline.edges.map((edge) => ({
+			source: edge.from.id,
+			target: edge.to.id,
+		})),
+	});
 	const taskStatusCounts = await listTaskStatusCountsByScanJobIdRepo(scanJobId);
 	const queuePendingCounts = await listQueuePendingCountsByScanJobId(
 		scanJobId,
@@ -4965,6 +4981,10 @@ export const findScanJobStageGraph = async (scanJobId: string) => {
 			pipeline.stages.map(async (stage, index) => {
 				const queue = queueByStageName.get(stage.id);
 				const counts = toStageGraphCounts(queue);
+				const runtimeSetting = getRuntimeStageSetting(
+					context.scanJob.scanRuntimeSettings,
+					stage.id,
+				);
 				const concurrencyLimit = Math.max(
 					1,
 					(await stage.getDesiredConcurrency?.(context)) ?? 1,
@@ -4985,6 +5005,10 @@ export const findScanJobStageGraph = async (scanJobId: string) => {
 					status: deriveStageGraphStatus(stage.id, counts, context.scanJob),
 					counts,
 					concurrencyLimit,
+					disabled: runtimeSetting.disabled === true,
+					effectiveDisabled: disabledStages.has(stage.id),
+					configuredConcurrency: runtimeSetting.concurrency ?? null,
+					configuredAgentProfileId: runtimeSetting.agentProfileId ?? null,
 					agentProfile:
 						buildTaskAgentProfileSnapshot(agentProfile).agentProfile,
 					groupId: groupNameByStageName.get(stage.id) ?? null,

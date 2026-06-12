@@ -9,9 +9,11 @@ import {
 	resetScanJobForRetryRepo,
 	sumClaudeCodeCachedReadTokensByScanJobIdRepo,
 	updateScanJobNoteRepo,
+	updateScanJobRuntimeSettingsRepo,
 	updateScanJobRepositoryTaskStatusRepo,
 	updateScanJobStatusRepo,
 } from "../persistence/scan-job.repo";
+import { normalizeScanRuntimeSettings } from "../runtime-settings";
 
 export const createScanJob = async (input: typeof apiCreateScanJob._type) =>
 	await createScanJobRepo({
@@ -39,6 +41,15 @@ export const updateScanJobNote = async (
 	scanJobId: string,
 	note: string | null,
 ) => await updateScanJobNoteRepo(scanJobId, note);
+
+export const updateScanJobRuntimeSettings = async (
+	scanJobId: string,
+	scanRuntimeSettings: unknown,
+) =>
+	await updateScanJobRuntimeSettingsRepo(
+		scanJobId,
+		normalizeScanRuntimeSettings(scanRuntimeSettings),
+	);
 
 export const updateScanJobStatus = async (
 	scanJobId: string,

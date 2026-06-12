@@ -8,7 +8,15 @@ import { getAgentProfileById } from "../../ai";
 import { findApplicationById } from "../../application";
 import { findComposeById } from "../../compose";
 import type { AgentProfileLike, ScanJob } from "../types";
-import type { ScanStageSettings } from "@dokploy/server/db/schema";
+import type {
+	ScanRuntimeSettings,
+	ScanStageSettings,
+} from "@dokploy/server/db/schema";
+import {
+	FULL_SCAN_STAGE_IDS,
+	getRuntimeStageSetting,
+	normalizeScanRuntimeSettings,
+} from "../runtime-settings";
 import { SCAN_STAGE_IDS } from "../stage-metadata";
 
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
@@ -31,6 +39,9 @@ type ScanTargetRef = {
 	composeId?: string | null;
 };
 type ScanJobRef = Pick<ScanJob, "scanJobId" | "applicationId" | "composeId">;
+type ScanJobRuntimeRef = ScanJobRef & {
+	scanRuntimeSettings?: ScanRuntimeSettings | null;
+};
 
 const sanitizeContainerNamePart = (value: string) =>
 	value
@@ -177,11 +188,30 @@ export const resolveStageAgentProfileFromTarget = async (
 };
 
 export const resolveStageAgentProfile = async (
-	scanJob: ScanJobRef,
+	scanJob: ScanJobRuntimeRef,
 	kind: StageAgentKind,
 	stageName?: string,
-): Promise<AgentProfileLike | null> =>
-	await resolveStageAgentProfileFromTarget(scanJob, kind, stageName);
+): Promise<AgentProfileLike | null> => {
+	if (stageName) {
+		const [freshScanJob] = await db
+			.select({ scanRuntimeSettings: scanJobs.scanRuntimeSettings })
+			.from(scanJobs)
+			.where(eq(scanJobs.scanJobId, scanJob.scanJobId))
+			.limit(1);
+		const runtimeAgentProfileId =
+			getRuntimeStageSetting(
+				freshScanJob?.scanRuntimeSettings ?? scanJob.scanRuntimeSettings,
+				stageName,
+			).agentProfileId ?? null;
+		if (runtimeAgentProfileId) {
+			return (
+				(await getAgentProfileById(runtimeAgentProfileId).catch(() => null)) ||
+				null
+			);
+		}
+	}
+	return await resolveStageAgentProfileFromTarget(scanJob, kind, stageName);
+};
 
 export const resolveScanProfileConcurrencySettingsFromTarget = async (
 	targetRef: ScanTargetRef,
@@ -224,17 +254,28 @@ export const resolveScanProfileConcurrencySettingsFromTarget = async (
 
 export const resolveScanProfileConcurrencySettings = async (
 	scanJobId: string,
-): Promise<ScanProfileConcurrencySettings> => {
+): Promise<ScanProfileConcurrencySettings & {
+	scanRuntimeSettings: ScanRuntimeSettings;
+}> => {
 	const [scanJob] = await db
 		.select({
 			applicationId: scanJobs.applicationId,
 			composeId: scanJobs.composeId,
+			scanRuntimeSettings: scanJobs.scanRuntimeSettings,
 		})
 		.from(scanJobs)
 		.where(eq(scanJobs.scanJobId, scanJobId))
 		.limit(1);
 
-	return await resolveScanProfileConcurrencySettingsFromTarget(scanJob ?? {});
+	const targetSettings = await resolveScanProfileConcurrencySettingsFromTarget(
+		scanJob ?? {},
+	);
+	return {
+		...targetSettings,
+		scanRuntimeSettings: normalizeScanRuntimeSettings(
+			scanJob?.scanRuntimeSettings ?? {},
+		),
+	};
 };
 
 export const resolveStageConcurrencySetting = async (
@@ -245,10 +286,34 @@ export const resolveStageConcurrencySetting = async (
 	const settings = await resolveScanProfileConcurrencySettings(scanJobId);
 	return Math.max(
 		1,
+		getRuntimeStageSetting(settings.scanRuntimeSettings, stageName)
+			.concurrency ||
 		settings.scanStageSettings?.[stageName]?.concurrency ||
 			fallback(settings) ||
 			1,
 	);
+};
+
+export const isFullScanStageActive = async (
+	scanJobId: string,
+	stageName: string,
+) => {
+	const [scanJob] = await db
+		.select({ scanRuntimeSettings: scanJobs.scanRuntimeSettings })
+		.from(scanJobs)
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.limit(1);
+	const setting = getRuntimeStageSetting(
+		scanJob?.scanRuntimeSettings ?? {},
+		stageName,
+	);
+	if (stageName === SCAN_STAGE_IDS.repositoryScan) {
+		return true;
+	}
+	if (!FULL_SCAN_STAGE_IDS.includes(stageName as (typeof FULL_SCAN_STAGE_IDS)[number])) {
+		return true;
+	}
+	return setting.disabled !== true;
 };
 
 export const resolveRepositoryArtifactsDir = async (input: {

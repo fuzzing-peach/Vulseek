@@ -41,6 +41,7 @@ import {
 	SANDBOX_AGENT_RUNTIME_FILE_NAMES,
 	summarizeSandboxAgentTokenUsage,
 } from "../runtime/sandbox-agent-shared";
+import { buildEffectiveDisabledStageSet } from "../runtime-settings";
 import {
 	createStageContext,
 	type PipelineContext,
@@ -1408,6 +1409,27 @@ const getStageConcurrencyLimit = async <
 	isFanoutStage(stage)
 		? Math.max(1, (await stage.getDesiredConcurrency?.(ctx)) || 1)
 		: 1;
+
+const isRuntimeStageActive = async <TPipelineContext extends PipelineContext>(
+	runtime: JobRuntime<TPipelineContext>,
+	stageName: string,
+) => {
+	const scanJob = await findScanJobByIdRepo(runtime.ctx.scanJobId).catch(
+		() => null,
+	);
+	if (!scanJob) {
+		return true;
+	}
+	const disabledStages = buildEffectiveDisabledStageSet({
+		settings: scanJob.scanRuntimeSettings,
+		stageNames: runtime.pipeline.stages.map((stage) => stage.id),
+		edges: runtime.pipeline.edges.map((edge) => ({
+			source: edge.from.id,
+			target: edge.to.id,
+		})),
+	});
+	return !disabledStages.has(stageName);
+};
 
 const validateSelectedDownstreamOutput = <
 	TPipelineContext extends PipelineContext,
@@ -3124,11 +3146,17 @@ const backfillStageQueue = async <
 	scope?: StageQueueScope,
 ) => {
 	await assertScanJobNotCancelled(runtime.ctx);
+	if (!(await isRuntimeStageActive(runtime, stageState.stageName))) {
+		return 0;
+	}
 	const limit = await getStageConcurrencyLimit(stageState.stage, runtime.ctx);
 	let launchedCount = 0;
 
 	while (!runtime.stopRequested) {
 		await assertScanJobNotCancelled(runtime.ctx);
+		if (!(await isRuntimeStageActive(runtime, stageState.stageName))) {
+			break;
+		}
 		const activeCount = await countActiveTasksByScanJobAndStageRepo({
 			scanJobId: runtime.ctx.scanJobId,
 			stageName: stageState.stageName,
@@ -3574,10 +3602,36 @@ const dispatchPipelineDownstream = async <
 	routeKey?: string | null,
 ) => {
 	await assertScanJobNotCancelled(runtime.ctx);
+	let effectiveRouteKey = routeKey;
+	const downstreamEdges = getDownstreamEdges(runtime.pipeline, stageName);
+	const routedEdges = downstreamEdges.filter((edge) => edge.route);
+	if (routedEdges.length > 0) {
+		const activeRoutedEdges = [];
+		for (const edge of routedEdges) {
+			if (await isRuntimeStageActive(runtime, edge.to.id)) {
+				activeRoutedEdges.push(edge);
+			}
+		}
+		const selectedRouteIsActive =
+			effectiveRouteKey == null
+				? activeRoutedEdges.some((edge) => edge.route?.default)
+				: activeRoutedEdges.some((edge) => edge.route?.key === effectiveRouteKey);
+		if (!selectedRouteIsActive) {
+			effectiveRouteKey = activeRoutedEdges[0]?.route?.key ?? null;
+			logPipelineEvent("downstream.route.runtime_fallback", {
+				scanJobId: runtime.ctx.scanJobId,
+				pipelineName: runtime.pipeline.name,
+				fromStageName: stageName,
+				fromTaskId,
+				routeKey: routeKey ?? null,
+				selectedRouteKey: effectiveRouteKey,
+			});
+		}
+	}
 	const selectedDownstream = selectDownstreamEdgesForRoute(
 		runtime.pipeline,
 		stageName,
-		routeKey,
+		effectiveRouteKey,
 	);
 	if (selectedDownstream.selectedRouteKey) {
 		logPipelineEvent("downstream.route.selected", {
@@ -3593,6 +3647,16 @@ const dispatchPipelineDownstream = async <
 		});
 	}
 	for (const edge of selectedDownstream.edges) {
+		if (!(await isRuntimeStageActive(runtime, edge.to.id))) {
+			logPipelineEvent("downstream.stage_disabled", {
+				scanJobId: runtime.ctx.scanJobId,
+				pipelineName: runtime.pipeline.name,
+				edgeName: edge.name,
+				fromStageName: stageName,
+				toStageName: edge.to.id,
+			});
+			continue;
+		}
 		const selectedStageOutput = edge.outputSchema
 			? edge.outputSchema.parse(stageOutput)
 			: stageOutput;

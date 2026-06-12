@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { FullScanStageGraphPreview } from "@/components/dashboard/scanning/scan-stage-graph";
+import {
+	FullScanStageGraphPreview,
+	type ScanRuntimeSettingsDraft,
+} from "@/components/dashboard/scanning/scan-stage-graph";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -51,6 +54,7 @@ interface Props {
 		targetRef?: string;
 		targetTag?: string;
 		commitWindow?: number;
+		scanRuntimeSettings?: ScanRuntimeSettingsDraft;
 	}) => Promise<void>;
 }
 
@@ -73,12 +77,15 @@ export const CreateScanDialog = ({
 	const [targetRef, setTargetRef] = useState(defaultRef);
 	const [targetTag, setTargetTag] = useState("");
 	const [commitWindow, setCommitWindow] = useState(String(defaultCommitWindow));
+	const [scanRuntimeSettings, setScanRuntimeSettings] =
+		useState<ScanRuntimeSettingsDraft>({});
 
 	useEffect(() => {
 		if (!open) {
 			setTargetRef(defaultRef);
 			setTargetTag("");
 			setCommitWindow(String(defaultCommitWindow));
+			setScanRuntimeSettings({});
 		}
 	}, [defaultCommitWindow, defaultRef, open]);
 
@@ -93,6 +100,7 @@ export const CreateScanDialog = ({
 			targetRef: targetRef.trim() || undefined,
 			targetTag: targetTag.trim() || undefined,
 			commitWindow: showCommitWindow ? normalizedWindow : undefined,
+			scanRuntimeSettings,
 		});
 		setOpen(false);
 	};
@@ -117,7 +125,11 @@ export const CreateScanDialog = ({
 						</div>
 					) : null}
 					{showFullScanPreview ? (
-						<FullScanStageGraphPreview serviceData={serviceData} />
+						<FullScanStageGraphPreview
+							serviceData={serviceData}
+							scanRuntimeSettings={scanRuntimeSettings}
+							onScanRuntimeSettingsChange={setScanRuntimeSettings}
+						/>
 					) : null}
 					<div className="grid gap-2">
 						<Label htmlFor={`${title}-target-ref`}>Ref</Label>

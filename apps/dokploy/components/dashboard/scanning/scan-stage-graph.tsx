@@ -20,13 +20,33 @@ import {
 	Dialog,
 	DialogContent,
 	DialogDescription,
+	DialogFooter,
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { api, type RouterOutputs } from "@/utils/api";
 
 type StageGraph = RouterOutputs["scan"]["stageGraph"];
 type StageGraphNode = StageGraph["nodes"][number];
+type RuntimeStageSetting = {
+	disabled?: boolean;
+	concurrency?: number | null;
+	agentProfileId?: string | null;
+};
+export type ScanRuntimeSettingsDraft = {
+	stages?: Record<string, RuntimeStageSetting>;
+};
 type PreviewAgentProfile = NonNullable<StageGraphNode["agentProfile"]>;
 type PreviewAgentProfiles = RouterOutputs["ai"]["getAgentProfiles"] | undefined;
 type PreviewServiceData = Record<string, unknown> | null | undefined;
@@ -57,6 +77,8 @@ const NODE_GAP_Y = 104;
 const STAGES_PER_ROW = 4;
 const BACK_EDGE_OFFSET_Y = 28;
 const FORWARD_LONG_EDGE_OFFSET_Y = 30;
+const DEFAULT_PROFILE_VALUE = "__service_default__";
+const REPOSITORY_STAGE_NAME = "repository-scan";
 const EMPTY_FLOW_ELEMENTS = {
 	nodes: [] as Node[],
 	edges: [] as Edge[],
@@ -93,6 +115,117 @@ const HANDLE_STYLE = {
 	opacity: 0,
 	pointerEvents: "none",
 } satisfies CSSProperties;
+
+const asRuntimeStageSetting = (
+	settings: ScanRuntimeSettingsDraft | null | undefined,
+	stageName: string,
+) => settings?.stages?.[stageName] ?? {};
+
+const getNodeRuntimeBoolean = (
+	node: StageGraphNode,
+	key: "disabled" | "effectiveDisabled",
+) =>
+	typeof (node as unknown as Record<string, unknown>)[key] === "boolean"
+		? ((node as unknown as Record<string, boolean>)[key] ?? false)
+		: false;
+
+const buildEffectiveDisabledStageSet = (
+	graph: StageGraph,
+	settings?: ScanRuntimeSettingsDraft | null,
+) => {
+	const explicitDisabled = new Set<string>();
+	for (const node of graph.nodes) {
+		const disabled =
+			asRuntimeStageSetting(settings, node.stageName).disabled === true ||
+			getNodeRuntimeBoolean(node, "disabled");
+		if (disabled && node.stageName !== REPOSITORY_STAGE_NAME) {
+			explicitDisabled.add(node.stageName);
+		}
+	}
+
+	const bySource = new Map<string, string[]>();
+	for (const edge of graph.edges) {
+		if (explicitDisabled.has(edge.source) || explicitDisabled.has(edge.target)) {
+			continue;
+		}
+		bySource.set(edge.source, [...(bySource.get(edge.source) ?? []), edge.target]);
+	}
+
+	const reachable = new Set<string>();
+	const queue = [REPOSITORY_STAGE_NAME];
+	while (queue.length > 0) {
+		const stageName = queue.shift();
+		if (!stageName || reachable.has(stageName) || explicitDisabled.has(stageName)) {
+			continue;
+		}
+		reachable.add(stageName);
+		for (const next of bySource.get(stageName) ?? []) {
+			if (!reachable.has(next)) {
+				queue.push(next);
+			}
+		}
+	}
+
+	return new Set(
+		graph.nodes
+			.map((node) => node.stageName)
+			.filter(
+				(stageName) =>
+					explicitDisabled.has(stageName) || !reachable.has(stageName),
+			),
+	);
+};
+
+const applyRuntimeSettingsToGraph = (
+	graph: StageGraph | null | undefined,
+	settings?: ScanRuntimeSettingsDraft | null,
+	agentProfiles?: PreviewAgentProfiles,
+): StageGraph | null | undefined => {
+	if (!graph) {
+		return graph;
+	}
+	const effectiveDisabled = buildEffectiveDisabledStageSet(graph, settings);
+	const profileById = new Map(
+		(agentProfiles ?? []).map((profile) => [
+			profile.agentProfileId,
+			asPreviewAgentProfile(profile),
+		]),
+	);
+	return {
+		...graph,
+		nodes: graph.nodes.map((node) => {
+			const setting = asRuntimeStageSetting(settings, node.stageName);
+			const configuredAgentProfileId =
+				setting.agentProfileId ??
+				((node as unknown as Record<string, unknown>)
+					.configuredAgentProfileId as string | null | undefined) ??
+				null;
+			const configuredConcurrency =
+				typeof setting.concurrency === "number"
+					? setting.concurrency
+					: ((node as unknown as Record<string, unknown>)
+							.configuredConcurrency as number | null | undefined) ?? null;
+			const agentProfile =
+				configuredAgentProfileId &&
+				profileById.get(configuredAgentProfileId)
+					? profileById.get(configuredAgentProfileId)
+					: node.agentProfile;
+			return {
+				...node,
+				disabled:
+					node.stageName === REPOSITORY_STAGE_NAME
+						? false
+						: setting.disabled === true ||
+							getNodeRuntimeBoolean(node, "disabled"),
+				effectiveDisabled: effectiveDisabled.has(node.stageName),
+				configuredConcurrency,
+				configuredAgentProfileId,
+				concurrencyLimit: configuredConcurrency ?? node.concurrencyLimit,
+				agentProfile: agentProfile ?? node.agentProfile,
+			};
+		}),
+	};
+};
 
 const StageNode = ({ data }: NodeProps<StageFlowNode>) => {
 	return (
@@ -156,13 +289,16 @@ const EDGE_TYPES = {
 } satisfies EdgeTypes;
 
 const getStatusClassName = (node: StageGraphNode) => {
+	if (getNodeRuntimeBoolean(node, "effectiveDisabled")) {
+		return "border-zinc-300 bg-zinc-100 text-zinc-400 opacity-60 dark:border-zinc-800 dark:bg-zinc-950/70 dark:text-zinc-500";
+	}
 	if (node.counts.running > 0 || (node.counts.starting ?? 0) > 0) {
-		return "border-sky-300 bg-sky-50 text-sky-950 dark:border-sky-500/70 dark:bg-sky-950/55 dark:text-sky-100";
+		return "border-emerald-400 bg-emerald-50 text-emerald-950 shadow-emerald-200/60 dark:border-emerald-400/80 dark:bg-emerald-950/55 dark:text-emerald-50 dark:shadow-emerald-950/40";
 	}
 	if (node.counts.launching > 0 || (node.counts.launched ?? 0) > 0) {
-		return "border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-500/70 dark:bg-amber-950/55 dark:text-amber-100";
+		return "border-amber-400 bg-amber-50 text-amber-950 shadow-amber-200/60 dark:border-amber-400/80 dark:bg-amber-950/55 dark:text-amber-50 dark:shadow-amber-950/40";
 	}
-	return "border-zinc-300 bg-zinc-50 text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900/85 dark:text-zinc-100";
+	return "border-sky-300 bg-white text-slate-950 shadow-sky-100/70 dark:border-sky-500/70 dark:bg-slate-900 dark:text-sky-50 dark:shadow-sky-950/30";
 };
 
 const StageLabel = ({ node }: { node: StageGraphNode }) => {
@@ -215,12 +351,77 @@ const DetailRow = ({ label, value }: { label: string; value: ReactNode }) => (
 
 const StageDetailDialog = ({
 	stage,
+	agentProfiles,
+	onSave,
 	onOpenChange,
 }: {
 	stage: StageGraphNode | null;
+	agentProfiles?: PreviewAgentProfiles;
+	onSave?: (
+		stageName: string,
+		setting: RuntimeStageSetting,
+	) => Promise<void> | void;
 	onOpenChange: (open: boolean) => void;
 }) => {
 	const agentProfile = stage?.agentProfile;
+	const defaultAgentProfileLabel =
+		agentProfile?.name ||
+		agentProfile?.agentProfileId ||
+		"No default profile configured";
+	const runtimeRecord = (stage ?? {}) as unknown as Record<string, unknown>;
+	const [disabled, setDisabled] = useState(false);
+	const [concurrency, setConcurrency] = useState("1");
+	const [agentProfileId, setAgentProfileId] = useState(DEFAULT_PROFILE_VALUE);
+	const [isSaving, setIsSaving] = useState(false);
+	const enabledProfiles = useMemo(
+		() =>
+			(agentProfiles ?? []).filter(
+				(profile) =>
+					profile.isEnabled &&
+					profile.agentProfileId !== agentProfile?.agentProfileId,
+			),
+		[agentProfiles, agentProfile?.agentProfileId],
+	);
+	useEffect(() => {
+		if (!stage) {
+			return;
+		}
+		setDisabled(
+			stage.stageName === REPOSITORY_STAGE_NAME
+				? false
+				: getNodeRuntimeBoolean(stage, "disabled"),
+		);
+		setConcurrency(String(stage.concurrencyLimit || 1));
+		const configuredAgentProfileId =
+			typeof runtimeRecord.configuredAgentProfileId === "string"
+				? runtimeRecord.configuredAgentProfileId
+				: "";
+		setAgentProfileId(configuredAgentProfileId || DEFAULT_PROFILE_VALUE);
+	}, [stage, runtimeRecord.configuredAgentProfileId]);
+	const saveStageSettings = async () => {
+		if (!stage || !onSave) {
+			onOpenChange(false);
+			return;
+		}
+		const parsedConcurrency = Number.parseInt(concurrency, 10);
+		const nextConcurrency =
+			Number.isFinite(parsedConcurrency) && parsedConcurrency >= 1
+				? Math.min(128, parsedConcurrency)
+				: 1;
+		setIsSaving(true);
+		try {
+			await onSave(stage.stageName, {
+				disabled:
+					stage.stageName === REPOSITORY_STAGE_NAME ? false : disabled,
+				concurrency: nextConcurrency,
+				agentProfileId:
+					agentProfileId === DEFAULT_PROFILE_VALUE ? null : agentProfileId,
+			});
+			onOpenChange(false);
+		} finally {
+			setIsSaving(false);
+		}
+	};
 	return (
 		<Dialog open={Boolean(stage)} onOpenChange={onOpenChange}>
 			<DialogContent className="sm:max-w-2xl">
@@ -235,61 +436,71 @@ const StageDetailDialog = ({
 						<div className="rounded-lg border p-3">
 							<div className="mb-2 text-sm font-semibold">Runtime</div>
 							<DetailRow label="Stage ID" value={stage.stageName} />
-							<DetailRow
-								label="Concurrency Limit"
-								value={stage.concurrencyLimit}
-							/>
-							<DetailRow
-								label="Running"
-								value={stage.counts.running + (stage.counts.starting ?? 0)}
-							/>
-							<DetailRow
-								label="Launching"
-								value={stage.counts.launching + (stage.counts.launched ?? 0)}
-							/>
-							<DetailRow label="Queued" value={stage.counts.queued} />
-							<DetailRow label="Completed" value={stage.counts.completed} />
-						</div>
-						<div className="rounded-lg border p-3">
-							<div className="mb-2 text-sm font-semibold">Agent Profile</div>
-							{agentProfile ? (
-								<>
-									<DetailRow
-										label="Name"
-										value={agentProfile.name || "Unnamed"}
+							<div className="grid gap-4 pt-3">
+								<div className="flex items-center justify-between gap-4">
+									<div>
+										<Label>Disable stage</Label>
+										<div className="text-xs text-muted-foreground">
+											Disabled stages and dominated successors will not start new
+											tasks.
+										</div>
+									</div>
+									<Switch
+										checked={disabled}
+										disabled={stage.stageName === REPOSITORY_STAGE_NAME}
+										onCheckedChange={setDisabled}
 									/>
-									<DetailRow
-										label="Profile ID"
-										value={agentProfile.agentProfileId}
-									/>
-									<DetailRow label="Provider" value={agentProfile.provider} />
-									<DetailRow label="Model" value={agentProfile.model} />
-									<DetailRow label="Auth Mode" value={agentProfile.authMode} />
-									<DetailRow
-										label="Home Path"
-										value={agentProfile.homePath || "Not set"}
-									/>
-									<DetailRow
-										label="Base URL"
-										value={agentProfile.baseUrl || "Not set"}
-									/>
-									<DetailRow
-										label="Thinking"
-										value={formatBoolean(agentProfile.thinkingLevelEnabled)}
-									/>
-									<DetailRow
-										label="Thinking Level"
-										value={agentProfile.thinkingLevel || "Not set"}
-									/>
-								</>
-							) : (
-								<div className="text-sm text-muted-foreground">
-									No agent profile is configured for this stage.
 								</div>
-							)}
+								<div className="grid gap-2">
+									<Label htmlFor={`${stage.stageName}-concurrency`}>
+										Concurrency
+									</Label>
+									<Input
+										id={`${stage.stageName}-concurrency`}
+										type="number"
+										min={1}
+										max={128}
+										step={1}
+										value={concurrency}
+										onChange={(event) => setConcurrency(event.target.value)}
+									/>
+								</div>
+								<div className="grid gap-2">
+									<Label>Agent Profile</Label>
+									<Select
+										value={agentProfileId}
+										onValueChange={setAgentProfileId}
+									>
+										<SelectTrigger>
+											<SelectValue placeholder={defaultAgentProfileLabel} />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value={DEFAULT_PROFILE_VALUE}>
+												{defaultAgentProfileLabel}
+											</SelectItem>
+											{enabledProfiles.map((profile) => (
+												<SelectItem
+													key={profile.agentProfileId}
+													value={profile.agentProfileId}
+												>
+													{profile.name}
+												</SelectItem>
+											))}
+										</SelectContent>
+									</Select>
+								</div>
+							</div>
 						</div>
 					</div>
 				) : null}
+				<DialogFooter>
+					<Button variant="secondary" onClick={() => onOpenChange(false)}>
+						Cancel
+					</Button>
+					<Button isLoading={isSaving} onClick={saveStageSettings}>
+						Save
+					</Button>
+				</DialogFooter>
 			</DialogContent>
 		</Dialog>
 	);
@@ -523,6 +734,11 @@ const buildFlowElements = (graph: StageGraph) => {
 	const flowEdges: ElkSectionEdge[] = graph.edges.map((edge) => {
 		const source = stagePositions.get(edge.source);
 		const target = stagePositions.get(edge.target);
+		const sourceNode = graph.nodes.find((node) => node.stageName === edge.source);
+		const targetNode = graph.nodes.find((node) => node.stageName === edge.target);
+		const isInactiveEdge =
+			(sourceNode && getNodeRuntimeBoolean(sourceNode, "effectiveDisabled")) ||
+			(targetNode && getNodeRuntimeBoolean(targetNode, "effectiveDisabled"));
 		return {
 			id: edge.id,
 			source: edge.source,
@@ -537,11 +753,15 @@ const buildFlowElements = (graph: StageGraph) => {
 				type: MarkerType.ArrowClosed,
 				width: 16,
 				height: 16,
-				color: "hsl(var(--foreground) / 0.62)",
+				color: isInactiveEdge
+					? "hsl(var(--muted-foreground) / 0.28)"
+					: "hsl(var(--foreground) / 0.62)",
 			},
 			style: {
-				strokeWidth: 1.5,
-				stroke: "hsl(var(--foreground) / 0.62)",
+				strokeWidth: isInactiveEdge ? 1.2 : 1.5,
+				stroke: isInactiveEdge
+					? "hsl(var(--muted-foreground) / 0.28)"
+					: "hsl(var(--foreground) / 0.62)",
 				strokeDasharray: "6 6",
 			},
 		};
@@ -557,6 +777,9 @@ const ScanStageGraphPanel = ({
 	title = "Stage Graph",
 	description = "Pipeline topology and live stage progress.",
 	heightClassName = "h-[420px] md:h-[520px]",
+	scanRuntimeSettings,
+	agentProfiles,
+	onStageSettingSave,
 }: {
 	graph?: StageGraph | null;
 	isLoading?: boolean;
@@ -564,6 +787,12 @@ const ScanStageGraphPanel = ({
 	title?: string;
 	description?: string;
 	heightClassName?: string;
+	scanRuntimeSettings?: ScanRuntimeSettingsDraft | null;
+	agentProfiles?: PreviewAgentProfiles;
+	onStageSettingSave?: (
+		stageName: string,
+		setting: RuntimeStageSetting,
+	) => Promise<void> | void;
 }) => {
 	const [elements, setElements] = useState(EMPTY_FLOW_ELEMENTS);
 	const [layoutError, setLayoutError] = useState<Error | null>(null);
@@ -576,10 +805,14 @@ const ScanStageGraphPanel = ({
 			elements.nodes.length === 0 &&
 			!layoutError,
 	);
+	const effectiveGraph = useMemo(
+		() => applyRuntimeSettingsToGraph(graph, scanRuntimeSettings, agentProfiles),
+		[graph, scanRuntimeSettings, agentProfiles],
+	);
 
 	useEffect(() => {
 		let isCancelled = false;
-		if (!graph || graph.nodes.length === 0) {
+		if (!effectiveGraph || effectiveGraph.nodes.length === 0) {
 			setElements(EMPTY_FLOW_ELEMENTS);
 			setLayoutError(null);
 			return;
@@ -587,7 +820,7 @@ const ScanStageGraphPanel = ({
 
 		setLayoutError(null);
 		try {
-			const nextElements = buildFlowElements(graph);
+			const nextElements = buildFlowElements(effectiveGraph);
 			if (!isCancelled) {
 				setElements(nextElements);
 			}
@@ -605,7 +838,7 @@ const ScanStageGraphPanel = ({
 		return () => {
 			isCancelled = true;
 		};
-	}, [graph]);
+	}, [effectiveGraph]);
 
 	return (
 		<div className="rounded-lg border bg-background">
@@ -624,7 +857,7 @@ const ScanStageGraphPanel = ({
 						<AlertCircle className="size-4" />
 						Failed to load stage graph.
 					</div>
-				) : !graph || graph.nodes.length === 0 ? (
+				) : !effectiveGraph || effectiveGraph.nodes.length === 0 ? (
 					<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
 						No stage graph available.
 					</div>
@@ -677,6 +910,8 @@ const ScanStageGraphPanel = ({
 			`}</style>
 			<StageDetailDialog
 				stage={selectedStage}
+				agentProfiles={agentProfiles}
+				onSave={onStageSettingSave}
 				onOpenChange={(open) => {
 					if (!open) {
 						setSelectedStage(null);
@@ -712,6 +947,10 @@ const createPreviewNode = ({
 	status: "pending",
 	counts: emptyStageCounts(),
 	concurrencyLimit,
+	disabled: false,
+	effectiveDisabled: false,
+	configuredConcurrency: null,
+	configuredAgentProfileId: null,
 	agentProfile,
 	groupId,
 	order,
@@ -1100,8 +1339,12 @@ const buildFullScanPreviewGraph = (
 
 export const FullScanStageGraphPreview = ({
 	serviceData,
+	scanRuntimeSettings,
+	onScanRuntimeSettingsChange,
 }: {
 	serviceData?: PreviewServiceData;
+	scanRuntimeSettings?: ScanRuntimeSettingsDraft;
+	onScanRuntimeSettingsChange?: (settings: ScanRuntimeSettingsDraft) => void;
 }) => {
 	const target = useMemo<FullScanStageGraphTarget | null>(() => {
 		const serviceRecord = asRecord(serviceData);
@@ -1122,6 +1365,19 @@ export const FullScanStageGraphPreview = ({
 	} = api.scan.fullScanStageGraph.useQuery(target ?? { applicationId: "" }, {
 		enabled: Boolean(target),
 	});
+	const { data: agentProfiles } = api.ai.getAgentProfiles.useQuery();
+	const handleStageSettingSave = (
+		stageName: string,
+		setting: RuntimeStageSetting,
+	) => {
+		onScanRuntimeSettingsChange?.({
+			...(scanRuntimeSettings ?? {}),
+			stages: {
+				...(scanRuntimeSettings?.stages ?? {}),
+				[stageName]: setting,
+			},
+		});
+	};
 	return (
 		<ScanStageGraphPanel
 			graph={graph}
@@ -1129,11 +1385,15 @@ export const FullScanStageGraphPreview = ({
 			error={error}
 			description="Full scan pipeline preview."
 			heightClassName="h-[360px]"
+			scanRuntimeSettings={scanRuntimeSettings}
+			agentProfiles={agentProfiles}
+			onStageSettingSave={handleStageSettingSave}
 		/>
 	);
 };
 
 export const ScanStageGraph = ({ scanJobId }: { scanJobId: string }) => {
+	const utils = api.useUtils();
 	const {
 		data: graph,
 		isLoading,
@@ -1142,7 +1402,45 @@ export const ScanStageGraph = ({ scanJobId }: { scanJobId: string }) => {
 		{ scanJobId },
 		{ enabled: !!scanJobId, refetchInterval: 1000 },
 	);
+	const { data: scanJob } = api.scan.one.useQuery(
+		{ scanJobId },
+		{ enabled: !!scanJobId, refetchInterval: 1000 },
+	);
+	const { data: agentProfiles } = api.ai.getAgentProfiles.useQuery();
+	const { mutateAsync: updateRuntimeSettings } =
+		api.scan.updateRuntimeSettings.useMutation();
+	const scanRuntimeSettings =
+		(scanJob as unknown as { scanRuntimeSettings?: ScanRuntimeSettingsDraft })
+			?.scanRuntimeSettings ?? {};
+	const handleStageSettingSave = async (
+		stageName: string,
+		setting: RuntimeStageSetting,
+	) => {
+		const nextSettings = {
+			...scanRuntimeSettings,
+			stages: {
+				...(scanRuntimeSettings.stages ?? {}),
+				[stageName]: setting,
+			},
+		};
+		await updateRuntimeSettings({
+			scanJobId,
+			scanRuntimeSettings: nextSettings,
+		});
+		await Promise.all([
+			utils.scan.one.invalidate({ scanJobId }),
+			utils.scan.stageGraph.invalidate({ scanJobId }),
+			utils.scan.statusView.invalidate({ scanJobId }),
+		]);
+	};
 	return (
-		<ScanStageGraphPanel graph={graph} isLoading={isLoading} error={error} />
+		<ScanStageGraphPanel
+			graph={graph}
+			isLoading={isLoading}
+			error={error}
+			scanRuntimeSettings={scanRuntimeSettings}
+			agentProfiles={agentProfiles}
+			onStageSettingSave={handleStageSettingSave}
+		/>
 	);
 };

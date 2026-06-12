@@ -84,6 +84,23 @@ export const ScanStageSettingsSchema = z.record(ScanStageSettingSchema);
 export type ScanStageSetting = z.infer<typeof ScanStageSettingSchema>;
 export type ScanStageSettings = z.infer<typeof ScanStageSettingsSchema>;
 
+export const ScanRuntimeStageSettingSchema = z.object({
+	disabled: z.boolean().optional(),
+	agentProfileId: z.string().nullable().optional(),
+	concurrency: z.number().int().min(1).max(128).nullable().optional(),
+});
+
+export const ScanRuntimeSettingsSchema = z
+	.object({
+		stages: z.record(ScanRuntimeStageSettingSchema).optional(),
+	})
+	.default({});
+
+export type ScanRuntimeStageSetting = z.infer<
+	typeof ScanRuntimeStageSettingSchema
+>;
+export type ScanRuntimeSettings = z.infer<typeof ScanRuntimeSettingsSchema>;
+
 export const buildDefaultScanStageSettings = (
 	agentProfileId?: string | null,
 ): ScanStageSettings => ({

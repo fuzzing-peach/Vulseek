@@ -14,6 +14,10 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { applications } from "./application";
 import { compose } from "./compose";
+import {
+	type ScanRuntimeSettings,
+	ScanRuntimeSettingsSchema,
+} from "./shared";
 
 type TaskAgentProfileSnapshot = {
 	agentProfileId: string | null;
@@ -61,6 +65,10 @@ export const scanJobs = pgTable("scan_jobs", {
 	baseSha: text("baseSha"),
 	targetRef: text("targetRef"),
 	targetTag: text("targetTag"),
+	scanRuntimeSettings: jsonb("scanRuntimeSettings")
+		.$type<ScanRuntimeSettings>()
+		.notNull()
+		.default({}),
 	commitWindow: integer("commitWindow").notNull().default(3),
 	moduleTasksTotal: integer("moduleTasksTotal").notNull().default(0),
 	moduleTasksCompleted: integer("moduleTasksCompleted").notNull().default(0),
@@ -349,6 +357,7 @@ export const apiCreateScanJob = z
 		targetRef: z.string().optional(),
 		targetTag: z.string().optional(),
 		commitWindow: z.number().int().min(1).max(50).optional(),
+		scanRuntimeSettings: ScanRuntimeSettingsSchema.optional(),
 	})
 	.refine((value) => Boolean(value.applicationId) !== Boolean(value.composeId), {
 		message: "Provide exactly one target: applicationId or composeId",

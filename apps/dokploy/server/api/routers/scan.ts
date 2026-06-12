@@ -34,6 +34,7 @@ import {
 	startCheckoutScanEnvironment,
 	syncFullScanTasksFromArtifacts,
 	updateScanJobNote,
+	updateScanJobRuntimeSettings,
 } from "@dokploy/server";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -46,6 +47,7 @@ import {
 	apiFindScanJobsByApplication,
 	apiFindScanJobsByCompose,
 	apiUpdateScanJobNote,
+	ScanRuntimeSettingsSchema,
 } from "@/server/db/schema";
 import type { ScanQueueJob } from "@/server/queues/queue-types";
 import { scansQueue } from "@/server/queues/queueSetup";
@@ -96,6 +98,11 @@ const apiFindFullScanStageGraph = z
 			path: ["applicationId"],
 		},
 	);
+
+const apiUpdateScanRuntimeSettings = z.object({
+	scanJobId: z.string().min(1),
+	scanRuntimeSettings: ScanRuntimeSettingsSchema,
+});
 
 export const scanRouter = createTRPCRouter({
 	checkout: protectedProcedure
@@ -402,6 +409,39 @@ export const scanRouter = createTRPCRouter({
 
 			const note = input.note?.trim() ? input.note.trim() : null;
 			return await updateScanJobNote(input.scanJobId, note);
+		}),
+
+	updateRuntimeSettings: protectedProcedure
+		.input(apiUpdateScanRuntimeSettings)
+		.mutation(async ({ input, ctx }) => {
+			const scanJob = await findScanJobById(input.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to update this scan job",
+				});
+			}
+
+			return await updateScanJobRuntimeSettings(
+				input.scanJobId,
+				input.scanRuntimeSettings,
+			);
 		}),
 
 	cancel: protectedProcedure
