@@ -87,6 +87,7 @@ import {
 import {
 	runPipeline,
 	startPipelineRuntime,
+	stopPipelineRuntimesForScanJob,
 } from "./scan/pipeline/pipeline-runner";
 import { createStageQueueBinding } from "./scan/pipeline/stage-definition";
 import {
@@ -7353,6 +7354,52 @@ const runFullScan = async (
 		throw error;
 	}
 };
+
+export const pauseScanJob = async (scanJobId: string) => {
+	const scanJob = await findScanJobByIdRepo(scanJobId);
+	if (scanJob.status === "canceled" || scanJob.status === "finished") {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Only pending or running scan jobs can be paused",
+		});
+	}
+	if (scanJob.status === "paused") {
+		return {
+			paused: true,
+			scanJobId,
+			stoppedRuntimes: 0,
+		};
+	}
+
+	await updateScanJobStatusRepo(scanJobId, "paused");
+	const stoppedRuntimes = stopPipelineRuntimesForScanJob(scanJobId);
+	return {
+		paused: true,
+		scanJobId,
+		stoppedRuntimes,
+	};
+};
+
+export const resumeScanJob = async (scanJobId: string) => {
+	const scanJob = await findScanJobByIdRepo(scanJobId);
+	if (scanJob.status !== "paused") {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Only paused scan jobs can be resumed",
+		});
+	}
+
+	await updateScanJobStatusRepo(scanJobId, "running");
+	await runFullScan(scanJobId, {
+		enqueueInitialRepositoryTask: false,
+		awaitCompletion: false,
+	});
+	return {
+		resumed: true,
+		scanJobId,
+	};
+};
+
 export const runScanJobInContainer = async (
 	scanJobId: string,
 	options?: {
@@ -8358,6 +8405,17 @@ export const reconcileScanJobCandidatePipelineStatus = async (
 	if (scanState.scanJob.status === "canceled") {
 		return {
 			status: "canceled" as const,
+			analysisFailed: analysisState.failed,
+			verificationFailed: verificationState.failed,
+			triageFailed: triageState.failed,
+			moduleFailed: scanState.moduleFailed,
+			functionFailed: scanState.functionFailed,
+		};
+	}
+
+	if (scanState.scanJob.status === "paused") {
+		return {
+			status: "paused" as const,
 			analysisFailed: analysisState.failed,
 			verificationFailed: verificationState.failed,
 			triageFailed: triageState.failed,

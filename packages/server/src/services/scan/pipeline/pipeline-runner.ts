@@ -221,6 +221,25 @@ const assertScanJobNotCancelled = async (ctx: PipelineContext) => {
 	}
 };
 
+const isScanJobPaused = async (ctx: PipelineContext) => {
+	const scanJob = await findScanJobByIdRepo(ctx.scanJobId).catch(() => null);
+	return scanJob?.status === "paused";
+};
+
+const shouldStopForPausedScanJob = async <TPipelineContext extends PipelineContext>(
+	runtime: JobRuntime<TPipelineContext>,
+) => {
+	if (!(await isScanJobPaused(runtime.ctx))) {
+		return false;
+	}
+	runtime.stopRequested = true;
+	logPipelineEvent("loop.paused", {
+		scanJobId: runtime.ctx.scanJobId,
+		pipelineName: runtime.pipeline.name,
+	});
+	return true;
+};
+
 const SANDBOX_AGENT_DRIVER_TASK_DIR_NAME = "sandbox-agent-driver-tasks";
 
 const normalizeJsonOutput = (rawOutput: string) => {
@@ -2153,6 +2172,19 @@ class WakeSignal {
 
 const pipelineSupervisorJobs = new Map<string, JobRuntime<PipelineContext>>();
 
+export const stopPipelineRuntimesForScanJob = (scanJobId: string) => {
+	let stoppedRuntimes = 0;
+	for (const runtime of pipelineSupervisorJobs.values()) {
+		if (runtime.ctx.scanJobId !== scanJobId) {
+			continue;
+		}
+		runtime.stopRequested = true;
+		runtime.wakeSignal.notify();
+		stoppedRuntimes += 1;
+	}
+	return stoppedRuntimes;
+};
+
 const getJobRuntimeKey = (pipelineName: string, scanJobId: string) =>
 	`${pipelineName}:${scanJobId}`;
 
@@ -3146,6 +3178,9 @@ const backfillStageQueue = async <
 	scope?: StageQueueScope,
 ) => {
 	await assertScanJobNotCancelled(runtime.ctx);
+	if (await shouldStopForPausedScanJob(runtime)) {
+		return 0;
+	}
 	if (!(await isRuntimeStageActive(runtime, stageState.stageName))) {
 		return 0;
 	}
@@ -3154,6 +3189,9 @@ const backfillStageQueue = async <
 
 	while (!runtime.stopRequested) {
 		await assertScanJobNotCancelled(runtime.ctx);
+		if (await shouldStopForPausedScanJob(runtime)) {
+			break;
+		}
 		if (!(await isRuntimeStageActive(runtime, stageState.stageName))) {
 			break;
 		}
@@ -3341,10 +3379,22 @@ const inspectTasks = async <TPipelineContext extends PipelineContext>(
 const runJobLoop = async <TPipelineContext extends PipelineContext>(
 	runtime: JobRuntime<TPipelineContext>,
 ) => {
+	if (await shouldStopForPausedScanJob(runtime)) {
+		return;
+	}
 	await reenqueueMissingPendingTasks(runtime);
+	if (await shouldStopForPausedScanJob(runtime)) {
+		return;
+	}
 	await backfillActiveGroupQueues(runtime);
+	if (await shouldStopForPausedScanJob(runtime)) {
+		return;
+	}
 	for (const stageState of runtime.stageStates.values()) {
 		await backfillStageQueue(runtime, stageState);
+		if (await shouldStopForPausedScanJob(runtime)) {
+			return;
+		}
 	}
 
 	let loopIteration = 0;
@@ -3352,6 +3402,9 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 		loopIteration += 1;
 		const loopStartedAt = Date.now();
 		await assertScanJobNotCancelled(runtime.ctx);
+		if (await shouldStopForPausedScanJob(runtime)) {
+			return;
+		}
 		if (runtime.failure) {
 			throw runtime.failure;
 		}
@@ -3418,16 +3471,25 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 			},
 		);
 
+		if (runtime.stopRequested || (await shouldStopForPausedScanJob(runtime))) {
+			return;
+		}
 		const inspectStartedAt = Date.now();
 		const inspectMetrics = await inspectTasks(runtime);
 		const inspectElapsedMs = Date.now() - inspectStartedAt;
 		let progressed = inspectMetrics.progressed;
 
+		if (runtime.stopRequested || (await shouldStopForPausedScanJob(runtime))) {
+			return;
+		}
 		const reenqueueStartedAt = Date.now();
 		const reenqueueCount = await reenqueueMissingPendingTasks(runtime);
 		const reenqueueElapsedMs = Date.now() - reenqueueStartedAt;
 		progressed = reenqueueCount > 0 || progressed;
 
+		if (runtime.stopRequested || (await shouldStopForPausedScanJob(runtime))) {
+			return;
+		}
 		const groupBackfillStartedAt = Date.now();
 		const groupBackfillLaunchedCount = await backfillActiveGroupQueues(runtime);
 		const groupBackfillElapsedMs = Date.now() - groupBackfillStartedAt;
@@ -3440,6 +3502,9 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 		}> = [];
 		let stageBackfillLaunchedCount = 0;
 		for (const stageState of runtime.stageStates.values()) {
+			if (runtime.stopRequested || (await shouldStopForPausedScanJob(runtime))) {
+				return;
+			}
 			const stageBackfillStartedAt = Date.now();
 			const launchedCount = await backfillStageQueue(runtime, stageState);
 			const elapsedMs = Date.now() - stageBackfillStartedAt;

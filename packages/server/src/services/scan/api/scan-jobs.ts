@@ -53,14 +53,14 @@ export const updateScanJobRuntimeSettings = async (
 
 export const updateScanJobStatus = async (
 	scanJobId: string,
-	status: "pending" | "running" | "finished" | "canceled",
+	status: "pending" | "running" | "paused" | "finished" | "canceled",
 	errorMessage?: string,
 ) => await updateScanJobStatusRepo(scanJobId, status, errorMessage);
 
 export const resetScanJobForRetry = async (
 	scanJobId: string,
 	input?: {
-		status?: "pending" | "running" | "finished" | "canceled";
+		status?: "pending" | "running" | "paused" | "finished" | "canceled";
 		errorMessage?: string | null;
 		repositoryTaskStatus?: "pending" | "launching" | "launched" | "starting" | "running" | "completed" | "failed" | "exited" | "canceled";
 	},

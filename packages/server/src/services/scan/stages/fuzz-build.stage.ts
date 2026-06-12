@@ -1,4 +1,3 @@
-import { buildTaskAgentProfileSnapshot } from "../agent-profile-snapshot";
 import { fuzzBuildResultSchema } from "../artifacts/contracts/domain-object.contract";
 import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";
 import { bindTaskRuntimeRepo } from "../persistence/task.repo";
@@ -9,11 +8,12 @@ import {
 } from "../pipeline/stage-definition";
 import { renderPromptTemplate } from "../prompts/prompt-template";
 import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
-import {
-	runSingleTurnAgentInContainer,
-	startContainer,
-} from "../runtime/run-single-turn-agent";
+import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
 import type { Candidate } from "../types";
+import {
+	launchAgentStageRuntime,
+	resolveAgentStageRuntime,
+} from "./agent-stage-runtime";
 import type { CandidateAnalysisStageInput } from "./candidate-analysis.stage";
 import {
 	type PipelineContext,
@@ -52,51 +52,28 @@ const executeFuzzBuildStage = async (
 	ctx: StageContext,
 	stageInput: FuzzBuildStageInput,
 ) => {
-	const agentProfile = await ctx.agentProfile();
 	const taskStageDirPath = await ctx.taskDir();
-	const taskStageRootInContainer = await ctx.taskDirContainer();
-	const taskRealRootInContainer = await ctx.taskDirRealContainer();
-	const stageDirPath =
-		ctx.laneIndex !== null ? await ctx.laneDir() : taskStageDirPath;
-	const stageRootInContainer =
-		ctx.laneIndex !== null
-			? await ctx.laneDirContainer()
-			: taskRealRootInContainer;
 	const candidate = await readTaskJsonArtifact<Candidate>({
 		taskDir: taskStageDirPath,
 		containerPath: stageInput.candidatePath,
 	});
-	const containerName = ctx.containerName(candidate.id.slice(0, 8));
-	await bindTaskRuntimeRepo({
-		taskId: ctx.taskId,
-		containerName,
-		containerIndex: ctx.containerIndex,
-		agentProfile: buildTaskAgentProfileSnapshot(agentProfile).agentProfile,
-	});
-	await startContainer({
-		scanJob: stageInput.scanJob,
-		taskId: ctx.taskId,
-		agentProfile,
-		containerName,
-		codexHome: `${stageRootInContainer}/.codex-fuzz-build`,
-		stageDirPath,
-		stageRootInContainer,
-		taskRealRootInContainer,
-		persistent: ctx.persistent,
-		reuseContainer: ctx.reuseContainer,
+	const runtime = await resolveAgentStageRuntime({
+		ctx,
+		containerNameParts: [candidate.id.slice(0, 8)],
+		codexHomeName: ".codex-fuzz-build",
 	});
 
 	return await runSingleTurnAgentInContainer({
 		scanJob: stageInput.scanJob,
-		agentProfile,
-		containerName,
-		codexHome: `${stageRootInContainer}/.codex-fuzz-build`,
-		stageDirPath,
-		stageRootInContainer,
+		agentProfile: runtime.agentProfile,
+		containerName: runtime.containerName,
+		codexHome: runtime.codexHome,
+		stageDirPath: runtime.stageDirPath,
+		stageRootInContainer: runtime.stageRootInContainer,
 		taskId: ctx.taskId,
-		taskStageDirPath,
-		taskStageRootInContainer,
-		taskRealRootInContainer,
+		taskStageDirPath: runtime.taskStageDirPath,
+		taskStageRootInContainer: runtime.taskStageRootInContainer,
+		taskRealRootInContainer: runtime.taskRealRootInContainer,
 		persistent: ctx.persistent,
 		reuseContainer: ctx.reuseContainer,
 		groupedPersistent: ctx.groupedPersistent,
@@ -108,7 +85,7 @@ const executeFuzzBuildStage = async (
 		parentTaskId: ctx.parentTaskId,
 		prompt: buildFuzzBuildPrompt(stageInput, {
 			candidate,
-			taskDirContainer: taskStageRootInContainer,
+			taskDirContainer: runtime.taskStageRootInContainer,
 			taskId: ctx.taskId,
 		}),
 		outputSchema: fuzzBuildResultSchema,
@@ -143,6 +120,19 @@ export const createFuzzBuildStageDefinition = <
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
 			await resolveStageConcurrencySetting(ctx.scanJobId, input.id, () => 2),
+		launch: async (ctx, stageInput) => {
+			const stageCtx = ctx as unknown as StageContext;
+			const candidate = await readTaskJsonArtifact<Candidate>({
+				taskDir: await stageCtx.taskDir(),
+				containerPath: stageInput.candidatePath,
+			});
+			await launchAgentStageRuntime({
+				ctx: stageCtx,
+				scanJob: stageInput.scanJob,
+				containerNameParts: [candidate.id.slice(0, 8)],
+				codexHomeName: ".codex-fuzz-build",
+			});
+		},
 		run: async (ctx, stageInput) => ({
 			completion: "deferred",
 			threadId: (

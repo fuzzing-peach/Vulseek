@@ -1,6 +1,7 @@
 export type ScanPipelineJobStatus =
 	| "pending"
 	| "running"
+	| "paused"
 	| "finished"
 	| "canceled";
 
@@ -36,6 +37,12 @@ export type ResolvedScanPipelineState = {
 export const resolveNextScanPipelineState = (
 	input: ResolveScanPipelineStateInput,
 ): ResolvedScanPipelineState => {
+	if (input.scanJobStatus === "paused") {
+		return {
+			status: "paused",
+		};
+	}
+
 	const repositoryPending =
 		input.repositoryTaskStatus !== "completed" &&
 		input.repositoryTaskStatus !== "failed" &&

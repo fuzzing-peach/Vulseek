@@ -27,7 +27,9 @@ import {
 	readScanJobAppServerText,
 	readScanJobFileContent,
 	readScanTaskFileContent,
+	pauseScanJob,
 	rerunScanTask,
+	resumeScanJob,
 	retryFailedScanJobTasks,
 	startCandidateAnalysis,
 	startCandidateVerification,
@@ -491,6 +493,66 @@ export const scanRouter = createTRPCRouter({
 			]);
 
 			return await cancelScanJob(input.scanJobId);
+		}),
+
+	pause: protectedProcedure
+		.input(apiFindOneScanJob)
+		.mutation(async ({ input, ctx }) => {
+			const scanJob = await findScanJobById(input.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to pause this scan job",
+				});
+			}
+
+			return await pauseScanJob(input.scanJobId);
+		}),
+
+	resume: protectedProcedure
+		.input(apiFindOneScanJob)
+		.mutation(async ({ input, ctx }) => {
+			const scanJob = await findScanJobById(input.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to resume this scan job",
+				});
+			}
+
+			return await resumeScanJob(input.scanJobId);
 		}),
 
 	syncArtifacts: protectedProcedure

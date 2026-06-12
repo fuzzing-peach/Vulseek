@@ -21,6 +21,7 @@ interface Props {
 const statusColorMap = {
 	pending: "bg-muted-foreground",
 	running: "bg-yellow-500",
+	paused: "bg-blue-500",
 	finished: "bg-green-500",
 	canceled: "bg-destructive",
 } as const;

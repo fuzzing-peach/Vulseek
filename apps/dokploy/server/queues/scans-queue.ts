@@ -54,7 +54,7 @@ export const scansWorker = new Worker(
 
 		try {
 			const scanJob = await findScanJobById(job.data.scanJobId);
-			if (scanJob.status === "canceled") {
+			if (scanJob.status === "canceled" || scanJob.status === "paused") {
 				return;
 			}
 
@@ -70,7 +70,10 @@ export const scansWorker = new Worker(
 
 			if (mode === "full") {
 				const latestScanJob = await findScanJobById(job.data.scanJobId);
-				if (latestScanJob.status === "canceled") {
+				if (
+					latestScanJob.status === "canceled" ||
+					latestScanJob.status === "paused"
+				) {
 					return;
 				}
 				if (latestScanJob.status === "running") {
@@ -85,6 +88,10 @@ export const scansWorker = new Worker(
 					await runScanJobInContainer(scanJob.scanJobId, {
 						enqueueInitialRepositoryTask: false,
 					});
+					const scanJobAfterRun = await findScanJobById(job.data.scanJobId);
+					if (scanJobAfterRun.status === "paused") {
+						return;
+					}
 					await reconcileScanJobCandidatePipelineStatus(scanJob.scanJobId);
 					return;
 				}
@@ -94,6 +101,10 @@ export const scansWorker = new Worker(
 				enqueueInitialRepositoryTask: mode === "full",
 			});
 
+			const scanJobAfterRun = await findScanJobById(job.data.scanJobId);
+			if (scanJobAfterRun.status === "paused") {
+				return;
+			}
 			await reconcileScanJobCandidatePipelineStatus(scanJob.scanJobId);
 			console.log(
 				"[scans-worker]",
@@ -113,7 +124,10 @@ export const scansWorker = new Worker(
 
 			try {
 				const latestScanJob = await findScanJobById(job.data.scanJobId);
-				if (latestScanJob.status === "canceled") {
+				if (
+					latestScanJob.status === "canceled" ||
+					latestScanJob.status === "paused"
+				) {
 					return;
 				}
 			} catch (_) {}

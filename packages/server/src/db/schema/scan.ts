@@ -35,6 +35,7 @@ export const scanTypeEnum = pgEnum("scanType", ["delta", "full"]);
 export const scanJobStatusEnum = pgEnum("scanJobStatus", [
 	"pending",
 	"running",
+	"paused",
 	"finished",
 	"canceled",
 ]);

@@ -153,7 +153,8 @@ export const ComposeActions = ({ composeId }: Props) => {
 									(scanJob) =>
 										scanJob.scanType === "full" &&
 										(scanJob.status === "pending" ||
-											scanJob.status === "running"),
+											scanJob.status === "running" ||
+											scanJob.status === "paused"),
 								),
 							);
 							if (hasPendingFullScan) {

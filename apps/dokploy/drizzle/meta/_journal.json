@@ -1303,6 +1303,13 @@
       "when": 1779743800000,
       "tag": "0185_scan_job_runtime_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 186,
+      "version": "7",
+      "when": 1779743900000,
+      "tag": "0186_scan_job_status_paused",
+      "breakpoints": true
     }
   ]
 }

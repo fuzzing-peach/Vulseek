@@ -133,7 +133,10 @@ const buildMetadata = async (
 };
 
 const isTerminalScanStatus = (status: string) =>
-	status === "finished" || status === "canceled" || status === "failed";
+	status === "finished" ||
+	status === "canceled" ||
+	status === "paused" ||
+	status === "failed";
 
 export default async function handler(
 	req: NextApiRequest,

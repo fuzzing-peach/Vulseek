@@ -8,6 +8,8 @@ import {
 	FileSearch,
 	Folder,
 	Loader2,
+	Pause,
+	Play,
 	RefreshCw,
 	Search,
 } from "lucide-react";
@@ -425,6 +427,10 @@ const getScanJobStatusLabel = (status?: string) => {
 		return "Running";
 	}
 
+	if (status === "paused") {
+		return "Paused";
+	}
+
 	if (status === "finished") {
 		return "Finished";
 	}
@@ -447,6 +453,10 @@ const getScanJobStatusClassName = (status?: string) => {
 
 	if (status === "running") {
 		return "text-amber-600";
+	}
+
+	if (status === "paused") {
+		return "text-blue-600";
 	}
 
 	return "text-muted-foreground";
@@ -794,6 +804,8 @@ export const ShowScanJobDetail = ({
 		);
 	const rerunTaskMutation = api.scan.rerunTask.useMutation();
 	const cancelScanJobMutation = api.scan.cancel.useMutation();
+	const pauseScanJobMutation = api.scan.pause.useMutation();
+	const resumeScanJobMutation = api.scan.resume.useMutation();
 	const updateNoteMutation = api.scan.updateNote.useMutation();
 	const analyzeCandidateMutation = api.scan.analyzeCandidate.useMutation();
 	const [reanalyzingCandidateId, setReanalyzingCandidateId] = useState<
@@ -824,8 +836,27 @@ export const ShowScanJobDetail = ({
 	);
 
 	const isNoteDirty = (scanJob?.note ?? "") !== noteDraft;
-	const canCancelScanJob =
+	const canPauseScanJob =
 		scanJob?.status === "pending" || scanJob?.status === "running";
+	const canResumeScanJob = scanJob?.status === "paused";
+	const canCancelScanJob =
+		scanJob?.status === "pending" ||
+		scanJob?.status === "running" ||
+		scanJob?.status === "paused";
+	const refreshScanJobViews = async () => {
+		await Promise.all([
+			utils.scan.one.invalidate({ scanJobId }),
+			utils.scan.statusView.invalidate({ scanJobId }),
+			utils.scan.candidates.invalidate({ scanJobId }),
+			serviceType === "application"
+				? utils.scan.allByApplication.invalidate({
+						applicationId: serviceId,
+					})
+				: utils.scan.allByCompose.invalidate({
+						composeId: serviceId,
+					}),
+		]);
+	};
 
 	const candidateListQueryState = useMemo(
 		() => parseCandidateListQueryState(router.query),
@@ -1621,50 +1652,114 @@ export const ShowScanJobDetail = ({
 								<div className="flex flex-col gap-3">
 									<div className="rounded-lg border p-4">
 										<div className="mb-3 text-lg font-semibold">Actions</div>
-										{canCancelScanJob ? (
-											<Button
-												type="button"
-												variant="destructive"
-												disabled={cancelScanJobMutation.isLoading}
-												onClick={async () => {
-													try {
-														const result =
-															await cancelScanJobMutation.mutateAsync({
-																scanJobId,
-															});
-														toast.success(
-															`Cancelled job. Stopped ${result.stoppedContainers} containers.`,
-														);
-														await Promise.all([
-															utils.scan.one.invalidate({ scanJobId }),
-															utils.scan.statusView.invalidate({ scanJobId }),
-															utils.scan.candidates.invalidate({ scanJobId }),
-															serviceType === "application"
-																? utils.scan.allByApplication.invalidate({
-																		applicationId: serviceId,
-																	})
-																: utils.scan.allByCompose.invalidate({
-																		composeId: serviceId,
-																	}),
-														]);
-													} catch (error) {
-														toast.error(
-															error instanceof Error
-																? error.message
-																: "Failed to cancel scan job",
-														);
-													}
-												}}
-											>
-												{cancelScanJobMutation.isLoading ? (
-													<>
-														<Loader2 className="mr-2 size-4 animate-spin" />
-														Cancelling...
-													</>
-												) : (
-													"Cancel"
-												)}
-											</Button>
+										{canPauseScanJob || canResumeScanJob || canCancelScanJob ? (
+											<div className="flex flex-wrap gap-2">
+												{canPauseScanJob ? (
+													<Button
+														type="button"
+														variant="outline"
+														disabled={pauseScanJobMutation.isLoading}
+														onClick={async () => {
+															try {
+																const result =
+																	await pauseScanJobMutation.mutateAsync({
+																		scanJobId,
+																	});
+																toast.success(
+																	`Paused job. Stopped ${result.stoppedRuntimes} runtimes.`,
+																);
+																await refreshScanJobViews();
+															} catch (error) {
+																toast.error(
+																	error instanceof Error
+																		? error.message
+																		: "Failed to pause scan job",
+																);
+															}
+														}}
+													>
+														{pauseScanJobMutation.isLoading ? (
+															<>
+																<Loader2 className="mr-2 size-4 animate-spin" />
+																Pausing...
+															</>
+														) : (
+															<>
+																<Pause className="mr-2 size-4" />
+																Pause
+															</>
+														)}
+													</Button>
+												) : null}
+												{canResumeScanJob ? (
+													<Button
+														type="button"
+														variant="outline"
+														disabled={resumeScanJobMutation.isLoading}
+														onClick={async () => {
+															try {
+																await resumeScanJobMutation.mutateAsync({
+																	scanJobId,
+																});
+																toast.success("Resumed job");
+																await refreshScanJobViews();
+															} catch (error) {
+																toast.error(
+																	error instanceof Error
+																		? error.message
+																		: "Failed to resume scan job",
+																);
+															}
+														}}
+													>
+														{resumeScanJobMutation.isLoading ? (
+															<>
+																<Loader2 className="mr-2 size-4 animate-spin" />
+																Resuming...
+															</>
+														) : (
+															<>
+																<Play className="mr-2 size-4" />
+																Resume
+															</>
+														)}
+													</Button>
+												) : null}
+												{canCancelScanJob ? (
+													<Button
+														type="button"
+														variant="destructive"
+														disabled={cancelScanJobMutation.isLoading}
+														onClick={async () => {
+															try {
+																const result =
+																	await cancelScanJobMutation.mutateAsync({
+																		scanJobId,
+																	});
+																toast.success(
+																	`Cancelled job. Stopped ${result.stoppedContainers} containers.`,
+																);
+																await refreshScanJobViews();
+															} catch (error) {
+																toast.error(
+																	error instanceof Error
+																		? error.message
+																		: "Failed to cancel scan job",
+																);
+															}
+														}}
+													>
+														{cancelScanJobMutation.isLoading ? (
+															<>
+																<Loader2 className="mr-2 size-4 animate-spin" />
+																Cancelling...
+															</>
+														) : (
+															"Cancel"
+														)}
+													</Button>
+												) : null}
+											</div>
 										) : (
 											<div className="text-sm text-muted-foreground">
 												No actions available for this job status.
