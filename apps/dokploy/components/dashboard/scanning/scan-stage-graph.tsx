@@ -51,8 +51,8 @@ type PreviewAgentProfile = NonNullable<StageGraphNode["agentProfile"]>;
 type PreviewAgentProfiles = RouterOutputs["ai"]["getAgentProfiles"] | undefined;
 type PreviewServiceData = Record<string, unknown> | null | undefined;
 type FullScanStageGraphTarget =
-	| { applicationId: string; composeId?: never }
-	| { composeId: string; applicationId?: never };
+	| { applicationId: string; composeId?: never; scanType?: "delta" | "full" }
+	| { composeId: string; applicationId?: never; scanType?: "delta" | "full" };
 type StageFlowNodeData = Record<string, unknown> & {
 	label: ReactNode;
 	stageNode?: StageGraphNode;
@@ -79,6 +79,7 @@ const BACK_EDGE_OFFSET_Y = 28;
 const FORWARD_LONG_EDGE_OFFSET_Y = 30;
 const DEFAULT_PROFILE_VALUE = "__service_default__";
 const REPOSITORY_STAGE_NAME = "repository-scan";
+const DELTA_SCOPE_STAGE_NAME = "delta-scope";
 const EMPTY_FLOW_ELEMENTS = {
 	nodes: [] as Node[],
 	edges: [] as Edge[],
@@ -121,6 +122,9 @@ const asRuntimeStageSetting = (
 	stageName: string,
 ) => settings?.stages?.[stageName] ?? {};
 
+const isRootRuntimeStage = (stageName: string) =>
+	stageName === REPOSITORY_STAGE_NAME || stageName === DELTA_SCOPE_STAGE_NAME;
+
 const getNodeRuntimeBoolean = (
 	node: StageGraphNode,
 	key: "disabled" | "effectiveDisabled",
@@ -133,12 +137,16 @@ const buildEffectiveDisabledStageSet = (
 	graph: StageGraph,
 	settings?: ScanRuntimeSettingsDraft | null,
 ) => {
+	const rootStageName =
+		graph.nodes.find((node) => node.order === 0)?.stageName ||
+		graph.nodes[0]?.stageName ||
+		REPOSITORY_STAGE_NAME;
 	const explicitDisabled = new Set<string>();
 	for (const node of graph.nodes) {
 		const disabled =
 			asRuntimeStageSetting(settings, node.stageName).disabled === true ||
 			getNodeRuntimeBoolean(node, "disabled");
-		if (disabled && node.stageName !== REPOSITORY_STAGE_NAME) {
+		if (disabled && node.stageName !== rootStageName) {
 			explicitDisabled.add(node.stageName);
 		}
 	}
@@ -152,7 +160,7 @@ const buildEffectiveDisabledStageSet = (
 	}
 
 	const reachable = new Set<string>();
-	const queue = [REPOSITORY_STAGE_NAME];
+	const queue = [rootStageName];
 	while (queue.length > 0) {
 		const stageName = queue.shift();
 		if (!stageName || reachable.has(stageName) || explicitDisabled.has(stageName)) {
@@ -213,7 +221,7 @@ const applyRuntimeSettingsToGraph = (
 			return {
 				...node,
 				disabled:
-					node.stageName === REPOSITORY_STAGE_NAME
+					isRootRuntimeStage(node.stageName)
 						? false
 						: setting.disabled === true ||
 							getNodeRuntimeBoolean(node, "disabled"),
@@ -374,20 +382,15 @@ const StageDetailDialog = ({
 	const [agentProfileId, setAgentProfileId] = useState(DEFAULT_PROFILE_VALUE);
 	const [isSaving, setIsSaving] = useState(false);
 	const enabledProfiles = useMemo(
-		() =>
-			(agentProfiles ?? []).filter(
-				(profile) =>
-					profile.isEnabled &&
-					profile.agentProfileId !== agentProfile?.agentProfileId,
-			),
-		[agentProfiles, agentProfile?.agentProfileId],
+		() => (agentProfiles ?? []).filter((profile) => profile.isEnabled),
+		[agentProfiles],
 	);
 	useEffect(() => {
 		if (!stage) {
 			return;
 		}
 		setDisabled(
-			stage.stageName === REPOSITORY_STAGE_NAME
+			isRootRuntimeStage(stage.stageName)
 				? false
 				: getNodeRuntimeBoolean(stage, "disabled"),
 		);
@@ -411,8 +414,7 @@ const StageDetailDialog = ({
 		setIsSaving(true);
 		try {
 			await onSave(stage.stageName, {
-				disabled:
-					stage.stageName === REPOSITORY_STAGE_NAME ? false : disabled,
+				disabled: isRootRuntimeStage(stage.stageName) ? false : disabled,
 				concurrency: nextConcurrency,
 				agentProfileId:
 					agentProfileId === DEFAULT_PROFILE_VALUE ? null : agentProfileId,
@@ -447,7 +449,7 @@ const StageDetailDialog = ({
 									</div>
 									<Switch
 										checked={disabled}
-										disabled={stage.stageName === REPOSITORY_STAGE_NAME}
+										disabled={isRootRuntimeStage(stage.stageName)}
 										onCheckedChange={setDisabled}
 									/>
 								</div>
@@ -1341,23 +1343,25 @@ export const FullScanStageGraphPreview = ({
 	serviceData,
 	scanRuntimeSettings,
 	onScanRuntimeSettingsChange,
+	scanType = "full",
 }: {
 	serviceData?: PreviewServiceData;
 	scanRuntimeSettings?: ScanRuntimeSettingsDraft;
 	onScanRuntimeSettingsChange?: (settings: ScanRuntimeSettingsDraft) => void;
+	scanType?: "delta" | "full";
 }) => {
 	const target = useMemo<FullScanStageGraphTarget | null>(() => {
 		const serviceRecord = asRecord(serviceData);
 		const applicationId = serviceRecord?.applicationId;
 		if (typeof applicationId === "string" && applicationId) {
-			return { applicationId };
+			return { applicationId, scanType };
 		}
 		const composeId = serviceRecord?.composeId;
 		if (typeof composeId === "string" && composeId) {
-			return { composeId };
+			return { composeId, scanType };
 		}
 		return null;
-	}, [serviceData]);
+	}, [scanType, serviceData]);
 	const {
 		data: graph,
 		isLoading,
@@ -1383,7 +1387,7 @@ export const FullScanStageGraphPreview = ({
 			graph={graph}
 			isLoading={isLoading}
 			error={error}
-			description="Full scan pipeline preview."
+			description={`${scanType === "delta" ? "Delta" : "Full"} scan pipeline preview.`}
 			heightClassName="h-[360px]"
 			scanRuntimeSettings={scanRuntimeSettings}
 			agentProfiles={agentProfiles}

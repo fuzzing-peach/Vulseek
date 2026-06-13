@@ -153,6 +153,8 @@ const CANDIDATE_EXPORT_FIELDS = [
 	{ key: "verificationUpdatedAt", label: "Verification Updated At" },
 	{ key: "triageTaskId", label: "Triage Task ID" },
 	{ key: "triageResult", label: "Triage Result" },
+	{ key: "triageDisqualifier", label: "Triage Disqualifier" },
+	{ key: "triageDisqualifierReason", label: "Triage Disqualifier Reason" },
 	{ key: "triageSecurityClassification", label: "Triage Classification" },
 	{ key: "triageIsSecurityIssue", label: "Triage Is Security Issue" },
 	{ key: "triageImpactType", label: "Triage Impact Type" },
@@ -536,6 +538,13 @@ const getTriageResultBadgeClassName = (result?: string | null) => {
 
 const getTaskStageLabel = (stage?: string) => {
 	if (
+		stage === "Delta Scope" ||
+		stage === "delta-scope" ||
+		stage === "delta_scoping"
+	) {
+		return "Delta Scope";
+	}
+	if (
 		stage === "Scan Repository" ||
 		stage === "repository-scan" ||
 		stage === "repository_scanning"
@@ -622,14 +631,15 @@ const getTaskStatusBadgeClassName = (status?: string) => {
 };
 
 const RUNNING_TASK_STAGE_ORDER: Record<string, number> = {
-	repository_scanning: 0,
-	module_scanning: 1,
-	function_scanning: 2,
-	analyzing: 3,
-	fuzz_building: 4,
-	fuzzing: 5,
-	criticizing: 6,
-	verifying: 7,
+	delta_scoping: 0,
+	repository_scanning: 1,
+	module_scanning: 2,
+	function_scanning: 3,
+	analyzing: 4,
+	fuzz_building: 5,
+	fuzzing: 6,
+	criticizing: 7,
+	verifying: 8,
 };
 
 const TASK_STAGE_OPTIONS = Object.keys(RUNNING_TASK_STAGE_ORDER);
@@ -1333,6 +1343,9 @@ export const ShowScanJobDetail = ({
 			verificationUpdatedAt: latestVerificationResult?.updatedAt ?? null,
 			triageTaskId: latestTriageResult?.taskId ?? null,
 			triageResult: latestTriageResult?.result ?? null,
+			triageDisqualifier: latestTriageResult?.disqualifier ?? null,
+			triageDisqualifierReason:
+				latestTriageResult?.disqualifierReason ?? null,
 			triageSecurityClassification:
 				latestTriageResult?.securityClassification ?? null,
 			triageIsSecurityIssue: latestTriageResult?.isSecurityIssue ?? null,
@@ -1440,12 +1453,27 @@ export const ShowScanJobDetail = ({
 		router.isReady,
 	]);
 
-	const buildCandidateDetailHref = (candidateId: string) =>
-		buildCandidateListStateHref(
-			`${candidateListPageBasePath}/candidates/${encodeURIComponent(candidateId)}`,
+	const buildCandidateDetailHref = (
+		candidate: Pick<
+			CandidateListItem,
+			"vulnerabilityCandidateId" | "scanFunctionTaskId"
+		>,
+	) => {
+		const href = buildCandidateListStateHref(
+			`${candidateListPageBasePath}/candidates/${encodeURIComponent(
+				candidate.vulnerabilityCandidateId,
+			)}`,
 			currentCandidateListState,
 			"candidates",
 		);
+		if (!candidate.scanFunctionTaskId) {
+			return href;
+		}
+		const separator = href.includes("?") ? "&" : "?";
+		return `${href}${separator}scanFunctionTaskId=${encodeURIComponent(
+			candidate.scanFunctionTaskId,
+		)}`;
+	};
 	const buildTaskDetailHref = (taskId: string) =>
 		`${candidateListPageBasePath}/tasks/${encodeURIComponent(taskId)}`;
 	const shouldIgnoreTaskRowClick = (target: EventTarget | null) =>
@@ -2313,7 +2341,7 @@ export const ShowScanJobDetail = ({
 																		<td className="px-4 py-3 align-top text-xs text-muted-foreground capitalize">
 																			<Link
 																				href={buildCandidateDetailHref(
-																					candidate.vulnerabilityCandidateId,
+																					candidate,
 																				)}
 																				onClick={handleCandidateLinkClick}
 																				className="block"
@@ -2324,7 +2352,7 @@ export const ShowScanJobDetail = ({
 																		<td className="px-4 py-3 align-top">
 																			<Link
 																				href={buildCandidateDetailHref(
-																					candidate.vulnerabilityCandidateId,
+																					candidate,
 																				)}
 																				onClick={handleCandidateLinkClick}
 																				className="block"
@@ -2343,7 +2371,7 @@ export const ShowScanJobDetail = ({
 																		<td className="px-4 py-3 align-top">
 																			<Link
 																				href={buildCandidateDetailHref(
-																					candidate.vulnerabilityCandidateId,
+																					candidate,
 																				)}
 																				onClick={handleCandidateLinkClick}
 																				className="block"
@@ -2372,7 +2400,7 @@ export const ShowScanJobDetail = ({
 																		<td className="px-4 py-3 align-top">
 																			<Link
 																				href={buildCandidateDetailHref(
-																					candidate.vulnerabilityCandidateId,
+																					candidate,
 																				)}
 																				onClick={handleCandidateLinkClick}
 																				className="block"
@@ -2396,7 +2424,7 @@ export const ShowScanJobDetail = ({
 																		<td className="px-4 py-3 align-top">
 																			<Link
 																				href={buildCandidateDetailHref(
-																					candidate.vulnerabilityCandidateId,
+																					candidate,
 																				)}
 																				onClick={handleCandidateLinkClick}
 																				className="block"
@@ -2424,7 +2452,7 @@ export const ShowScanJobDetail = ({
 																		<td className="px-4 py-3 align-top text-xs text-muted-foreground">
 																			<Link
 																				href={buildCandidateDetailHref(
-																					candidate.vulnerabilityCandidateId,
+																					candidate,
 																				)}
 																				onClick={handleCandidateLinkClick}
 																				className="block"

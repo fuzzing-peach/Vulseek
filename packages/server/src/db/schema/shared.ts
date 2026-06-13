@@ -104,6 +104,10 @@ export type ScanRuntimeSettings = z.infer<typeof ScanRuntimeSettingsSchema>;
 export const buildDefaultScanStageSettings = (
 	agentProfileId?: string | null,
 ): ScanStageSettings => ({
+	"delta-scope": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 1,
+	},
 	"repository-scan": {
 		agentProfileId: agentProfileId ?? null,
 		concurrency: 1,

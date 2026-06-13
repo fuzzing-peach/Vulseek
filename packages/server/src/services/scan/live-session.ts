@@ -207,6 +207,7 @@ export type SandboxAgentTaskRuntime = {
 	taskId: string;
 	scanJobId: string;
 	taskKind:
+		| "delta_scoping"
 		| "repository_scanning"
 		| "module_scanning"
 		| "function_scanning"
@@ -240,12 +241,19 @@ const inspectContainerIpAddress = async (containerName: string) => {
 };
 
 const resolveScannerTaskSession = async (input: {
-	stage: "repository_scanning" | "module_scanning" | "function_scanning";
+	stage:
+		| "delta_scoping"
+		| "repository_scanning"
+		| "module_scanning"
+		| "function_scanning";
 	taskId: string;
 }) => {
 	const task = await findTaskByIdRepo(input.taskId).catch(() => null);
 	if (!task) {
-		if (input.stage !== "repository_scanning") {
+		if (
+			input.stage !== "repository_scanning" &&
+			input.stage !== "delta_scoping"
+		) {
 			return null;
 		}
 		const scanJob = await findScanJobByIdRepo(input.taskId).catch(() => null);
@@ -276,7 +284,11 @@ const resolveScannerTaskSession = async (input: {
 };
 
 export const findScanJobSandboxAgentSession = async (input: {
-	stage: "repository_scanning" | "module_scanning" | "function_scanning";
+	stage:
+		| "delta_scoping"
+		| "repository_scanning"
+		| "module_scanning"
+		| "function_scanning";
 	taskId: string;
 }): Promise<SandboxAgentLiveSession | null> => {
 	const task = await resolveScannerTaskSession(input);
@@ -350,6 +362,9 @@ const buildSandboxAgentTaskRuntime = async (
 	let taskKind: SandboxAgentTaskRuntime["taskKind"] = "repository_scanning";
 
 	switch (task.stageName) {
+		case "delta-scope":
+			taskKind = "delta_scoping";
+			break;
 		case "repository-scan":
 			taskKind = "repository_scanning";
 			break;

@@ -3,6 +3,8 @@ node_modules
 .gitignore
 *.md
 !packages/server/src/services/scan/**/*.prompt.md
+!agents/skills/**/*.md
+!agents/cache-schema/**/*.md
 dist
 
 # Local package/build caches

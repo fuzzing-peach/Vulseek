@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
 	buildFuzzerRequestSchema,
 	candidateSchema,
+	deltaScopeManifestSchema,
 	functionScanManifestSchema,
 	moduleScanManifestSchema,
 	moduleSchema,
@@ -15,6 +16,7 @@ import {
 	verificationSchema,
 } from "./artifacts/contracts/domain-object.contract";
 import { buildFunctionScannerPrompt } from "./prompts/function-scanner.prompt";
+import { buildDeltaScopePrompt } from "./prompts/delta-scope.prompt";
 import { buildModuleScannerPrompt } from "./prompts/module-scanner.prompt";
 import { buildRepositoryScannerPrompt } from "./prompts/repository-scanner.prompt";
 import { buildStructuredOutputPromptSuffix } from "./runtime/run-single-turn-agent";
@@ -228,6 +230,60 @@ test("repository, module, and function prompts stay concise while delegating det
 	assert.match(functionSkill, /structured evidence/i);
 });
 
+test("delta scope prompt and schema stay limited to repository and functions", () => {
+	assert.equal(
+		deltaScopeManifestSchema.safeParse({
+			repository: "/task/repository.json",
+			functions: ["/task/functions/parse_record.json"],
+		}).success,
+		true,
+	);
+	assert.equal(
+		deltaScopeManifestSchema.safeParse({
+			repository: "/task/repository.json",
+			functions: [],
+		}).success,
+		true,
+	);
+	assert.equal(
+		deltaScopeManifestSchema.safeParse({
+			repository: "/task/repository.json",
+			module: "/task/module.json",
+			functions: [],
+		}).success,
+		false,
+	);
+
+	const deltaScopePrompt = buildDeltaScopePrompt({
+		repository: { id: "repo", name: "wolfSSL" },
+		repositoryState: {
+			currentBranch: "master",
+			targetRef: "master",
+			currentExactTag: null,
+			targetTag: null,
+			resolvedTargetSha: "abc",
+			resolvedBaseSha: "def",
+			commitWindow: 3,
+		},
+		repositoryStatePath: "/task/00_repository_state.json",
+		agentProvider: "codex",
+	});
+	assert.match(deltaScopePrompt, /delta-scope as your working method/);
+	assert.match(
+		deltaScopePrompt,
+		/\/workspace\/repo\/\.agents\/skills\/delta-scope\/SKILL\.md/,
+	);
+	assert.match(deltaScopePrompt, /repository/);
+	assert.match(deltaScopePrompt, /functions/);
+	assert.match(deltaScopePrompt, /Do not write or return a module artifact/);
+	assert.match(deltaScopePrompt, /\{ "repository": "\/task\/repository\.json", "functions": \[\] \}/);
+
+	const deltaScopeSkill = readSkillSource("delta-scope");
+	assert.match(deltaScopeSkill, /impact scoping only/i);
+	assert.match(deltaScopeSkill, /Do not write module artifacts/i);
+	assert.match(deltaScopeSkill, /functions/);
+});
+
 test("stage boundary manifests use task artifact paths instead of object lists", () => {
 	assert.equal(
 		repositoryScanManifestSchema.safeParse({
@@ -422,28 +478,48 @@ test("verification is a three-value sanity check and triage owns security classi
 		false,
 	);
 
+	const baseTriage = {
+		id: "triage-1",
+		result: "security_issue",
+		disqualifier: null,
+		disqualifierReason: null,
+		securityClassification: "vulnerability",
+		isSecurityIssue: true,
+		impactType: "memory corruption",
+		cvssVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+		cvssScore: 9.8,
+		cvssSeverity: "critical",
+		exploitability: "practical",
+		isExploitable: true,
+		commonTriggerConditions: ["malformed network record reaches parser"],
+		hardeningOrRobustness: false,
+		epssProbability30d: 0.02,
+		epssSource: "heuristic:no-cve-mapping",
+		summary: "Security issue with network trigger.",
+		reportPath: "/task/01_triage_report.md",
+		runtimeSeconds: null,
+		evidenceBundle: [evidence],
+		residualUncertainty: [],
+		status: "completed",
+	};
+
+	assert.equal(triageSchema.safeParse(baseTriage).success, true);
+
 	assert.equal(
 		triageSchema.safeParse({
-			id: "triage-1",
-			result: "security_issue",
-			securityClassification: "vulnerability",
-			isSecurityIssue: true,
-			impactType: "memory corruption",
-			cvssVector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
-			cvssScore: 9.8,
-			cvssSeverity: "critical",
-			exploitability: "practical",
-			isExploitable: true,
-			commonTriggerConditions: ["malformed network record reaches parser"],
-			hardeningOrRobustness: false,
-			epssProbability30d: 0.02,
-			epssSource: "heuristic:no-cve-mapping",
-			summary: "Security issue with network trigger.",
-			reportPath: "/task/01_triage_report.md",
-			runtimeSeconds: null,
-			evidenceBundle: [evidence],
-			residualUncertainty: [],
-			status: "completed",
+			...baseTriage,
+			result: "non_security",
+			disqualifier: "D-5",
+			disqualifierReason:
+				"Caller violates the documented API ownership contract.",
+			securityClassification: "non_security",
+			isSecurityIssue: false,
+			cvssVector: null,
+			cvssScore: null,
+			cvssSeverity: "none",
+			exploitability: "none",
+			isExploitable: false,
+			hardeningOrRobustness: true,
 		}).success,
 		true,
 	);

@@ -70,6 +70,10 @@ COPY --from=build /prod/dokploy/drizzle ./drizzle
 COPY .env.production ./.env
 COPY --from=build /prod/dokploy/components.json ./components.json
 COPY --from=build /prod/dokploy/node_modules ./node_modules
+COPY --from=build /usr/src/app/agents/skills ./agents/skills
+COPY --from=build /usr/src/app/agents/cache-schema ./agents/cache-schema
+COPY --from=build /usr/src/app/agents/mcp ./agents/mcp
+COPY --from=build /usr/src/app/agents/codex-config.toml ./agents/codex-config.toml
 
 EXPOSE 3000
 CMD [ "pnpm", "start" ]

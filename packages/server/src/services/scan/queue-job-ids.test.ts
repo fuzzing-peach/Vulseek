@@ -36,4 +36,16 @@ test("buildKnownQueueJobIdsForTask includes legacy and canonical ids for retry c
 		),
 		["scan:job-1:repository:job-1", "repository:job-1"],
 	);
+
+	assert.deepEqual(
+		buildKnownQueueJobIdsForTask(
+			{ name: "scan:job-1:repository" },
+			{
+				stageName: "delta-scope",
+				taskId: "delta-root-1",
+				scanJobId: "job-1",
+			},
+		),
+		["scan:job-1:repository:delta-root-1", "delta-scope:job-1"],
+	);
 });

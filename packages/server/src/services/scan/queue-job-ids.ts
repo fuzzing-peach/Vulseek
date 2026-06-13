@@ -15,6 +15,8 @@ export const buildKnownStageQueueJobIds = (input: {
 	const currentJobId = buildQueueTaskJobId(input.queueName, input.taskId);
 
 	switch (input.stageName) {
+		case "delta-scope":
+			return dedupe([currentJobId, `delta-scope:${input.scanJobId}`]);
 		case "repository-scan":
 			return dedupe([currentJobId, `repository:${input.scanJobId}`]);
 		case "module-scan":

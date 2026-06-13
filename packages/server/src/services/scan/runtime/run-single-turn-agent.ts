@@ -31,7 +31,7 @@ import { SCAN_STAGE_IDS } from "../stage-metadata";
 const RUNTIME_CUSTOM_SKILLS = [
 	"codeql",
 	"semgrep",
-	"delta-scan",
+	"delta-scope",
 	"full-scan",
 	"full-scan-subagent",
 	"scan-repository",

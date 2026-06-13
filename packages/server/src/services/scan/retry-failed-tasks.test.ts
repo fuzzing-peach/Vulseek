@@ -80,6 +80,13 @@ const makeTask = (overrides?: Partial<Task>): Task => ({
 test("retryFailedScanJobTasksWithDeps retries every failed task type in stage order", async () => {
 	const tasks: Task[] = [
 		makeTask({
+			taskId: "delta-scope-1",
+			stageName: "delta-scope",
+			status: "failed",
+			name: "delta-scoping",
+			createdAt: "2026-05-04T00:00:30.000Z",
+		}),
+		makeTask({
 			taskId: "verify-1",
 			stageName: "verify",
 			status: "failed",
@@ -154,6 +161,7 @@ test("retryFailedScanJobTasksWithDeps retries every failed task type in stage or
 	});
 
 	assert.deepEqual(result.retriedTasksByStage, {
+		"delta-scope": 1,
 		"repository-scan": 1,
 		"module-scan": 1,
 		"function-scan": 1,
@@ -161,8 +169,9 @@ test("retryFailedScanJobTasksWithDeps retries every failed task type in stage or
 		verify: 1,
 		triage: 1,
 	});
-	assert.equal(result.retriedTaskCount, 6);
+	assert.equal(result.retriedTaskCount, 7);
 	assert.deepEqual(removed, [
+		"delta-scope-1",
 		"repo-1",
 		"module-1",
 		"function-1",

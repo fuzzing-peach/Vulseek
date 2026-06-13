@@ -151,6 +151,8 @@ const buildTriageTaskResultView = async (
 		scanJobId: task.scanJobId,
 		vulnerabilityCandidateId,
 		result: parsedOutput.data.result,
+		disqualifier: parsedOutput.data.disqualifier,
+		disqualifierReason: parsedOutput.data.disqualifierReason,
 		securityClassification: parsedOutput.data.securityClassification,
 		isSecurityIssue: parsedOutput.data.isSecurityIssue,
 		impactType: parsedOutput.data.impactType,

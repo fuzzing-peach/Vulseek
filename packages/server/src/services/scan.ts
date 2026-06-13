@@ -79,7 +79,11 @@ import {
 	updateTaskRepo,
 	updateTaskStatusRepo,
 } from "./scan/persistence/task.repo";
-import type { PipelineDefinition } from "./scan/pipeline/pipeline-definition";
+import type {
+	AnyStageDefinition,
+	PipelineDefinition,
+	PipelineEdge,
+} from "./scan/pipeline/pipeline-definition";
 import {
 	createPipelineDefinition,
 	createPipelineEdge,
@@ -89,7 +93,10 @@ import {
 	startPipelineRuntime,
 	stopPipelineRuntimesForScanJob,
 } from "./scan/pipeline/pipeline-runner";
-import { createStageQueueBinding } from "./scan/pipeline/stage-definition";
+import {
+	createStageQueueBinding,
+	type StageDefinition,
+} from "./scan/pipeline/stage-definition";
 import {
 	buildKnownQueueJobIdsForTask,
 	buildQueueTaskJobId,
@@ -135,7 +142,11 @@ import type {
 import {
 	createFunctionScanningStageDefinition,
 	type FunctionScanningStageInput,
+	type FunctionScanningStageOutput,
 } from "./scan/stages/function-scan.stage";
+import {
+	createDeltaScopeStageDefinition,
+} from "./scan/stages/delta-scope.stage";
 import {
 	createFuzzBuildStageDefinition,
 	type FuzzBuildStageInput,
@@ -181,7 +192,7 @@ const PREINSTALLED_TOOL_SKILLS = [] as const;
 const RUNTIME_CUSTOM_SKILLS = [
 	"codeql",
 	"semgrep",
-	"delta-scan",
+	"delta-scope",
 	"full-scan",
 	"full-scan-subagent",
 	"scan-repository",
@@ -277,6 +288,7 @@ type InProgressTaskView = {
 	title: string;
 	subtitle: string;
 	stage:
+		| "delta_scoping"
 		| "repository_scanning"
 		| "module_scanning"
 		| "function_scanning"
@@ -320,15 +332,16 @@ const IN_PROGRESS_TASK_STAGE_ORDER: Record<
 	InProgressTaskView["stage"],
 	number
 > = {
-	repository_scanning: 0,
-	module_scanning: 1,
-	function_scanning: 2,
-	analyzing: 3,
-	fuzz_building: 4,
-	fuzzing: 5,
-	criticizing: 6,
-	verifying: 7,
-	triaging: 8,
+	delta_scoping: 0,
+	repository_scanning: 1,
+	module_scanning: 2,
+	function_scanning: 3,
+	analyzing: 4,
+	fuzz_building: 5,
+	fuzzing: 6,
+	criticizing: 7,
+	verifying: 8,
+	triaging: 9,
 };
 
 const compareInProgressTaskView = (
@@ -364,6 +377,7 @@ export const MAX_SCAN_FUNCTION_WORKER_CONCURRENCY = 32;
 
 type ScanStageQueueKind =
 	| "repository"
+	| "delta-scope"
 	| "module"
 	| "function"
 	| "analysis"
@@ -496,6 +510,7 @@ const obliterateScanStageGroupQueues = async (
 		(
 			[
 				"repository",
+				"delta-scope",
 				"module",
 				"function",
 				"analysis",
@@ -528,6 +543,9 @@ const taskMatchesStageQueueScope = async (
 };
 
 const getRepositoryScanQueue = (scanJobId: string) =>
+	getScanStageQueue(scanJobId, "repository");
+
+const getDeltaScopeQueue = (scanJobId: string) =>
 	getScanStageQueue(scanJobId, "repository");
 
 const getModuleScanQueue = (scanJobId: string) =>
@@ -821,6 +839,16 @@ const readCandidateRecordFromTaskInput = (
 const buildInProgressTaskView = (task: Task): InProgressTaskView | null => {
 	const input = asTaskRecord(task.input);
 	switch (task.stageName) {
+		case SCAN_STAGE_IDS.deltaScope:
+			return {
+				id: `delta-scope-${task.taskId}`,
+				taskId: task.taskId,
+				title: "Delta Scope",
+				subtitle: "Diff impact function scoping",
+				stage: "delta_scoping",
+				startedAt: task.startedAt,
+				updatedAt: task.updatedAt,
+			};
 		case SCAN_STAGE_IDS.repositoryScan:
 			return {
 				id: `repository-${task.taskId}`,
@@ -1029,18 +1057,28 @@ const listQueuePendingCountsByScanJobId = async (
 	const activeStageGroups = (
 		await listStageGroupInstancesByScanJobIdRepo(scanJobId).catch(() => [])
 	).filter((group) => group.status === "active");
+	const hasDeltaScopeRoot = taskStatusCounts.some(
+		(row) => row.stageName === SCAN_STAGE_IDS.deltaScope,
+	);
 	const queueEntries: Array<{
 		id: ScanStageQueueKind;
 		title: string;
 		stageName: Task["stageName"];
 		queue: Queue<string>;
 	}> = [
-		{
-			id: "repository",
-			title: SCAN_STAGE_METADATA.repositoryScan.name,
-			stageName: SCAN_STAGE_IDS.repositoryScan,
-			queue: getRepositoryScanQueue(scanJobId),
-		},
+		hasDeltaScopeRoot
+			? {
+					id: "delta-scope",
+					title: SCAN_STAGE_METADATA.deltaScope.name,
+					stageName: SCAN_STAGE_IDS.deltaScope,
+					queue: getDeltaScopeQueue(scanJobId),
+				}
+			: {
+					id: "repository",
+					title: SCAN_STAGE_METADATA.repositoryScan.name,
+					stageName: SCAN_STAGE_IDS.repositoryScan,
+					queue: getRepositoryScanQueue(scanJobId),
+				},
 		{
 			id: "module",
 			title: SCAN_STAGE_METADATA.moduleScan.name,
@@ -1190,6 +1228,7 @@ const RERUNNABLE_TASK_STATUSES = new Set<Task["status"]>([
 ]);
 
 const RERUNNABLE_TASK_STAGE_NAMES = new Set<Task["stageName"]>([
+	SCAN_STAGE_IDS.deltaScope,
 	SCAN_STAGE_IDS.repositoryScan,
 	SCAN_STAGE_IDS.moduleScan,
 	SCAN_STAGE_IDS.functionScan,
@@ -2261,13 +2300,6 @@ const buildProjectProfileCacheRoot = () =>
 
 const buildScanJobContextRoot = (scanJobId: string) =>
 	path.posix.join(buildProjectProfileContextRoot(), "jobs", scanJobId);
-
-const buildScanCandidateResultPath = (scanJobId: string) =>
-	path.posix.join(
-		buildScanJobContextRoot(scanJobId),
-		"scanning",
-		"scan_candidates.json",
-	);
 
 const buildFullScanRoot = (scanJobId: string) =>
 	path.posix.join(buildScanJobContextRoot(scanJobId), "scanning", "full_scan");
@@ -4579,6 +4611,7 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 };
 
 const SCAN_TASK_VIEW_STAGE_TO_STAGE_NAME: Record<string, Task["stageName"]> = {
+	delta_scoping: SCAN_STAGE_IDS.deltaScope,
 	repository_scanning: SCAN_STAGE_IDS.repositoryScan,
 	module_scanning: SCAN_STAGE_IDS.moduleScan,
 	function_scanning: SCAN_STAGE_IDS.functionScan,
@@ -4689,7 +4722,10 @@ const deriveStageGraphStatus = (
 	counts: ScanStageGraphCounts,
 	scanJob: ScanJob,
 ): ScanStageGraphNodeStatus => {
-	if (stageName === SCAN_STAGE_IDS.repositoryScan) {
+	if (
+		stageName === SCAN_STAGE_IDS.repositoryScan ||
+		stageName === SCAN_STAGE_IDS.deltaScope
+	) {
 		const repositoryStatus = scanJob.repositoryTaskStatus;
 		if (
 			repositoryStatus === "pending" ||
@@ -4737,11 +4773,23 @@ const resolveStageGraphAgentKind = (stageName: string): StageAgentKind => {
 type ScanStageGraphTargetInput = {
 	applicationId?: string | null;
 	composeId?: string | null;
+	scanType?: "delta" | "full" | null;
 };
 
 const FULL_SCAN_STAGE_GRAPH_STAGES = [
 	SCAN_STAGE_METADATA.repositoryScan,
 	SCAN_STAGE_METADATA.moduleScan,
+	SCAN_STAGE_METADATA.functionScan,
+	SCAN_STAGE_METADATA.analysis,
+	SCAN_STAGE_METADATA.fuzzBuild,
+	SCAN_STAGE_METADATA.fuzzRun,
+	SCAN_STAGE_METADATA.analysisCritic,
+	SCAN_STAGE_METADATA.verification,
+	SCAN_STAGE_METADATA.triage,
+] as const;
+
+const DELTA_SCAN_STAGE_GRAPH_STAGES = [
+	SCAN_STAGE_METADATA.deltaScope,
 	SCAN_STAGE_METADATA.functionScan,
 	SCAN_STAGE_METADATA.analysis,
 	SCAN_STAGE_METADATA.fuzzBuild,
@@ -4853,6 +4901,23 @@ const FULL_SCAN_STAGE_GRAPH_EDGES = [
 	},
 ] as const;
 
+const DELTA_SCAN_STAGE_GRAPH_EDGES = [
+	{
+		id: "delta-scope-to-function",
+		name: "delta-scope-to-function",
+		source: SCAN_STAGE_IDS.deltaScope,
+		target: SCAN_STAGE_IDS.functionScan,
+		fork: false,
+		routeKey: null,
+		isDefaultRoute: false,
+	},
+	...FULL_SCAN_STAGE_GRAPH_EDGES.filter(
+		(edge) =>
+			edge.source !== SCAN_STAGE_IDS.repositoryScan &&
+			edge.source !== SCAN_STAGE_IDS.moduleScan,
+	),
+] as const;
+
 const FULL_SCAN_STAGE_GRAPH_GROUPS = [
 	{
 		id: "analysis-fuzzing-debate",
@@ -4906,10 +4971,20 @@ export const findFullScanStageGraph = async (
 ) => {
 	const settings =
 		await resolveScanProfileConcurrencySettingsFromTarget(target);
+	const scanType = target.scanType === "delta" ? "delta" : "full";
+	const stages =
+		scanType === "delta"
+			? DELTA_SCAN_STAGE_GRAPH_STAGES
+			: FULL_SCAN_STAGE_GRAPH_STAGES;
+	const edges =
+		scanType === "delta"
+			? DELTA_SCAN_STAGE_GRAPH_EDGES
+			: FULL_SCAN_STAGE_GRAPH_EDGES;
 	return {
-		pipelineName: "full-scan-programmatic",
+		pipelineName:
+			scanType === "delta" ? "delta-scan-programmatic" : "full-scan-programmatic",
 		nodes: await Promise.all(
-			FULL_SCAN_STAGE_GRAPH_STAGES.map(async (stage, index) => {
+			stages.map(async (stage, index) => {
 				const agentProfile = await resolveStageAgentProfileFromTarget(
 					target,
 					resolveStageGraphAgentKind(stage.id),
@@ -4940,7 +5015,7 @@ export const findFullScanStageGraph = async (
 				};
 			}),
 		),
-		edges: FULL_SCAN_STAGE_GRAPH_EDGES.map((edge) => ({ ...edge })),
+		edges: edges.map((edge) => ({ ...edge })),
 		groups: FULL_SCAN_STAGE_GRAPH_GROUPS.map((group) => ({
 			...group,
 			memberStageNames: [...group.memberStageNames],
@@ -4951,7 +5026,10 @@ export const findFullScanStageGraph = async (
 
 export const findScanJobStageGraph = async (scanJobId: string) => {
 	const context = await buildFullScanPipelineContext(scanJobId);
-	const pipeline = buildFullScanPipeline(context);
+	const pipeline =
+		context.scanJob.scanType === "delta"
+			? buildDeltaScanPipeline(context)
+			: buildFullScanPipeline(context);
 	const disabledStages = buildEffectiveDisabledStageSet({
 		settings: context.scanJob.scanRuntimeSettings,
 		stageNames: pipeline.stages.map((stage) => stage.id),
@@ -4959,6 +5037,7 @@ export const findScanJobStageGraph = async (scanJobId: string) => {
 			source: edge.from.id,
 			target: edge.to.id,
 		})),
+		rootStageName: pipeline.stages[0]?.id,
 	});
 	const taskStatusCounts = await listTaskStatusCountsByScanJobIdRepo(scanJobId);
 	const queuePendingCounts = await listQueuePendingCountsByScanJobId(
@@ -5112,146 +5191,6 @@ const renderJsonRpcMessage = (message: JsonRpcMessage) => {
 		default:
 			return "";
 	}
-};
-
-const validateFunctionCandidateFile = async (filePath: string) => {
-	let raw = "";
-	try {
-		raw = await fs.readFile(filePath, "utf-8");
-	} catch (error) {
-		throw new Error(
-			`function result file not found at ${filePath}: ${error instanceof Error ? error.message : "unknown error"}`,
-		);
-	}
-
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch (error) {
-		throw new Error(
-			`function result file contains invalid JSON at ${filePath}: ${error instanceof Error ? error.message : "unknown error"}`,
-		);
-	}
-
-	return candidateSchema
-		.array()
-		.parse(parsed)
-		.filter((candidate) => candidate.title.trim().length > 0);
-};
-
-const persistFunctionResultCandidates = async (input: {
-	scanJob: ScanJob;
-	candidates: CanonicalCandidate[];
-}) => {
-	let createdCandidates = 0;
-	for (const [index, candidate] of input.candidates.entries()) {
-		if (!candidate.title) continue;
-		const moduleId = "legacy-repository";
-		const functionTaskId = createShortTaskId();
-		const functionId = candidate.functionId || functionTaskId;
-		const normalizedCandidate: CanonicalCandidate = {
-			id: candidate.id || `${functionTaskId}:candidate:0`,
-			functionId,
-			title: candidate.title,
-			description: candidate.description || "",
-			filePath: candidate.filePath || null,
-			line: candidate.line ?? null,
-			vulnerabilityType: candidate.vulnerabilityType || null,
-			confidence: candidate.confidence ?? null,
-			score: candidate.score ?? null,
-			claim: candidate.claim || candidate.title,
-			rootCauseKey: candidate.rootCauseKey || null,
-			evidence: candidate.evidence || [],
-			attackerControl: candidate.attackerControl || null,
-			affectedSink: candidate.affectedSink || null,
-			preconditions: candidate.preconditions || [],
-			quickDisproofAttempt: candidate.quickDisproofAttempt || null,
-			needsFuzzing: Boolean(candidate.needsFuzzing),
-			needsManualAnalysis: candidate.needsManualAnalysis ?? true,
-			status: candidate.status || "pending",
-			currentStage: candidate.currentStage || "analyzing",
-		};
-		const syntheticModule: CanonicalModule = {
-			id: moduleId,
-			moduleId,
-			name: "Repository",
-			summary: "Legacy repository-wide scan context",
-			priority: 0,
-			files: normalizedCandidate.filePath ? [normalizedCandidate.filePath] : [],
-			entryPoints: [],
-			trustBoundaries: [],
-			attackSurfaces: [],
-			vulnerabilityThemes: [],
-			runtimeComponents: [],
-			notes: [],
-		};
-		const syntheticFunction: CanonicalFunction = {
-			id: functionId,
-			moduleId,
-			moduleName: syntheticModule.name,
-			functionId,
-			functionName:
-				normalizedCandidate.filePath ||
-				normalizedCandidate.title ||
-				`legacy-candidate-${index + 1}`,
-			filePath: normalizedCandidate.filePath,
-			line: normalizedCandidate.line,
-			priority: 0,
-			summary: normalizedCandidate.description || null,
-			vulnerabilityType: normalizedCandidate.vulnerabilityType,
-			score: normalizedCandidate.score,
-			role: "legacy candidate source function",
-			reachability: "unknown",
-			sourceToSinkHint: null,
-			excludeReason: null,
-			priorityReason: "legacy imported candidate",
-			securityModelRelation: "legacy repository-wide candidate context",
-			attackSurface: null,
-			trustBoundary: null,
-			likelyVulnerabilityTypes: normalizedCandidate.vulnerabilityType
-				? [normalizedCandidate.vulnerabilityType]
-				: [],
-		};
-		await createTaskRepo({
-			taskId: functionTaskId,
-			scanJobId: input.scanJob.scanJobId,
-			parentTaskId: null,
-			name: syntheticFunction.functionName,
-			stageName: SCAN_STAGE_IDS.functionScan,
-			status: "completed",
-			priority: syntheticFunction.priority,
-			input: {
-				scanJob: input.scanJob,
-				module: syntheticModule,
-				function: syntheticFunction,
-			},
-			output: {
-				candidates: [normalizedCandidate],
-			},
-		});
-		const analysisTaskId = createShortTaskId();
-		await createTaskRepo({
-			taskId: analysisTaskId,
-			scanJobId: input.scanJob.scanJobId,
-			parentTaskId: functionTaskId,
-			name: `Candidate Analysis: ${normalizedCandidate.title}`,
-			stageName: SCAN_STAGE_IDS.analysis,
-			input: buildCandidateAnalysisStageInput({
-				scanJob: input.scanJob,
-				module: syntheticModule,
-				function: syntheticFunction,
-				candidate: normalizedCandidate,
-			}),
-		});
-		await enqueueAnalysisTask(input.scanJob.scanJobId, analysisTaskId);
-		createdCandidates += 1;
-	}
-
-	return {
-		receivedCandidates: input.candidates.length,
-		createdCandidates,
-		droppedCandidates: Math.max(0, input.candidates.length - createdCandidates),
-	};
 };
 
 const captureContainerCodexState = async (
@@ -5775,6 +5714,33 @@ type FullScanPipelineContext = PipelineContext & {
 	executionContext: FullScanExecutionContext;
 	refreshPipelineState: () => Promise<void>;
 };
+
+type FullScanPipelineStage = AnyStageDefinition<FullScanPipelineContext>;
+type FullScanPipelineEdge = PipelineEdge<
+	FullScanPipelineContext,
+	FullScanPipelineStage,
+	any,
+	FullScanPipelineStage,
+	any
+>;
+type FullScanFunctionStage = StageDefinition<
+	FullScanPipelineContext,
+	FunctionScanningStageInput,
+	FunctionScanningStageOutput
+>;
+
+type DeltaScopeFunctionInput = Pick<
+	FunctionScanningStageInput,
+	| "scanJob"
+	| "repositoryPath"
+	| "modulePath"
+	| "functionPath"
+	| "moduleId"
+	| "moduleName"
+	| "functionId"
+	| "functionName"
+	| "priority"
+>;
 
 const buildRepositoryObject = (
 	scanJob: ScanJob,
@@ -7291,6 +7257,225 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 	return pipeline;
 };
 
+const buildSyntheticDeltaModule = (
+	functions: CanonicalFunction[],
+): CanonicalModule => {
+	const files = [
+		...new Set(
+			functions
+				.map((func) => func.filePath)
+				.filter((filePath): filePath is string => Boolean(filePath)),
+		),
+	].slice(0, 200);
+	const entryPoints = [
+		...new Set(
+			functions
+				.map((func) => func.functionName)
+				.filter((functionName): functionName is string =>
+					Boolean(functionName),
+				),
+		),
+	].slice(0, 200);
+	return {
+		id: "delta-scope",
+		moduleId: "delta-scope",
+		name: "Delta Scope",
+		summary:
+			"Synthetic compatibility module for functions selected by delta impact scoping.",
+		priority: 1,
+		files,
+		entryPoints,
+		trustBoundaries: ["Diff-affected runtime behavior"],
+		attackSurfaces: ["Functions affected by the target/base diff"],
+		vulnerabilityThemes: ["Delta-scoped security review"],
+		runtimeComponents: ["delta-scope"],
+		notes: [
+			"This module is generated internally for function-scan compatibility and is not a delta-scope output artifact.",
+		],
+	};
+};
+
+const buildDeltaScanPipeline = (context: FullScanPipelineContext) => {
+	const { scanJob } = context;
+	const deltaScopeQueue = getDeltaScopeQueue(scanJob.scanJobId);
+	const basePipeline = buildFullScanPipeline(context);
+	const functionStage = basePipeline.stages.find(
+		(stage) => stage.id === SCAN_STAGE_IDS.functionScan,
+	) as FullScanFunctionStage | undefined;
+	if (!functionStage) {
+		throw new Error("Full scan pipeline did not define function-scan stage");
+	}
+	const deltaScopeStage =
+		createDeltaScopeStageDefinition<FullScanPipelineContext>({
+			id: SCAN_STAGE_METADATA.deltaScope.id,
+			name: SCAN_STAGE_METADATA.deltaScope.name,
+			persistent: false,
+			reuseContainer: true,
+			mode: "serial",
+			queue: createStageQueueBinding({
+				queue: deltaScopeQueue,
+				getGroupQueue: (groupInstanceId) =>
+					getScanStageGroupQueue(
+						scanJob.scanJobId,
+						groupInstanceId,
+						"delta-scope",
+					),
+				obliterateGroupQueue: (groupInstanceId) =>
+					obliterateScanStageGroupQueue(
+						scanJob.scanJobId,
+						groupInstanceId,
+						"delta-scope",
+					),
+				ownsInputId: async (ctx, inputId, _jobData, _jobId, scope) => {
+					const task = await findTaskByIdRepo(inputId).catch(() => null);
+					return Boolean(
+						task &&
+							task.scanJobId === ctx.scanJob.scanJobId &&
+							task.stageName === SCAN_STAGE_IDS.deltaScope &&
+							(await taskMatchesStageQueueScope(task, scope?.groupInstanceId)),
+					);
+				},
+				loadInput: async (ctx, inputId) => {
+					const task = await findTaskByIdRepo(inputId).catch(() => null);
+					if (
+						!task ||
+						task.scanJobId !== ctx.scanJob.scanJobId ||
+						task.stageName !== SCAN_STAGE_IDS.deltaScope ||
+						task.status !== "pending"
+					) {
+						return undefined;
+					}
+					return null;
+				},
+			}),
+		});
+	const stages: FullScanPipelineStage[] = [
+		deltaScopeStage,
+		...basePipeline.stages.filter(
+			(stage) =>
+				stage.id !== SCAN_STAGE_IDS.repositoryScan &&
+				stage.id !== SCAN_STAGE_IDS.moduleScan,
+		),
+	];
+	const deltaScopeToFunctionEdge = createPipelineEdge<
+		FullScanPipelineContext,
+		typeof deltaScopeStage,
+		DeltaScopeFunctionInput,
+		FullScanFunctionStage
+	>({
+			name: "delta-scope-to-function",
+			from: deltaScopeStage,
+			to: functionStage,
+			fork: false,
+			transformOutput: async ({
+				ctx,
+				stageOutput,
+			}): Promise<DeltaScopeFunctionInput[]> =>
+				stageOutput.functions.map((functionPath) => ({
+					scanJob: ctx.scanJob,
+					repositoryPath: stageOutput.repository,
+					modulePath: "",
+					functionPath,
+					moduleId: "delta-scope",
+					moduleName: "Delta Scope",
+					functionId: "",
+					functionName: "",
+					priority: null,
+				})),
+			createTasks: async ({ fromTaskId, stageOutput, nextInputObjects }) => {
+				const fromTask = await findTaskByIdRepo(fromTaskId);
+				const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
+					context,
+					fromTask,
+				);
+				const scopedFunctions = await Promise.all(
+					stageOutput.functions.map((functionPath) =>
+						readTaskJsonArtifact<CanonicalFunction>({
+							taskDir: fromTaskDir,
+							containerPath: functionPath,
+						}),
+					),
+				);
+				const syntheticModule = buildSyntheticDeltaModule(scopedFunctions);
+				const taskIds: string[] = [];
+				for (const manifestInput of nextInputObjects) {
+					const func = await readTaskJsonArtifact<CanonicalFunction>({
+						taskDir: fromTaskDir,
+						containerPath: manifestInput.functionPath,
+					});
+					const taskId = createShortTaskId();
+					const taskName = func.functionName;
+					const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
+						taskId,
+						stageName: SCAN_STAGE_IDS.functionScan,
+						taskName,
+					});
+					const repositoryPath = await copyArtifactToDownstreamInput({
+						fromTaskDir,
+						fromPath: manifestInput.repositoryPath,
+						toTaskDir,
+						toRelativePath: "inputs/repository.json",
+					});
+					const modulePath = await writeDownstreamInputArtifact({
+						toTaskDir,
+						toRelativePath: "inputs/module.json",
+						value: syntheticModule,
+					});
+					const functionPath = await copyArtifactToDownstreamInput({
+						fromTaskDir,
+						fromPath: manifestInput.functionPath,
+						toTaskDir,
+						toRelativePath: "inputs/function.json",
+					});
+					const downstreamInput: FunctionScanningStageInput = {
+						scanJob: manifestInput.scanJob,
+						repositoryPath,
+						modulePath,
+						functionPath,
+						moduleId: func.moduleId || "delta-scope",
+						moduleName: func.moduleName || "Delta Scope",
+						functionId: func.functionId,
+						functionName: func.functionName,
+						filePath: func.filePath,
+						line: func.line,
+						summary: func.summary,
+						vulnerabilityType: func.vulnerabilityType,
+						priority: func.priority,
+					};
+					const task = await createTaskRepo({
+						taskId,
+						scanJobId: context.scanJob.scanJobId,
+						parentTaskId: fromTaskId,
+						name: taskName,
+						stageName: SCAN_STAGE_IDS.functionScan,
+						priority: func.priority,
+						input: downstreamInput,
+					});
+					taskIds.push(task.taskId);
+				}
+				return taskIds;
+			},
+		});
+	const edges: FullScanPipelineEdge[] = [
+		deltaScopeToFunctionEdge,
+		...basePipeline.edges.filter(
+			(edge) =>
+				edge.from.id !== SCAN_STAGE_IDS.repositoryScan &&
+				edge.from.id !== SCAN_STAGE_IDS.moduleScan,
+		),
+	];
+	return createPipelineDefinition<
+		FullScanPipelineContext,
+		FullScanPipelineStage[],
+		FullScanPipelineEdge[]
+	>({
+		name: "delta-scan-programmatic",
+		stages,
+		edges,
+		groups: basePipeline.groups,
+	});
+};
+
 const runFullScan = async (
 	scanJobId: string,
 	options?: {
@@ -7355,6 +7540,85 @@ const runFullScan = async (
 	}
 };
 
+const runDeltaScan = async (
+	scanJobId: string,
+	options?: {
+		enqueueInitialDeltaScopeTask?: boolean;
+		awaitCompletion?: boolean;
+	},
+) => {
+	const enqueueInitialDeltaScopeTask =
+		options?.enqueueInitialDeltaScopeTask ?? true;
+	const awaitCompletion = options?.awaitCompletion ?? true;
+	await assertScanJobNotCancelled(scanJobId);
+	console.log(
+		"[delta-scan]",
+		JSON.stringify({
+			event: "runDeltaScan.start",
+			scanJobId,
+		}),
+	);
+	const context = await buildFullScanPipelineContext(scanJobId);
+	const pipeline = buildDeltaScanPipeline(context);
+
+	try {
+		await assertScanJobNotCancelled(scanJobId);
+		await updateTaskRepo(context.scanJob.repositoryTaskId || scanJobId, {
+			name: context.projectName,
+		}).catch(() => {});
+		if (enqueueInitialDeltaScopeTask) {
+			await enqueueDeltaScopeTask(scanJobId);
+			console.log(
+				"[delta-scan]",
+				JSON.stringify({
+					event: "runDeltaScan.delta_scope.enqueued",
+					scanJobId,
+				}),
+			);
+		}
+		await assertScanJobNotCancelled(scanJobId);
+		if (awaitCompletion) {
+			await runPipeline(pipeline, context);
+		} else {
+			startPipelineRuntime(pipeline, context);
+		}
+		console.log(
+			"[delta-scan]",
+			JSON.stringify({
+				event: awaitCompletion
+					? "runDeltaScan.completed"
+					: "runDeltaScan.runtime_started",
+				scanJobId,
+			}),
+		);
+	} catch (error) {
+		console.log(
+			"[delta-scan]",
+			JSON.stringify({
+				event: "runDeltaScan.failed",
+				scanJobId,
+				errorMessage: error instanceof Error ? error.message : String(error),
+			}),
+		);
+		throw error;
+	}
+};
+
+const startScanPipelineRuntimeForExistingQueues = async (scanJobId: string) => {
+	const scanJob = await findScanJobByIdRepo(scanJobId);
+	if (scanJob.scanType === "delta") {
+		await runDeltaScan(scanJobId, {
+			enqueueInitialDeltaScopeTask: false,
+			awaitCompletion: false,
+		});
+		return;
+	}
+	await runFullScan(scanJobId, {
+		enqueueInitialRepositoryTask: false,
+		awaitCompletion: false,
+	});
+};
+
 export const pauseScanJob = async (scanJobId: string) => {
 	const scanJob = await findScanJobByIdRepo(scanJobId);
 	if (scanJob.status === "canceled" || scanJob.status === "finished") {
@@ -7390,10 +7654,7 @@ export const resumeScanJob = async (scanJobId: string) => {
 	}
 
 	await updateScanJobStatusRepo(scanJobId, "running");
-	await runFullScan(scanJobId, {
-		enqueueInitialRepositoryTask: false,
-		awaitCompletion: false,
-	});
+	await startScanPipelineRuntimeForExistingQueues(scanJobId);
 	return {
 		resumed: true,
 		scanJobId,
@@ -7415,397 +7676,11 @@ export const runScanJobInContainer = async (
 		});
 		return;
 	}
-	const {
-		isApplicationJob,
-		appName,
-		imageTag,
-		contextVolumeName,
-		projectName,
-		serviceName,
-		projectProfileContextRoot,
-		projectProfileCacheRoot,
-		scanAgentProfile,
-	} = await resolveScanExecutionContext(scanJob);
-
-	const containerName = [
-		sanitizeContainerNamePart(projectName),
-		sanitizeContainerNamePart(serviceName),
-		scanJob.scanType,
-		"scan",
-		sanitizeContainerNamePart(scanJob.scanJobId),
-	].join("-");
-	const scanRootDir = path.posix.join(
-		buildScanJobContextRoot(scanJob.scanJobId),
-		"scanning",
-	);
-	const startedAt = new Date().toISOString();
-	const agentsDir = await resolveAgentsDirectory();
-	const agentProvider = scanAgentProfile?.provider || "codex";
-	const containerEnvPairs = [
-		...getGlobalContainerEnvironmentPairs(),
-		`VULSEEK_PROJECT_PROFILE_DIR=${projectProfileContextRoot}`,
-		`VULSEEK_PROJECT_CACHE_DIR=${projectProfileCacheRoot}`,
-	];
-	const containerEnvArgs = containerEnvPairs
-		.map((pair) => `-e '${escapeSingleQuotes(pair)}'`)
-		.join(" ");
-
-	const scanContextMount = await resolveScanContextMount({
-		contextVolumeName,
-		projectName,
-		profileName: serviceName,
+	await runDeltaScan(scanJobId, {
+		enqueueInitialDeltaScopeTask:
+			options?.enqueueInitialRepositoryTask ?? true,
 	});
-	const scanRuntimeDir = resolveLiveScanJobArtifactsDir({
-		scanContextMount,
-		scanJobId: scanJob.scanJobId,
-		projectName,
-		profileName: serviceName,
-	});
-	const appServerJsonlPath = path.join(
-		scanRuntimeDir,
-		"app-server-messages.jsonl",
-	);
-	const appServerTextPath = path.join(scanRuntimeDir, "app-server-text.log");
-	const appServerStderrPath = path.join(
-		scanRuntimeDir,
-		"app-server-stderr.log",
-	);
-	const runtimeArtifacts = createCodexRuntimeArtifacts({
-		runtimeDir: scanRuntimeDir,
-		jsonlFileName: "app-server-messages.jsonl",
-		textFileName: "app-server-text.log",
-		stderrFileName: "app-server-stderr.log",
-	});
-	const stageSummary: string[] = [];
-	let repositoryState: PreparedRepositoryState | null = null;
-	let result:
-		| {
-				appName: string;
-				imageTag: string;
-				contextVolumeName: string | null | undefined;
-				scanRootDir: string;
-				codexStdoutSnippet: string;
-				codexStderrSnippet: string;
-		  }
-		| undefined;
-	try {
-		const namespaceEnabledContainerArgs = buildNamespaceEnabledContainerArgs();
-		const codexHomeHostMountArg = buildCodexHomeHostMountArg(scanAgentProfile);
-		await execAsync(
-			`docker run -d --rm --init --name ${containerName} ${namespaceEnabledContainerArgs} ${scanContextMount.dockerMountArg} ${codexHomeHostMountArg} ${containerEnvArgs} ${imageTag} bash -lc "sleep infinity"`,
-		);
-
-		stageSummary.push(`- container: ${containerName}`);
-		stageSummary.push(`- image: ${imageTag}`);
-		stageSummary.push(
-			`- context_storage: ${scanContextMount.mountDescription}`,
-		);
-		stageSummary.push(`- scan_type: ${scanJob.scanType}`);
-		stageSummary.push(`- container_env_count: ${containerEnvPairs.length}`);
-		stageSummary.push(
-			`- agent_transport: ${agentProvider === "claude_code" ? "claude-stream-json-stdio" : "codex-app-server-jsonrpc-stdio"}`,
-		);
-		stageSummary.push(
-			`- agent_profile: ${scanAgentProfile?.name || scanAgentProfile?.agentProfileId || "default"}`,
-		);
-		stageSummary.push(`- agent_provider: ${agentProvider}`);
-		stageSummary.push(`- agent_model: ${scanAgentProfile?.model || "gpt-5.4"}`);
-		stageSummary.push(
-			`- preinstalled_tool_skills: ${PREINSTALLED_TOOL_SKILLS.join(", ")}`,
-		);
-		stageSummary.push(`- started_at: ${startedAt}`);
-
-		await execAsync(
-			`docker exec ${containerName} bash -lc "mkdir -p '${scanRootDir}' '/root/.codex/skills'"`,
-		);
-
-		if (agentsDir) {
-			stageSummary.push(`- image_preinstalled_skills_source: ${agentsDir}`);
-
-			if (scanAgentProfile) {
-				await copyCodexAssetsToContainerHome(
-					containerName,
-					"/root/.codex",
-					agentsDir,
-					scanAgentProfile,
-				);
-				stageSummary.push(
-					agentProvider === "codex"
-						? "- generated_codex_config_from_agent_profile: true"
-						: "- using_agent_profile_runtime_env: true",
-				);
-			} else {
-				await copyCodexAssetsToContainerHome(
-					containerName,
-					"/root/.codex",
-					agentsDir,
-					null,
-				);
-				try {
-					await execAsync(
-						`docker exec ${containerName} bash -lc "test -f /root/.codex/config.toml"`,
-					);
-					stageSummary.push("- copied_codex_config: true");
-				} catch {
-					stageSummary.push("- copied_codex_config: false");
-				}
-				try {
-					await execAsync(
-						`docker exec ${containerName} bash -lc "test -f /root/.codex/auth.json"`,
-					);
-					stageSummary.push("- copied_codex_auth: true");
-				} catch {
-					stageSummary.push("- copied_codex_auth: false");
-				}
-			}
-
-			stageSummary.push(
-				"- runtime_installed_custom_skills: delegated_to_runSingleTurnAgentInContainer",
-			);
-		} else {
-			stageSummary.push("- image_preinstalled_skills_source: none");
-			stageSummary.push("- runtime_installed_custom_skills: none");
-		}
-
-		await writeContainerFile(
-			containerName,
-			`${scanRootDir}/02_skills.md`,
-			["# Skills Copy", "", ...stageSummary].join("\n"),
-		);
-		await captureContainerCodexState(
-			containerName,
-			scanRootDir,
-			"02_codex_runtime_before.md",
-		);
-		repositoryState = await prepareRepositoryForScanInContainer({
-			containerName,
-			scanJob,
-			scanRootDir,
-		});
-		await updateScanJobTargetContextRepo(scanJob.scanJobId, {
-			targetRef: repositoryState.currentBranch || repositoryState.targetRef,
-			targetTag: repositoryState.currentExactTag || repositoryState.targetTag,
-			commitSha: repositoryState.resolvedTargetSha,
-			baseSha: repositoryState.resolvedBaseSha,
-			commitWindow: repositoryState.commitWindow,
-		});
-
-		try {
-			const candidateResultPath = buildScanCandidateResultPath(
-				scanJob.scanJobId,
-			);
-			const codexPrompt = [
-				"先概括当前仓库的目录结构，再开始正式扫描。",
-				`Run a ${scanJob.scanType} vulnerability scan for this repository.`,
-				scanJob.scanType === "delta"
-					? "For delta scan, always use the latest fetched ref/HEAD in the repository as the scan target."
-					: "For full scan, use the explicitly prepared repository target revision and analyze the full repository codebase, not a recent commit window.",
-				`Target ref: ${repositoryState?.currentBranch || repositoryState?.targetRef || "<none>"}.`,
-				`Target tag: ${repositoryState?.currentExactTag || repositoryState?.targetTag || "<none>"}.`,
-				`Target commit: ${repositoryState?.resolvedTargetSha || "<none>"}.`,
-				...(scanJob.scanType === "delta"
-					? [
-							`Base commit: ${repositoryState?.resolvedBaseSha || "<none>"}.`,
-							`Commit window k: ${repositoryState?.commitWindow || scanJob.commitWindow}.`,
-						]
-					: [
-							"Do not bias the scan toward recent commits or recent diffs.",
-							"Do not use recent commit windows as the main search strategy for full scan.",
-						]),
-				scanAgentProfile?.thinkingLevelEnabled
-					? `Use ${agentProvider} as the runtime agent and keep reasoning effort around ${scanAgentProfile.thinkingLevel}.`
-					: `Use ${agentProvider} as the runtime agent.`,
-				`Before analyzing, use the repository state already prepared in ${toAgentVisiblePath(`${scanRootDir}/00_repository_state.md`)} and work from the checked out target revision in /workspace/repo.`,
-				`Use the installed skill named ${scanJob.scanType === "delta" ? "delta-scan" : "full-scan"} as your working method.`,
-				"Persist final candidate output only to the required JSON result file.",
-				`Write final candidate JSON to ${toAgentVisiblePath(candidateResultPath)}.`,
-				"scan_candidates.json must contain a top-level object with a candidates array.",
-				"Each candidate object may include only: title, description, filePath, line, confidence, score.",
-				"Always write scan_candidates.json, even when there are no candidates; use an empty array in that case.",
-				"Focus on security-relevant code paths and produce concise actionable findings.",
-				`Write a markdown report to ${toAgentVisiblePath(`${scanRootDir}/03_codex_report.md`)}.`,
-				repositoryState?.markdown
-					? `Repository state:\n${repositoryState.markdown}`
-					: "",
-			].join("\n");
-
-			await initializeRuntimeFiles({
-				runtimeDir: scanRuntimeDir,
-				jsonlPath: appServerJsonlPath,
-				textPath: appServerTextPath,
-				stderrPath: appServerStderrPath,
-			});
-			await initializeCodexRuntimeMetadataFiles({
-				cursorPath: runtimeArtifacts.cursorPath,
-				statePath: runtimeArtifacts.statePath,
-			});
-			await initializeRuntimeFilesInContainer({
-				containerName,
-				runtimeDirInContainer: scanRootDir,
-				jsonlFileName: "app-server-messages.jsonl",
-				textFileName: "app-server-text.log",
-				stderrFileName: "app-server-stderr.log",
-			});
-			await initializeCodexRuntimeMetadataFilesInContainer({
-				containerName,
-				runtimeDirInContainer: scanRootDir,
-				cursorFileName: runtimeArtifacts.cursorFileName,
-				stateFileName: runtimeArtifacts.stateFileName,
-			});
-			const sandboxRuntime = await prepareSandboxAgentRuntime({
-				containerName,
-				stageDirPath: scanRuntimeDir,
-				stageDirInContainer: scanRootDir,
-				provider: agentProvider,
-				homeDir: "/root",
-				envPairs:
-					agentProvider === "claude_code" && scanAgentProfile
-						? buildClaudeEnvPairs(scanAgentProfile)
-						: [
-								"CODEX_HOME=/root/.codex",
-								...(scanAgentProfile
-									? parseAgentProfileEnvPairs(scanAgentProfile)
-									: []),
-							],
-			});
-			await runSandboxAgentHeadlessTurnInContainer({
-				baseUrl: sandboxRuntime.server.baseUrl,
-				provider: agentProvider === "claude_code" ? "claude" : "codex",
-				cwd: "/workspace/repo",
-				prompt: codexPrompt,
-				model: scanAgentProfile?.model,
-				thinkingLevel: scanAgentProfile?.thinkingLevelEnabled
-					? scanAgentProfile.thinkingLevel
-					: undefined,
-				jsonlPath: appServerJsonlPath,
-				textPath: appServerTextPath,
-				stderrPath: appServerStderrPath,
-				onSessionId: async (nextSessionId) => {
-					await updateScanJobScanningThreadIdRepo(
-						scanJob.scanJobId,
-						nextSessionId,
-					);
-				},
-			});
-			const candidates = await validateFunctionCandidateFile(
-				path.join(scanRuntimeDir, "scan_candidates.json"),
-			);
-			const persistResult = await persistFunctionResultCandidates({
-				scanJob,
-				candidates,
-			});
-			await appendScanRuntimeFile(
-				appServerStderrPath,
-				[
-					`[candidate-result] records_received=${persistResult.receivedCandidates}`,
-					`records_created=${persistResult.createdCandidates}`,
-					`records_dropped=${persistResult.droppedCandidates}`,
-				].join(" ") + "\n",
-			);
-			if (persistResult.receivedCandidates === 0) {
-				await appendScanRuntimeFile(
-					appServerStderrPath,
-					"[candidate-result] scan agent wrote an empty candidates array\n",
-				);
-			} else if (persistResult.createdCandidates === 0) {
-				await appendScanRuntimeFile(
-					appServerStderrPath,
-					"[candidate-result] candidate records were parsed but no candidate row was created; check payload title/shape\n",
-				);
-			}
-		} catch (error) {
-			await captureContainerCodexState(
-				containerName,
-				scanRootDir,
-				"05_codex_runtime_after_failure.md",
-			).catch(() => {});
-			const failedStdoutSnippet = (
-				await readScanJobAppServerText(scanJob.scanJobId)
-			).slice(-8_000);
-			const failedStderrSnippet = await fs
-				.readFile(appServerStderrPath, "utf-8")
-				.catch(() => "");
-			await writeContainerFile(
-				containerName,
-				`${scanRootDir}/04_summary.md`,
-				[
-					"# Scan Summary",
-					"",
-					`- completed_at: ${new Date().toISOString()}`,
-					`- status: failed`,
-					`- error: ${error instanceof Error ? error.message : "Unknown error"}`,
-					`- app_name: ${appName}`,
-					`- image_tag: ${imageTag}`,
-					`- app_server_jsonl: ${scanRootDir}/app-server-messages.jsonl`,
-					`- app_server_text: ${scanRootDir}/app-server-text.log`,
-					`- app_server_stderr: ${scanRootDir}/app-server-stderr.log`,
-					"",
-					"## App Server Text (tail)",
-					"```text",
-					failedStdoutSnippet || "(empty)",
-					"```",
-					"",
-					"## App Server Stderr (tail)",
-					"```text",
-					failedStderrSnippet || "(empty)",
-					"```",
-				].join("\n"),
-			);
-			throw error;
-		}
-
-		await captureContainerCodexState(
-			containerName,
-			scanRootDir,
-			"05_codex_runtime_after_success.md",
-		).catch(() => {});
-
-		const codexStdoutSnippet = (
-			await readScanJobAppServerText(scanJob.scanJobId)
-		).slice(-8_000);
-		const codexStderrSnippet = await fs
-			.readFile(appServerStderrPath, "utf-8")
-			.catch(() => "");
-
-		await writeContainerFile(
-			containerName,
-			`${scanRootDir}/04_summary.md`,
-			[
-				"# Scan Summary",
-				"",
-				`- completed_at: ${new Date().toISOString()}`,
-				`- status: completed`,
-				`- app_name: ${appName}`,
-				`- image_tag: ${imageTag}`,
-				`- app_server_jsonl: ${scanRootDir}/app-server-messages.jsonl`,
-				`- app_server_text: ${scanRootDir}/app-server-text.log`,
-				`- app_server_stderr: ${scanRootDir}/app-server-stderr.log`,
-				"",
-				"## App Server Text (tail)",
-				"```text",
-				codexStdoutSnippet || "(empty)",
-				"```",
-				"",
-				"## App Server Stderr (tail)",
-				"```text",
-				codexStderrSnippet || "(empty)",
-				"```",
-			].join("\n"),
-		);
-
-		result = {
-			appName,
-			imageTag,
-			contextVolumeName,
-			scanRootDir,
-			codexStdoutSnippet,
-			codexStderrSnippet,
-		};
-	} finally {
-		// await execAsync(`docker rm -f ${containerName}`).catch(() => {});
-	}
-
-	return result as NonNullable<typeof result>;
+	return;
 };
 
 const resolveHostPathToScanContextContainerPath = async (
@@ -7871,6 +7746,17 @@ const enqueueRepositoryScanTask = async (scanJobId: string) => {
 	});
 };
 
+const enqueueDeltaScopeTask = async (scanJobId: string) => {
+	const scanJob = await findScanJobByIdRepo(scanJobId);
+	const deltaScopeTaskId = scanJob.repositoryTaskId || scanJobId;
+	const deltaScopeQueue = getDeltaScopeQueue(scanJobId);
+	await deltaScopeQueue.add("delta-scope", deltaScopeTaskId, {
+		jobId: buildQueueTaskJobId(deltaScopeQueue.name, deltaScopeTaskId),
+		removeOnComplete: true,
+		removeOnFail: true,
+	});
+};
+
 const enqueueRepositoryTask = async (
 	scanJobId: string,
 	repositoryTaskId: string,
@@ -7878,6 +7764,18 @@ const enqueueRepositoryTask = async (
 	const repositoryScanQueue = getRepositoryScanQueue(scanJobId);
 	await repositoryScanQueue.add("repository", repositoryTaskId, {
 		jobId: buildQueueTaskJobId(repositoryScanQueue.name, repositoryTaskId),
+		removeOnComplete: true,
+		removeOnFail: true,
+	});
+};
+
+const enqueueDeltaScopeRootTask = async (
+	scanJobId: string,
+	deltaScopeTaskId: string,
+) => {
+	const deltaScopeQueue = getDeltaScopeQueue(scanJobId);
+	await deltaScopeQueue.add("delta-scope", deltaScopeTaskId, {
+		jobId: buildQueueTaskJobId(deltaScopeQueue.name, deltaScopeTaskId),
 		removeOnComplete: true,
 		removeOnFail: true,
 	});
@@ -7975,6 +7873,9 @@ const enqueueAnalysisCriticTask = async (
 
 const enqueueRetriedTask = async (scanJobId: string, task: Task) => {
 	switch (task.stageName) {
+		case SCAN_STAGE_IDS.deltaScope:
+			await enqueueDeltaScopeRootTask(scanJobId, task.taskId);
+			return;
 		case SCAN_STAGE_IDS.repositoryScan:
 			await enqueueRepositoryTask(scanJobId, task.taskId);
 			return;
@@ -8044,6 +7945,17 @@ const forceRemoveStageQueueJob = async (
 
 const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
 	switch (task.stageName) {
+		case SCAN_STAGE_IDS.deltaScope:
+			await Promise.all(
+				buildKnownQueueJobIdsForTask(getDeltaScopeQueue(scanJobId), task).map(
+					(jobId) =>
+						forceRemoveStageQueueJob(
+							getDeltaScopeQueue(scanJobId),
+							jobId,
+						).catch(() => {}),
+				),
+			);
+			return;
 		case SCAN_STAGE_IDS.repositoryScan:
 			await Promise.all(
 				buildKnownQueueJobIdsForTask(
@@ -8259,6 +8171,10 @@ export const cancelScanJob = async (scanJobId: string) => {
 	}
 	const tasksToCancel = [...tasksToCancelById.values()];
 	const repositoryScanQueue = getRepositoryScanQueue(scanJobId);
+	const rootStageName =
+		scanJob.scanType === "delta"
+			? SCAN_STAGE_IDS.deltaScope
+			: SCAN_STAGE_IDS.repositoryScan;
 
 	const containerNames = new Set<string>();
 
@@ -8283,7 +8199,7 @@ export const cancelScanJob = async (scanJobId: string) => {
 
 	await Promise.all([
 		...buildKnownQueueJobIdsForTask(repositoryScanQueue, {
-			stageName: SCAN_STAGE_IDS.repositoryScan,
+			stageName: rootStageName,
 			taskId: scanJob.repositoryTaskId || scanJobId,
 			scanJobId,
 		} as Task).map((jobId) =>
@@ -8611,10 +8527,7 @@ export const recoverPendingFullScanQueues = async (input?: {
 	let startedPipelines = 0;
 
 	for (const job of jobs) {
-		if (
-			job.scanType !== "full" ||
-			(job.status !== "running" && job.status !== "pending")
-		) {
+		if (job.status !== "running" && job.status !== "pending") {
 			continue;
 		}
 
@@ -8629,10 +8542,7 @@ export const recoverPendingFullScanQueues = async (input?: {
 			await updateScanJobStatusRepo(job.scanJobId, "running").catch(() => {});
 		}
 
-		await runFullScan(job.scanJobId, {
-			enqueueInitialRepositoryTask: false,
-			awaitCompletion: false,
-		});
+		await startScanPipelineRuntimeForExistingQueues(job.scanJobId);
 		startedPipelines += 1;
 	}
 
@@ -8795,10 +8705,7 @@ export const startCandidateVerification = async (
 	if (scanJob.status === "finished") {
 		await updateScanJobStatusRepo(scanJob.scanJobId, "running").catch(() => {});
 	}
-	await runFullScan(scanJob.scanJobId, {
-		enqueueInitialRepositoryTask: false,
-		awaitCompletion: false,
-	});
+	await startScanPipelineRuntimeForExistingQueues(scanJob.scanJobId);
 
 	return {
 		started: true,

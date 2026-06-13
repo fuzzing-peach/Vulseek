@@ -5,6 +5,8 @@ export const resolveStageTaskName = <TInput>(
 	const record =
 		(input as Record<string, unknown> | null | undefined) || undefined;
 	switch (stageName) {
+		case "delta-scope":
+			return "delta-scoping";
 		case "repository-scan":
 			return "repository-scanning";
 		case "module-scan":

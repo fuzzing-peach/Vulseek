@@ -69,6 +69,8 @@ const resolveStageAgentKindFromStageName = (
 
 const resolveStageContainerPrefix = (stageName: string) => {
 	switch (stageName) {
+		case SCAN_STAGE_IDS.deltaScope:
+			return "delta-scope";
 		case SCAN_STAGE_IDS.repositoryScan:
 			return "repository-scan";
 		case SCAN_STAGE_IDS.moduleScan:
@@ -307,10 +309,17 @@ export const isFullScanStageActive = async (
 		scanJob?.scanRuntimeSettings ?? {},
 		stageName,
 	);
-	if (stageName === SCAN_STAGE_IDS.repositoryScan) {
+	if (
+		stageName === SCAN_STAGE_IDS.repositoryScan ||
+		stageName === SCAN_STAGE_IDS.deltaScope
+	) {
 		return true;
 	}
-	if (!FULL_SCAN_STAGE_IDS.includes(stageName as (typeof FULL_SCAN_STAGE_IDS)[number])) {
+	if (
+		!FULL_SCAN_STAGE_IDS.includes(
+			stageName as (typeof FULL_SCAN_STAGE_IDS)[number],
+		)
+	) {
 		return true;
 	}
 	return setting.disabled !== true;

@@ -5,6 +5,7 @@ type SandboxAgentSessionMetadata = {
 	taskId: string;
 	scanJobId: string;
 	taskKind:
+		| "delta_scoping"
 		| "repository_scanning"
 		| "module_scanning"
 		| "function_scanning"

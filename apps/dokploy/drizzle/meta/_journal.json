@@ -1310,6 +1310,13 @@
       "when": 1779743900000,
       "tag": "0186_scan_job_status_paused",
       "breakpoints": true
+    },
+    {
+      "idx": 187,
+      "version": "7",
+      "when": 1779744000000,
+      "tag": "0187_candidate_metadata_tags",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,5 @@
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import { Ban, PackageSearch, Shield, Terminal } from "lucide-react";
+import { Ban, GitBranch, PackageSearch, Shield, Terminal } from "lucide-react";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -197,6 +197,78 @@ export const ComposeActions = ({ composeId }: Props) => {
 									<TooltipPrimitive.Portal>
 										<TooltipContent sideOffset={5} className="z-[60]">
 											<p>Scans the full codebase from the current source</p>
+										</TooltipContent>
+									</TooltipPrimitive.Portal>
+								</Tooltip>
+							</Button>
+						}
+					/>
+					<CreateScanDialog
+						title="Delta Scan"
+						description="Configure ref, tag, and commit window for this delta scan. Dokploy compares the target commit against target~k unless a base SHA is already set on the job."
+						isLoading={isCreatingScanJob}
+						showCommitWindow
+						showFullScanPreview
+						scanType="delta"
+						serviceData={
+							data ? (data as unknown as Record<string, unknown>) : undefined
+						}
+						onSubmit={async ({
+							targetRef,
+							targetTag,
+							commitWindow,
+							scanRuntimeSettings,
+						}) => {
+							const scanJobsResult = await refetchScanJobs();
+							const hasPendingDeltaScan = Boolean(
+								scanJobsResult.data?.some(
+									(scanJob) =>
+										scanJob.scanType === "delta" &&
+										(scanJob.status === "pending" ||
+											scanJob.status === "running" ||
+											scanJob.status === "paused"),
+								),
+							);
+							if (hasPendingDeltaScan) {
+								toast.error("A delta scan is already pending");
+								return;
+							}
+							await createScanJob({
+								composeId: composeId,
+								scanType: "delta",
+								triggerSource: "manual",
+								targetRef,
+								targetTag,
+								commitWindow,
+								scanRuntimeSettings,
+							})
+								.then(() => {
+									toast.success("Delta scan started successfully");
+									refetch();
+									router.push(
+										`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/profiles/compose/${composeId}?tab=deployments`,
+									);
+								})
+								.catch(() => {
+									toast.error("Error starting delta scan");
+								});
+						}}
+						trigger={
+							<Button
+								variant="secondary"
+								isLoading={isCreatingScanJob}
+								className="flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-offset-2"
+							>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<div className="flex items-center">
+											<GitBranch className="size-4 mr-1" />
+											Delta Scan
+										</div>
+									</TooltipTrigger>
+									<TooltipPrimitive.Portal>
+										<TooltipContent sideOffset={5} className="z-[60]">
+											<p>Scans functions impacted by the target/base diff</p>
 										</TooltipContent>
 									</TooltipPrimitive.Portal>
 								</Tooltip>

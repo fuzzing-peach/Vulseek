@@ -1,4 +1,8 @@
 export const SCAN_STAGE_METADATA = {
+	deltaScope: {
+		id: "delta-scope",
+		name: "Delta Scope",
+	},
 	repositoryScan: {
 		id: "repository-scan",
 		name: "Scan Repository",

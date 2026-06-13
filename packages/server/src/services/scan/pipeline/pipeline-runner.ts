@@ -1446,6 +1446,7 @@ const isRuntimeStageActive = async <TPipelineContext extends PipelineContext>(
 			source: edge.from.id,
 			target: edge.to.id,
 		})),
+		rootStageName: runtime.pipeline.stages[0]?.id,
 	});
 	return !disabledStages.has(stageName);
 };
@@ -1494,7 +1495,10 @@ const resolveStageTaskId = (
 
 	const pipelineScanJob = (ctx as PipelineScanJobContext).scanJob;
 	if (pipelineScanJob?.scanJobId) {
-		if (stageName === SCAN_STAGE_IDS.repositoryScan) {
+		if (
+			stageName === SCAN_STAGE_IDS.repositoryScan ||
+			stageName === SCAN_STAGE_IDS.deltaScope
+		) {
 			return pipelineScanJob.repositoryTaskId || pipelineScanJob.scanJobId;
 		}
 		return pipelineScanJob.scanJobId;

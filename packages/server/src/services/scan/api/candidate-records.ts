@@ -5,6 +5,8 @@ import {
 	findVulnerabilityCandidateByIdAndScanJobIdRepo,
 	findVulnerabilityCandidateByIdRepo,
 	findVulnerabilityCandidatesByScanJobIdRepo,
+	listCandidateTagsRepo,
+	updateVulnerabilityCandidateMetadataRepo,
 } from "../persistence/candidate.repo";
 import { findScanJobByIdRepo } from "../persistence/scan-job.repo";
 import {
@@ -412,6 +414,8 @@ export const findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId 
 			const haystack = [
 				candidate.title,
 				candidate.description || "",
+				candidate.note || "",
+				...(candidate.tags || []),
 				candidate.filePath || "",
 				candidate.status,
 				typeof candidate.line === "number" ? String(candidate.line) : "",
@@ -432,6 +436,8 @@ export const findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId 
 				candidate.latestVerificationResult?.reportPath || "",
 				candidate.latestVerificationResult?.threadId || "",
 				candidate.latestTriageResult?.result || "",
+				candidate.latestTriageResult?.disqualifier || "",
+				candidate.latestTriageResult?.disqualifierReason || "",
 				candidate.latestTriageResult?.securityClassification || "",
 				candidate.latestTriageResult?.impactType || "",
 				candidate.latestTriageResult?.cvssSeverity || "",
@@ -508,14 +514,29 @@ export const findVulnerabilityCandidateById = async (
 export const findVulnerabilityCandidateByIdForScanJob = async (input: {
 	vulnerabilityCandidateId: string;
 	scanJobId: string;
+	scanFunctionTaskId?: string;
 }) => await findVulnerabilityCandidateByIdAndScanJobIdRepo(input);
 
+export const listCandidateTags = async () => await listCandidateTagsRepo();
+
+export const updateVulnerabilityCandidateMetadata = async (input: {
+	vulnerabilityCandidateId: string;
+	scanJobId: string;
+	note: string;
+	tags: string[];
+}) => await updateVulnerabilityCandidateMetadataRepo(input);
+
 export const findVulnerabilityCandidateWithLatestAnalysisResultById =
-	async (input: { vulnerabilityCandidateId: string; scanJobId?: string }) => {
+	async (input: {
+		vulnerabilityCandidateId: string;
+		scanJobId?: string;
+		scanFunctionTaskId?: string;
+	}) => {
 		const candidate = input.scanJobId
 			? await findVulnerabilityCandidateByIdAndScanJobIdRepo({
 					vulnerabilityCandidateId: input.vulnerabilityCandidateId,
 					scanJobId: input.scanJobId,
+					scanFunctionTaskId: input.scanFunctionTaskId,
 				})
 			: await findVulnerabilityCandidateByIdRepo(
 					input.vulnerabilityCandidateId,
@@ -575,7 +596,7 @@ const toLineageItem = (
 const resolveUpstreamRelation = (
 	task: Task,
 ): CandidateTaskLineageRelation | null => {
-	if (task.stageName === "repository-scan") {
+	if (task.stageName === "repository-scan" || task.stageName === "delta-scope") {
 		return "repository";
 	}
 	if (task.stageName === "module-scan") {
@@ -590,11 +611,13 @@ const resolveUpstreamRelation = (
 export const findCandidateTaskLineage = async (input: {
 	vulnerabilityCandidateId: string;
 	scanJobId?: string;
+	scanFunctionTaskId?: string;
 }) => {
 	const candidate = input.scanJobId
 		? await findVulnerabilityCandidateByIdAndScanJobIdRepo({
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
 				scanJobId: input.scanJobId,
+				scanFunctionTaskId: input.scanFunctionTaskId,
 			})
 		: await findVulnerabilityCandidateByIdRepo(input.vulnerabilityCandidateId);
 	const upstreamTasks: CandidateTaskLineageItem[] = [];

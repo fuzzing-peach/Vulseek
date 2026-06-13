@@ -50,6 +50,7 @@ interface Props {
 	defaultCommitWindow?: number;
 	showCommitWindow?: boolean;
 	showFullScanPreview?: boolean;
+	scanType?: "delta" | "full";
 	onSubmit: (input: {
 		targetRef?: string;
 		targetTag?: string;
@@ -67,6 +68,7 @@ export const CreateScanDialog = ({
 	defaultCommitWindow = 3,
 	showCommitWindow = true,
 	showFullScanPreview = false,
+	scanType = "full",
 	onSubmit,
 }: Props) => {
 	const [open, setOpen] = useState(false);
@@ -79,6 +81,10 @@ export const CreateScanDialog = ({
 	const [commitWindow, setCommitWindow] = useState(String(defaultCommitWindow));
 	const [scanRuntimeSettings, setScanRuntimeSettings] =
 		useState<ScanRuntimeSettingsDraft>({});
+	const previewDescription =
+		scanType === "delta"
+			? "Delta Scan scopes functions impacted by the target/base diff, then runs function scanning, candidate analysis, fuzzing, verification, and triage."
+			: "Full Scan checks out the selected source, scans repository structure, expands module and function tasks, analyzes candidate findings, and only sends verified or likely findings to triage.";
 
 	useEffect(() => {
 		if (!open) {
@@ -118,9 +124,7 @@ export const CreateScanDialog = ({
 						<div className="rounded-lg border bg-background p-4">
 							<div className="text-sm font-semibold">What will run</div>
 							<p className="mt-1 text-sm text-muted-foreground">
-								Full Scan checks out the selected source, scans repository
-								structure, expands module and function tasks, analyzes candidate
-								findings, and only sends verified or likely findings to triage.
+								{previewDescription}
 							</p>
 						</div>
 					) : null}
@@ -128,6 +132,7 @@ export const CreateScanDialog = ({
 						<FullScanStageGraphPreview
 							serviceData={serviceData}
 							scanRuntimeSettings={scanRuntimeSettings}
+							scanType={scanType}
 							onScanRuntimeSettingsChange={setScanRuntimeSettings}
 						/>
 					) : null}

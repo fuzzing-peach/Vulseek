@@ -318,6 +318,43 @@ export const scanStageGroupLaneMemberships = pgTable(
 	}),
 );
 
+export const candidateMetadata = pgTable(
+	"candidate_metadata",
+	{
+		vulnerabilityCandidateId: text("vulnerabilityCandidateId")
+			.notNull(),
+		scanJobId: text("scanJobId")
+			.notNull()
+			.references(() => scanJobs.scanJobId, {
+				onDelete: "cascade",
+			}),
+		note: text("note").notNull().default(""),
+		tags: jsonb("tags").$type<string[]>().notNull().default([]),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		pk: primaryKey({
+			columns: [table.scanJobId, table.vulnerabilityCandidateId],
+		}),
+		scanJobIdx: index("candidate_metadata_scan_job_idx").on(table.scanJobId),
+	}),
+);
+
+export const candidateTags = pgTable("candidate_tags", {
+	name: text("name").notNull().primaryKey(),
+	createdAt: text("createdAt")
+		.notNull()
+		.$defaultFn(() => new Date().toISOString()),
+	updatedAt: text("updatedAt")
+		.notNull()
+		.$defaultFn(() => new Date().toISOString()),
+});
+
 export const scanJobsRelations = relations(scanJobs, ({ one, many }) => ({
 	application: one(applications, {
 		fields: [scanJobs.applicationId],
@@ -328,6 +365,7 @@ export const scanJobsRelations = relations(scanJobs, ({ one, many }) => ({
 		references: [compose.composeId],
 	}),
 	tasks: many(tasks),
+	candidateMetadata: many(candidateMetadata),
 }));
 
 export const tasksRelations = relations(tasks, ({ one, many }) => ({
@@ -344,6 +382,16 @@ export const tasksRelations = relations(tasks, ({ one, many }) => ({
 		relationName: "task_parent",
 	}),
 }));
+
+export const candidateMetadataRelations = relations(
+	candidateMetadata,
+	({ one }) => ({
+		scanJob: one(scanJobs, {
+			fields: [candidateMetadata.scanJobId],
+			references: [scanJobs.scanJobId],
+		}),
+	}),
+);
 
 export const apiCreateScanJob = z
 	.object({

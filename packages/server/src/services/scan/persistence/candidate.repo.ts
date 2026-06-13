@@ -1,7 +1,12 @@
 import { db } from "@dokploy/server/db";
-import { type taskStatusEnum, tasks } from "@dokploy/server/db/schema";
+import {
+	candidateMetadata,
+	candidateTags,
+	type taskStatusEnum,
+	tasks,
+} from "@dokploy/server/db/schema";
 import { TRPCError } from "@trpc/server";
-import { desc, eq, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, or } from "drizzle-orm";
 import {
 	analysisSchema,
 	candidateSchema,
@@ -9,6 +14,7 @@ import {
 	verificationSchema,
 } from "../artifacts/contracts/domain-object.contract";
 import {
+	findTaskByIdRepo,
 	listCandidateDescendantTasksByFunctionTaskIdRepo,
 	listTasksByScanJobAndStageRepo,
 } from "./task.repo";
@@ -30,6 +36,8 @@ type DerivedCandidateRecord = {
 	currentStage: "analyzing" | "fuzzing" | "verifying";
 	confidence: number | null;
 	score: number | null;
+	note: string;
+	tags: string[];
 	createdAt: string;
 	updatedAt: string;
 };
@@ -72,6 +80,91 @@ const maxTimestamp = (...values: Array<string | null | undefined>) =>
 		)
 		.sort()
 		.at(-1) || new Date(0).toISOString();
+
+const normalizeCandidateTags = (tags: string[]) =>
+	[
+		...new Set(
+			tags
+				.map((tag) => tag.trim())
+				.filter(Boolean)
+				.map((tag) => tag.slice(0, 64)),
+		),
+	].slice(0, 50);
+
+const normalizeCandidateNote = (note: string | null | undefined) =>
+	(note || "").slice(0, 10000);
+
+const candidateMetadataKey = (
+	scanJobId: string,
+	vulnerabilityCandidateId: string,
+) => `${scanJobId}\n${vulnerabilityCandidateId}`;
+
+const listCandidateMetadataByIds = async (
+	candidates: Array<{ scanJobId: string; vulnerabilityCandidateId: string }>,
+) => {
+	const ids = [
+		...new Set(
+			candidates
+				.map((candidate) => candidate.vulnerabilityCandidateId)
+				.filter(Boolean),
+		),
+	];
+	const scanJobIds = [
+		...new Set(
+			candidates.map((candidate) => candidate.scanJobId).filter(Boolean),
+		),
+	];
+	if (ids.length === 0) {
+		return new Map<string, typeof candidateMetadata.$inferSelect>();
+	}
+
+	const rows = await db
+		.select()
+		.from(candidateMetadata)
+		.where(
+			and(
+				inArray(candidateMetadata.vulnerabilityCandidateId, ids),
+				inArray(candidateMetadata.scanJobId, scanJobIds),
+			),
+		);
+
+	return new Map(
+		rows.map((row) => [
+			candidateMetadataKey(row.scanJobId, row.vulnerabilityCandidateId),
+			row,
+		]),
+	);
+};
+
+const withCandidateMetadata = async <
+	TCandidate extends {
+		scanJobId: string;
+		vulnerabilityCandidateId: string;
+		note?: string;
+		tags?: string[];
+	},
+>(
+	candidates: TCandidate[],
+) => {
+	const metadataById = await listCandidateMetadataByIds(candidates);
+	return candidates.map((candidate) => {
+		const metadata = metadataById.get(
+			candidateMetadataKey(
+				candidate.scanJobId,
+				candidate.vulnerabilityCandidateId,
+			),
+		);
+		return {
+			...candidate,
+			note: metadata?.note ?? candidate.note ?? "",
+			tags: Array.isArray(metadata?.tags)
+				? metadata.tags
+				: Array.isArray(candidate.tags)
+					? candidate.tags
+					: [],
+		};
+	});
+};
 
 const buildDerivedCandidatesFromTasks = async (input: {
 	functionTasks: (typeof tasks.$inferSelect)[];
@@ -187,6 +280,8 @@ const buildDerivedCandidatesFromTasks = async (input: {
 								typeof analysisOutput.data.score === "number"
 							? analysisOutput.data.score
 							: (candidate.score ?? null),
+				note: "",
+				tags: [],
 				createdAt: functionTask.createdAt,
 				updatedAt: maxTimestamp(
 					functionTask.updatedAt,
@@ -240,7 +335,7 @@ const listDerivedCandidatesByScanJobId = async (
 		analysisTasks,
 		verificationTasks,
 		triageTasks,
-	});
+	}).then(withCandidateMetadata);
 };
 
 const findDerivedCandidateById = async (
@@ -275,7 +370,7 @@ const findDerivedCandidateById = async (
 		analysisTasks,
 		verificationTasks,
 		triageTasks,
-	});
+	}).then(withCandidateMetadata);
 	return (
 		candidates.find(
 			(candidate) =>
@@ -290,10 +385,70 @@ export const findVulnerabilityCandidatesByScanJobIdRepo = async (
 	return (await listDerivedCandidatesByScanJobId(scanJobId)) || [];
 };
 
+const findVulnerabilityCandidateByFunctionTaskRepo = async (input: {
+	vulnerabilityCandidateId: string;
+	scanJobId: string;
+	scanFunctionTaskId: string;
+}) => {
+	const functionTask = await findTaskByIdRepo(input.scanFunctionTaskId).catch(
+		() => null,
+	);
+	if (!functionTask) {
+		return null;
+	}
+	if (
+		functionTask.scanJobId !== input.scanJobId ||
+		functionTask.stageName !== "function-scan"
+	) {
+		return null;
+	}
+
+	const candidates = await parseFunctionTaskCandidates(functionTask);
+	if (
+		!candidates.some(
+			(candidate) => candidate.id === input.vulnerabilityCandidateId,
+		)
+	) {
+		return null;
+	}
+
+	const candidateTasks = await listCandidateDescendantTasksByFunctionTaskIdRepo({
+		scanFunctionTaskId: functionTask.taskId,
+		vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+	});
+	const derivedCandidates = await buildDerivedCandidatesFromTasks({
+		functionTasks: [functionTask],
+		analysisTasks: candidateTasks.filter((task) => task.stageName === "analyze"),
+		verificationTasks: candidateTasks.filter(
+			(task) => task.stageName === "verify",
+		),
+		triageTasks: candidateTasks.filter((task) => task.stageName === "triage"),
+	}).then(withCandidateMetadata);
+
+	return (
+		derivedCandidates.find(
+			(candidate) =>
+				candidate.vulnerabilityCandidateId === input.vulnerabilityCandidateId,
+		) || null
+	);
+};
+
 export const findVulnerabilityCandidateByIdAndScanJobIdRepo = async (input: {
 	vulnerabilityCandidateId: string;
 	scanJobId: string;
+	scanFunctionTaskId?: string;
 }) => {
+	if (input.scanFunctionTaskId) {
+		const derivedCandidate = await findVulnerabilityCandidateByFunctionTaskRepo({
+			vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+			scanJobId: input.scanJobId,
+			scanFunctionTaskId: input.scanFunctionTaskId,
+		});
+		if (derivedCandidate) {
+			return derivedCandidate;
+		}
+	}
+
 	const functionTasks = await listTasksByScanJobAndStageRepo({
 		scanJobId: input.scanJobId,
 		stageName: "function-scan",
@@ -323,7 +478,7 @@ export const findVulnerabilityCandidateByIdAndScanJobIdRepo = async (input: {
 				(task) => task.stageName === "verify",
 			),
 			triageTasks: candidateTasks.filter((task) => task.stageName === "triage"),
-		});
+		}).then(withCandidateMetadata);
 		const derivedCandidate = derivedCandidates.find(
 			(candidate) =>
 				candidate.vulnerabilityCandidateId === input.vulnerabilityCandidateId,
@@ -347,6 +502,71 @@ export const findVulnerabilityCandidateByIdAndScanJobIdRepo = async (input: {
 		code: "NOT_FOUND",
 		message: "Vulnerability candidate not found",
 	});
+};
+
+export const listCandidateTagsRepo = async () =>
+	await db
+		.select({
+			name: candidateTags.name,
+		})
+		.from(candidateTags)
+		.orderBy(asc(candidateTags.name))
+		.then((rows) => rows.map((row) => row.name));
+
+export const updateVulnerabilityCandidateMetadataRepo = async (input: {
+	vulnerabilityCandidateId: string;
+	scanJobId: string;
+	note: string;
+	tags: string[];
+}) => {
+	const now = new Date().toISOString();
+	const note = normalizeCandidateNote(input.note);
+	const tags = normalizeCandidateTags(input.tags);
+	await Promise.all(
+		tags.map((name) =>
+			db
+				.insert(candidateTags)
+				.values({
+					name,
+					createdAt: now,
+					updatedAt: now,
+				})
+				.onConflictDoUpdate({
+					target: candidateTags.name,
+					set: {
+						updatedAt: now,
+					},
+				}),
+		),
+	);
+
+	const [metadata] = await db
+		.insert(candidateMetadata)
+		.values({
+			vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+			scanJobId: input.scanJobId,
+			note,
+			tags,
+			createdAt: now,
+			updatedAt: now,
+		})
+		.onConflictDoUpdate({
+			target: [
+				candidateMetadata.scanJobId,
+				candidateMetadata.vulnerabilityCandidateId,
+			],
+			set: {
+				note,
+				tags,
+				updatedAt: now,
+			},
+		})
+		.returning();
+
+	return {
+		note: metadata?.note ?? note,
+		tags: metadata?.tags ?? tags,
+	};
 };
 
 export const findVulnerabilityCandidateByIdRepo = async (

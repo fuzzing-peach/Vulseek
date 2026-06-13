@@ -20,6 +20,7 @@ import {
 	findVulnerabilityCandidateById,
 	findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId,
 	findVulnerabilityCandidateWithLatestAnalysisResultById,
+	listCandidateTags,
 	listScanJobDirectory,
 	listScanTaskDirectory,
 	readCandidateFileContent,
@@ -35,6 +36,7 @@ import {
 	startCandidateVerification,
 	startCheckoutScanEnvironment,
 	syncFullScanTasksFromArtifacts,
+	updateVulnerabilityCandidateMetadata,
 	updateScanJobNote,
 	updateScanJobRuntimeSettings,
 } from "@dokploy/server";
@@ -77,6 +79,14 @@ const parseCsvFilter = (value: string) =>
 		.map((item) => item.trim())
 		.filter(Boolean);
 
+const apiUpdateCandidateMetadata = z.object({
+	vulnerabilityCandidateId: z.string().min(1),
+	scanJobId: z.string().min(1),
+	scanFunctionTaskId: z.string().min(1).optional(),
+	note: z.string().max(10000).default(""),
+	tags: z.array(z.string().min(1).max(64)).max(50).default([]),
+});
+
 const apiFindScanJobTerminalTasksPage = z
 	.object({
 		scanJobId: z.string().min(1),
@@ -92,6 +102,7 @@ const apiFindFullScanStageGraph = z
 	.object({
 		applicationId: z.string().min(1).optional(),
 		composeId: z.string().min(1).optional(),
+		scanType: z.enum(["delta", "full"]).optional(),
 	})
 	.refine(
 		(value) => Boolean(value.applicationId) !== Boolean(value.composeId),
@@ -901,6 +912,7 @@ export const scanRouter = createTRPCRouter({
 			z.object({
 				vulnerabilityCandidateId: z.string().min(1),
 				scanJobId: z.string().min(1).optional(),
+				scanFunctionTaskId: z.string().min(1).optional(),
 			}),
 		)
 		.query(async ({ input, ctx }) => {
@@ -936,6 +948,7 @@ export const scanRouter = createTRPCRouter({
 				await findVulnerabilityCandidateWithLatestAnalysisResultById({
 					vulnerabilityCandidateId: input.vulnerabilityCandidateId,
 					scanJobId: candidateScanJobId,
+					scanFunctionTaskId: input.scanFunctionTaskId,
 				});
 			if (!enrichedCandidate) {
 				throw new TRPCError({
@@ -947,11 +960,52 @@ export const scanRouter = createTRPCRouter({
 			return enrichedCandidate;
 		}),
 
+	candidateTags: protectedProcedure.query(async () => {
+		return await listCandidateTags();
+	}),
+
+	updateCandidateMetadata: protectedProcedure
+		.input(apiUpdateCandidateMetadata)
+		.mutation(async ({ input, ctx }) => {
+			const scanJob = await findScanJobById(input.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to update this candidate",
+				});
+			}
+
+			await findVulnerabilityCandidateWithLatestAnalysisResultById({
+				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+				scanJobId: input.scanJobId,
+				scanFunctionTaskId: input.scanFunctionTaskId,
+			});
+
+			return await updateVulnerabilityCandidateMetadata(input);
+		}),
+
 	candidateTaskLineage: protectedProcedure
 		.input(
 			z.object({
 				vulnerabilityCandidateId: z.string().min(1),
 				scanJobId: z.string().min(1).optional(),
+				scanFunctionTaskId: z.string().min(1).optional(),
 			}),
 		)
 		.query(async ({ input, ctx }) => {
@@ -986,6 +1040,7 @@ export const scanRouter = createTRPCRouter({
 			return await findCandidateTaskLineage({
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
 				scanJobId: candidateScanJobId,
+				scanFunctionTaskId: input.scanFunctionTaskId,
 			});
 		}),
 
@@ -1167,6 +1222,7 @@ export const scanRouter = createTRPCRouter({
 		.input(
 			z.object({
 				stage: z.enum([
+					"delta_scoping",
 					"repository_scanning",
 					"module_scanning",
 					"function_scanning",

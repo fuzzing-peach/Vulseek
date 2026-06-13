@@ -4,6 +4,7 @@ import type {
 	BuildFuzzerRequest,
 	Candidate,
 	CriticResponse,
+	DeltaScopeManifest,
 	Evidence,
 	FinalAnalysis,
 	Function,
@@ -23,6 +24,7 @@ export type {
 	BuildFuzzerRequest,
 	Candidate,
 	CriticResponse,
+	DeltaScopeManifest,
 	Evidence,
 	FinalAnalysis,
 	Function,
@@ -71,6 +73,8 @@ export type VulnerabilityCandidate = {
 	currentStage: "analyzing" | "fuzzing" | "verifying";
 	confidence: number | null;
 	score: number | null;
+	note: string;
+	tags: string[];
 	createdAt: string;
 	updatedAt: string;
 };
@@ -110,6 +114,8 @@ export type TriageResult = {
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
 	result: Triage["result"];
+	disqualifier: Triage["disqualifier"];
+	disqualifierReason: string | null;
 	securityClassification: Triage["securityClassification"];
 	isSecurityIssue: boolean;
 	impactType: string;

@@ -67,6 +67,16 @@ export const triageExploitabilitySchema = z.enum([
 	"unknown",
 ]);
 
+export const triageDisqualifierSchema = z.enum([
+	"D-0",
+	"D-1",
+	"D-1.5",
+	"D-2",
+	"D-3",
+	"D-4",
+	"D-5",
+]);
+
 export const evidenceSchema = z.object({
 	id: z.string().min(1),
 	kind: z.enum([
@@ -205,6 +215,13 @@ export const repositoryScanManifestSchema = z.object({
 	repository: artifactPathOf(repositorySchema),
 	modules: artifactPathListOf(repositoryModuleSchema),
 });
+
+export const deltaScopeManifestSchema = z
+	.object({
+		repository: artifactPathOf(repositorySchema),
+		functions: artifactPathListOf(functionSchema),
+	})
+	.strict();
 
 export const moduleScanManifestSchema = z.object({
 	module: artifactPathOf(moduleSchema),
@@ -383,6 +400,8 @@ export const verificationSchema = z.object({
 export const triageSchema = z.object({
 	id: z.string().min(1),
 	result: triageResultEnumSchema,
+	disqualifier: triageDisqualifierSchema.nullable().default(null),
+	disqualifierReason: z.string().nullable().default(null),
 	securityClassification: triageSecurityClassificationSchema,
 	isSecurityIssue: z.boolean(),
 	impactType: z.string(),
@@ -407,6 +426,7 @@ export type Repository = z.infer<typeof repositorySchema>;
 export type RepositoryScanManifest = z.infer<
 	typeof repositoryScanManifestSchema
 >;
+export type DeltaScopeManifest = z.infer<typeof deltaScopeManifestSchema>;
 export type RepositoryModule = z.infer<typeof repositoryModuleSchema>;
 export type Module = z.infer<typeof moduleSchema>;
 export type ModuleScanManifest = z.infer<typeof moduleScanManifestSchema>;

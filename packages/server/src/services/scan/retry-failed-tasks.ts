@@ -5,6 +5,7 @@ import type {
 } from "./types";
 
 export const RETRYABLE_TASK_STAGE_NAMES = [
+	"delta-scope",
 	"repository-scan",
 	"module-scan",
 	"function-scan",
@@ -36,15 +37,17 @@ type RetryFailedTasksDeps = {
 };
 
 const RETRY_STAGE_ORDER: Record<RetryableTaskStageName, number> = {
-	"repository-scan": 0,
-	"module-scan": 1,
-	"function-scan": 2,
-	analyze: 3,
-	verify: 4,
-	triage: 5,
+	"delta-scope": 0,
+	"repository-scan": 1,
+	"module-scan": 2,
+	"function-scan": 3,
+	analyze: 4,
+	verify: 5,
+	triage: 6,
 };
 
 const createEmptyRetryCounts = (): RetryFailedTasksByStage => ({
+	"delta-scope": 0,
 	"repository-scan": 0,
 	"module-scan": 0,
 	"function-scan": 0,

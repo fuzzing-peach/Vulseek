@@ -6,7 +6,10 @@ import {
 	FileText,
 	Folder,
 	Loader2,
+	Plus,
 	ShieldCheck,
+	Tag,
+	X,
 	Workflow,
 } from "lucide-react";
 import Head from "next/head";
@@ -39,7 +42,9 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Tree } from "@/components/ui/file-tree";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
 
@@ -117,6 +122,9 @@ type CandidateTaskLineageTask = {
 };
 
 const getTaskStageLabel = (stage?: string | null) => {
+	if (stage === "delta-scope") {
+		return "Delta Scope";
+	}
 	if (stage === "repository-scan") {
 		return "Repository";
 	}
@@ -182,6 +190,7 @@ const CandidateTaskLineagePanel = ({
 	routeSegment,
 	serviceId,
 	scanJobId,
+	scanFunctionTaskId,
 	enabled,
 }: {
 	candidateId: string;
@@ -191,6 +200,7 @@ const CandidateTaskLineagePanel = ({
 	routeSegment: "profiles" | "services";
 	serviceId: string;
 	scanJobId: string;
+	scanFunctionTaskId?: string;
 	enabled: boolean;
 }) => {
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -201,7 +211,7 @@ const CandidateTaskLineagePanel = ({
 	const textAutoScrollRef = useRef(true);
 	const { data, isLoading, isError, error } =
 		api.scan.candidateTaskLineage.useQuery(
-			{ vulnerabilityCandidateId: candidateId, scanJobId },
+			{ vulnerabilityCandidateId: candidateId, scanJobId, scanFunctionTaskId },
 			{
 				enabled: enabled && !!candidateId && !!scanJobId,
 				refetchInterval: enabled ? 4000 : false,
@@ -516,6 +526,10 @@ export const ShowScanCandidateDetail = ({
 		typeof router.query.candidateId === "string"
 			? router.query.candidateId
 			: "";
+	const scanFunctionTaskId =
+		typeof router.query.scanFunctionTaskId === "string"
+			? router.query.scanFunctionTaskId
+			: "";
 	const candidateListQueryState = useMemo(
 		() => parseCandidateListQueryState(router.query),
 		[router.query],
@@ -525,6 +539,10 @@ export const ShowScanCandidateDetail = ({
 	const [activeTab, setActiveTab] = useState<
 		"overview" | "task-lineage" | "files"
 	>("overview");
+	const [noteDraft, setNoteDraft] = useState("");
+	const [selectedTags, setSelectedTags] = useState<string[]>([]);
+	const [tagInput, setTagInput] = useState("");
+	const metadataSyncKeyRef = useRef("");
 
 	const jobCandidatesHref = buildCandidateListStateHref(
 		`/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}`,
@@ -548,6 +566,7 @@ export const ShowScanCandidateDetail = ({
 			{
 				vulnerabilityCandidateId: candidateId,
 				scanJobId: scanJobId || undefined,
+				scanFunctionTaskId: scanFunctionTaskId || undefined,
 			},
 			{ enabled: !!candidateId && !!scanJobId, refetchInterval: 2000 },
 		);
@@ -586,7 +605,28 @@ export const ShowScanCandidateDetail = ({
 			},
 			{ enabled: !!candidateId && !!scanJobId && !!previewFilePath },
 		);
+	const { data: availableTags = [] } = api.scan.candidateTags.useQuery();
 	const verifyCandidateMutation = api.scan.verifyCandidate.useMutation();
+	const updateCandidateMetadataMutation =
+		api.scan.updateCandidateMetadata.useMutation();
+
+	useEffect(() => {
+		if (!candidate) {
+			return;
+		}
+		const nextMetadataKey = [
+			candidate.vulnerabilityCandidateId,
+			candidate.note || "",
+			...(candidate.tags || []),
+		].join("\n");
+		if (metadataSyncKeyRef.current === nextMetadataKey) {
+			return;
+		}
+		metadataSyncKeyRef.current = nextMetadataKey;
+		setNoteDraft(candidate.note || "");
+		setSelectedTags(candidate.tags || []);
+		setTagInput("");
+	}, [candidate?.note, candidate?.tags, candidate?.vulnerabilityCandidateId]);
 
 	useEffect(() => {
 		if (!fileTree?.length) {
@@ -638,6 +678,48 @@ export const ShowScanCandidateDetail = ({
 	const verifyButtonLabel = candidate?.latestVerificationResult
 		? "Reverify"
 		: "Verify";
+	const normalizedTagInput = tagInput.trim();
+	const candidateMetadataDirty =
+		noteDraft !== (candidate?.note || "") ||
+		selectedTags.join("\n") !== (candidate?.tags || []).join("\n");
+	const candidateTagSuggestions = availableTags.filter(
+		(tag) => !selectedTags.includes(tag),
+	);
+	const addCandidateTag = (tag: string) => {
+		const normalized = tag.trim().slice(0, 64);
+		if (!normalized || selectedTags.includes(normalized)) {
+			return;
+		}
+		setSelectedTags((current) => [...current, normalized].slice(0, 50));
+		setTagInput("");
+	};
+	const removeCandidateTag = (tag: string) => {
+		setSelectedTags((current) => current.filter((value) => value !== tag));
+	};
+	const saveCandidateMetadata = async () => {
+		if (!candidateId || !scanJobId) {
+			return;
+		}
+		await updateCandidateMetadataMutation.mutateAsync({
+			vulnerabilityCandidateId: candidateId,
+			scanJobId,
+			scanFunctionTaskId: scanFunctionTaskId || undefined,
+			note: noteDraft,
+			tags: selectedTags,
+		});
+		metadataSyncKeyRef.current = [candidateId, noteDraft, ...selectedTags].join(
+			"\n",
+		);
+		await Promise.all([
+			utils.scan.candidate.invalidate({
+				vulnerabilityCandidateId: candidateId,
+				scanJobId,
+				scanFunctionTaskId: scanFunctionTaskId || undefined,
+			}),
+			utils.scan.candidates.invalidate({ scanJobId }),
+			utils.scan.candidateTags.invalidate(),
+		]);
+	};
 	const renderPathCard = (
 		label: string,
 		value?: string | null,
@@ -897,12 +979,119 @@ export const ShowScanCandidateDetail = ({
 											</div>
 										</div>
 
-										<div className="rounded-lg border p-3">
+										<div className="mt-4 rounded-lg border p-3">
 											<div className="text-sm text-muted-foreground">
 												Description
 											</div>
 											<div className="mt-1 whitespace-pre-wrap break-words text-sm">
 												{candidate.description || "-"}
+											</div>
+										</div>
+									</section>
+
+									<section className="rounded-lg border p-4">
+										<div className="mb-4 flex items-center justify-between gap-3">
+											<div className="flex items-center gap-2 text-lg font-semibold">
+												<Tag className="size-4" />
+												User Notes
+											</div>
+											<Button
+												type="button"
+												size="sm"
+												isLoading={updateCandidateMetadataMutation.isLoading}
+												disabled={
+													updateCandidateMetadataMutation.isLoading ||
+													!candidateMetadataDirty
+												}
+												onClick={saveCandidateMetadata}
+											>
+												Save
+											</Button>
+										</div>
+										<div className="grid gap-4">
+											<div className="grid gap-2">
+												<div className="text-sm text-muted-foreground">
+													Note
+												</div>
+												<Textarea
+													value={noteDraft}
+													onChange={(event) =>
+														setNoteDraft(event.target.value)
+													}
+													placeholder="Add reviewer notes for this candidate."
+													className="min-h-28"
+												/>
+											</div>
+											<div className="grid gap-2">
+												<div className="text-sm text-muted-foreground">
+													Tags
+												</div>
+												<div className="flex flex-wrap gap-2">
+													{selectedTags.length > 0 ? (
+														selectedTags.map((tag) => (
+															<Badge
+																key={tag}
+																variant="secondary"
+																className="gap-1 pr-1"
+															>
+																<span>{tag}</span>
+																<button
+																	type="button"
+																	className="rounded-sm p-0.5 hover:bg-background/70"
+																	onClick={() => removeCandidateTag(tag)}
+																	aria-label={`Remove tag ${tag}`}
+																>
+																	<X className="size-3" />
+																</button>
+															</Badge>
+														))
+													) : (
+														<div className="text-sm text-muted-foreground">
+															No tags set.
+														</div>
+													)}
+												</div>
+												<div className="flex gap-2">
+													<Input
+														value={tagInput}
+														onChange={(event) =>
+															setTagInput(event.target.value)
+														}
+														maxLength={64}
+														onKeyDown={(event) => {
+															if (event.key === "Enter") {
+																event.preventDefault();
+																addCandidateTag(normalizedTagInput);
+															}
+														}}
+														placeholder="Type a new tag"
+													/>
+													<Button
+														type="button"
+														variant="secondary"
+														disabled={!normalizedTagInput}
+														onClick={() =>
+															addCandidateTag(normalizedTagInput)
+														}
+													>
+														<Plus className="mr-2 size-4" />
+														Add
+													</Button>
+												</div>
+												{candidateTagSuggestions.length > 0 ? (
+													<div className="flex flex-wrap gap-2">
+														{candidateTagSuggestions.map((tag) => (
+															<button
+																key={tag}
+																type="button"
+																className="rounded-md border px-2 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
+																onClick={() => addCandidateTag(tag)}
+															>
+																{tag}
+															</button>
+														))}
+													</div>
+												) : null}
 											</div>
 										</div>
 									</section>
@@ -1097,10 +1286,27 @@ export const ShowScanCandidateDetail = ({
 											</div>
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
+													Disqualifier
+												</div>
+												<div className="mt-1 text-sm">
+													{candidate.latestTriageResult?.disqualifier || "-"}
+												</div>
+											</div>
+											<div className="rounded-md border p-3">
+												<div className="text-xs text-muted-foreground">
 													Impact
 												</div>
 												<div className="mt-1 text-sm">
 													{candidate.latestTriageResult?.impactType || "-"}
+												</div>
+											</div>
+											<div className="rounded-md border p-3 md:col-span-2">
+												<div className="text-xs text-muted-foreground">
+													Disqualifier Reason
+												</div>
+												<div className="mt-1 whitespace-pre-wrap break-words text-sm">
+													{candidate.latestTriageResult
+														?.disqualifierReason || "-"}
 												</div>
 											</div>
 											<div className="rounded-md border p-3">
@@ -1146,6 +1352,7 @@ export const ShowScanCandidateDetail = ({
 								routeSegment={routeSegment}
 								serviceId={serviceId}
 								scanJobId={scanJobId}
+								scanFunctionTaskId={scanFunctionTaskId || undefined}
 								enabled={activeTab === "task-lineage"}
 							/>
 						</TabsContent>

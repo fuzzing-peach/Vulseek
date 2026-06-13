@@ -62,6 +62,13 @@ type DirectoryCacheEntry = {
 
 const getTaskStageLabel = (stage?: string | null) => {
 	if (
+		stage === "Delta Scope" ||
+		stage === "delta-scope" ||
+		stage === "delta_scoping"
+	) {
+		return "Delta Scope";
+	}
+	if (
 		stage === "Scan Repository" ||
 		stage === "repository-scan" ||
 		stage === "repository_scanning"

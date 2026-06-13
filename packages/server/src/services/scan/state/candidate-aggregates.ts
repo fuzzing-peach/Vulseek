@@ -35,6 +35,8 @@ export const buildCandidatesWithLatestResults = <
 		taskId: string;
 		vulnerabilityCandidateId: string;
 		result: string;
+		disqualifier?: string | null;
+		disqualifierReason?: string | null;
 		securityClassification: string;
 		isSecurityIssue: boolean;
 		impactType: string;
@@ -191,6 +193,8 @@ export const buildCandidatesWithLatestResults = <
 				? {
 						taskId: latestTriageResult.taskId,
 						result: latestTriageResult.result,
+						disqualifier: latestTriageResult.disqualifier,
+						disqualifierReason: latestTriageResult.disqualifierReason,
 						securityClassification:
 							latestTriageResult.securityClassification,
 						isSecurityIssue: latestTriageResult.isSecurityIssue,

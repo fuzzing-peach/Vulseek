@@ -2,7 +2,7 @@ import { db } from "@dokploy/server/db";
 import { scanJobs, tasks } from "@dokploy/server/db/schema";
 import type { ScanRuntimeSettings } from "@dokploy/server/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, or, sql } from "drizzle-orm";
 import { normalizeScanRuntimeSettings } from "../runtime-settings";
 import { createTaskRepo } from "./task.repo";
 
@@ -53,7 +53,10 @@ export const findScanJobByIdRepo = async (scanJobId: string) => {
 			tasks,
 			and(
 				eq(tasks.scanJobId, scanJobs.scanJobId),
-				eq(tasks.stageName, "repository-scan"),
+				or(
+					eq(tasks.stageName, "repository-scan"),
+					eq(tasks.stageName, "delta-scope"),
+				),
 			),
 		)
 		.where(eq(scanJobs.scanJobId, scanJobId))
@@ -85,7 +88,10 @@ export const listScanJobsByApplicationIdRepo = async (applicationId: string) =>
 			tasks,
 			and(
 				eq(tasks.scanJobId, scanJobs.scanJobId),
-				eq(tasks.stageName, "repository-scan"),
+				or(
+					eq(tasks.stageName, "repository-scan"),
+					eq(tasks.stageName, "delta-scope"),
+				),
 			),
 		)
 		.where(eq(scanJobs.applicationId, applicationId))
@@ -99,7 +105,10 @@ export const listScanJobsByComposeIdRepo = async (composeId: string) =>
 			tasks,
 			and(
 				eq(tasks.scanJobId, scanJobs.scanJobId),
-				eq(tasks.stageName, "repository-scan"),
+				or(
+					eq(tasks.stageName, "repository-scan"),
+					eq(tasks.stageName, "delta-scope"),
+				),
 			),
 		)
 		.where(eq(scanJobs.composeId, composeId))
@@ -113,7 +122,10 @@ export const listUnfinishedScanJobsRepo = async () =>
 			tasks,
 			and(
 				eq(tasks.scanJobId, scanJobs.scanJobId),
-				eq(tasks.stageName, "repository-scan"),
+				or(
+					eq(tasks.stageName, "repository-scan"),
+					eq(tasks.stageName, "delta-scope"),
+				),
 			),
 		)
 		.where(
@@ -167,8 +179,8 @@ export const createScanJobRepo = async (input: {
 
 	await createTaskRepo({
 		scanJobId: created[0].scanJobId,
-		name: "repository-scanning",
-		stageName: "repository-scan",
+		name: input.scanType === "delta" ? "delta-scoping" : "repository-scanning",
+		stageName: input.scanType === "delta" ? "delta-scope" : "repository-scan",
 		status: "pending",
 	});
 
