@@ -14,6 +14,7 @@ import {
 	Search,
 } from "lucide-react";
 import Head from "next/head";
+import { useTranslation } from "next-i18next";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import {
@@ -75,6 +76,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { idleSandboxAgentActivity } from "@/lib/scan/sandbox-agent-activity";
 import { api } from "@/utils/api";
+import {
+	formatAnalysisResultLabel,
+	formatScanJobStatusLabel,
+	formatScanStageLabel,
+	formatScanStatusLabel,
+	formatScanTypeLabel,
+	formatTruthResultLabel,
+	scanT,
+	type ScanTranslation,
+} from "./scan-i18n";
 
 interface Props {
 	projectId: string;
@@ -175,6 +186,11 @@ const DEFAULT_CANDIDATE_EXPORT_FIELDS = CANDIDATE_EXPORT_FIELDS.map(
 	(field) => field.key,
 );
 
+const getCandidateExportFieldLabel = (
+	t: ScanTranslation,
+	field: (typeof CANDIDATE_EXPORT_FIELDS)[number],
+) => scanT(t, `scan.exportField.${field.key}`, field.label);
+
 const buildCandidateExportFilename = (scanJobId: string) => {
 	const timestamp = new Date()
 		.toISOString()
@@ -229,11 +245,13 @@ const formatTaskRuntime = (
 	return `${seconds}s`;
 };
 
-const formatTokenUsage = (value?: number | null) => {
+const formatTokenUsage = (t: ScanTranslation, value?: number | null) => {
 	if (typeof value !== "number" || !Number.isFinite(value)) {
 		return "-";
 	}
-	return `${new Intl.NumberFormat().format(value)} tokens`;
+	return scanT(t, "scan.tokenUsage", "{{count}} tokens", {
+		count: new Intl.NumberFormat().format(value),
+	});
 };
 
 const formatTokenCount = (value?: number | null) => {
@@ -244,6 +262,7 @@ const formatTokenCount = (value?: number | null) => {
 };
 
 const formatTokenUsageWithCache = (
+	t: ScanTranslation,
 	total?: number | null,
 	cached?: number | null,
 ) => {
@@ -259,10 +278,21 @@ const formatTokenUsageWithCache = (
 		typeof cached !== "number" ||
 		!Number.isFinite(cached)
 	) {
-		return `${totalValue} tokens`;
+		return scanT(t, "scan.tokenUsage", "{{count}} tokens", {
+			count: totalValue,
+		});
 	}
 	const cachedPercent = (cached / total) * 100;
-	return `${totalValue} / ${cachedValue} (${cachedPercent.toFixed(2)}% cached)`;
+	return scanT(
+		t,
+		"scan.cachedTokenUsage",
+		"{{total}} / {{cached}} ({{percent}}% cached)",
+		{
+			total: totalValue,
+			cached: cachedValue,
+			percent: cachedPercent.toFixed(2),
+		},
+	);
 };
 
 const resolveRequestedTab = (
@@ -288,11 +318,31 @@ const resolveRequestedTab = (
 	return "overview";
 };
 
-const getShortResultLabel = (value?: string | null) => {
+const getShortResultLabel = (t: ScanTranslation, value?: string | null) => {
 	if (!value) {
 		return "-";
 	}
-	return RESULT_SHORT_LABELS[value] || formatResultLabel(value);
+	if (value in RESULT_SHORT_LABELS) {
+		if (
+			value === "real_vulnerability" ||
+			value === "likely_vulnerability" ||
+			value === "plausible_but_unproven" ||
+			value === "false_positive" ||
+			value === "api_misuse"
+		) {
+			return formatAnalysisResultLabel(t, value);
+		}
+		return formatTruthResultLabel(t, value);
+	}
+	if (
+		value === "security_issue" ||
+		value === "non_security" ||
+		value === "hardening" ||
+		value === "needs_review"
+	) {
+		return scanT(t, `scan.triageResult.${value}`, formatResultLabel(value));
+	}
+	return formatResultLabel(value);
 };
 
 const ROOT_DIRECTORY_KEY = "__root__";
@@ -316,6 +366,7 @@ const LazyFileTree = ({
 	onToggleDirectory,
 	onSelectFile,
 }: LazyFileTreeProps) => {
+	const { t } = useTranslation("scan");
 	const renderItems = (items: DirectoryListItem[], depth = 0): ReactNode =>
 		items.map((item) => {
 			const isDirectory = item.type === "directory";
@@ -364,21 +415,25 @@ const LazyFileTree = ({
 									style={{ paddingLeft: `${(depth + 1) * 14 + 10}px` }}
 								>
 									<Loader2 className="size-4 animate-spin" />
-									Loading...
+									{scanT(t, "scan.files.loadingShort", "Loading...")}
 								</div>
 							) : childStatus === "error" ? (
 								<div
 									className="px-2 py-1.5 text-sm text-destructive"
 									style={{ paddingLeft: `${(depth + 1) * 14 + 10}px` }}
 								>
-									Failed to load directory
+									{scanT(
+										t,
+										"scan.files.directoryLoadError",
+										"Failed to load directory",
+									)}
 								</div>
 							) : childStatus === "loaded" && childItems.length === 0 ? (
 								<div
 									className="px-2 py-1.5 text-sm text-muted-foreground"
 									style={{ paddingLeft: `${(depth + 1) * 14 + 10}px` }}
 								>
-									Empty
+									{scanT(t, "scan.files.emptyDirectory", "Empty")}
 								</div>
 							) : (
 								renderItems(childItems, depth + 1)
@@ -393,7 +448,7 @@ const LazyFileTree = ({
 		return (
 			<div className="flex h-full min-h-[320px] items-center justify-center gap-2 text-muted-foreground">
 				<Loader2 className="size-4 animate-spin" />
-				Loading files...
+				{scanT(t, "scan.files.loading", "Loading files...")}
 			</div>
 		);
 	}
@@ -401,7 +456,7 @@ const LazyFileTree = ({
 	if (rootStatus === "error") {
 		return (
 			<div className="flex h-full min-h-[320px] items-center justify-center text-destructive">
-				Failed to load files
+				{scanT(t, "scan.files.loadError", "Failed to load files")}
 			</div>
 		);
 	}
@@ -410,7 +465,7 @@ const LazyFileTree = ({
 		return (
 			<div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-2 text-muted-foreground">
 				<Folder className="size-6" />
-				No files available
+				{scanT(t, "scan.files.empty", "No files available")}
 			</div>
 		);
 	}
@@ -420,29 +475,8 @@ const LazyFileTree = ({
 	);
 };
 
-const getScanJobStatusLabel = (status?: string) => {
-	if (status === "pending") {
-		return "Pending";
-	}
-
-	if (status === "running") {
-		return "Running";
-	}
-
-	if (status === "paused") {
-		return "Paused";
-	}
-
-	if (status === "finished") {
-		return "Finished";
-	}
-
-	if (status === "canceled") {
-		return "Canceled";
-	}
-
-	return "Pending";
-};
+const getScanJobStatusLabel = (t: ScanTranslation, status?: string) =>
+	formatScanJobStatusLabel(t, status || "pending");
 
 const getScanJobStatusClassName = (status?: string) => {
 	if (status === "finished") {
@@ -464,8 +498,13 @@ const getScanJobStatusClassName = (status?: string) => {
 	return "text-muted-foreground";
 };
 
-const formatTriggerSourceLabel = (triggerSource?: string) =>
-	triggerSource === "schedule" ? "auto" : triggerSource || "manual";
+const formatTriggerSourceLabel = (
+	t: ScanTranslation,
+	triggerSource?: string,
+) =>
+	triggerSource === "schedule"
+		? scanT(t, "scan.jobs.auto", "auto")
+		: triggerSource || "manual";
 
 const getAnalysisResultBadgeClassName = (result?: string | null) => {
 	if (result === "real_vulnerability") {
@@ -492,6 +531,7 @@ const getAnalysisResultBadgeClassName = (result?: string | null) => {
 };
 
 const getVerificationTruthBadge = (
+	t: ScanTranslation,
 	result?: string | null,
 ): { label: string; className: string } | null => {
 	if (!result) {
@@ -500,7 +540,7 @@ const getVerificationTruthBadge = (
 
 	if (result === "true") {
 		return {
-			label: "True",
+			label: formatTruthResultLabel(t, "true"),
 			className:
 				"border-emerald-200 bg-emerald-100 text-emerald-700 dark:border-emerald-500/60 dark:bg-emerald-950/50 dark:text-emerald-100",
 		};
@@ -508,14 +548,14 @@ const getVerificationTruthBadge = (
 
 	if (result === "likely") {
 		return {
-			label: "Likely",
+			label: formatTruthResultLabel(t, "likely"),
 			className:
 				"border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100",
 		};
 	}
 
 	return {
-		label: getShortResultLabel(result),
+		label: getShortResultLabel(t, result),
 		className: "border-muted-foreground/20 bg-muted text-muted-foreground",
 	};
 };
@@ -536,62 +576,62 @@ const getTriageResultBadgeClassName = (result?: string | null) => {
 	return "border-muted-foreground/20 bg-muted text-muted-foreground";
 };
 
-const getTaskStageLabel = (stage?: string) => {
+const getTaskStageLabel = (t: ScanTranslation, stage?: string) => {
 	if (
 		stage === "Delta Scope" ||
 		stage === "delta-scope" ||
 		stage === "delta_scoping"
 	) {
-		return "Delta Scope";
+		return formatScanStageLabel(t, "delta-scope");
 	}
 	if (
 		stage === "Scan Repository" ||
 		stage === "repository-scan" ||
 		stage === "repository_scanning"
 	) {
-		return "Scan Repository";
+		return formatScanStageLabel(t, "repository-scan");
 	}
 	if (
 		stage === "Scan Module" ||
 		stage === "module-scan" ||
 		stage === "module_scanning"
 	) {
-		return "Scan Module";
+		return formatScanStageLabel(t, "module-scan");
 	}
 	if (
 		stage === "Scan Function" ||
 		stage === "function-scan" ||
 		stage === "function_scanning"
 	) {
-		return "Scan Function";
+		return formatScanStageLabel(t, "function-scan");
 	}
 	if (stage === "Analyze" || stage === "analyze" || stage === "analyzing") {
-		return "Analyze";
+		return formatScanStageLabel(t, "analyze");
 	}
 	if (
 		stage === "Build Fuzzer" ||
 		stage === "build-fuzzer" ||
 		stage === "fuzz_building"
 	) {
-		return "Build Fuzzer";
+		return formatScanStageLabel(t, "build-fuzzer");
 	}
 	if (stage === "Run Fuzzer" || stage === "run-fuzzer" || stage === "fuzzing") {
-		return "Run Fuzzer";
+		return formatScanStageLabel(t, "run-fuzzer");
 	}
 	if (
 		stage === "Criticize" ||
 		stage === "criticize" ||
 		stage === "criticizing"
 	) {
-		return "Criticize";
+		return formatScanStageLabel(t, "criticize");
 	}
 	if (stage === "Verify" || stage === "verify" || stage === "verifying") {
-		return "Verify";
+		return formatScanStageLabel(t, "verify");
 	}
 	if (stage === "Triage" || stage === "triage" || stage === "triaging") {
-		return "Triage";
+		return formatScanStageLabel(t, "triage");
 	}
-	return "Task";
+	return scanT(t, "scan.monitoring.task", "阶段任务");
 };
 
 const TERMINAL_CANDIDATE_STATUSES = new Set([
@@ -602,13 +642,11 @@ const TERMINAL_CANDIDATE_STATUSES = new Set([
 ]);
 const RERUNNABLE_TASK_STATUSES = new Set(["completed", "failed", "exited"]);
 
-const getTaskStatusLabel = (status?: string) => {
+const getTaskStatusLabel = (t: ScanTranslation, status?: string) => {
 	if (!status) {
 		return "-";
 	}
-	return status
-		.replace(/_/g, " ")
-		.replace(/\b\w/g, (char) => char.toUpperCase());
+	return formatScanStatusLabel(t, status);
 };
 
 const getTaskStatusBadgeClassName = (status?: string) => {
@@ -628,6 +666,52 @@ const getTaskStatusBadgeClassName = (status?: string) => {
 		return "border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100";
 	}
 	return "border-muted-foreground/20 bg-muted text-muted-foreground";
+};
+
+const localizeTaskListText = (
+	t: ScanTranslation,
+	value?: string | null,
+): string => {
+	const text = (value || "").trim();
+	if (!text || text === "-") {
+		return "";
+	}
+	if (text === "Delta Scope") {
+		return formatScanStageLabel(t, "delta-scope");
+	}
+	if (text === "Repository Scanner") {
+		return formatScanStageLabel(t, "repository-scan");
+	}
+	if (text === "Diff impact function scoping") {
+		return scanT(
+			t,
+			"scan.tasks.deltaScopeSubtitle",
+			"增量 diff 影响函数定位",
+		);
+	}
+	if (text === "Repository-wide planner and module partitioning") {
+		return scanT(
+			t,
+			"scan.tasks.repositoryScannerSubtitle",
+			"仓库级规划和模块拆分",
+		);
+	}
+	return text;
+};
+
+const getTaskListDisplay = (
+	t: ScanTranslation,
+	task: { title: string; subtitle?: string | null; stage?: string | null },
+) => {
+	const title = getTaskStageLabel(t, task.stage || undefined);
+	const localizedTitle = localizeTaskListText(t, task.title);
+	const localizedSubtitle = localizeTaskListText(t, task.subtitle);
+	const subtitleParts = [localizedSubtitle, localizedTitle]
+		.filter((value) => value && value !== "-" && value !== title);
+	return {
+		title,
+		subtitle: subtitleParts.join(" · ") || "-",
+	};
 };
 
 const RUNNING_TASK_STAGE_ORDER: Record<string, number> = {
@@ -686,6 +770,7 @@ export const ShowScanJobDetail = ({
 	serviceType,
 	routeSegment,
 }: Props) => {
+	const { t } = useTranslation("scan");
 	const router = useRouter();
 	const utils = api.useUtils();
 	const initialCandidateListQueryState = parseCandidateListQueryState(
@@ -728,7 +813,8 @@ export const ShowScanJobDetail = ({
 		CandidateExportField[]
 	>(() => [...DEFAULT_CANDIDATE_EXPORT_FIELDS]);
 	const [taskSearchQuery, setTaskSearchQuery] = useState("");
-	const [taskStageFilter, setTaskStageFilter] = useState("all");
+	const [runningTaskStageFilter, setRunningTaskStageFilter] = useState("all");
+	const [finishedTaskStageFilter, setFinishedTaskStageFilter] = useState("all");
 	const [taskStatusFilter, setTaskStatusFilter] = useState("all");
 	const [runningTaskPage, setRunningTaskPage] = useState(1);
 	const [runningTaskPageSize, setRunningTaskPageSize] = useState(10);
@@ -793,7 +879,7 @@ export const ShowScanJobDetail = ({
 				page: finishedTaskPage,
 				pageSize: finishedTaskPageSize,
 				query: taskSearchQuery,
-				stage: taskStageFilter,
+				stage: finishedTaskStageFilter,
 				status: taskStatusFilter,
 			},
 			{
@@ -997,7 +1083,12 @@ export const ShowScanJobDetail = ({
 			running,
 			done,
 			concurrencyLimit,
-			title: `Queued ${queued}, Running ${running} / ${concurrencyLimit}, Done ${done}`,
+			title: scanT(
+				t,
+				"scan.tasks.queueMetrics",
+				"排队 {{queued}}，运行 {{running}} / {{limit}}，完成 {{done}}",
+				{ queued, running, limit: concurrencyLimit, done },
+			),
 		};
 	};
 	const sortedInProgressTasks = useMemo(() => {
@@ -1014,7 +1105,10 @@ export const ShowScanJobDetail = ({
 	const filteredInProgressTasks = useMemo(() => {
 		const query = taskSearchQuery.trim().toLowerCase();
 		return sortedInProgressTasks.filter((task) => {
-			if (taskStageFilter !== "all" && task.stage !== taskStageFilter) {
+			if (
+				runningTaskStageFilter !== "all" &&
+				task.stage !== runningTaskStageFilter
+			) {
 				return false;
 			}
 			if (!query) {
@@ -1024,14 +1118,14 @@ export const ShowScanJobDetail = ({
 				task.title,
 				task.subtitle || "",
 				task.stage || "",
-				getTaskStageLabel(task.stage),
+				getTaskStageLabel(t, task.stage),
 				task.taskId,
 			]
 				.join("\n")
 				.toLowerCase()
 				.includes(query);
 		});
-	}, [sortedInProgressTasks, taskSearchQuery, taskStageFilter]);
+	}, [sortedInProgressTasks, taskSearchQuery, runningTaskStageFilter, t]);
 	const runningTaskPagination = useMemo(() => {
 		const totalItems = filteredInProgressTasks.length;
 		const totalPages = Math.max(1, Math.ceil(totalItems / runningTaskPageSize));
@@ -1099,7 +1193,9 @@ export const ShowScanJobDetail = ({
 			await analyzeCandidateMutation.mutateAsync({
 				vulnerabilityCandidateId,
 			});
-			toast.success("Analysis requeued");
+			toast.success(
+				scanT(t, "scan.candidates.analysisRequeued", "Analysis requeued"),
+			);
 			await Promise.all([
 				utils.scan.one.invalidate({ scanJobId }),
 				utils.scan.statusView.invalidate({ scanJobId }),
@@ -1107,7 +1203,13 @@ export const ShowScanJobDetail = ({
 			]);
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : "Failed to requeue analysis",
+				error instanceof Error
+					? error.message
+					: scanT(
+							t,
+							"scan.candidates.analysisRequeueError",
+							"Failed to requeue analysis",
+						),
 			);
 		} finally {
 			setReanalyzingCandidateId((current) =>
@@ -1119,14 +1221,20 @@ export const ShowScanJobDetail = ({
 		setRerunningTaskId(taskId);
 		try {
 			const result = await rerunTaskMutation.mutateAsync({ taskId });
-			toast.success(`Created rerun task ${result.task.taskId}`);
+			toast.success(
+				scanT(t, "scan.task.rerunCreated", "Created rerun task {{id}}", {
+					id: result.task.taskId,
+				}),
+			);
 			await Promise.all([
 				utils.scan.one.invalidate({ scanJobId }),
 				utils.scan.statusView.invalidate({ scanJobId }),
 			]);
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : "Failed to rerun task",
+				error instanceof Error
+					? error.message
+					: scanT(t, "scan.task.rerunError", "Failed to rerun task"),
 			);
 		} finally {
 			setRerunningTaskId((current) => (current === taskId ? null : current));
@@ -1211,7 +1319,7 @@ export const ShowScanJobDetail = ({
 		(statusView?.summary.totalCandidates ?? candidates?.total ?? 0) > 0;
 	const hasFinishedTaskFilters =
 		taskSearchQuery.trim().length > 0 ||
-		taskStageFilter !== "all" ||
+		finishedTaskStageFilter !== "all" ||
 		taskStatusFilter !== "all";
 
 	const toggleCandidateSort = (key: CandidateSortKey) => {
@@ -1387,18 +1495,24 @@ export const ShowScanJobDetail = ({
 		anchor.click();
 		anchor.remove();
 		URL.revokeObjectURL(objectUrl);
-		toast.success("Candidate JSON downloaded");
+		toast.success(
+			scanT(t, "scan.candidates.downloaded", "Candidate JSON downloaded"),
+		);
 	};
 
 	const copySelectedCandidatesJson = async () => {
 		try {
 			await copyTextToClipboard(buildCandidateExportJson());
-			toast.success("Candidate JSON copied");
+			toast.success(scanT(t, "scan.candidates.copied", "Candidate JSON copied"));
 		} catch (error) {
 			toast.error(
 				error instanceof Error
 					? error.message
-					: "Failed to copy candidate JSON",
+					: scanT(
+							t,
+							"scan.candidates.copyFailed",
+							"Failed to copy candidate JSON",
+						),
 			);
 		}
 	};
@@ -1604,7 +1718,7 @@ export const ShowScanJobDetail = ({
 		<div className="pb-10">
 			<BreadcrumbSidebar
 				list={[
-					{ name: "Projects", href: "/dashboard/projects" },
+					{ name: scanT(t, "scan.breadcrumb.projects", "Projects"), href: "/dashboard/projects" },
 					{ name: serviceData?.environment.project.name || "" },
 					{
 						name: serviceData?.environment.name || "",
@@ -1615,26 +1729,37 @@ export const ShowScanJobDetail = ({
 						href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}?tab=deployments`,
 					},
 					{
-						name: "Jobs",
+						name: scanT(t, "scan.jobs.title", "Jobs"),
 						href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}?tab=deployments`,
 					},
-					{ name: `Job ${scanJobId.slice(0, 6)}` },
+					{
+						name: scanT(t, "scan.job.shortTitle", "Job {{id}}", {
+							id: scanJobId.slice(0, 6),
+						}),
+					},
 				]}
 			/>
 			<Head>
-				<title>Scan Job {scanJobId.slice(0, 6)} | Dokploy</title>
+				<title>
+					{scanT(t, "scan.job.title", "Scan Job {{id}}", {
+						id: scanJobId.slice(0, 6),
+					})}{" "}
+					| Dokploy
+				</title>
 			</Head>
 
 			<Card className="bg-background">
 				<CardHeader>
 					<CardTitle className="text-xl">
-						Scan Job {scanJobId.slice(0, 6)}
+						{scanT(t, "scan.job.title", "Scan Job {{id}}", {
+							id: scanJobId.slice(0, 6),
+						})}
 					</CardTitle>
 					<CardDescription className="flex items-center gap-2 break-all">
 						<span>{scanJobId}</span>
 						<CopyValueButton
 							value={scanJobId}
-							label="Job ID"
+							label={scanT(t, "scan.field.jobId", "Job ID")}
 							className="size-7 shrink-0"
 						/>
 					</CardDescription>
@@ -1649,19 +1774,19 @@ export const ShowScanJobDetail = ({
 					>
 						<TabsList className="flex h-auto min-h-10 w-full justify-start gap-1 overflow-x-auto p-1 sm:gap-2">
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="overview">
-								Overview
+								{scanT(t, "scan.job.tabs.overview", "Overview")}
 							</TabsTrigger>
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="tasks">
-								Tasks
+								{scanT(t, "scan.job.tabs.tasks", "阶段任务")}
 							</TabsTrigger>
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="candidates">
-								Candidates
+								{scanT(t, "scan.job.tabs.candidates", "Candidates")}
 							</TabsTrigger>
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="monitoring">
-								Monitoring
+								{scanT(t, "scan.monitoring.title", "Monitoring")}
 							</TabsTrigger>
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="files">
-								Files
+								{scanT(t, "scan.files.title", "Files")}
 							</TabsTrigger>
 						</TabsList>
 
@@ -1669,17 +1794,19 @@ export const ShowScanJobDetail = ({
 							{isLoadingJob ? (
 								<div className="flex items-center gap-2 text-muted-foreground">
 									<Loader2 className="size-4 animate-spin" />
-									Loading job...
+									{scanT(t, "scan.job.loading", "Loading job...")}
 								</div>
 							) : !scanJob ? (
 								<div className="flex items-center gap-2 text-muted-foreground">
 									<AlertCircle className="size-4" />
-									Job not found
+									{scanT(t, "scan.job.notFound", "Job not found")}
 								</div>
 							) : (
 								<div className="flex flex-col gap-3">
 									<div className="rounded-lg border p-4">
-										<div className="mb-3 text-lg font-semibold">Actions</div>
+										<div className="mb-3 text-lg font-semibold">
+											{scanT(t, "scan.actions.title", "Actions")}
+										</div>
 										{canPauseScanJob || canResumeScanJob || canCancelScanJob ? (
 											<div className="flex flex-wrap gap-2">
 												{canPauseScanJob ? (
@@ -1694,14 +1821,23 @@ export const ShowScanJobDetail = ({
 																		scanJobId,
 																	});
 																toast.success(
-																	`Paused job. Stopped ${result.stoppedRuntimes} runtimes.`,
+																	scanT(
+																		t,
+																		"scan.job.pausedToast",
+																		"Paused job. Stopped {{count}} runtimes.",
+																		{ count: result.stoppedRuntimes },
+																	),
 																);
 																await refreshScanJobViews();
 															} catch (error) {
 																toast.error(
 																	error instanceof Error
 																		? error.message
-																		: "Failed to pause scan job",
+																		: scanT(
+																				t,
+																				"scan.job.pauseError",
+																				"Failed to pause scan job",
+																			),
 																);
 															}
 														}}
@@ -1709,12 +1845,12 @@ export const ShowScanJobDetail = ({
 														{pauseScanJobMutation.isLoading ? (
 															<>
 																<Loader2 className="mr-2 size-4 animate-spin" />
-																Pausing...
+																{scanT(t, "scan.job.pausing", "Pausing...")}
 															</>
 														) : (
 															<>
 																<Pause className="mr-2 size-4" />
-																Pause
+																{scanT(t, "scan.job.pause", "Pause")}
 															</>
 														)}
 													</Button>
@@ -1729,13 +1865,19 @@ export const ShowScanJobDetail = ({
 																await resumeScanJobMutation.mutateAsync({
 																	scanJobId,
 																});
-																toast.success("Resumed job");
+																toast.success(
+																	scanT(t, "scan.job.resumedToast", "Resumed job"),
+																);
 																await refreshScanJobViews();
 															} catch (error) {
 																toast.error(
 																	error instanceof Error
 																		? error.message
-																		: "Failed to resume scan job",
+																		: scanT(
+																				t,
+																				"scan.job.resumeError",
+																				"Failed to resume scan job",
+																			),
 																);
 															}
 														}}
@@ -1743,12 +1885,12 @@ export const ShowScanJobDetail = ({
 														{resumeScanJobMutation.isLoading ? (
 															<>
 																<Loader2 className="mr-2 size-4 animate-spin" />
-																Resuming...
+																{scanT(t, "scan.job.resuming", "Resuming...")}
 															</>
 														) : (
 															<>
 																<Play className="mr-2 size-4" />
-																Resume
+																{scanT(t, "scan.job.resume", "Resume")}
 															</>
 														)}
 													</Button>
@@ -1765,14 +1907,23 @@ export const ShowScanJobDetail = ({
 																		scanJobId,
 																	});
 																toast.success(
-																	`Cancelled job. Stopped ${result.stoppedContainers} containers.`,
+																	scanT(
+																		t,
+																		"scan.job.cancelledToast",
+																		"Cancelled job. Stopped {{count}} containers.",
+																		{ count: result.stoppedContainers },
+																	),
 																);
 																await refreshScanJobViews();
 															} catch (error) {
 																toast.error(
 																	error instanceof Error
 																		? error.message
-																		: "Failed to cancel scan job",
+																		: scanT(
+																				t,
+																				"scan.job.cancelError",
+																				"Failed to cancel scan job",
+																			),
 																);
 															}
 														}}
@@ -1780,17 +1931,21 @@ export const ShowScanJobDetail = ({
 														{cancelScanJobMutation.isLoading ? (
 															<>
 																<Loader2 className="mr-2 size-4 animate-spin" />
-																Cancelling...
+																{scanT(t, "scan.job.cancelling", "Cancelling...")}
 															</>
 														) : (
-															"Cancel"
+															scanT(t, "scan.dialog.cancel", "Cancel")
 														)}
 													</Button>
 												) : null}
 											</div>
 										) : (
 											<div className="text-sm text-muted-foreground">
-												No actions available for this job status.
+												{scanT(
+													t,
+													"scan.job.noActions",
+													"No actions available for this job status.",
+												)}
 											</div>
 										)}
 									</div>
@@ -1798,41 +1953,42 @@ export const ShowScanJobDetail = ({
 									<div className="grid grid-cols-1 md:grid-cols-2 gap-3">
 										<div className="border rounded-lg p-3">
 											<div className="text-sm text-muted-foreground">
-												Status
+												{scanT(t, "scan.field.status", "Status")}
 											</div>
 											<div
 												className={`font-medium ${getScanJobStatusClassName(scanJob.status)}`}
 											>
-												{getScanJobStatusLabel(scanJob.status)}
+												{getScanJobStatusLabel(t, scanJob.status)}
 											</div>
 										</div>
 										<div className="border rounded-lg p-3">
 											<div className="text-sm text-muted-foreground">
-												Scan Type
+												{scanT(t, "scan.field.scanType", "Scan Type")}
 											</div>
 											<div className="font-medium">
-												{scanJob.scanType === "delta"
-													? "Delta Scan"
-													: "Full Scan"}
+												{formatScanTypeLabel(t, scanJob.scanType)}
 											</div>
 										</div>
 										<div className="border rounded-lg p-3">
 											<div className="text-sm text-muted-foreground">
-												Trigger
+												{scanT(t, "scan.field.trigger", "Trigger")}
 											</div>
 											<div className="font-medium">
-												{formatTriggerSourceLabel(scanJob.triggerSource)}
+												{formatTriggerSourceLabel(t, scanJob.triggerSource)}
 											</div>
 										</div>
 										<div className="border rounded-lg p-3 md:col-span-2">
-											<div className="mb-3 text-sm font-medium">Usage</div>
+											<div className="mb-3 text-sm font-medium">
+												{scanT(t, "scan.section.usage", "Usage")}
+											</div>
 											<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
 												<div>
 													<div className="text-sm text-muted-foreground">
-														Input / Cache Read
+														{scanT(t, "scan.field.inputCacheRead", "Input / Cache Read")}
 													</div>
 													<div className="font-medium">
 														{formatTokenUsageWithCache(
+															t,
 															scanJob.inputTokens,
 															scanJob.cachedReadTokens,
 														)}
@@ -1840,26 +1996,26 @@ export const ShowScanJobDetail = ({
 												</div>
 												<div>
 													<div className="text-sm text-muted-foreground">
-														Output Tokens
+														{scanT(t, "scan.field.outputTokens", "Output Tokens")}
 													</div>
 													<div className="font-medium">
-														{formatTokenUsage(scanJob.outputTokens)}
+														{formatTokenUsage(t, scanJob.outputTokens)}
 													</div>
 												</div>
 												<div>
 													<div className="text-sm text-muted-foreground">
-														Total Tokens
+														{scanT(t, "scan.field.totalTokens", "Total Tokens")}
 													</div>
 													<div className="font-medium">
-														{formatTokenUsage(scanJob.totalTokens)}
+														{formatTokenUsage(t, scanJob.totalTokens)}
 													</div>
 												</div>
 												<div>
 													<div className="text-sm text-muted-foreground">
-														Thought Tokens
+														{scanT(t, "scan.field.thoughtTokens", "Thought Tokens")}
 													</div>
 													<div className="font-medium">
-														{formatTokenUsage(scanJob.thoughtTokens)}
+														{formatTokenUsage(t, scanJob.thoughtTokens)}
 													</div>
 												</div>
 											</div>
@@ -1867,7 +2023,7 @@ export const ShowScanJobDetail = ({
 										{scanJob.scanType === "delta" ? (
 											<div className="border rounded-lg p-3">
 												<div className="text-sm text-muted-foreground">
-													Commit Window
+													{scanT(t, "scan.field.commitWindow", "Commit Window")}
 												</div>
 												<div className="font-medium">
 													k={scanJob.commitWindow}
@@ -1876,7 +2032,7 @@ export const ShowScanJobDetail = ({
 										) : null}
 										<div className="border rounded-lg p-3">
 											<div className="text-sm text-muted-foreground">
-												Created
+												{scanT(t, "scan.field.created", "Created")}
 											</div>
 											<div className="font-medium">
 												<DateTooltip date={scanJob.createdAt} />
@@ -1884,7 +2040,7 @@ export const ShowScanJobDetail = ({
 										</div>
 										<div className="border rounded-lg p-3">
 											<div className="text-sm text-muted-foreground">
-												Finished
+												{scanT(t, "scan.status.finished", "Finished")}
 											</div>
 											<div className="font-medium">
 												{scanJob.finishedAt ? (
@@ -1897,7 +2053,7 @@ export const ShowScanJobDetail = ({
 										{scanJob.errorMessage && (
 											<div className="border rounded-lg p-3 md:col-span-2">
 												<div className="text-sm text-muted-foreground">
-													Error
+													{scanT(t, "scan.field.errorMessage", "Error")}
 												</div>
 												<div className="font-medium text-destructive break-all">
 													{scanJob.errorMessage}
@@ -1908,10 +2064,14 @@ export const ShowScanJobDetail = ({
 											<div className="flex items-start justify-between gap-3">
 												<div>
 													<div className="text-sm text-muted-foreground">
-														Note
+														{scanT(t, "scan.candidate.note", "Note")}
 													</div>
 													<div className="text-xs text-muted-foreground">
-														Internal note for this scan job
+														{scanT(
+															t,
+															"scan.job.noteDescription",
+															"Internal note for this scan job",
+														)}
 													</div>
 												</div>
 												<Button
@@ -1928,7 +2088,7 @@ export const ShowScanJobDetail = ({
 																scanJobId,
 																note: noteDraft,
 															});
-															toast.success("Note saved");
+															toast.success(scanT(t, "scan.job.noteSaved", "Note saved"));
 															await Promise.all([
 																utils.scan.one.invalidate({ scanJobId }),
 																serviceType === "application"
@@ -1943,7 +2103,11 @@ export const ShowScanJobDetail = ({
 															toast.error(
 																error instanceof Error
 																	? error.message
-																	: "Failed to save note",
+																	: scanT(
+																			t,
+																			"scan.job.noteSaveError",
+																			"Failed to save note",
+																		),
 															);
 														}
 													}}
@@ -1951,17 +2115,21 @@ export const ShowScanJobDetail = ({
 													{updateNoteMutation.isLoading ? (
 														<>
 															<Loader2 className="mr-2 size-4 animate-spin" />
-															Saving...
+															{scanT(t, "scan.common.saving", "Saving...")}
 														</>
 													) : (
-														"Save"
+														scanT(t, "scan.dialog.save", "Save")
 													)}
 												</Button>
 											</div>
 											<Textarea
 												value={noteDraft}
 												onChange={(event) => setNoteDraft(event.target.value)}
-												placeholder="Add a note for this scan job..."
+												placeholder={scanT(
+													t,
+													"scan.job.notePlaceholder",
+													"Add a note for this scan job...",
+												)}
 												className="mt-3 min-h-[96px] resize-y"
 											/>
 										</div>
@@ -1974,7 +2142,7 @@ export const ShowScanJobDetail = ({
 							{isLoadingCandidates ? (
 								<div className="flex items-center gap-2 text-muted-foreground">
 									<Loader2 className="size-4 animate-spin" />
-									Loading candidates...
+									{scanT(t, "scan.candidates.loading", "Loading candidates...")}
 								</div>
 							) : !candidates ||
 								(!hasAnyCandidates &&
@@ -1982,7 +2150,7 @@ export const ShowScanJobDetail = ({
 									candidates.total === 0) ? (
 								<div className="flex items-center gap-2 text-muted-foreground">
 									<FileSearch className="size-4" />
-									No Candidates yet
+									{scanT(t, "scan.candidates.empty", "No candidates yet")}
 								</div>
 							) : (
 								<div className="flex flex-col gap-3">
@@ -1996,7 +2164,11 @@ export const ShowScanJobDetail = ({
 													setCandidatePage(1);
 													setCandidateQuery(event.target.value);
 												}}
-												placeholder="Search candidates"
+												placeholder={scanT(
+													t,
+													"scan.candidates.search",
+													"Search candidates",
+												)}
 												className="flex h-10 w-full rounded-md border border-input bg-background pl-9 pr-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
 											/>
 										</div>
@@ -2004,7 +2176,11 @@ export const ShowScanJobDetail = ({
 											<PopoverTrigger asChild>
 												<Button variant="outline" className="justify-between">
 													<span>
-														Analysis Result
+														{scanT(
+															t,
+															"scan.filters.analysisResult",
+															"Analysis Result",
+														)}
 														{analysisFilters.length > 0
 															? ` (${analysisFilters.length})`
 															: ""}
@@ -2015,7 +2191,11 @@ export const ShowScanJobDetail = ({
 											<PopoverContent align="end" className="w-72 p-3">
 												<div className="mb-3 flex items-center justify-between">
 													<div className="text-sm font-medium">
-														Analysis Result
+														{scanT(
+															t,
+															"scan.filters.analysisResult",
+															"Analysis Result",
+														)}
 													</div>
 													<Button
 														type="button"
@@ -2024,7 +2204,7 @@ export const ShowScanJobDetail = ({
 														className="h-auto px-2 py-1 text-xs"
 														onClick={() => setAnalysisFilters([])}
 													>
-														Clear
+														{scanT(t, "scan.filters.clear", "Clear")}
 													</Button>
 												</div>
 												<div className="space-y-2">
@@ -2039,7 +2219,7 @@ export const ShowScanJobDetail = ({
 																	toggleAnalysisFilter(value)
 																}
 															/>
-															<span>{formatResultLabel(value)}</span>
+															<span>{formatAnalysisResultLabel(t, value)}</span>
 														</label>
 													))}
 												</div>
@@ -2049,7 +2229,7 @@ export const ShowScanJobDetail = ({
 											<PopoverTrigger asChild>
 												<Button variant="outline" className="justify-between">
 													<span>
-														Verify Result
+														{scanT(t, "scan.filters.verifyResult", "Verify Result")}
 														{verifyFilters.length > 0
 															? ` (${verifyFilters.length})`
 															: ""}
@@ -2060,7 +2240,7 @@ export const ShowScanJobDetail = ({
 											<PopoverContent align="end" className="w-72 p-3">
 												<div className="mb-3 flex items-center justify-between">
 													<div className="text-sm font-medium">
-														Verify Result
+														{scanT(t, "scan.filters.verifyResult", "Verify Result")}
 													</div>
 													<Button
 														type="button"
@@ -2069,7 +2249,7 @@ export const ShowScanJobDetail = ({
 														className="h-auto px-2 py-1 text-xs"
 														onClick={() => setVerifyFilters([])}
 													>
-														Clear
+														{scanT(t, "scan.filters.clear", "Clear")}
 													</Button>
 												</div>
 												<div className="space-y-2">
@@ -2084,7 +2264,7 @@ export const ShowScanJobDetail = ({
 																	toggleVerifyFilter(value)
 																}
 															/>
-															<span>{formatResultLabel(value)}</span>
+															<span>{formatTruthResultLabel(t, value)}</span>
 														</label>
 													))}
 												</div>
@@ -2094,7 +2274,7 @@ export const ShowScanJobDetail = ({
 											<PopoverTrigger asChild>
 												<Button variant="outline" className="justify-between">
 													<span>
-														Triage Result
+														{scanT(t, "scan.filters.triageResult", "Triage Result")}
 														{triageFilters.length > 0
 															? ` (${triageFilters.length})`
 															: ""}
@@ -2105,7 +2285,7 @@ export const ShowScanJobDetail = ({
 											<PopoverContent align="end" className="w-72 p-3">
 												<div className="mb-3 flex items-center justify-between">
 													<div className="text-sm font-medium">
-														Triage Result
+														{scanT(t, "scan.filters.triageResult", "Triage Result")}
 													</div>
 													<Button
 														type="button"
@@ -2114,7 +2294,7 @@ export const ShowScanJobDetail = ({
 														className="h-auto px-2 py-1 text-xs"
 														onClick={() => setTriageFilters([])}
 													>
-														Clear
+														{scanT(t, "scan.filters.clear", "Clear")}
 													</Button>
 												</div>
 												<div className="space-y-2">
@@ -2129,7 +2309,13 @@ export const ShowScanJobDetail = ({
 																	toggleTriageFilter(value)
 																}
 															/>
-															<span>{formatResultLabel(value)}</span>
+															<span>
+																{scanT(
+																	t,
+																	`scan.triageResult.${value}`,
+																	formatResultLabel(value),
+																)}
+															</span>
 														</label>
 													))}
 												</div>
@@ -2139,18 +2325,34 @@ export const ShowScanJobDetail = ({
 									{candidatePagination.totalItems === 0 ? (
 										<div className="flex items-center gap-2 text-muted-foreground">
 											<FileSearch className="size-4" />
-											No matching candidates
+											{scanT(
+												t,
+												"scan.candidates.noMatching",
+												"No matching candidates",
+											)}
 										</div>
 									) : (
 										<>
 											<div className="rounded-lg border">
 												<div className="flex flex-col gap-3 border-b px-4 py-3 text-sm md:flex-row md:items-center md:justify-between">
 													<div className="text-muted-foreground">
-														Showing {candidatePagination.startIndex + 1}-
-														{candidatePagination.endIndex} of{" "}
-														{candidatePagination.totalItems}
+														{scanT(
+															t,
+															"scan.pagination.showing",
+															"Showing {{start}}-{{end}} of {{total}}",
+															{
+																start: candidatePagination.startIndex + 1,
+																end: candidatePagination.endIndex,
+																total: candidatePagination.totalItems,
+															},
+														)}
 														{selectedCandidateCount > 0
-															? ` (${selectedCandidateCount} selected)`
+															? ` ${scanT(
+																	t,
+																	"scan.pagination.selected",
+																	"({{count}} selected)",
+																	{ count: selectedCandidateCount },
+																)}`
 															: ""}
 													</div>
 													<div className="flex flex-wrap items-center gap-2">
@@ -2164,10 +2366,10 @@ export const ShowScanJobDetail = ({
 															}
 														>
 															<Download className="mr-2 size-4" />
-															Export
+															{scanT(t, "scan.candidates.export", "Export")}
 														</Button>
 														<label className="text-muted-foreground">
-															Page size
+															{scanT(t, "scan.pagination.pageSize", "Page size")}
 														</label>
 														<select
 															value={candidatePageSize}
@@ -2196,11 +2398,18 @@ export const ShowScanJobDetail = ({
 															}
 															disabled={candidatePagination.page <= 1}
 														>
-															Previous
+															{scanT(t, "scan.pagination.previous", "Previous")}
 														</Button>
 														<div className="min-w-[96px] text-center text-muted-foreground">
-															Page {candidatePagination.page} /{" "}
-															{candidatePagination.totalPages}
+															{scanT(
+																t,
+																"scan.pagination.page",
+																"Page {{page}} / {{total}}",
+																{
+																	page: candidatePagination.page,
+																	total: candidatePagination.totalPages,
+																},
+															)}
 														</div>
 														<Button
 															type="button"
@@ -2219,7 +2428,7 @@ export const ShowScanJobDetail = ({
 																candidatePagination.totalPages
 															}
 														>
-															Next
+															{scanT(t, "scan.pagination.next", "Next")}
 														</Button>
 													</div>
 												</div>
@@ -2229,7 +2438,11 @@ export const ShowScanJobDetail = ({
 															<tr>
 																<th className="w-12 px-4 py-3 font-medium">
 																	<Checkbox
-																		aria-label="Select all candidates on this page"
+																		aria-label={scanT(
+																			t,
+																			"scan.candidates.selectAllAria",
+																			"Select all candidates on this page",
+																		)}
 																		checked={
 																			areAllCurrentPageCandidatesSelected
 																				? true
@@ -2244,7 +2457,7 @@ export const ShowScanJobDetail = ({
 																	/>
 																</th>
 																<th className="w-[10%] px-4 py-3 font-medium">
-																	Status
+																	{scanT(t, "scan.field.status", "Status")}
 																</th>
 																<th className="w-[32%] px-4 py-3 font-medium">
 																	<button
@@ -2254,7 +2467,13 @@ export const ShowScanJobDetail = ({
 																		}
 																		className="inline-flex items-center gap-1 hover:text-foreground"
 																	>
-																		<span>Candidate</span>
+																		<span>
+																			{scanT(
+																				t,
+																				"scan.field.candidate",
+																				"Candidate",
+																			)}
+																		</span>
 																		<ChevronsUpDown className="size-3.5" />
 																	</button>
 																</th>
@@ -2266,7 +2485,13 @@ export const ShowScanJobDetail = ({
 																		}
 																		className="inline-flex items-center gap-1 hover:text-foreground"
 																	>
-																		<span>Analysis Result</span>
+																		<span>
+																			{scanT(
+																				t,
+																				"scan.filters.analysisResult",
+																				"Analysis Result",
+																			)}
+																		</span>
 																		<ChevronsUpDown className="size-3.5" />
 																	</button>
 																</th>
@@ -2278,12 +2503,22 @@ export const ShowScanJobDetail = ({
 																		}
 																		className="inline-flex items-center gap-1 hover:text-foreground"
 																	>
-																		<span>Verify Result</span>
+																		<span>
+																			{scanT(
+																				t,
+																				"scan.filters.verifyResult",
+																				"Verify Result",
+																			)}
+																		</span>
 																		<ChevronsUpDown className="size-3.5" />
 																	</button>
 																</th>
 																<th className="w-[18%] px-4 py-3 font-medium">
-																	Triage Result
+																	{scanT(
+																		t,
+																		"scan.filters.triageResult",
+																		"Triage Result",
+																	)}
 																</th>
 																<th className="w-[14%] px-4 py-3 font-medium">
 																	<button
@@ -2291,12 +2526,12 @@ export const ShowScanJobDetail = ({
 																		onClick={() => toggleCandidateSort("score")}
 																		className="inline-flex items-center gap-1 hover:text-foreground"
 																	>
-																		<span>Score</span>
+																		<span>{scanT(t, "scan.field.score", "Score")}</span>
 																		<ChevronsUpDown className="size-3.5" />
 																	</button>
 																</th>
 																<th className="w-[8%] px-4 py-3 font-medium">
-																	Actions
+																	{scanT(t, "scan.tasks.actions", "Actions")}
 																</th>
 															</tr>
 														</thead>
@@ -2304,6 +2539,7 @@ export const ShowScanJobDetail = ({
 															{candidatePagination.items.map((candidate) => {
 																const verificationTruthBadge =
 																	getVerificationTruthBadge(
+																		t,
 																		candidate.latestVerificationResult?.result,
 																	);
 																const isTerminalCandidate =
@@ -2326,7 +2562,12 @@ export const ShowScanJobDetail = ({
 																	>
 																		<td className="px-4 py-3 align-top">
 																			<Checkbox
-																				aria-label={`Select candidate ${candidate.title}`}
+																				aria-label={scanT(
+																					t,
+																					"scan.candidates.selectAria",
+																					"Select candidate {{title}}",
+																					{ title: candidate.title },
+																				)}
 																				checked={isSelectedCandidate}
 																				onClick={(event) =>
 																					event.stopPropagation()
@@ -2346,7 +2587,10 @@ export const ShowScanJobDetail = ({
 																				onClick={handleCandidateLinkClick}
 																				className="block"
 																			>
-																				{candidate.status}
+																				{formatScanStatusLabel(
+																					t,
+																					candidate.status,
+																				)}
 																			</Link>
 																		</td>
 																		<td className="px-4 py-3 align-top">
@@ -2386,6 +2630,7 @@ export const ShowScanJobDetail = ({
 																						)}
 																					>
 																						{getShortResultLabel(
+																							t,
 																							candidate.latestAnalysisResult
 																								.result,
 																						)}
@@ -2438,6 +2683,7 @@ export const ShowScanJobDetail = ({
 																						)}
 																					>
 																						{getShortResultLabel(
+																							t,
 																							candidate.latestTriageResult
 																								.result,
 																						)}
@@ -2469,13 +2715,29 @@ export const ShowScanJobDetail = ({
 																				size="icon"
 																				title={
 																					isTerminalCandidate
-																						? "Re-run analysis"
-																						: "Analysis can be re-run after the candidate reaches a terminal state"
+																						? scanT(
+																								t,
+																								"scan.candidates.rerunAnalysis",
+																								"Re-run analysis",
+																							)
+																						: scanT(
+																								t,
+																								"scan.candidates.rerunAnalysisDisabled",
+																								"Analysis can be re-run after the candidate reaches a terminal state",
+																							)
 																				}
 																				aria-label={
 																					isTerminalCandidate
-																						? "Re-run analysis"
-																						: "Analysis can be re-run after the candidate reaches a terminal state"
+																						? scanT(
+																								t,
+																								"scan.candidates.rerunAnalysis",
+																								"Re-run analysis",
+																							)
+																						: scanT(
+																								t,
+																								"scan.candidates.rerunAnalysisDisabled",
+																								"Analysis can be re-run after the candidate reaches a terminal state",
+																							)
 																				}
 																				disabled={
 																					!isTerminalCandidate ||
@@ -2507,22 +2769,34 @@ export const ShowScanJobDetail = ({
 											>
 												<DialogContent className="sm:max-w-xl">
 													<DialogHeader>
-														<DialogTitle>Export Candidates</DialogTitle>
+														<DialogTitle>
+															{scanT(
+																t,
+																"scan.candidates.exportTitle",
+																"Export Candidates",
+															)}
+														</DialogTitle>
 														<DialogDescription>
-															Export {selectedCandidateCount} selected candidate
-															{selectedCandidateCount === 1 ? "" : "s"} from the
-															current page.
+															{scanT(
+																t,
+																"scan.candidates.exportDescription",
+																"Export {{count}} selected candidates from the current page.",
+																{ count: selectedCandidateCount },
+															)}
 														</DialogDescription>
 													</DialogHeader>
 													<div className="space-y-4">
 														<div className="flex items-center justify-between gap-3">
 															<div>
 																<div className="text-sm font-medium">
-																	Fields
+																	{scanT(t, "scan.candidates.exportFields", "Fields")}
 																</div>
 																<div className="text-xs text-muted-foreground">
-																	Choose the fields included in the generated
-																	JSON.
+																	{scanT(
+																		t,
+																		"scan.candidates.exportFieldsDescription",
+																		"Choose the fields included in the generated JSON.",
+																	)}
 																</div>
 															</div>
 															<Button
@@ -2541,8 +2815,12 @@ export const ShowScanJobDetail = ({
 															>
 																{candidateExportFields.length ===
 																CANDIDATE_EXPORT_FIELDS.length
-																	? "Clear"
-																	: "Select all"}
+																	? scanT(t, "scan.filters.clear", "Clear")
+																	: scanT(
+																			t,
+																			"scan.candidates.selectAll",
+																			"Select all",
+																		)}
 															</Button>
 														</div>
 														<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -2559,13 +2837,19 @@ export const ShowScanJobDetail = ({
 																			toggleCandidateExportField(field.key)
 																		}
 																	/>
-																	<span>{field.label}</span>
+																	<span>
+																		{getCandidateExportFieldLabel(t, field)}
+																	</span>
 																</label>
 															))}
 														</div>
 														{!hasSelectedExportFields ? (
 															<div className="text-xs text-destructive">
-																Select at least one field to export.
+																{scanT(
+																	t,
+																	"scan.candidates.exportNoFields",
+																	"Select at least one field to export.",
+																)}
 															</div>
 														) : null}
 													</div>
@@ -2580,7 +2864,7 @@ export const ShowScanJobDetail = ({
 															}
 														>
 															<Clipboard className="mr-2 size-4" />
-															Copy JSON
+															{scanT(t, "scan.candidates.copyJson", "Copy JSON")}
 														</Button>
 														<Button
 															type="button"
@@ -2591,7 +2875,11 @@ export const ShowScanJobDetail = ({
 															}
 														>
 															<Download className="mr-2 size-4" />
-															Download JSON
+															{scanT(
+																t,
+																"scan.candidates.downloadJson",
+																"Download JSON",
+															)}
 														</Button>
 													</DialogFooter>
 												</DialogContent>
@@ -2609,9 +2897,15 @@ export const ShowScanJobDetail = ({
 						<TabsContent value="files" className="pt-4">
 							<div className="rounded-lg border">
 								<div className="border-b px-4 py-3">
-									<div className="font-medium">Files</div>
+									<div className="font-medium">
+										{scanT(t, "scan.files.title", "Files")}
+									</div>
 									<div className="text-sm text-muted-foreground">
-										Browse scan job context files.
+										{scanT(
+											t,
+											"scan.files.jobDescription",
+											"Browse scan job context files.",
+										)}
 									</div>
 								</div>
 								<div className="grid min-h-[65vh] grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]">
@@ -2639,7 +2933,11 @@ export const ShowScanJobDetail = ({
 												<span className="truncate">
 													{selectedFile?.relativePath ||
 														selectedFilePath ||
-														"No file selected"}
+														scanT(
+															t,
+															"scan.files.noFileSelected",
+															"No file selected",
+														)}
 												</span>
 											</div>
 										</div>
@@ -2647,16 +2945,21 @@ export const ShowScanJobDetail = ({
 											{!selectedFilePath ? (
 												<div className="flex min-h-[280px] flex-col items-center justify-center gap-2 text-muted-foreground">
 													<FileIcon className="size-6" />
-													No file selected
+													{scanT(
+														t,
+														"scan.files.noFileSelected",
+														"No file selected",
+													)}
 												</div>
 											) : isLoadingSelectedFile ? (
 												<div className="flex min-h-[280px] items-center justify-center gap-2 text-muted-foreground">
 													<Loader2 className="size-4 animate-spin" />
-													Loading file...
+													{scanT(t, "scan.files.loadingFile", "Loading file...")}
 												</div>
 											) : (
 												<pre className="whitespace-pre-wrap break-words font-mono text-sm">
-													{selectedFile?.content || "(empty)"}
+													{selectedFile?.content ||
+														scanT(t, "scan.files.emptyFile", "(empty)")}
 												</pre>
 											)}
 										</div>
@@ -2669,39 +2972,53 @@ export const ShowScanJobDetail = ({
 							<div className="flex flex-col gap-4">
 								<div className="rounded-lg border">
 									<div className="border-b px-4 py-3">
-										<div className="font-medium">Task Queues</div>
+										<div className="font-medium">
+											{scanT(t, "scan.tasks.queues", "阶段任务队列")}
+										</div>
 										<div className="text-sm text-muted-foreground">
-											Per-queue task progress for this job.
+											{scanT(
+												t,
+												"scan.tasks.queuesDescription",
+												"此任务中每个队列的阶段任务进度。",
+											)}
 										</div>
 									</div>
 									<div className="overflow-x-auto">
 										{statusViewError ? (
 											<div className="px-4 py-6 text-sm text-destructive">
-												Failed to load queue status.
+												{scanT(
+													t,
+													"scan.tasks.queueLoadError",
+													"加载队列状态失败。",
+												)}
 											</div>
 										) : !statusView ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
-												Loading queue status...
+												{scanT(
+													t,
+													"scan.tasks.queueLoading",
+													"正在加载队列状态...",
+												)}
 											</div>
 										) : queuePendingCounts.length === 0 ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
-												No task queues
+												{scanT(t, "scan.tasks.noQueues", "暂无阶段任务队列")}
 											</div>
 										) : (
 											<table className="w-full text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
 														<th className="w-[46%] px-4 py-3 font-medium">
-															Queue
+															{scanT(t, "scan.tasks.queue", "队列")}
 														</th>
 														<th className="w-[18%] px-4 py-3 text-right font-medium">
-															Queued
+															{scanT(t, "scan.status.queued", "排队中")}
 														</th>
 														<th className="w-[18%] px-4 py-3 text-right font-medium">
-															Running
+															{scanT(t, "scan.status.running", "运行中")}
 														</th>
 														<th className="w-[18%] px-4 py-3 text-right font-medium">
-															Done
+															{scanT(t, "scan.tasks.done", "完成")}
 														</th>
 													</tr>
 												</thead>
@@ -2752,10 +3069,15 @@ export const ShowScanJobDetail = ({
 
 								<div className="rounded-lg border">
 									<div className="border-b px-4 py-3">
-										<div className="font-medium">Running Tasks</div>
+										<div className="font-medium">
+											{scanT(t, "scan.tasks.running", "运行中阶段任务")}
+										</div>
 										<div className="text-sm text-muted-foreground">
-											All running scanning, analysis, and verification agents
-											for this job.
+											{scanT(
+												t,
+												"scan.tasks.runningDescription",
+												"此任务中所有运行中的扫描、分析和验证 agent。",
+											)}
 										</div>
 									</div>
 									{statusView && sortedInProgressTasks.length > 0 ? (
@@ -2771,37 +3093,47 @@ export const ShowScanJobDetail = ({
 															setRunningTaskPage(1);
 															setFinishedTaskPage(1);
 														}}
-														placeholder="Search tasks"
+														placeholder={scanT(t, "scan.tasks.search", "搜索阶段任务")}
 														className="flex h-9 w-full rounded-md border border-input bg-background py-2 pl-9 pr-3 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
 													/>
 												</div>
 												<select
-													value={taskStageFilter}
+													value={runningTaskStageFilter}
 													onChange={(event) => {
-														setTaskStageFilter(event.target.value);
+														setRunningTaskStageFilter(event.target.value);
 														setRunningTaskPage(1);
-														setFinishedTaskPage(1);
 													}}
 													className="h-9 rounded-md border border-input bg-background px-2 text-sm"
 												>
-													<option value="all">All stages</option>
+													<option value="all">
+														{scanT(t, "scan.filters.allStages", "全部阶段")}
+													</option>
 													{TASK_STAGE_OPTIONS.map((stage) => (
 														<option key={stage} value={stage}>
-															{getTaskStageLabel(stage)}
+															{getTaskStageLabel(t, stage)}
 														</option>
 													))}
 												</select>
 											</div>
 											<div className="flex flex-wrap items-center gap-2">
 												<div className="text-muted-foreground">
-													Showing{" "}
-													{runningTaskPagination.totalItems > 0
-														? runningTaskPagination.startIndex + 1
-														: 0}
-													-{runningTaskPagination.endIndex} of{" "}
-													{runningTaskPagination.totalItems}
+													{scanT(
+														t,
+														"scan.pagination.showing",
+														"显示 {{start}}-{{end}} / {{total}}",
+														{
+															start:
+																runningTaskPagination.totalItems > 0
+																	? runningTaskPagination.startIndex + 1
+																	: 0,
+															end: runningTaskPagination.endIndex,
+															total: runningTaskPagination.totalItems,
+														},
+													)}
 												</div>
-												<span className="text-muted-foreground">Page size</span>
+												<span className="text-muted-foreground">
+													{scanT(t, "scan.pagination.pageSize", "每页数量")}
+												</span>
 												<select
 													value={runningTaskPageSize}
 													onChange={(event) => {
@@ -2829,11 +3161,13 @@ export const ShowScanJobDetail = ({
 													}
 													disabled={runningTaskPagination.page <= 1}
 												>
-													Previous
+													{scanT(t, "scan.pagination.previous", "上一页")}
 												</Button>
 												<div className="min-w-[88px] text-center text-muted-foreground">
-													Page {runningTaskPagination.page} /{" "}
-													{runningTaskPagination.totalPages}
+													{scanT(t, "scan.pagination.page", "第 {{page}} / {{total}} 页", {
+														page: runningTaskPagination.page,
+														total: runningTaskPagination.totalPages,
+													})}
 												</div>
 												<Button
 													type="button"
@@ -2852,7 +3186,7 @@ export const ShowScanJobDetail = ({
 														runningTaskPagination.totalPages
 													}
 												>
-													Next
+													{scanT(t, "scan.pagination.next", "下一页")}
 												</Button>
 											</div>
 										</div>
@@ -2860,39 +3194,46 @@ export const ShowScanJobDetail = ({
 									<div className="overflow-x-auto">
 										{!statusView || sortedInProgressTasks.length === 0 ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
-												No running tasks
+												{scanT(t, "scan.tasks.noRunning", "暂无运行中阶段任务")}
 											</div>
 										) : filteredInProgressTasks.length === 0 ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
-												No matching tasks
+												{scanT(t, "scan.tasks.noMatching", "没有匹配的阶段任务")}
 											</div>
 										) : (
 											<table className="w-full text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
 														<th className="w-[22%] px-4 py-3 font-medium">
-															Task
+															{scanT(t, "scan.monitoring.task", "阶段任务")}
 														</th>
 														<th className="w-[10%] px-4 py-3 font-medium">
-															Stage
+															{scanT(t, "scan.field.stage", "阶段")}
 														</th>
 														<th className="w-[10%] px-4 py-3 font-medium">
-															Runtime
+															{scanT(t, "scan.fuzzing.runtime", "运行时长")}
 														</th>
 														<th className="w-[48%] px-4 py-3 font-medium">
-															Current Activity
+															{scanT(t, "scan.tasks.currentActivity", "当前活动")}
 														</th>
 														<th className="w-[10%] px-4 py-3 font-medium">
-															Actions
+															{scanT(t, "scan.tasks.actions", "操作")}
 														</th>
 													</tr>
 												</thead>
 												<tbody>
-													{runningTaskPagination.items.map((task) => (
-														<tr
+													{runningTaskPagination.items.map((task) => {
+														const displayTask = getTaskListDisplay(t, task);
+														return (
+															<tr
 															key={task.id}
 															tabIndex={0}
-															aria-label={`Open task ${task.title}`}
+															aria-label={scanT(
+																t,
+																"scan.task.openAria",
+																"打开阶段任务 {{title}}",
+																{ title: displayTask.title },
+															)}
 															onClick={(event) =>
 																handleTaskRowClick(event, task.taskId)
 															}
@@ -2903,14 +3244,14 @@ export const ShowScanJobDetail = ({
 														>
 															<td className="w-[22%] px-4 py-3 align-top">
 																<div className="line-clamp-2 font-medium">
-																	{task.title}
+																	{displayTask.title}
 																</div>
 																<div className="text-xs text-muted-foreground break-all">
-																	{task.subtitle || "-"}
+																	{displayTask.subtitle}
 																</div>
 															</td>
 															<td className="w-[10%] px-4 py-3 align-top capitalize">
-																{getTaskStageLabel(task.stage)}
+																{getTaskStageLabel(t, task.stage)}
 															</td>
 															<td className="w-[10%] whitespace-nowrap px-4 py-3 align-top tabular-nums">
 																{formatTaskRuntime(
@@ -2936,8 +3277,8 @@ export const ShowScanJobDetail = ({
 																<div className="flex items-center gap-2">
 																	<LiveTaskActivityButton
 																		taskId={task.taskId}
-																		title={task.title}
-																		subtitle={task.subtitle}
+																		title={displayTask.title}
+																		subtitle={displayTask.subtitle}
 																		activity={
 																			activitiesByTaskId[task.taskId] ||
 																			idleSandboxAgentActivity
@@ -2948,16 +3289,17 @@ export const ShowScanJobDetail = ({
 																	/>
 																	<LiveTaskTextButton
 																		taskId={task.taskId}
-																		title={task.title}
-																		subtitle={task.subtitle}
+																		title={displayTask.title}
+																		subtitle={displayTask.subtitle}
 																		variant="outline"
 																		size="icon"
 																		iconOnly
 																	/>
 																</div>
 															</td>
-														</tr>
-													))}
+															</tr>
+														);
+													})}
 												</tbody>
 											</table>
 										)}
@@ -2966,9 +3308,15 @@ export const ShowScanJobDetail = ({
 
 								<div className="rounded-lg border">
 									<div className="border-b px-4 py-3">
-										<div className="font-medium">Finished Tasks</div>
+										<div className="font-medium">
+											{scanT(t, "scan.tasks.finished", "已完成阶段任务")}
+										</div>
 										<div className="text-sm text-muted-foreground">
-											Completed, failed, and canceled tasks for this job.
+											{scanT(
+												t,
+												"scan.tasks.finishedDescription",
+												"此任务中已完成、失败和已取消的阶段任务。",
+											)}
 										</div>
 									</div>
 									{terminalTasks &&
@@ -2985,23 +3333,24 @@ export const ShowScanJobDetail = ({
 															setRunningTaskPage(1);
 															setFinishedTaskPage(1);
 														}}
-														placeholder="Search tasks"
+														placeholder={scanT(t, "scan.tasks.search", "搜索阶段任务")}
 														className="flex h-9 w-full rounded-md border border-input bg-background py-2 pl-9 pr-3 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
 													/>
 												</div>
 												<select
-													value={taskStageFilter}
+													value={finishedTaskStageFilter}
 													onChange={(event) => {
-														setTaskStageFilter(event.target.value);
-														setRunningTaskPage(1);
+														setFinishedTaskStageFilter(event.target.value);
 														setFinishedTaskPage(1);
 													}}
 													className="h-9 rounded-md border border-input bg-background px-2 text-sm"
 												>
-													<option value="all">All stages</option>
+													<option value="all">
+														{scanT(t, "scan.filters.allStages", "全部阶段")}
+													</option>
 													{TASK_STAGE_OPTIONS.map((stage) => (
 														<option key={stage} value={stage}>
-															{getTaskStageLabel(stage)}
+															{getTaskStageLabel(t, stage)}
 														</option>
 													))}
 												</select>
@@ -3013,24 +3362,35 @@ export const ShowScanJobDetail = ({
 													}}
 													className="h-9 rounded-md border border-input bg-background px-2 text-sm"
 												>
-													<option value="all">All statuses</option>
+													<option value="all">
+														{scanT(t, "scan.filters.allStatuses", "全部状态")}
+													</option>
 													{TERMINAL_TASK_STATUS_OPTIONS.map((status) => (
 														<option key={status} value={status}>
-															{getTaskStatusLabel(status)}
+															{getTaskStatusLabel(t, status)}
 														</option>
 													))}
 												</select>
 											</div>
 											<div className="flex flex-wrap items-center gap-2">
 												<div className="text-muted-foreground">
-													Showing{" "}
-													{finishedTaskPagination.totalItems > 0
-														? finishedTaskPagination.startIndex + 1
-														: 0}
-													-{finishedTaskPagination.endIndex} of{" "}
-													{finishedTaskPagination.totalItems}
+													{scanT(
+														t,
+														"scan.pagination.showing",
+														"显示 {{start}}-{{end}} / {{total}}",
+														{
+															start:
+																finishedTaskPagination.totalItems > 0
+																	? finishedTaskPagination.startIndex + 1
+																	: 0,
+															end: finishedTaskPagination.endIndex,
+															total: finishedTaskPagination.totalItems,
+														},
+													)}
 												</div>
-												<span className="text-muted-foreground">Page size</span>
+												<span className="text-muted-foreground">
+													{scanT(t, "scan.pagination.pageSize", "每页数量")}
+												</span>
 												<select
 													value={finishedTaskPageSize}
 													onChange={(event) => {
@@ -3058,11 +3418,18 @@ export const ShowScanJobDetail = ({
 													}
 													disabled={finishedTaskPagination.page <= 1}
 												>
-													Previous
+													{scanT(t, "scan.pagination.previous", "上一页")}
 												</Button>
 												<div className="min-w-[88px] text-center text-muted-foreground">
-													Page {finishedTaskPagination.page} /{" "}
-													{finishedTaskPagination.totalPages}
+													{scanT(
+														t,
+														"scan.pagination.page",
+														"第 {{page}} / {{total}} 页",
+														{
+															page: finishedTaskPagination.page,
+															total: finishedTaskPagination.totalPages,
+														},
+													)}
 												</div>
 												<Button
 													type="button"
@@ -3081,7 +3448,7 @@ export const ShowScanJobDetail = ({
 														finishedTaskPagination.totalPages
 													}
 												>
-													Next
+													{scanT(t, "scan.pagination.next", "下一页")}
 												</Button>
 											</div>
 										</div>
@@ -3090,42 +3457,46 @@ export const ShowScanJobDetail = ({
 										{isLoadingTerminalTasks ? (
 											<div className="flex items-center gap-2 px-4 py-6 text-sm text-muted-foreground">
 												<Loader2 className="size-4 animate-spin" />
-												Loading finished tasks...
+												{scanT(
+													t,
+													"scan.tasks.loadingFinished",
+													"正在加载已完成阶段任务...",
+												)}
 											</div>
 										) : !terminalTasks ||
 											(terminalTasks.total === 0 && !hasFinishedTaskFilters) ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
-												No finished tasks
+												{scanT(t, "scan.tasks.noFinished", "暂无已完成阶段任务")}
 											</div>
 										) : terminalTasks.total === 0 ||
 											finishedTaskPagination.items.length === 0 ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
-												No matching tasks
+												{scanT(t, "scan.tasks.noMatching", "没有匹配的阶段任务")}
 											</div>
 										) : (
 											<table className="w-full text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
 														<th className="w-[22%] px-4 py-3 font-medium">
-															Task
+															{scanT(t, "scan.monitoring.task", "阶段任务")}
 														</th>
 														<th className="w-[9%] px-4 py-3 font-medium">
-															Stage
+															{scanT(t, "scan.field.stage", "阶段")}
 														</th>
 														<th className="w-[9%] px-4 py-3 font-medium">
-															Status
+															{scanT(t, "scan.field.status", "状态")}
 														</th>
 														<th className="w-[11%] px-4 py-3 font-medium">
-															Started
+															{scanT(t, "scan.field.started", "开始时间")}
 														</th>
 														<th className="w-[11%] px-4 py-3 font-medium">
-															Finished
+															{scanT(t, "scan.field.completed", "完成时间")}
 														</th>
 														<th className="w-[30%] px-4 py-3 font-medium">
-															Details
+															{scanT(t, "scan.task.tabs.details", "详情")}
 														</th>
 														<th className="w-[8%] px-4 py-3 font-medium">
-															Actions
+															{scanT(t, "scan.tasks.actions", "操作")}
 														</th>
 													</tr>
 												</thead>
@@ -3136,12 +3507,18 @@ export const ShowScanJobDetail = ({
 														);
 														const isRerunningTask =
 															rerunningTaskId === task.taskId;
+														const displayTask = getTaskListDisplay(t, task);
 														return (
 															<tr
 																key={task.id}
 																role="link"
 																tabIndex={0}
-																aria-label={`Open task ${task.title}`}
+																aria-label={scanT(
+																	t,
+																	"scan.task.openAria",
+																	"打开阶段任务 {{title}}",
+																	{ title: displayTask.title },
+																)}
 																onClick={() =>
 																	void router.push(
 																		buildTaskDetailHref(task.taskId),
@@ -3154,14 +3531,14 @@ export const ShowScanJobDetail = ({
 															>
 																<td className="w-[22%] px-4 py-3 align-top">
 																	<div className="line-clamp-2 font-medium">
-																		{task.title}
+																		{displayTask.title}
 																	</div>
 																	<div className="text-xs text-muted-foreground break-all">
-																		{task.subtitle || "-"}
+																		{displayTask.subtitle}
 																	</div>
 																</td>
 																<td className="w-[9%] px-4 py-3 align-top capitalize">
-																	{getTaskStageLabel(task.stage)}
+																	{getTaskStageLabel(t, task.stage)}
 																</td>
 																<td className="w-[9%] px-4 py-3 align-top">
 																	<Badge
@@ -3170,7 +3547,7 @@ export const ShowScanJobDetail = ({
 																			task.status,
 																		)}
 																	>
-																		{getTaskStatusLabel(task.status)}
+																		{getTaskStatusLabel(t, task.status)}
 																	</Badge>
 																</td>
 																<td className="w-[11%] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
@@ -3200,13 +3577,21 @@ export const ShowScanJobDetail = ({
 																			size="icon"
 																			title={
 																				canRerunTask
-																					? "Rerun task"
-																					: "Task can be rerun after it reaches a terminal state"
+																					? scanT(t, "scan.task.rerunTask", "重新运行阶段任务")
+																					: scanT(
+																							t,
+																							"scan.task.rerunDisabled",
+																							"阶段任务到达终态后才能重新运行",
+																						)
 																			}
 																			aria-label={
 																				canRerunTask
-																					? "Rerun task"
-																					: "Task can be rerun after it reaches a terminal state"
+																					? scanT(t, "scan.task.rerunTask", "重新运行阶段任务")
+																					: scanT(
+																							t,
+																							"scan.task.rerunDisabled",
+																							"阶段任务到达终态后才能重新运行",
+																						)
 																			}
 																			disabled={
 																				!canRerunTask ||
@@ -3242,7 +3627,7 @@ export const ShowScanJobDetail = ({
 							className="text-sm text-muted-foreground underline"
 							href={`/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}?tab=deployments`}
 						>
-							Back to Jobs
+							{scanT(t, "scan.job.backToJobs", "Back to Jobs")}
 						</Link>
 					</div>
 				</CardContent>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "next-i18next";
 import {
 	FullScanStageGraphPreview,
 	type ScanRuntimeSettingsDraft,
@@ -15,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { scanT } from "./scan-i18n";
 
 const deriveDefaultRef = (
 	serviceData: Record<string, unknown> | null | undefined,
@@ -71,6 +73,7 @@ export const CreateScanDialog = ({
 	scanType = "full",
 	onSubmit,
 }: Props) => {
+	const { t } = useTranslation("scan");
 	const [open, setOpen] = useState(false);
 	const defaultRef = useMemo(
 		() => deriveDefaultRef(serviceData),
@@ -83,8 +86,16 @@ export const CreateScanDialog = ({
 		useState<ScanRuntimeSettingsDraft>({});
 	const previewDescription =
 		scanType === "delta"
-			? "Delta Scan scopes functions impacted by the target/base diff, then runs function scanning, candidate analysis, fuzzing, verification, and triage."
-			: "Full Scan checks out the selected source, scans repository structure, expands module and function tasks, analyzes candidate findings, and only sends verified or likely findings to triage.";
+			? scanT(
+					t,
+					"scan.dialog.deltaPreview",
+					"Delta Scan scopes functions impacted by the target/base diff, then runs function scanning, candidate analysis, fuzzing, verification, and triage.",
+				)
+			: scanT(
+					t,
+					"scan.dialog.fullPreview",
+					"Full Scan checks out the selected source, scans repository structure, expands module and function tasks, analyzes candidate findings, and only sends verified or likely findings to triage.",
+				);
 
 	useEffect(() => {
 		if (!open) {
@@ -122,7 +133,9 @@ export const CreateScanDialog = ({
 				<div className="grid gap-4">
 					{showFullScanPreview ? (
 						<div className="rounded-lg border bg-background p-4">
-							<div className="text-sm font-semibold">What will run</div>
+							<div className="text-sm font-semibold">
+								{scanT(t, "scan.dialog.whatWillRun", "What will run")}
+							</div>
 							<p className="mt-1 text-sm text-muted-foreground">
 								{previewDescription}
 							</p>
@@ -137,7 +150,9 @@ export const CreateScanDialog = ({
 						/>
 					) : null}
 					<div className="grid gap-2">
-						<Label htmlFor={`${title}-target-ref`}>Ref</Label>
+						<Label htmlFor={`${title}-target-ref`}>
+							{scanT(t, "scan.dialog.ref", "Ref")}
+						</Label>
 						<Input
 							id={`${title}-target-ref`}
 							placeholder="main"
@@ -146,7 +161,9 @@ export const CreateScanDialog = ({
 						/>
 					</div>
 					<div className="grid gap-2">
-						<Label htmlFor={`${title}-target-tag`}>Tag</Label>
+						<Label htmlFor={`${title}-target-tag`}>
+							{scanT(t, "scan.dialog.tag", "Tag")}
+						</Label>
 						<Input
 							id={`${title}-target-tag`}
 							placeholder="v1.2.3"
@@ -169,10 +186,10 @@ export const CreateScanDialog = ({
 				</div>
 				<DialogFooter>
 					<Button variant="secondary" onClick={() => setOpen(false)}>
-						Cancel
+						{scanT(t, "scan.dialog.cancel", "Cancel")}
 					</Button>
 					<Button isLoading={isLoading} onClick={handleSubmit}>
-						Confirm
+						{scanT(t, "scan.dialog.confirm", "Confirm")}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

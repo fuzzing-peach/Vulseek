@@ -1,5 +1,6 @@
 import { Loader2 } from "lucide-react";
 import { useTheme } from "next-themes";
+import { useTranslation } from "next-i18next";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import {
@@ -9,6 +10,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { scanT } from "./scan-i18n";
 
 interface Props {
 	open: boolean;
@@ -87,6 +89,7 @@ export const CheckoutLogModal = ({
 	logs,
 	isLoading,
 }: Props) => {
+	const { t } = useTranslation("scan");
 	const hostRef = useRef<HTMLDivElement | null>(null);
 	const xtermRef = useRef<XTermInstance | null>(null);
 	const fitAddonRef = useRef<FitAddonInstance | null>(null);
@@ -429,14 +432,19 @@ export const CheckoutLogModal = ({
 				<DialogHeader>
 					<DialogTitle>{title}</DialogTitle>
 					<DialogDescription>
-						{description || "Docker build logs"}
+						{description ||
+							scanT(t, "scan.actions.dockerBuildLogs", "Docker build logs")}
 					</DialogDescription>
 				</DialogHeader>
 				<div className="relative h-[60vh] overflow-hidden rounded-lg border border-slate-200 bg-slate-50 p-4 font-mono text-xs leading-5 text-slate-700 shadow-sm">
 					{isLoading ? (
 						<div className="pointer-events-none absolute right-4 top-4 z-10 flex items-center gap-2 rounded-md bg-white/85 px-2 py-1 text-slate-500 shadow-sm">
 							<Loader2 className="size-4 animate-spin" />
-							Running checkout and image build...
+							{scanT(
+								t,
+								"scan.actions.checkoutRunning",
+								"Running checkout and image build...",
+							)}
 						</div>
 					) : null}
 					<div ref={setHostNode} className="h-full w-full" />

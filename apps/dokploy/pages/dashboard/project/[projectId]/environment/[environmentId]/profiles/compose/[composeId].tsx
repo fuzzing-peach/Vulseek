@@ -9,6 +9,7 @@ import type {
 import Head from "next/head";
 import Link from "next/link";
 import { useRouter } from "next/router";
+import { useTranslation } from "next-i18next";
 import { type ReactElement, useEffect, useState } from "react";
 import { toast } from "sonner";
 import superjson from "superjson";
@@ -51,6 +52,8 @@ import {
 import { UseKeyboardNav } from "@/hooks/use-keyboard-nav";
 import { appRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
+import { getLocale, serverSideTranslations } from "@/utils/i18n";
+import { scanT } from "@/components/dashboard/scanning/scan-i18n";
 
 type TabState =
 	| "general"
@@ -80,6 +83,7 @@ const normalizeComposeTab = (value: unknown): TabState => {
 const Service = (
 	props: InferGetServerSidePropsType<typeof getServerSideProps>,
 ) => {
+	const { t } = useTranslation("scan");
 	const [_toggleMonitoring, _setToggleMonitoring] = useState(false);
 	const { composeId, activeTab } = props;
 	const router = useRouter();
@@ -234,7 +238,9 @@ const Service = (
 										<TabsList className="flex gap-8 max-md:gap-4 justify-start">
 											<TabsTrigger value="general">General</TabsTrigger>
 											<TabsTrigger value="environment">Environment</TabsTrigger>
-											<TabsTrigger value="deployments">Jobs</TabsTrigger>
+											<TabsTrigger value="deployments">
+												{scanT(t, "scan.jobs.title", "Jobs")}
+											</TabsTrigger>
 											<TabsTrigger value="backups">Backups</TabsTrigger>
 											<TabsTrigger value="advanced">Advanced</TabsTrigger>
 										</TabsList>
@@ -411,6 +417,10 @@ export async function getServerSideProps(
 			await helpers.settings.isCloud.prefetch();
 			return {
 				props: {
+					...(await serverSideTranslations(getLocale(req.cookies), [
+						"common",
+						"scan",
+					])),
 					trpcState: helpers.dehydrate(),
 					composeId: params?.composeId,
 					activeTab: (activeTab || "general") as TabState,

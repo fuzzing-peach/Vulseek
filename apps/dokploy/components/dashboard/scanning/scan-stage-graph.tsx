@@ -14,6 +14,7 @@ import {
 	ReactFlow,
 } from "@xyflow/react";
 import { AlertCircle, Loader2 } from "lucide-react";
+import { useTranslation } from "next-i18next";
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -36,6 +37,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { api, type RouterOutputs } from "@/utils/api";
+import { formatScanStageLabel, scanT } from "./scan-i18n";
 
 type StageGraph = RouterOutputs["scan"]["stageGraph"];
 type StageGraphNode = StageGraph["nodes"][number];
@@ -310,6 +312,7 @@ const getStatusClassName = (node: StageGraphNode) => {
 };
 
 const StageLabel = ({ node }: { node: StageGraphNode }) => {
+	const { t } = useTranslation("scan");
 	const runningBlockCount = Math.max(
 		1,
 		node.concurrencyLimit,
@@ -323,7 +326,7 @@ const StageLabel = ({ node }: { node: StageGraphNode }) => {
 	return (
 		<div className="flex min-h-full flex-col justify-center gap-2.5 px-5 py-4">
 			<div className="text-left text-[15px] font-semibold leading-snug tracking-normal">
-				{node.name || node.title}
+				{formatScanStageLabel(t, node.stageName) || node.name || node.title}
 			</div>
 			<div className="h-px bg-border/80" />
 			<div className="flex min-h-4 flex-wrap items-center gap-1.5">
@@ -342,13 +345,6 @@ const StageLabel = ({ node }: { node: StageGraphNode }) => {
 		</div>
 	);
 };
-
-const formatBoolean = (value: boolean | null | undefined) =>
-	value === undefined || value === null
-		? "Not set"
-		: value
-			? "Enabled"
-			: "Disabled";
 
 const DetailRow = ({ label, value }: { label: string; value: ReactNode }) => (
 	<div className="grid grid-cols-[150px_minmax(0,1fr)] gap-3 border-b py-2 last:border-b-0">
@@ -371,11 +367,16 @@ const StageDetailDialog = ({
 	) => Promise<void> | void;
 	onOpenChange: (open: boolean) => void;
 }) => {
+	const { t } = useTranslation("scan");
 	const agentProfile = stage?.agentProfile;
 	const defaultAgentProfileLabel =
 		agentProfile?.name ||
 		agentProfile?.agentProfileId ||
-		"No default profile configured";
+		scanT(
+			t,
+			"scan.stageGraph.noDefaultProfile",
+			"No default profile configured",
+		);
 	const runtimeRecord = (stage ?? {}) as unknown as Record<string, unknown>;
 	const [disabled, setDisabled] = useState(false);
 	const [concurrency, setConcurrency] = useState("1");
@@ -428,23 +429,41 @@ const StageDetailDialog = ({
 		<Dialog open={Boolean(stage)} onOpenChange={onOpenChange}>
 			<DialogContent className="sm:max-w-2xl">
 				<DialogHeader>
-					<DialogTitle>{stage?.name || stage?.title || "Stage"}</DialogTitle>
+					<DialogTitle>
+						{stage
+							? formatScanStageLabel(t, stage.stageName)
+							: scanT(t, "scan.stageGraph.stage", "Stage")}
+					</DialogTitle>
 					<DialogDescription>
-						Stage runtime settings and selected agent profile.
+						{scanT(
+							t,
+							"scan.stageGraph.runtimeDescription",
+							"Stage runtime settings and selected agent profile.",
+						)}
 					</DialogDescription>
 				</DialogHeader>
 				{stage ? (
 					<div className="space-y-4">
 						<div className="rounded-lg border p-3">
-							<div className="mb-2 text-sm font-semibold">Runtime</div>
-							<DetailRow label="Stage ID" value={stage.stageName} />
+							<div className="mb-2 text-sm font-semibold">
+								{scanT(t, "scan.stageGraph.runtime", "Runtime")}
+							</div>
+							<DetailRow
+								label={scanT(t, "scan.stageGraph.stageId", "Stage ID")}
+								value={stage.stageName}
+							/>
 							<div className="grid gap-4 pt-3">
 								<div className="flex items-center justify-between gap-4">
 									<div>
-										<Label>Disable stage</Label>
+										<Label>
+											{scanT(t, "scan.stageGraph.disableStage", "Disable stage")}
+										</Label>
 										<div className="text-xs text-muted-foreground">
-											Disabled stages and dominated successors will not start new
-											tasks.
+											{scanT(
+												t,
+												"scan.stageGraph.disableStageDescription",
+												"Disabled stages and dominated successors will not start new tasks.",
+											)}
 										</div>
 									</div>
 									<Switch
@@ -455,7 +474,7 @@ const StageDetailDialog = ({
 								</div>
 								<div className="grid gap-2">
 									<Label htmlFor={`${stage.stageName}-concurrency`}>
-										Concurrency
+										{scanT(t, "scan.stageGraph.concurrency", "Concurrency")}
 									</Label>
 									<Input
 										id={`${stage.stageName}-concurrency`}
@@ -468,7 +487,9 @@ const StageDetailDialog = ({
 									/>
 								</div>
 								<div className="grid gap-2">
-									<Label>Agent Profile</Label>
+									<Label>
+										{scanT(t, "scan.stageGraph.agentProfile", "Agent Profile")}
+									</Label>
 									<Select
 										value={agentProfileId}
 										onValueChange={setAgentProfileId}
@@ -497,10 +518,10 @@ const StageDetailDialog = ({
 				) : null}
 				<DialogFooter>
 					<Button variant="secondary" onClick={() => onOpenChange(false)}>
-						Cancel
+						{scanT(t, "scan.dialog.cancel", "Cancel")}
 					</Button>
 					<Button isLoading={isSaving} onClick={saveStageSettings}>
-						Save
+						{scanT(t, "scan.dialog.save", "Save")}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
@@ -776,8 +797,8 @@ const ScanStageGraphPanel = ({
 	graph,
 	isLoading = false,
 	error,
-	title = "Stage Graph",
-	description = "Pipeline topology and live stage progress.",
+	title,
+	description,
 	heightClassName = "h-[420px] md:h-[520px]",
 	scanRuntimeSettings,
 	agentProfiles,
@@ -796,6 +817,7 @@ const ScanStageGraphPanel = ({
 		setting: RuntimeStageSetting,
 	) => Promise<void> | void;
 }) => {
+	const { t } = useTranslation("scan");
 	const [elements, setElements] = useState(EMPTY_FLOW_ELEMENTS);
 	const [layoutError, setLayoutError] = useState<Error | null>(null);
 	const [selectedStage, setSelectedStage] = useState<StageGraphNode | null>(
@@ -845,23 +867,32 @@ const ScanStageGraphPanel = ({
 	return (
 		<div className="rounded-lg border bg-background">
 			<div className="border-b px-4 py-3">
-				<div className="font-medium">{title}</div>
-				<div className="text-sm text-muted-foreground">{description}</div>
+				<div className="font-medium">
+					{title || scanT(t, "scan.stageGraph.title", "Stage Graph")}
+				</div>
+				<div className="text-sm text-muted-foreground">
+					{description ||
+						scanT(
+							t,
+							"scan.stageGraph.description",
+							"Pipeline topology and live stage progress.",
+						)}
+				</div>
 			</div>
 			<div className={`relative bg-muted/10 ${heightClassName}`}>
 				{isLoading || isLayoutLoading ? (
 					<div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
 						<Loader2 className="size-4 animate-spin" />
-						Loading stage graph...
+						{scanT(t, "scan.stageGraph.loading", "Loading stage graph...")}
 					</div>
 				) : error || layoutError ? (
 					<div className="flex h-full items-center justify-center gap-2 text-sm text-destructive">
 						<AlertCircle className="size-4" />
-						Failed to load stage graph.
+						{scanT(t, "scan.stageGraph.error", "Failed to load stage graph.")}
 					</div>
 				) : !effectiveGraph || effectiveGraph.nodes.length === 0 ? (
 					<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-						No stage graph available.
+						{scanT(t, "scan.stageGraph.empty", "No stage graph available.")}
 					</div>
 				) : (
 					<ReactFlow
@@ -1350,6 +1381,7 @@ export const FullScanStageGraphPreview = ({
 	onScanRuntimeSettingsChange?: (settings: ScanRuntimeSettingsDraft) => void;
 	scanType?: "delta" | "full";
 }) => {
+	const { t } = useTranslation("scan");
 	const target = useMemo<FullScanStageGraphTarget | null>(() => {
 		const serviceRecord = asRecord(serviceData);
 		const applicationId = serviceRecord?.applicationId;
@@ -1387,7 +1419,17 @@ export const FullScanStageGraphPreview = ({
 			graph={graph}
 			isLoading={isLoading}
 			error={error}
-			description={`${scanType === "delta" ? "Delta" : "Full"} scan pipeline preview.`}
+			description={scanT(
+				t,
+				"scan.stageGraph.previewDescription",
+				"{{type}} scan pipeline preview.",
+				{
+					type:
+						scanType === "delta"
+							? scanT(t, "scan.scanType.delta", "Delta Scan")
+							: scanT(t, "scan.scanType.full", "Full Scan"),
+				},
+			)}
 			heightClassName="h-[360px]"
 			scanRuntimeSettings={scanRuntimeSettings}
 			agentProfiles={agentProfiles}

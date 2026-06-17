@@ -1487,6 +1487,35 @@ const extractPayloadText = (payload) => {
   );
 };
 
+const extractRawOutputText = (rawOutput) => {
+  const record = asRecord(rawOutput);
+  if (!record) return extractTextValue(rawOutput);
+  const lines = [];
+  const exitCode = record.exit_code ?? record.exitCode ?? record.code;
+  const status = asString(record.status);
+  if (exitCode !== undefined) lines.push("exit_code: " + String(exitCode));
+  if (status) lines.push("status: " + status);
+  const stderr = extractTextValue(record.stderr);
+  if (stderr) lines.push("stderr:\n" + stderr);
+  const stdout =
+    extractTextValue(record.stdout) ||
+    extractTextValue(record.aggregated_output) ||
+    extractTextValue(record.aggregatedOutput) ||
+    extractTextValue(record.output);
+  if (stdout) lines.push("output:\n" + stdout);
+  return lines.join("\n") || extractTextValue(rawOutput);
+};
+
+const mergeToolTextWithRawOutput = (text, record) => {
+  const rawOutputText = extractRawOutputText(record?.rawOutput);
+  if (!rawOutputText) return text;
+  if (!text) return rawOutputText;
+  if (text.includes(rawOutputText) || rawOutputText.includes(text)) {
+    return text;
+  }
+  return text + "\nrawOutput:\n" + rawOutputText;
+};
+
 const getEventRenderKey = (event) => {
   const update = getEventUpdate(event);
   const record = asRecord(update);
@@ -1544,9 +1573,11 @@ const renderSandboxAgentEvent = (event, state) => {
       rendered = text;
       break;
     case "tool_call":
-    case "tool_call_update":
-      rendered = text ? "\n[tool] " + text + "\n" : "";
+    case "tool_call_update": {
+      const toolText = mergeToolTextWithRawOutput(text, record);
+      rendered = toolText ? "\n[tool] " + toolText + "\n" : "";
       break;
+    }
     case "plan":
       rendered = text ? "\n[plan] " + text + "\n" : "";
       break;

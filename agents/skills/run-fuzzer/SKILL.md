@@ -22,7 +22,7 @@ candidate.
 2. Confirm the executable is a real LibAFL fuzzer, not a custom loop or replay-only harness.
 3. Run the fuzzer within `fuzzing_budget_seconds`.
 4. Store corpus, crashes, triggering inputs, stdout/stderr, and summary logs under the task directory.
-5. Write fuzzing progress to `fuzz-progress.jsonl` in the task directory.
+5. Write fuzzing progress to exactly `/task/fuzz-progress.jsonl`.
 6. Use coverage feedback when available to assess harness effectiveness and blockers.
 7. Decide whether a triggering input was found.
 8. Return the structured result and route requested by the stage prompt.
@@ -38,16 +38,21 @@ behavior that should become a new analysis hypothesis.
 
 ## Progress Metrics
 
-The task directory must contain `fuzz-progress.jsonl`. Each line should be a
-JSON object emitted from a LibAFL monitor, not parsed from stdout. Use
-`JSONLPrintingMonitor.rs` in this skill directory as the copyable reference
-implementation.
+The task directory must contain `/task/fuzz-progress.jsonl`. Each line must be
+a JSON object emitted from a LibAFL monitor, not parsed from stdout and not
+hand-written by the run agent as a substitute. Use `JSONLPrintingMonitor.rs` in
+this skill directory as the copyable reference implementation.
 
 The JSONL monitor records only data visible to LibAFL `Monitor::display`:
 `eventMsg`, `senderId`, global runtime stats, corpus size, objective size,
 executions, exec/sec, optional edge coverage, and `userStats`. Do not invent
 top-level `crashCount` or `timeoutCount`; if those are needed, emit them as
 LibAFL user stats so they appear under `userStats`.
+
+Before returning, verify that `/task/fuzz-progress.jsonl` exists and contains
+at least one valid JSONL monitor record. If the executable does not use
+`JSONLPrintingMonitor`, treat the run as a failed/non-compliant fuzz run rather
+than fabricating a progress file.
 
 ## Run Decision
 

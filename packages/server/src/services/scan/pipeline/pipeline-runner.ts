@@ -26,6 +26,7 @@ import {
 } from "../persistence/stage-lane-runtime.repo";
 import {
 	countActiveTasksByScanJobAndStageRepo,
+	countOpenTasksByScanJobIdRepo,
 	countTasksByScanJobStageAndStatusRepo,
 	findTaskByIdRepo,
 	listActiveTasksByScanJobAndStageRepo,
@@ -3523,6 +3524,25 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 		const totalLaunchedCount =
 			groupBackfillLaunchedCount + stageBackfillLaunchedCount;
 		if (await isJobRuntimeQuiescent(runtime)) {
+			const openCount = await countOpenTasksByScanJobIdRepo(
+				runtime.ctx.scanJobId,
+			).catch((error) => {
+				logPipelineEvent("pipeline.final_open_task_count_failed", {
+					scanJobId: runtime.ctx.scanJobId,
+					pipelineName: runtime.pipeline.name,
+					errorMessage: getErrorMessage(error),
+				});
+				return null;
+			});
+			if (openCount === 0) {
+				await refreshPipelineState(runtime.ctx).catch((error) => {
+					logPipelineEvent("pipeline.final_refresh_failed", {
+						scanJobId: runtime.ctx.scanJobId,
+						pipelineName: runtime.pipeline.name,
+						errorMessage: getErrorMessage(error),
+					});
+				});
+			}
 			logPipelineEvent("loop.timing", {
 				scanJobId: runtime.ctx.scanJobId,
 				pipelineName: runtime.pipeline.name,
@@ -3538,6 +3558,7 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 				backfillActiveGroupQueuesLaunchedCount: groupBackfillLaunchedCount,
 				stageBackfillTimings,
 				launchedCount: totalLaunchedCount,
+				finalOpenTaskCount: openCount,
 				progressed,
 				quiescent: true,
 				slept: false,

@@ -1,4 +1,5 @@
 import { Activity, FileText, Loader2 } from "lucide-react";
+import { useTranslation } from "next-i18next";
 import { useEffect, useRef, useState } from "react";
 import { JsonRpcSummaryPanel } from "@/components/dashboard/scanning/jsonrpc-summary";
 import { useSandboxAgentActivity } from "@/components/dashboard/scanning/use-sandbox-agent-activity";
@@ -13,6 +14,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import type { SandboxAgentActivity } from "@/lib/scan/sandbox-agent-activity";
+import { scanT } from "./scan-i18n";
 
 const getActivityBadgeClassName = (kind: string) => {
 	if (kind === "web") {
@@ -214,6 +216,7 @@ export const LiveTaskActivityBadge = ({
 	activity?: SandboxAgentActivity;
 	isConnected?: boolean;
 }) => {
+	const { t } = useTranslation("scan");
 	const liveActivity = useSandboxAgentActivity({
 		taskId: taskId || "",
 		enabled: !!taskId && !activity,
@@ -226,7 +229,7 @@ export const LiveTaskActivityBadge = ({
 			<div className="flex flex-wrap items-center gap-2">
 				{resolvedIsConnected ? (
 					<span
-						title="Live"
+						title={scanT(t, "scan.activity.live", "Live")}
 						className="size-1.5 shrink-0 rounded-full bg-emerald-500"
 					/>
 				) : null}
@@ -240,7 +243,12 @@ export const LiveTaskActivityBadge = ({
 					<Badge
 						variant="outline"
 						className="border-muted-foreground/20 bg-background text-muted-foreground"
-						title={`Token usage: ${resolvedActivity.tokenUsage.used}`}
+						title={scanT(
+							t,
+							"scan.activity.tokenUsage",
+							"Token usage: {{count}}",
+							{ count: resolvedActivity.tokenUsage.used },
+						)}
 					>
 						{formatTokenUsage(resolvedActivity.tokenUsage.used)} tokens
 					</Badge>
@@ -267,6 +275,7 @@ export const LiveTaskActivityButton = ({
 	size?: "default" | "sm" | "lg" | "icon";
 	iconOnly?: boolean;
 }) => {
+	const { t } = useTranslation("scan");
 	const [isOpen, setIsOpen] = useState(false);
 	const openedAtRef = useRef<number | null>(null);
 	const messageCountRef = useRef(0);
@@ -326,8 +335,8 @@ export const LiveTaskActivityButton = ({
 				variant={variant}
 				size={size}
 				disabled={!taskId}
-				title="View agent output"
-				aria-label="View agent output"
+				title={scanT(t, "scan.activity.viewOutput", "View agent output")}
+				aria-label={scanT(t, "scan.activity.viewOutput", "View agent output")}
 				onClick={(event) => {
 					event.stopPropagation();
 					openedAtRef.current =
@@ -342,14 +351,19 @@ export const LiveTaskActivityButton = ({
 				}}
 			>
 				<Activity className={iconOnly ? "size-4" : "mr-2 size-4"} />
-				{iconOnly ? null : "View"}
+				{iconOnly ? null : scanT(t, "scan.activity.view", "View")}
 			</Button>
 			<Dialog open={isOpen} onOpenChange={setIsOpen}>
 				<DialogContent className="max-w-5xl">
 					<DialogHeader>
 						<DialogTitle>{title}</DialogTitle>
 						<DialogDescription>
-							{subtitle || "Live sandbox agent operations"}
+							{subtitle ||
+								scanT(
+									t,
+									"scan.activity.operations",
+									"Live sandbox agent operations",
+								)}
 						</DialogDescription>
 					</DialogHeader>
 					<div className="mb-3 flex flex-wrap items-center gap-2">
@@ -362,12 +376,12 @@ export const LiveTaskActivityButton = ({
 						{isDetailConnected ? (
 							<span className="flex items-center gap-1 text-xs text-muted-foreground">
 								<span className="size-1.5 rounded-full bg-emerald-500" />
-								connected
+								{scanT(t, "scan.activity.connected", "connected")}
 							</span>
 						) : (
 							<span className="flex items-center gap-1 text-xs text-muted-foreground">
 								<Loader2 className="size-3 animate-spin" />
-								connecting
+								{scanT(t, "scan.activity.connecting", "connecting")}
 							</span>
 						)}
 					</div>
@@ -419,6 +433,7 @@ export const LiveTaskTextButton = ({
 	size?: "default" | "sm" | "lg" | "icon";
 	iconOnly?: boolean;
 }) => {
+	const { t } = useTranslation("scan");
 	const [isOpen, setIsOpen] = useState(false);
 	const textContainerRef = useRef<HTMLPreElement | null>(null);
 	const textAutoScrollRef = useRef(true);
@@ -446,37 +461,42 @@ export const LiveTaskTextButton = ({
 				variant={variant}
 				size={size}
 				disabled={!taskId}
-				title="View agent text log"
-				aria-label="View agent text log"
+				title={scanT(t, "scan.activity.viewTextLog", "View agent text log")}
+				aria-label={scanT(t, "scan.activity.viewTextLog", "View agent text log")}
 				onClick={(event) => {
 					event.stopPropagation();
 					setIsOpen(true);
 				}}
 			>
 				<FileText className={iconOnly ? "size-4" : "mr-2 size-4"} />
-				{iconOnly ? null : "Text"}
+				{iconOnly ? null : scanT(t, "scan.activity.text", "Text")}
 			</Button>
 			<Dialog open={isOpen} onOpenChange={setIsOpen}>
 				<DialogContent className="max-w-5xl">
 					<DialogHeader>
 						<DialogTitle>{title}</DialogTitle>
 						<DialogDescription>
-							{subtitle || "Live sandbox agent text log"}
+							{subtitle ||
+								scanT(t, "scan.activity.textLog", "Live sandbox agent text log")}
 						</DialogDescription>
 					</DialogHeader>
 					<div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
 						{textState.isConnected ? (
 							<span className="flex items-center gap-1">
 								<span className="size-1.5 rounded-full bg-emerald-500" />
-								connected
+								{scanT(t, "scan.activity.connected", "connected")}
 							</span>
 						) : (
 							<span className="flex items-center gap-1">
 								<Loader2 className="size-3 animate-spin" />
-								connecting
+								{scanT(t, "scan.activity.connecting", "connecting")}
 							</span>
 						)}
-						<span>{textState.text.length.toLocaleString()} chars</span>
+						<span>
+							{scanT(t, "scan.activity.chars", "{{count}} chars", {
+								count: textState.text.length.toLocaleString(),
+							})}
+						</span>
 					</div>
 					{textState.errorMessage ? (
 						<div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100">
@@ -513,7 +533,7 @@ export const LiveTaskTextButton = ({
 						}}
 						className="max-h-[65vh] min-h-[360px] w-full overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-md border bg-muted/20 p-3 text-xs leading-relaxed text-foreground"
 					>
-						{textState.text || "No text output yet."}
+						{textState.text || scanT(t, "scan.activity.noText", "No text output yet.")}
 					</pre>
 				</DialogContent>
 			</Dialog>

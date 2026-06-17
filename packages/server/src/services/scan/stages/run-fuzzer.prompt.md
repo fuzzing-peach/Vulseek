@@ -7,6 +7,7 @@ candidate_title: {{candidateTitle}}
 candidate_json_path: {{candidateJsonPath}}
 build_request_json_path: {{buildRequestJsonPath}}
 task_dir: {{taskDir}}
+progress_jsonl_path: /task/fuzz-progress.jsonl
 fuzzing_budget_seconds: {{fuzzingBudgetSeconds}}
 build_result_json_path: {{buildResultJsonPath}}
 
@@ -14,6 +15,8 @@ Follow the run-fuzzer skill for execution, evidence collection, exploration repo
 Read candidate_json_path, build_request_json_path, and build_result_json_path before running.
 Run the LibAFL executable within the budget.
 Save corpus, crashes, triggering inputs, and logs under task_dir.
+The fuzzer must write LibAFL monitor progress to exactly /task/fuzz-progress.jsonl using JSONLPrintingMonitor.
+Before returning, verify /task/fuzz-progress.jsonl exists, contains at least one JSONL record, and was produced by the LibAFL monitor path rather than a manual fallback.
 Before returning, validate the structured JSON against the runtime-provided output.schema.json.
 Use {{taskId}} as id.
 Always route back to analysis.

@@ -50,59 +50,6 @@ clang++ -DNO_MAIN -g -O2 -fsanitize=fuzzer-no-link libFuzzer.a harness.cc main.c
 ./fuzz corpus/
 ```
 
-## Installation
-
-### Prerequisites
-
-- Clang/LLVM 15-18
-- Rust (via rustup)
-- Additional system dependencies
-
-### Linux/macOS
-
-Install Clang:
-```bash
-apt install clang
-```
-
-Or install a specific version via apt.llvm.org:
-```bash
-wget https://apt.llvm.org/llvm.sh
-chmod +x llvm.sh
-sudo ./llvm.sh 15
-```
-
-Configure environment for Rust:
-```bash
-export RUSTFLAGS="-C linker=/usr/bin/clang-15"
-export CC="clang-15"
-export CXX="clang++-15"
-```
-
-Install Rust:
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-Install additional dependencies:
-```bash
-apt install libssl-dev pkg-config
-```
-
-For libFuzzer compatibility mode, install nightly Rust:
-```bash
-rustup toolchain install nightly --component llvm-tools
-```
-
-### Verification
-
-Build LibAFL to verify installation:
-```bash
-cd LibAFL/libafl_libfuzzer_runtime
-./build.sh
-# Should produce libFuzzer.a
-```
-
 ## Writing a Harness
 
 LibAFL harnesses follow the same pattern as libFuzzer when using drop-in replacement mode:
@@ -176,6 +123,36 @@ A LibAFL fuzzer consists of modular components:
 6. **Scheduler** - Select which inputs to mutate
 7. **Executor** - Run the target with inputs
 
+### Component Selection Rules
+
+Build fuzzers around the evidence goal and target shape. A successful fuzzing
+campaign must have a meaningful feedback signal, a persistent corpus, and an
+objective that matches the bug oracle.
+
+- Use coverage feedback as the primary feedback for parser, protocol, and
+  memory-safety fuzzing. Prefer `MaxMapFeedback` with a real edge/map observer
+  that is updated by the target code.
+- `TimeFeedback` is optional auxiliary feedback for slow-path or complexity
+  exploration. Do not use `TimeFeedback` as the only normal feedback.
+- Do not use `ConstFeedback(false)` for a successful fuzzing campaign. It
+  prevents LibAFL from accepting new interesting testcases and reduces the run
+  to mutation plus crash waiting.
+- Put crash, timeout, sanitizer, and oracle-failure checks in the objective
+  (`CrashFeedback`, `TimeoutFeedback`, or a custom objective). Do not use the
+  objective as a substitute for normal coverage or semantic feedback.
+- For C/C++ targets, the observer must read the same coverage map updated by
+  the target. Do not define separate Rust and C coverage maps with the same
+  intent; expose the C symbol to Rust or use LibAFL/sanitizer coverage helpers.
+- Do not use `InMemoryCorpus` as the main corpus. Use a persistent main corpus,
+  preferably `InMemoryOnDiskCorpus` for speed plus persistence or `OnDiskCorpus`
+  when simple durability is more important.
+- Keep the run result's corpus path aligned with the actual main corpus
+  directory. If the monitor reports `corpusSize`, it should reflect LibAFL
+  accepted testcase events, not hand-written progress records.
+- For evidence fuzzing, choose feedback, mutators, seeds, sanitizers, and
+  objectives from the expected oracle. If the oracle is ASan/UBSan output, the
+  binary must actually link and run with those sanitizers enabled.
+
 ### Basic Fuzzer Structure
 
 ```rust
@@ -192,13 +169,13 @@ pub extern "C" fn libafl_main() {
         ).track_indices();
         let time_observer = TimeObserver::new("time");
 
-        // 2. Define feedback
+        // 2. Define feedback. Coverage is the primary signal; time is auxiliary.
         let mut feedback = feedback_or!(
             MaxMapFeedback::new(&edges_observer),
             TimeFeedback::new(&time_observer)
         );
 
-        // 3. Define objective
+        // 3. Define objective. Crashes and timeouts are outcomes, not corpus feedback.
         let mut objective = feedback_or_fast!(
             CrashFeedback::new(),
             TimeoutFeedback::new()
@@ -206,10 +183,12 @@ pub extern "C" fn libafl_main() {
 
         // 4. Create or restore state
         let mut state = state.unwrap_or_else(|| {
+            let corpus_dir = output_dir.join("corpus");
+            let solutions_dir = output_dir.join("solutions");
             StdState::new(
                 StdRand::new(),
-                InMemoryCorpus::new(),
-                OnDiskCorpus::new(&output_dir).unwrap(),
+                InMemoryOnDiskCorpus::new(&corpus_dir).unwrap(),
+                OnDiskCorpus::new(&solutions_dir).unwrap(),
                 &mut feedback,
                 &mut objective,
             ).unwrap()
@@ -463,8 +442,8 @@ echo "p (uint8_t *)__token_start" | gdb fuzz
 | Setting | Impact |
 |---------|--------|
 | Multi-core fuzzing | Linear speedup with cores |
-| `InMemoryCorpus` | Faster but non-persistent |
-| `InMemoryOnDiskCorpus` | Balanced speed and persistence |
+| `InMemoryOnDiskCorpus` | Fast main corpus with persistence |
+| `OnDiskCorpus` | Simple durable corpus and objective storage |
 | Sanitizers | 2-5x slowdown, essential for bugs |
 | Optimization level `-O2` | Balance between speed and coverage |
 

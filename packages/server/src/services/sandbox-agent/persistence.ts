@@ -8,11 +8,11 @@ import type {
 export const createSandboxAgentRuntimeArtifacts = (
 	runtimeDir: string,
 ): SandboxAgentRuntimeArtifacts => ({
-	stderrFileName: "sandbox-agent-stderr.log",
+	stderrFileName: "driver-stderr.log",
 	metadataFileName: "sandbox-agent-runtime.json",
 	serverLogFileName: "sandbox-agent-server.log",
 	pidFileName: "sandbox-agent-server.pid",
-	stderrPath: path.join(runtimeDir, "sandbox-agent-stderr.log"),
+	stderrPath: path.join(runtimeDir, "driver-stderr.log"),
 	metadataPath: path.join(runtimeDir, "sandbox-agent-runtime.json"),
 	serverLogPath: path.join(runtimeDir, "sandbox-agent-server.log"),
 	pidPath: path.join(runtimeDir, "sandbox-agent-server.pid"),

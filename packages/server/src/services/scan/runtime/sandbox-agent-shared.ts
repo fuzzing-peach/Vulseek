@@ -1,8 +1,8 @@
 export const SANDBOX_AGENT_RUNTIME_FILE_NAMES = {
 	jsonl: "sandbox-agent-event.jsonl",
 	text: "sandbox-agent-text.log",
-	stderr: "sandbox-agent-stderr.log",
-	stdout: "task-stdout.log",
+	stderr: "driver-stderr.log",
+	stdout: "driver-stdout.log",
 	usage: "usage.json",
 } as const;
 
@@ -86,6 +86,38 @@ export const extractPayloadText = (
 	);
 };
 
+const extractRawOutputText = (rawOutput: unknown): string => {
+	const record = asRecord(rawOutput);
+	if (!record) return extractTextValue(rawOutput);
+	const lines: string[] = [];
+	const exitCode = record.exit_code ?? record.exitCode ?? record.code;
+	const status = asString(record.status);
+	if (exitCode !== undefined) lines.push(`exit_code: ${String(exitCode)}`);
+	if (status) lines.push(`status: ${status}`);
+	const stderr = extractTextValue(record.stderr);
+	if (stderr) lines.push(`stderr:\n${stderr}`);
+	const stdout =
+		extractTextValue(record.stdout) ||
+		extractTextValue(record.aggregated_output) ||
+		extractTextValue(record.aggregatedOutput) ||
+		extractTextValue(record.output);
+	if (stdout) lines.push(`output:\n${stdout}`);
+	return lines.join("\n") || extractTextValue(rawOutput);
+};
+
+const mergeToolTextWithRawOutput = (
+	text: string,
+	record: Record<string, unknown> | null,
+) => {
+	const rawOutputText = extractRawOutputText(record?.rawOutput);
+	if (!rawOutputText) return text;
+	if (!text) return rawOutputText;
+	if (text.includes(rawOutputText) || rawOutputText.includes(text)) {
+		return text;
+	}
+	return `${text}\nrawOutput:\n${rawOutputText}`;
+};
+
 export const renderSandboxAgentEvent = (event: SandboxAgentSessionEvent) => {
 	const update = getEventUpdate(event);
 	const record = asRecord(update);
@@ -97,8 +129,10 @@ export const renderSandboxAgentEvent = (event: SandboxAgentSessionEvent) => {
 		case "user_message_chunk":
 			return text;
 		case "tool_call":
-		case "tool_call_update":
-			return text ? `\n[tool] ${text}\n` : "";
+		case "tool_call_update": {
+			const toolText = mergeToolTextWithRawOutput(text, record);
+			return toolText ? `\n[tool] ${toolText}\n` : "";
+		}
 		case "plan":
 			return text ? `\n[plan] ${text}\n` : "";
 		case "usage_update":

@@ -1,4 +1,7 @@
-import { fuzzRunResultSchema } from "../artifacts/contracts/domain-object.contract";
+import {
+	type FuzzRunResult,
+	fuzzRunResultSchema,
+} from "../artifacts/contracts/domain-object.contract";
 import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";
 import { bindTaskRuntimeRepo } from "../persistence/task.repo";
 import {
@@ -14,6 +17,7 @@ import {
 	launchAgentStageRuntime,
 	resolveAgentStageRuntime,
 } from "./agent-stage-runtime";
+import { validateFuzzRunCompliance } from "./fuzz-progress-compliance";
 import {
 	type PipelineContext,
 	resolveScanProfileConcurrencySettings,
@@ -26,7 +30,7 @@ export type FuzzRunStageInput = FuzzBuildStageInput & {
 	buildResultPath: string;
 };
 
-export type FuzzRunStageOutput = unknown;
+export type FuzzRunStageOutput = FuzzRunResult;
 
 const DEFAULT_FUZZING_BUDGET_SECONDS = 600;
 
@@ -103,6 +107,15 @@ const executeFuzzRunStage = async (
 	});
 };
 
+const validateFuzzRunStageOutput = async (
+	ctx: StageContext,
+	rawOutput: string,
+) => {
+	const output = fuzzRunResultSchema.parse(JSON.parse(rawOutput));
+	await validateFuzzRunCompliance(await ctx.taskDir());
+	return output;
+};
+
 export const createFuzzRunStageDefinition = <
 	TPipelineContext extends PipelineContext,
 >(input: {
@@ -146,4 +159,6 @@ export const createFuzzRunStageDefinition = <
 				await executeFuzzRunStage(ctx as unknown as StageContext, stageInput)
 			).threadId,
 		}),
+		validateOutput: async (ctx, _stageInput, rawOutput) =>
+			await validateFuzzRunStageOutput(ctx as unknown as StageContext, rawOutput),
 	});

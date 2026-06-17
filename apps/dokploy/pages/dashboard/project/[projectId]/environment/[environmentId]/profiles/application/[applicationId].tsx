@@ -9,6 +9,7 @@ import type {
 import Head from "next/head";
 import Link from "next/link";
 import { useRouter } from "next/router";
+import { useTranslation } from "next-i18next";
 import { type ReactElement, useEffect, useState } from "react";
 import { toast } from "sonner";
 import superjson from "superjson";
@@ -53,6 +54,8 @@ import {
 import { UseKeyboardNav } from "@/hooks/use-keyboard-nav";
 import { appRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
+import { getLocale, serverSideTranslations } from "@/utils/i18n";
+import { scanT } from "@/components/dashboard/scanning/scan-i18n";
 
 type TabState =
 	| "general"
@@ -81,6 +84,8 @@ const normalizeApplicationTab = (value: unknown): TabState => {
 const Service = (
 	props: InferGetServerSidePropsType<typeof getServerSideProps>,
 ) => {
+	const { t } = useTranslation("scan");
+	const { t: commonT } = useTranslation("common");
 	const [_toggleMonitoring, _setToggleMonitoring] = useState(false);
 	const { applicationId, activeTab } = props;
 	const router = useRouter();
@@ -108,7 +113,7 @@ const Service = (
 			<UseKeyboardNav forPage="application" />
 			<BreadcrumbSidebar
 				list={[
-					{ name: "Projects", href: "/dashboard/projects" },
+					{ name: commonT("dashboard.projects"), href: "/dashboard/projects" },
 					{
 						name: data?.environment.project.name || "",
 					},
@@ -123,7 +128,8 @@ const Service = (
 			/>
 			<Head>
 				<title>
-					Application: {data?.name} - {data?.environment.project.name} | Dokploy
+					{commonT("application.pageTitlePrefix")}: {data?.name} -{" "}
+					{data?.environment.project.name} | Dokploy
 				</title>
 			</Head>
 			<div className="w-full">
@@ -156,7 +162,7 @@ const Service = (
 										onClick={() => {
 											if (data?.server?.ipAddress) {
 												copy(data.server.ipAddress);
-												toast.success("IP Address Copied!");
+												toast.success(commonT("application.ipCopied"));
 											}
 										}}
 										variant={
@@ -167,7 +173,7 @@ const Service = (
 													: "destructive"
 										}
 									>
-										{data?.server?.name || "Dokploy Server"}
+										{data?.server?.name || commonT("application.defaultServer")}
 									</Badge>
 									{data?.server?.serverStatus === "inactive" && (
 										<TooltipProvider delayDuration={0}>
@@ -183,9 +189,7 @@ const Service = (
 													side="top"
 												>
 													<span>
-														You cannot, deploy this application because the
-														server is inactive, please upgrade your plan to add
-														more servers.
+														{commonT("application.serverInactiveDeployBlocked")}
 													</span>
 												</TooltipContent>
 											</Tooltip>
@@ -207,18 +211,17 @@ const Service = (
 									<div className="max-w-3xl mx-auto flex flex-col items-center justify-center self-center gap-3">
 										<ServerOff className="size-10 text-muted-foreground self-center" />
 										<span className="text-center text-base text-muted-foreground">
-											This profile is hosted on the server {data.server.name},
-											but this server has been disabled because your current
-											plan doesn't include enough servers. Please purchase more
-											servers to regain access to this application.
+											{commonT("application.serverDisabledMessage", {
+												server: data.server.name,
+											})}
 										</span>
 										<span className="text-center text-base text-muted-foreground">
-											Go to{" "}
+											{commonT("application.goTo")}{" "}
 											<Link
 												href="/dashboard/settings/billing"
 												className="text-primary"
 											>
-												Billing
+												{commonT("application.billing")}
 											</Link>
 										</span>
 									</div>
@@ -236,10 +239,18 @@ const Service = (
 								>
 									<div className="flex flex-row items-center justify-between w-full overflow-auto">
 										<TabsList className="flex gap-8 max-md:gap-4 justify-start">
-											<TabsTrigger value="general">General</TabsTrigger>
-											<TabsTrigger value="environment">Environment</TabsTrigger>
-											<TabsTrigger value="deployments">Jobs</TabsTrigger>
-											<TabsTrigger value="advanced">Advanced</TabsTrigger>
+											<TabsTrigger value="general">
+												{commonT("application.tabs.general")}
+											</TabsTrigger>
+											<TabsTrigger value="environment">
+												{commonT("application.tabs.environment")}
+											</TabsTrigger>
+											<TabsTrigger value="deployments">
+												{scanT(t, "scan.jobs.title", "Jobs")}
+											</TabsTrigger>
+											<TabsTrigger value="advanced">
+												{commonT("application.tabs.advanced")}
+											</TabsTrigger>
 										</TabsList>
 									</div>
 
@@ -407,6 +418,10 @@ export async function getServerSideProps(
 
 			return {
 				props: {
+					...(await serverSideTranslations(getLocale(req.cookies), [
+						"common",
+						"scan",
+					])),
 					trpcState: helpers.dehydrate(),
 					applicationId: params?.applicationId,
 					activeTab: (activeTab || "general") as TabState,

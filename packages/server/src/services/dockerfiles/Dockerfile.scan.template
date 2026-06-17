@@ -37,10 +37,16 @@ RUN --mount=type=cache,id=dokploy-apt-cache,target=/var/cache/apt,sharing=locked
     openssh-client ripgrep vim nano less rsync tree \
     build-essential cmake ninja-build make autoconf automake libtool pkg-config \
     patch \
-    clang clangd lldb lld gdb \
+    clang clangd lldb lld libclang-rt-18-dev gdb \
     python3 python3-pip python3-venv \
     pipx \
     software-properties-common
+
+RUN printf '%s\n' 'int main(void){char a[1]; a[0]=0; return 0;}' > /tmp/dokploy-sanitize-smoke.c \
+    && clang -O1 -g -fsanitize=address,undefined,pointer-overflow \
+      /tmp/dokploy-sanitize-smoke.c -o /tmp/dokploy-sanitize-smoke \
+    && /tmp/dokploy-sanitize-smoke \
+    && rm -f /tmp/dokploy-sanitize-smoke.c /tmp/dokploy-sanitize-smoke
 
 RUN sed -i 's|http://mirrors.ustc.edu.cn/ubuntu/|https://mirrors.ustc.edu.cn/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
 

@@ -3,6 +3,7 @@ import type { GetServerSidePropsContext } from "next";
 import type { ReactElement } from "react";
 import { ShowScanTaskDetail } from "@/components/dashboard/scanning/show-scan-task-detail";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
+import { getLocale, serverSideTranslations } from "@/utils/i18n";
 
 const Page = () => {
 	return <ShowScanTaskDetail serviceType="compose" routeSegment="profiles" />;
@@ -40,6 +41,10 @@ export async function getServerSideProps(context: GetServerSidePropsContext) {
 
 	return {
 		props: {
+			...(await serverSideTranslations(getLocale(context.req.cookies), [
+				"common",
+				"scan",
+			])),
 			projectId,
 			environmentId,
 			composeId,

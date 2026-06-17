@@ -13,6 +13,7 @@ import {
 	Workflow,
 } from "lucide-react";
 import Head from "next/head";
+import { useTranslation } from "next-i18next";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -47,6 +48,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
+import {
+	formatAnalysisResultLabel,
+	formatScanStageLabel,
+	formatScanStatusLabel,
+	formatTruthResultLabel,
+	scanT,
+	type ScanTranslation,
+} from "./scan-i18n";
 
 interface Props {
 	serviceType: "application" | "compose";
@@ -78,6 +87,7 @@ const getAnalysisResultBadgeClassName = (result?: string | null) => {
 };
 
 const getVerificationTruthBadge = (
+	t: ScanTranslation,
 	result?: string | null,
 ): { label: string; className: string } | null => {
 	if (!result) {
@@ -86,7 +96,7 @@ const getVerificationTruthBadge = (
 
 	if (result === "true") {
 		return {
-			label: "Facts True",
+			label: scanT(t, "scan.candidate.factsTrue", "Facts True"),
 			className:
 				"border-emerald-200 bg-emerald-100 text-emerald-700 dark:border-emerald-500/60 dark:bg-emerald-950/50 dark:text-emerald-100",
 		};
@@ -94,14 +104,14 @@ const getVerificationTruthBadge = (
 
 	if (result === "likely") {
 		return {
-			label: "Facts Likely",
+			label: scanT(t, "scan.candidate.factsLikely", "Facts Likely"),
 			className:
 				"border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100",
 		};
 	}
 
 	return {
-		label: "Facts False",
+		label: scanT(t, "scan.candidate.factsFalse", "Facts False"),
 		className: "border-muted-foreground/20 bg-muted text-muted-foreground",
 	};
 };
@@ -121,36 +131,36 @@ type CandidateTaskLineageTask = {
 	relation: "repository" | "module" | "function" | "candidate";
 };
 
-const getTaskStageLabel = (stage?: string | null) => {
+const getTaskStageLabel = (t: ScanTranslation, stage?: string | null) => {
 	if (stage === "delta-scope") {
-		return "Delta Scope";
+		return formatScanStageLabel(t, "delta-scope");
 	}
 	if (stage === "repository-scan") {
-		return "Repository";
+		return formatScanStageLabel(t, "repository");
 	}
 	if (stage === "module-scan") {
-		return "Module";
+		return formatScanStageLabel(t, "module");
 	}
 	if (stage === "function-scan") {
-		return "Function";
+		return formatScanStageLabel(t, "function");
 	}
 	if (stage === "analyze") {
-		return "Analyze";
+		return formatScanStageLabel(t, "analyze");
 	}
 	if (stage === "criticize") {
-		return "Criticize";
+		return formatScanStageLabel(t, "criticize");
 	}
 	if (stage === "build-fuzzer") {
-		return "Build Fuzzer";
+		return formatScanStageLabel(t, "build-fuzzer");
 	}
 	if (stage === "run-fuzzer") {
-		return "Run Fuzzer";
+		return formatScanStageLabel(t, "run-fuzzer");
 	}
 	if (stage === "verify") {
-		return "Verify";
+		return formatScanStageLabel(t, "verify");
 	}
 	if (stage === "triage") {
-		return "Triage";
+		return formatScanStageLabel(t, "triage");
 	}
 	return stage || "-";
 };
@@ -203,6 +213,7 @@ const CandidateTaskLineagePanel = ({
 	scanFunctionTaskId?: string;
 	enabled: boolean;
 }) => {
+	const { t } = useTranslation("scan");
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 	const [taskOutputView, setTaskOutputView] = useState<"activities" | "text">(
 		"activities",
@@ -268,7 +279,7 @@ const CandidateTaskLineagePanel = ({
 			</div>
 			{groupTasks.length === 0 ? (
 				<div className="rounded-md border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-					No tasks.
+					{scanT(t, "scan.tasks.empty", "暂无阶段任务。")}
 				</div>
 			) : (
 				groupTasks.map((task) => (
@@ -289,13 +300,13 @@ const CandidateTaskLineagePanel = ({
 								<div className="truncate text-sm font-medium">{task.name}</div>
 								<div className="mt-1 flex flex-wrap items-center gap-2">
 									<Badge variant="outline">
-										{getTaskStageLabel(task.stageName)}
+										{getTaskStageLabel(t, task.stageName)}
 									</Badge>
 									<Badge
 										variant="outline"
 										className={getTaskStatusBadgeClassName(task.status)}
 									>
-										{task.status}
+										{formatScanStatusLabel(t, task.status)}
 									</Badge>
 								</div>
 							</div>
@@ -305,7 +316,7 @@ const CandidateTaskLineagePanel = ({
 							variant="ghost"
 							size="icon"
 							className="size-8 shrink-0"
-							title="Open task detail"
+							title={scanT(t, "scan.task.openDetail", "打开阶段任务详情")}
 						>
 							<Link href={taskHref(task.taskId)}>
 								<ExternalLink className="size-4" />
@@ -321,7 +332,7 @@ const CandidateTaskLineagePanel = ({
 		return (
 			<div className="flex items-center gap-2 text-muted-foreground">
 				<Loader2 className="size-4 animate-spin" />
-				Loading task lineage...
+				{scanT(t, "scan.candidate.loadingLineage", "正在加载阶段任务 lineage...")}
 			</div>
 		);
 	}
@@ -330,7 +341,12 @@ const CandidateTaskLineagePanel = ({
 		return (
 			<div className="flex items-center gap-2 text-muted-foreground">
 				<AlertCircle className="size-4" />
-				{error?.message || "Unable to load task lineage"}
+				{error?.message ||
+					scanT(
+						t,
+						"scan.candidate.lineageLoadError",
+						"无法加载阶段任务 lineage",
+					)}
 			</div>
 		);
 	}
@@ -339,21 +355,37 @@ const CandidateTaskLineagePanel = ({
 		<div className="grid min-h-[65vh] grid-cols-1 overflow-hidden rounded-lg border lg:grid-cols-[360px_minmax(0,1fr)]">
 			<div className="border-b bg-muted/10 lg:border-b-0 lg:border-r">
 				<div className="border-b px-4 py-3">
-					<div className="font-medium">Task Lineage</div>
+					<div className="font-medium">
+						{scanT(t, "scan.candidate.taskLineage", "阶段任务 Lineage")}
+					</div>
 					<div className="text-sm text-muted-foreground">
-						Repository to candidate-specific tasks.
+						{scanT(
+							t,
+							"scan.candidate.lineageDescription",
+							"从仓库阶段任务到候选点位专属阶段任务。",
+						)}
 					</div>
 				</div>
 				<div className="max-h-[65vh] space-y-4 overflow-auto p-3">
 					{tasks.length === 0 ? (
 						<div className="flex min-h-[280px] flex-col items-center justify-center gap-2 text-muted-foreground">
 							<Workflow className="size-6" />
-							No lineage tasks found
+							{scanT(
+								t,
+								"scan.candidate.noLineageTasks",
+								"未找到 lineage 阶段任务",
+							)}
 						</div>
 					) : (
 						<>
-							{renderTaskGroup("Upstream", upstreamTasks)}
-							{renderTaskGroup("Candidate Tasks", downstreamTasks)}
+							{renderTaskGroup(
+								scanT(t, "scan.candidate.upstream", "Upstream"),
+								upstreamTasks,
+							)}
+							{renderTaskGroup(
+								scanT(t, "scan.candidate.candidateTasks", "候选点位阶段任务"),
+								downstreamTasks,
+							)}
 						</>
 					)}
 				</div>
@@ -367,13 +399,13 @@ const CandidateTaskLineagePanel = ({
 								<div className="truncate font-medium">{selectedTask.name}</div>
 								<div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
 									<Badge variant="outline">
-										{getTaskStageLabel(selectedTask.stageName)}
+										{getTaskStageLabel(t, selectedTask.stageName)}
 									</Badge>
 									<Badge
 										variant="outline"
 										className={getTaskStatusBadgeClassName(selectedTask.status)}
 									>
-										{selectedTask.status}
+										{formatScanStatusLabel(t, selectedTask.status)}
 									</Badge>
 									<span>{selectedTask.taskId}</span>
 								</div>
@@ -381,13 +413,13 @@ const CandidateTaskLineagePanel = ({
 							<Button asChild variant="outline" size="sm">
 								<Link href={taskHref(selectedTask.taskId)}>
 									<ExternalLink className="mr-2 size-4" />
-									Task Detail
+									{scanT(t, "scan.task.detail", "阶段任务详情")}
 								</Link>
 							</Button>
 						</div>
 					) : (
 						<div className="text-sm text-muted-foreground">
-							No task selected
+							{scanT(t, "scan.task.noSelected", "未选择阶段任务")}
 						</div>
 					)}
 				</div>
@@ -403,11 +435,11 @@ const CandidateTaskLineagePanel = ({
 							<TabsList>
 								<TabsTrigger value="activities">
 									<Activity className="mr-2 size-4" />
-									Activities
+									{scanT(t, "scan.activity.activities", "Activities")}
 								</TabsTrigger>
 								<TabsTrigger value="text">
 									<FileText className="mr-2 size-4" />
-									Text
+									{scanT(t, "scan.activity.text", "Text")}
 								</TabsTrigger>
 							</TabsList>
 
@@ -447,15 +479,19 @@ const CandidateTaskLineagePanel = ({
 									{textState.isConnected ? (
 										<span className="flex items-center gap-1">
 											<span className="size-1.5 rounded-full bg-emerald-500" />
-											connected
+											{scanT(t, "scan.activity.connected", "connected")}
 										</span>
 									) : (
 										<span className="flex items-center gap-1">
 											<Loader2 className="size-3 animate-spin" />
-											connecting
+											{scanT(t, "scan.activity.connecting", "connecting")}
 										</span>
 									)}
-									<span>{textState.text.length.toLocaleString()} chars</span>
+									<span>
+										{scanT(t, "scan.activity.chars", "{{count}} chars", {
+											count: textState.text.length.toLocaleString(),
+										})}
+									</span>
 								</div>
 								{textState.errorMessage ? (
 									<div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100">
@@ -487,14 +523,19 @@ const CandidateTaskLineagePanel = ({
 									}}
 									className="max-h-[58vh] min-h-[360px] w-full overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-md border bg-muted/20 p-3 text-xs leading-relaxed text-foreground"
 								>
-									{textState.text || "No text output yet."}
+									{textState.text ||
+										scanT(t, "scan.activity.noText", "No text output yet.")}
 								</pre>
 							</TabsContent>
 						</Tabs>
 					</div>
 				) : (
 					<div className="flex min-h-[360px] items-center justify-center text-muted-foreground">
-						Select a task to inspect output.
+						{scanT(
+							t,
+							"scan.task.selectToInspect",
+							"Select a task to inspect output.",
+						)}
 					</div>
 				)}
 			</div>
@@ -506,6 +547,7 @@ export const ShowScanCandidateDetail = ({
 	serviceType,
 	routeSegment,
 }: Props) => {
+	const { t } = useTranslation("scan");
 	const router = useRouter();
 	const utils = api.useUtils();
 	const projectId =
@@ -656,8 +698,8 @@ export const ShowScanCandidateDetail = ({
 
 	const verificationTruthBadge = useMemo(
 		() =>
-			getVerificationTruthBadge(candidate?.latestVerificationResult?.result),
-		[candidate?.latestVerificationResult?.result],
+			getVerificationTruthBadge(t, candidate?.latestVerificationResult?.result),
+		[candidate?.latestVerificationResult?.result, t],
 	);
 	const candidateStreamStage =
 		candidate?.currentStage === "verifying" ? "verifying" : "analyzing";
@@ -676,8 +718,8 @@ export const ShowScanCandidateDetail = ({
 		candidate?.latestAnalysisResult?.result === "real_vulnerability" ||
 		candidate?.latestAnalysisResult?.result === "likely_vulnerability";
 	const verifyButtonLabel = candidate?.latestVerificationResult
-		? "Reverify"
-		: "Verify";
+		? scanT(t, "scan.candidate.reverify", "Reverify")
+		: scanT(t, "scan.candidate.verify", "Verify");
 	const normalizedTagInput = tagInput.trim();
 	const candidateMetadataDirty =
 		noteDraft !== (candidate?.note || "") ||
@@ -758,7 +800,7 @@ export const ShowScanCandidateDetail = ({
 		<div className="pb-10">
 			<BreadcrumbSidebar
 				list={[
-					{ name: "Projects", href: "/dashboard/projects" },
+					{ name: scanT(t, "scan.breadcrumb.projects", "Projects"), href: "/dashboard/projects" },
 					{ name: serviceData?.environment.project.name || "" },
 					{
 						name: serviceData?.environment.name || "",
@@ -769,7 +811,7 @@ export const ShowScanCandidateDetail = ({
 						href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}?tab=deployments`,
 					},
 					{
-						name: "Jobs",
+						name: scanT(t, "scan.jobs.title", "Jobs"),
 						href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}?tab=deployments`,
 					},
 					{
@@ -777,14 +819,23 @@ export const ShowScanCandidateDetail = ({
 						href: jobCandidatesHref,
 					},
 					{
-						name: "Candidates",
+						name: scanT(t, "scan.job.tabs.candidates", "Candidates"),
 						href: jobCandidatesHref,
 					},
-					{ name: `Candidate ${candidateId.slice(0, 6)}` },
+					{
+						name: scanT(t, "scan.candidate.shortTitle", "Candidate {{id}}", {
+							id: candidateId.slice(0, 6),
+						}),
+					},
 				]}
 			/>
 			<Head>
-				<title>Candidate {candidateId.slice(0, 6)} | Dokploy</title>
+				<title>
+					{scanT(t, "scan.candidate.shortTitle", "Candidate {{id}}", {
+						id: candidateId.slice(0, 6),
+					})}{" "}
+					| Dokploy
+				</title>
 			</Head>
 			<Dialog
 				open={!!previewFilePath}
@@ -792,19 +843,21 @@ export const ShowScanCandidateDetail = ({
 			>
 				<DialogContent className="max-w-5xl">
 					<DialogHeader>
-						<DialogTitle>File Preview</DialogTitle>
+						<DialogTitle>
+							{scanT(t, "scan.files.preview", "File Preview")}
+						</DialogTitle>
 					</DialogHeader>
 					<div className="rounded-md border">
 						<div className="flex items-start justify-between gap-3 border-b px-4 py-3 text-sm text-muted-foreground">
 							<span className="break-all">
 								{previewFile?.relativePath ||
 									previewFilePath ||
-									"No file selected"}
+									scanT(t, "scan.files.noFileSelected", "No file selected")}
 							</span>
 							{previewFile?.content ? (
 								<CopyValueButton
 									value={previewFile.content}
-									label="File Content"
+									label={scanT(t, "scan.files.content", "File Content")}
 									className="size-7 shrink-0"
 								/>
 							) : null}
@@ -813,11 +866,12 @@ export const ShowScanCandidateDetail = ({
 							{!previewFilePath ? null : isLoadingPreviewFile ? (
 								<div className="flex min-h-[280px] items-center justify-center gap-2 text-muted-foreground">
 									<Loader2 className="size-4 animate-spin" />
-									Loading file...
+									{scanT(t, "scan.files.loadingFile", "Loading file...")}
 								</div>
 							) : (
 								<pre className="whitespace-pre-wrap break-words font-mono text-sm">
-									{previewFile?.content || "(empty)"}
+									{previewFile?.content ||
+										scanT(t, "scan.files.emptyFile", "(empty)")}
 								</pre>
 							)}
 						</div>
@@ -836,7 +890,7 @@ export const ShowScanCandidateDetail = ({
 								<span>{candidateId}</span>
 								<CopyValueButton
 									value={candidateId}
-									label="Candidate ID"
+									label={scanT(t, "scan.field.candidateId", "Candidate ID")}
 									className="size-7 shrink-0"
 								/>
 							</CardDescription>
@@ -885,56 +939,67 @@ export const ShowScanCandidateDetail = ({
 						className="w-full"
 					>
 						<TabsList className="flex gap-4 justify-start">
-							<TabsTrigger value="overview">Overview</TabsTrigger>
-							<TabsTrigger value="task-lineage">Task Lineage</TabsTrigger>
-							<TabsTrigger value="files">Files</TabsTrigger>
+							<TabsTrigger value="overview">
+								{scanT(t, "scan.job.tabs.overview", "Overview")}
+							</TabsTrigger>
+							<TabsTrigger value="task-lineage">
+								{scanT(t, "scan.candidate.taskLineage", "阶段任务 Lineage")}
+							</TabsTrigger>
+							<TabsTrigger value="files">
+								{scanT(t, "scan.files.title", "Files")}
+							</TabsTrigger>
 						</TabsList>
 
 						<TabsContent value="overview" className="pt-4">
 							{isLoadingCandidate ? (
 								<div className="flex items-center gap-2 text-muted-foreground">
 									<Loader2 className="size-4 animate-spin" />
-									Loading candidate...
+									{scanT(t, "scan.candidate.loading", "Loading candidate...")}
 								</div>
 							) : !candidate ? (
 								<div className="flex items-center gap-2 text-muted-foreground">
 									<AlertCircle className="size-4" />
-									Candidate not found
+									{scanT(t, "scan.candidate.notFound", "Candidate not found")}
 								</div>
 							) : (
 								<div className="grid gap-6">
 									<section className="rounded-lg border p-4">
-										<div className="mb-4 text-lg font-semibold">General</div>
+										<div className="mb-4 text-lg font-semibold">
+											{scanT(t, "scan.section.general", "General")}
+										</div>
 										<div className="grid gap-3 md:grid-cols-2">
 											<div className="rounded-lg border p-3">
 												<div className="text-sm text-muted-foreground">
-													Status
+													{scanT(t, "scan.field.status", "Status")}
 												</div>
 												<div className="mt-1 font-medium capitalize">
-													{candidate.status}
+													{formatScanStatusLabel(t, candidate.status)}
 												</div>
 											</div>
 											<div className="rounded-lg border p-3">
 												<div className="text-sm text-muted-foreground">
-													Current Stage
+													{scanT(t, "scan.field.currentStage", "Current Stage")}
 												</div>
 												<div className="mt-1 font-medium capitalize">
-													{candidate.currentStage}
+													{formatScanStageLabel(t, candidate.currentStage)}
 												</div>
 											</div>
 											<div className="rounded-lg border p-3">
 												<div className="text-sm text-muted-foreground">
-													Sanity Check
+													{scanT(t, "scan.field.sanityCheck", "Sanity Check")}
 												</div>
 												<div className="mt-1 font-medium">
 													{candidate.latestVerificationResult
-														? candidate.latestVerificationResult.result
+														? formatTruthResultLabel(
+																t,
+																candidate.latestVerificationResult.result,
+															)
 														: "-"}
 												</div>
 											</div>
 											<div className="rounded-lg border p-3">
 												<div className="text-sm text-muted-foreground">
-													Location
+													{scanT(t, "scan.field.location", "Location")}
 												</div>
 												<div className="mt-1 break-all font-medium">
 													{candidate.filePath || "-"}
@@ -943,7 +1008,7 @@ export const ShowScanCandidateDetail = ({
 											</div>
 											<div className="rounded-lg border p-3">
 												<div className="text-sm text-muted-foreground">
-													Score
+													{scanT(t, "scan.field.score", "Score")}
 												</div>
 												<div className="mt-1 font-medium">
 													{typeof candidate.score === "number"
@@ -953,7 +1018,7 @@ export const ShowScanCandidateDetail = ({
 											</div>
 											<div className="rounded-lg border p-3">
 												<div className="text-sm text-muted-foreground">
-													Confidence
+													{scanT(t, "scan.field.confidence", "Confidence")}
 												</div>
 												<div className="mt-1 font-medium">
 													{typeof candidate.confidence === "number"
@@ -963,7 +1028,7 @@ export const ShowScanCandidateDetail = ({
 											</div>
 											<div className="rounded-lg border p-3">
 												<div className="text-sm text-muted-foreground">
-													Created
+													{scanT(t, "scan.field.created", "Created")}
 												</div>
 												<div className="mt-1 font-medium">
 													<DateTooltip date={candidate.createdAt} />
@@ -971,7 +1036,7 @@ export const ShowScanCandidateDetail = ({
 											</div>
 											<div className="rounded-lg border p-3">
 												<div className="text-sm text-muted-foreground">
-													Updated
+													{scanT(t, "scan.field.updated", "Updated")}
 												</div>
 												<div className="mt-1 font-medium">
 													<DateTooltip date={candidate.updatedAt} />
@@ -981,7 +1046,7 @@ export const ShowScanCandidateDetail = ({
 
 										<div className="mt-4 rounded-lg border p-3">
 											<div className="text-sm text-muted-foreground">
-												Description
+												{scanT(t, "scan.field.description", "Description")}
 											</div>
 											<div className="mt-1 whitespace-pre-wrap break-words text-sm">
 												{candidate.description || "-"}
@@ -993,7 +1058,7 @@ export const ShowScanCandidateDetail = ({
 										<div className="mb-4 flex items-center justify-between gap-3">
 											<div className="flex items-center gap-2 text-lg font-semibold">
 												<Tag className="size-4" />
-												User Notes
+												{scanT(t, "scan.candidate.userNotes", "User Notes")}
 											</div>
 											<Button
 												type="button"
@@ -1005,26 +1070,30 @@ export const ShowScanCandidateDetail = ({
 												}
 												onClick={saveCandidateMetadata}
 											>
-												Save
+												{scanT(t, "scan.dialog.save", "Save")}
 											</Button>
 										</div>
 										<div className="grid gap-4">
 											<div className="grid gap-2">
 												<div className="text-sm text-muted-foreground">
-													Note
+													{scanT(t, "scan.candidate.note", "Note")}
 												</div>
 												<Textarea
 													value={noteDraft}
 													onChange={(event) =>
 														setNoteDraft(event.target.value)
 													}
-													placeholder="Add reviewer notes for this candidate."
+													placeholder={scanT(
+														t,
+														"scan.candidate.notePlaceholder",
+														"Add reviewer notes for this candidate.",
+													)}
 													className="min-h-28"
 												/>
 											</div>
 											<div className="grid gap-2">
 												<div className="text-sm text-muted-foreground">
-													Tags
+													{scanT(t, "scan.candidate.tags", "Tags")}
 												</div>
 												<div className="flex flex-wrap gap-2">
 													{selectedTags.length > 0 ? (
@@ -1039,7 +1108,12 @@ export const ShowScanCandidateDetail = ({
 																	type="button"
 																	className="rounded-sm p-0.5 hover:bg-background/70"
 																	onClick={() => removeCandidateTag(tag)}
-																	aria-label={`Remove tag ${tag}`}
+																	aria-label={scanT(
+																		t,
+																		"scan.candidate.removeTagAria",
+																		"Remove tag {{tag}}",
+																		{ tag },
+																	)}
 																>
 																	<X className="size-3" />
 																</button>
@@ -1047,7 +1121,7 @@ export const ShowScanCandidateDetail = ({
 														))
 													) : (
 														<div className="text-sm text-muted-foreground">
-															No tags set.
+															{scanT(t, "scan.candidate.noTags", "No tags set.")}
 														</div>
 													)}
 												</div>
@@ -1064,7 +1138,11 @@ export const ShowScanCandidateDetail = ({
 																addCandidateTag(normalizedTagInput);
 															}
 														}}
-														placeholder="Type a new tag"
+														placeholder={scanT(
+															t,
+															"scan.candidate.tagPlaceholder",
+															"Type a new tag",
+														)}
 													/>
 													<Button
 														type="button"
@@ -1075,7 +1153,7 @@ export const ShowScanCandidateDetail = ({
 														}
 													>
 														<Plus className="mr-2 size-4" />
-														Add
+														{scanT(t, "scan.common.add", "Add")}
 													</Button>
 												</div>
 												{candidateTagSuggestions.length > 0 ? (
@@ -1099,14 +1177,21 @@ export const ShowScanCandidateDetail = ({
 									{candidate.status === "running" ? (
 										<section className="rounded-lg border p-4">
 											<div className="mb-4 text-lg font-semibold">
-												Live Output
+												{scanT(t, "scan.candidate.liveOutput", "Live Output")}
 											</div>
 											<div className="mb-3 flex items-center justify-between gap-3">
 												<div className="text-sm text-muted-foreground">
-													Live Agent Output
+													{scanT(
+														t,
+														"scan.candidate.liveAgentOutput",
+														"Live Agent Output",
+													)}
 												</div>
 												<Badge variant="outline" className="capitalize">
-													{candidate.currentStage || candidateStreamStage}
+													{formatScanStageLabel(
+														t,
+														candidate.currentStage || candidateStreamStage,
+													)}
 												</Badge>
 											</div>
 											<JsonRpcSummaryPanel
@@ -1116,20 +1201,26 @@ export const ShowScanCandidateDetail = ({
 										</section>
 									) : null}
 
-									<section className="rounded-lg border p-4">
-										<div className="mb-4 text-lg font-semibold">Analysis</div>
+										<section className="rounded-lg border p-4">
+										<div className="mb-4 text-lg font-semibold">
+											{scanT(t, "scan.section.analysis", "Analysis")}
+										</div>
 										<div className="mb-3 flex items-center justify-between gap-3">
 											<div className="text-sm text-muted-foreground">
-												Latest Analysis Result
+												{scanT(
+													t,
+													"scan.candidate.latestAnalysis",
+													"Latest Analysis Result",
+												)}
 											</div>
 											{candidate.latestAnalysisResult?.result ? (
 												<Badge
 													variant="outline"
 													className={`capitalize ${getAnalysisResultBadgeClassName(candidate.latestAnalysisResult.result)}`}
 												>
-													{candidate.latestAnalysisResult.result.replace(
-														/_/g,
-														" ",
+													{formatAnalysisResultLabel(
+														t,
+														candidate.latestAnalysisResult.result,
 													)}
 												</Badge>
 											) : null}
@@ -1137,20 +1228,24 @@ export const ShowScanCandidateDetail = ({
 										<div className="grid gap-3 md:grid-cols-2">
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
-													Summary
+													{scanT(t, "scan.field.summary", "Summary")}
 												</div>
 												<div className="mt-1 whitespace-pre-wrap break-words text-sm">
 													{candidate.latestAnalysisResult?.summary || "-"}
 												</div>
 											</div>
 											{renderPathCard(
-												"Report Path",
+												scanT(t, "scan.field.reportPath", "Report Path"),
 												candidate.latestAnalysisResult?.reportPath,
-												"Analysis Report Path",
+												scanT(
+													t,
+													"scan.field.analysisReportPath",
+													"Analysis Report Path",
+												),
 											)}
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
-													Score
+													{scanT(t, "scan.field.score", "Score")}
 												</div>
 												<div className="mt-1 text-sm">
 													{typeof candidate.latestAnalysisResult?.score ===
@@ -1161,7 +1256,7 @@ export const ShowScanCandidateDetail = ({
 											</div>
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
-													Confidence
+													{scanT(t, "scan.field.confidence", "Confidence")}
 												</div>
 												<div className="mt-1 text-sm">
 													{typeof candidate.latestAnalysisResult?.confidence ===
@@ -1172,7 +1267,7 @@ export const ShowScanCandidateDetail = ({
 											</div>
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
-													Runtime Seconds
+													{scanT(t, "scan.field.runtimeSeconds", "Runtime Seconds")}
 												</div>
 												<div className="mt-1 text-sm">
 													{candidate.latestAnalysisResult?.runtimeSeconds ??
@@ -1181,7 +1276,7 @@ export const ShowScanCandidateDetail = ({
 											</div>
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
-													Thread ID
+													{scanT(t, "scan.field.threadId", "Thread ID")}
 												</div>
 												<div className="mt-1 flex items-center gap-2 break-all text-sm">
 													<span>
@@ -1190,7 +1285,11 @@ export const ShowScanCandidateDetail = ({
 													{candidate.latestAnalysisResult?.threadId ? (
 														<CopyValueButton
 															value={candidate.latestAnalysisResult.threadId}
-															label="Analysis Thread ID"
+															label={scanT(
+																t,
+																"scan.field.analysisThreadId",
+																"Analysis Thread ID",
+															)}
 															className="size-6 shrink-0"
 														/>
 													) : null}
@@ -1200,10 +1299,16 @@ export const ShowScanCandidateDetail = ({
 									</section>
 
 									<section className="rounded-lg border p-4">
-										<div className="mb-4 text-lg font-semibold">Verify</div>
+										<div className="mb-4 text-lg font-semibold">
+											{scanT(t, "scan.section.verify", "Verify")}
+										</div>
 										<div className="mb-3 flex items-center justify-between gap-3">
 											<div className="text-sm text-muted-foreground">
-												Latest Verification Result
+												{scanT(
+													t,
+													"scan.candidate.latestVerification",
+													"Latest Verification Result",
+												)}
 											</div>
 											{verificationTruthBadge ? (
 												<Badge
@@ -1217,15 +1322,20 @@ export const ShowScanCandidateDetail = ({
 										<div className="grid gap-3 md:grid-cols-2">
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
-													Result
+													{scanT(t, "scan.field.result", "Result")}
 												</div>
 												<div className="mt-1 text-sm">
-													{candidate.latestVerificationResult?.result || "-"}
+													{candidate.latestVerificationResult?.result
+														? formatTruthResultLabel(
+																t,
+																candidate.latestVerificationResult.result,
+															)
+														: "-"}
 												</div>
 											</div>
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
-													Score
+													{scanT(t, "scan.field.score", "Score")}
 												</div>
 												<div className="mt-1 text-sm">
 													{typeof candidate.latestVerificationResult?.score ===
@@ -1238,7 +1348,7 @@ export const ShowScanCandidateDetail = ({
 											</div>
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
-													Confidence
+													{scanT(t, "scan.field.confidence", "Confidence")}
 												</div>
 												<div className="mt-1 text-sm">
 													{typeof candidate.latestVerificationResult
@@ -1248,22 +1358,28 @@ export const ShowScanCandidateDetail = ({
 												</div>
 											</div>
 											{renderPathCard(
-												"Report Path",
+												scanT(t, "scan.field.reportPath", "Report Path"),
 												candidate.latestVerificationResult?.reportPath,
-												"Verification Report Path",
+												scanT(
+													t,
+													"scan.field.verificationReportPath",
+													"Verification Report Path",
+												),
 											)}
 										</div>
 									</section>
 
 									<section className="rounded-lg border p-4">
-										<div className="mb-4 text-lg font-semibold">Triage</div>
+										<div className="mb-4 text-lg font-semibold">
+											{scanT(t, "scan.section.triage", "Triage")}
+										</div>
 										<div className="mb-3 text-sm text-muted-foreground">
-											Latest Triage
+											{scanT(t, "scan.candidate.latestTriage", "Latest Triage")}
 										</div>
 										<div className="grid gap-3 md:grid-cols-2">
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
-													Classification
+													{scanT(t, "scan.field.classification", "Classification")}
 												</div>
 												<div className="mt-1 text-sm">
 													{candidate.latestTriageResult
@@ -1272,21 +1388,21 @@ export const ShowScanCandidateDetail = ({
 											</div>
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
-													Security Issue
+													{scanT(t, "scan.field.securityIssue", "Security Issue")}
 												</div>
 												<div className="mt-1 text-sm">
 													{typeof candidate.latestTriageResult
 														?.isSecurityIssue === "boolean"
-														? candidate.latestTriageResult
+															? candidate.latestTriageResult
 																.isSecurityIssue
-															? "Yes"
-															: "No"
+															? scanT(t, "scan.common.yes", "Yes")
+															: scanT(t, "scan.common.no", "No")
 														: "-"}
 												</div>
 											</div>
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
-													Disqualifier
+													{scanT(t, "scan.field.disqualifier", "Disqualifier")}
 												</div>
 												<div className="mt-1 text-sm">
 													{candidate.latestTriageResult?.disqualifier || "-"}
@@ -1294,7 +1410,7 @@ export const ShowScanCandidateDetail = ({
 											</div>
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
-													Impact
+													{scanT(t, "scan.field.impact", "Impact")}
 												</div>
 												<div className="mt-1 text-sm">
 													{candidate.latestTriageResult?.impactType || "-"}
@@ -1302,7 +1418,11 @@ export const ShowScanCandidateDetail = ({
 											</div>
 											<div className="rounded-md border p-3 md:col-span-2">
 												<div className="text-xs text-muted-foreground">
-													Disqualifier Reason
+													{scanT(
+														t,
+														"scan.field.disqualifierReason",
+														"Disqualifier Reason",
+													)}
 												</div>
 												<div className="mt-1 whitespace-pre-wrap break-words text-sm">
 													{candidate.latestTriageResult
@@ -1333,9 +1453,13 @@ export const ShowScanCandidateDetail = ({
 												</div>
 											</div>
 											{renderPathCard(
-												"Report Path",
+												scanT(t, "scan.field.reportPath", "Report Path"),
 												candidate.latestTriageResult?.reportPath,
-												"Triage Report Path",
+												scanT(
+													t,
+													"scan.field.triageReportPath",
+													"Triage Report Path",
+												),
 											)}
 										</div>
 									</section>
@@ -1360,9 +1484,15 @@ export const ShowScanCandidateDetail = ({
 						<TabsContent value="files" className="pt-4">
 							<div className="rounded-lg border">
 								<div className="border-b px-4 py-3">
-									<div className="font-medium">Files</div>
-									<div className="text-sm text-muted-foreground">
-										Browse candidate context files.
+									<div className="font-medium">
+										{scanT(t, "scan.files.title", "Files")}
+									</div>
+										<div className="text-sm text-muted-foreground">
+											{scanT(
+												t,
+												"scan.files.candidateDescription",
+												"Browse candidate context files.",
+											)}
 									</div>
 								</div>
 								<div className="grid min-h-[65vh] grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]">
@@ -1370,12 +1500,12 @@ export const ShowScanCandidateDetail = ({
 										{isLoadingFileTree ? (
 											<div className="flex h-full min-h-[320px] items-center justify-center gap-2 text-muted-foreground">
 												<Loader2 className="size-4 animate-spin" />
-												Loading files...
+												{scanT(t, "scan.files.loading", "Loading files...")}
 											</div>
 										) : !fileTree || fileTree.length === 0 ? (
 											<div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-2 text-muted-foreground">
 												<Folder className="size-6" />
-												No files available
+												{scanT(t, "scan.files.empty", "No files available")}
 											</div>
 										) : (
 											<Tree
@@ -1397,13 +1527,17 @@ export const ShowScanCandidateDetail = ({
 													<span className="truncate">
 														{selectedFile?.relativePath ||
 															selectedFilePath ||
-															"No file selected"}
+															scanT(
+																t,
+																"scan.files.noFileSelected",
+																"No file selected",
+															)}
 													</span>
 												</div>
 												{selectedFile?.content ? (
 													<CopyValueButton
 														value={selectedFile.content}
-														label="File Content"
+														label={scanT(t, "scan.files.content", "File Content")}
 														className="size-7 shrink-0"
 													/>
 												) : null}
@@ -1413,16 +1547,21 @@ export const ShowScanCandidateDetail = ({
 											{!selectedFilePath ? (
 												<div className="flex min-h-[280px] flex-col items-center justify-center gap-2 text-muted-foreground">
 													<FileIcon className="size-6" />
-													No file selected
+													{scanT(
+														t,
+														"scan.files.noFileSelected",
+														"No file selected",
+													)}
 												</div>
 											) : isLoadingSelectedFile ? (
 												<div className="flex min-h-[280px] items-center justify-center gap-2 text-muted-foreground">
 													<Loader2 className="size-4 animate-spin" />
-													Loading file...
+													{scanT(t, "scan.files.loadingFile", "Loading file...")}
 												</div>
 											) : (
 												<pre className="whitespace-pre-wrap break-words font-mono text-sm">
-													{selectedFile?.content || "(empty)"}
+													{selectedFile?.content ||
+														scanT(t, "scan.files.emptyFile", "(empty)")}
 												</pre>
 											)}
 										</div>

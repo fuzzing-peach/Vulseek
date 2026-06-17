@@ -1,5 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
+import { useTranslation } from "next-i18next";
 import { useEffect, useRef } from "react";
+import { scanT } from "./scan-i18n";
 
 export type JsonRpcStreamMessage = {
 	line: number;
@@ -728,7 +730,7 @@ const renderSummaryLineContent = (line: SummaryLine) => {
 
 export const JsonRpcSummaryPanel = ({
 	messages,
-	emptyLabel = "No agent output yet",
+	emptyLabel,
 	className = "",
 	maxHeightClassName = "max-h-40",
 	debugTaskId,
@@ -739,6 +741,7 @@ export const JsonRpcSummaryPanel = ({
 	maxHeightClassName?: string;
 	debugTaskId?: string;
 }) => {
+	const { t } = useTranslation("scan");
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const autoScrollRef = useRef(true);
 	const firstMessagesRenderedRef = useRef(false);
@@ -793,7 +796,8 @@ export const JsonRpcSummaryPanel = ({
 							exit={{ opacity: 0, y: -4 }}
 							className="text-muted-foreground"
 						>
-							{emptyLabel}
+							{emptyLabel ||
+								scanT(t, "scan.jsonrpc.empty", "No agent output yet")}
 						</motion.div>
 					) : (
 						summaryLines.map((line) => (

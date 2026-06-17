@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "next-i18next";
 import {
 	Area,
 	AreaChart,
@@ -15,6 +16,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import type { SandboxAgentActivity } from "@/lib/scan/sandbox-agent-activity";
+import { scanT } from "./scan-i18n";
 
 type ScanMonitoringMode = "job" | "task";
 
@@ -498,9 +500,10 @@ export const ScanMonitoring = ({
 	mode,
 	scanJobId,
 	taskId,
-	title = "Monitoring",
+	title,
 	description,
 }: ScanMonitoringProps) => {
+	const { t } = useTranslation("scan");
 	const [samples, setSamples] = useState<ScanMonitoringSample[]>([]);
 	const [currentData, setCurrentData] =
 		useState<ScanMonitoringSample>(emptySample);
@@ -568,16 +571,28 @@ export const ScanMonitoring = ({
 		<div className="flex flex-col gap-4">
 			<header className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
 				<div className="space-y-1">
-					<h2 className="text-2xl font-semibold tracking-tight">{title}</h2>
+					<h2 className="text-2xl font-semibold tracking-tight">
+						{title || scanT(t, "scan.monitoring.title", "Monitoring")}
+					</h2>
 					<p className="text-sm text-muted-foreground">
 						{description ||
 							(mode === "job"
-								? "Aggregated live usage for currently running scan tasks."
-								: "Live usage for this scan task container.")}
+								? scanT(
+										t,
+										"scan.monitoring.jobDescription",
+										"Aggregated live usage for currently running scan tasks.",
+									)
+								: scanT(
+										t,
+										"scan.monitoring.taskDescription",
+										"Live usage for this scan task container.",
+									))}
 					</p>
 				</div>
 				<div className="rounded-lg border px-3 py-2 text-sm">
-					<span className="text-muted-foreground">Running containers: </span>
+					<span className="text-muted-foreground">
+						{scanT(t, "scan.monitoring.runningContainers", "Running containers:")}{" "}
+					</span>
 					<span className="font-medium">
 						{currentData.runningContainerCount}
 					</span>
@@ -592,13 +607,22 @@ export const ScanMonitoring = ({
 
 			{noRunningContainers ? (
 				<div className="rounded-lg border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-					No running container is currently available for this {mode}.
+					{scanT(
+						t,
+						"scan.monitoring.noRunningContainer",
+						"No running container is currently available for this {{mode}}.",
+						{ mode },
+					)}
 				</div>
 			) : null}
 
 			{!hasReceivedSample && !error ? (
 				<div className="rounded-lg border bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-					Connecting to live container stats...
+					{scanT(
+						t,
+						"scan.monitoring.connectingStats",
+						"Connecting to live container stats...",
+					)}
 				</div>
 			) : null}
 
@@ -606,14 +630,14 @@ export const ScanMonitoring = ({
 				<Card className="bg-background lg:col-span-2">
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
 						<CardTitle className="text-sm font-medium">
-							Token Throughput
+							{scanT(t, "scan.monitoring.tokenThroughput", "Token Throughput")}
 						</CardTitle>
 					</CardHeader>
 					<CardContent>
 						<div className="flex w-full flex-col gap-4">
 							<div className="flex flex-col gap-1 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">
 								<span>
-									Current:{" "}
+									{scanT(t, "scan.monitoring.current", "Current:")}{" "}
 									<span className="font-medium text-foreground">
 										{formatTokensPerSecond(
 											tokenThroughput.aggregateTokensPerSecond,
@@ -621,7 +645,8 @@ export const ScanMonitoring = ({
 									</span>
 								</span>
 								<span>
-									Latest usage: {formatTokens(tokenThroughput.latestTokens)}
+									{scanT(t, "scan.monitoring.latestUsage", "Latest usage:")}{" "}
+									{formatTokens(tokenThroughput.latestTokens)}
 								</span>
 							</div>
 							<UsageChart
@@ -629,7 +654,10 @@ export const ScanMonitoring = ({
 								keys={[
 									{
 										key: "aggregateTokensPerSecond",
-										name: mode === "job" ? "Job" : "Task",
+										name:
+											mode === "job"
+												? scanT(t, "scan.monitoring.job", "Job")
+												: scanT(t, "scan.monitoring.task", "Task"),
 										color: "#7C3AED",
 									},
 								]}
@@ -640,7 +668,11 @@ export const ScanMonitoring = ({
 								<div className="grid gap-2 md:grid-cols-2">
 									{tokenThroughput.taskRates.length === 0 ? (
 										<div className="text-sm text-muted-foreground">
-											Waiting for token usage updates from running tasks.
+											{scanT(
+												t,
+												"scan.monitoring.waitingTokens",
+												"Waiting for token usage updates from running tasks.",
+											)}
 										</div>
 									) : (
 										tokenThroughput.taskRates.map((rate) => (
@@ -669,7 +701,8 @@ export const ScanMonitoring = ({
 													/>
 												</div>
 												<div className="mt-1 text-xs text-muted-foreground">
-													Latest: {formatTokens(rate.latestTokens)}
+													{scanT(t, "scan.monitoring.latest", "Latest:")}{" "}
+													{formatTokens(rate.latestTokens)}
 												</div>
 											</div>
 										))
@@ -682,12 +715,16 @@ export const ScanMonitoring = ({
 
 				<Card className="bg-background">
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">CPU Usage</CardTitle>
+						<CardTitle className="text-sm font-medium">
+							{scanT(t, "scan.monitoring.cpuUsage", "CPU Usage")}
+						</CardTitle>
 					</CardHeader>
 					<CardContent>
 						<div className="flex w-full flex-col gap-2">
 							<span className="text-sm text-muted-foreground">
-								Used: {formatVcpu(cpuUsedVcpu)} / Capacity:{" "}
+								{scanT(t, "scan.monitoring.used", "Used:")}{" "}
+								{formatVcpu(cpuUsedVcpu)} /{" "}
+								{scanT(t, "scan.monitoring.capacity", "Capacity:")}{" "}
 								{formatVcpu(cpuCapacityVcpu)} (
 								{formatPercent(currentData.cpu.percent)})
 							</span>
@@ -699,7 +736,13 @@ export const ScanMonitoring = ({
 							/>
 							<UsageChart
 								data={chartData}
-								keys={[{ key: "cpuVcpu", name: "CPU", color: "#27272A" }]}
+								keys={[
+									{
+										key: "cpuVcpu",
+										name: scanT(t, "scan.monitoring.cpu", "CPU"),
+										color: "#27272A",
+									},
+								]}
 								formatter={formatVcpu}
 								axisUnitLabel="vCPU"
 							/>
@@ -709,12 +752,16 @@ export const ScanMonitoring = ({
 
 				<Card className="bg-background">
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">Memory Usage</CardTitle>
+						<CardTitle className="text-sm font-medium">
+							{scanT(t, "scan.monitoring.memoryUsage", "Memory Usage")}
+						</CardTitle>
 					</CardHeader>
 					<CardContent>
 						<div className="flex w-full flex-col gap-2">
 							<span className="text-sm text-muted-foreground">
-								Used: {formatBytes(currentData.memory.usedBytes)} / Limit:{" "}
+								{scanT(t, "scan.monitoring.used", "Used:")}{" "}
+								{formatBytes(currentData.memory.usedBytes)} /{" "}
+								{scanT(t, "scan.monitoring.limit", "Limit:")}{" "}
 								{formatBytes(currentData.memory.limitBytes)}
 							</span>
 							<Progress
@@ -724,7 +771,11 @@ export const ScanMonitoring = ({
 							<UsageChart
 								data={chartData}
 								keys={[
-									{ key: "memoryBytes", name: "Memory", color: "#27272A" },
+									{
+										key: "memoryBytes",
+										name: scanT(t, "scan.monitoring.memory", "Memory"),
+										color: "#27272A",
+									},
 								]}
 								formatter={formatBytes}
 								axisUnits={BYTE_AXIS_UNITS}
@@ -735,19 +786,31 @@ export const ScanMonitoring = ({
 
 				<Card className="bg-background">
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">Block I/O</CardTitle>
+						<CardTitle className="text-sm font-medium">
+							{scanT(t, "scan.monitoring.blockIo", "Block I/O")}
+						</CardTitle>
 					</CardHeader>
 					<CardContent>
 						<div className="flex w-full flex-col gap-2">
 							<span className="text-sm text-muted-foreground">
-								Read: {formatBytes(currentData.block.readBytes)} / Write:{" "}
+								{scanT(t, "scan.monitoring.read", "Read:")}{" "}
+								{formatBytes(currentData.block.readBytes)} /{" "}
+								{scanT(t, "scan.monitoring.write", "Write:")}{" "}
 								{formatBytes(currentData.block.writeBytes)}
 							</span>
 							<UsageChart
 								data={chartData}
 								keys={[
-									{ key: "blockReadBytes", name: "Read", color: "#27272A" },
-									{ key: "blockWriteBytes", name: "Write", color: "#82CA9D" },
+									{
+										key: "blockReadBytes",
+										name: scanT(t, "scan.monitoring.read", "Read:"),
+										color: "#27272A",
+									},
+									{
+										key: "blockWriteBytes",
+										name: scanT(t, "scan.monitoring.write", "Write:"),
+										color: "#82CA9D",
+									},
 								]}
 								formatter={formatBytes}
 								axisUnits={BYTE_AXIS_UNITS}
@@ -758,19 +821,31 @@ export const ScanMonitoring = ({
 
 				<Card className="bg-background">
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">Network I/O</CardTitle>
+						<CardTitle className="text-sm font-medium">
+							{scanT(t, "scan.monitoring.networkIo", "Network I/O")}
+						</CardTitle>
 					</CardHeader>
 					<CardContent>
 						<div className="flex w-full flex-col gap-2">
 							<span className="text-sm text-muted-foreground">
-								In: {formatBytes(currentData.network.rxBytes)} / Out:{" "}
+								{scanT(t, "scan.monitoring.in", "In:")}{" "}
+								{formatBytes(currentData.network.rxBytes)} /{" "}
+								{scanT(t, "scan.monitoring.out", "Out:")}{" "}
 								{formatBytes(currentData.network.txBytes)}
 							</span>
 							<UsageChart
 								data={chartData}
 								keys={[
-									{ key: "networkRxBytes", name: "In", color: "#8884D8" },
-									{ key: "networkTxBytes", name: "Out", color: "#82CA9D" },
+									{
+										key: "networkRxBytes",
+										name: scanT(t, "scan.monitoring.in", "In:"),
+										color: "#8884D8",
+									},
+									{
+										key: "networkTxBytes",
+										name: scanT(t, "scan.monitoring.out", "Out:"),
+										color: "#82CA9D",
+									},
 								]}
 								formatter={formatBytes}
 								axisUnits={BYTE_AXIS_UNITS}

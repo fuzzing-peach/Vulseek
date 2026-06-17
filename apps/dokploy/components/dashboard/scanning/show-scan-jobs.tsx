@@ -1,4 +1,5 @@
 import { Loader2, RocketIcon } from "lucide-react";
+import { useTranslation } from "next-i18next";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { DateTooltip } from "@/components/shared/date-tooltip";
@@ -12,6 +13,13 @@ import {
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
+import {
+	formatResourceTypeLabel,
+	formatScanJobStatusLabel,
+	formatScanTypeLabel,
+	scanT,
+	type ScanTranslation,
+} from "./scan-i18n";
 
 interface Props {
 	id: string;
@@ -29,17 +37,20 @@ const statusColorMap = {
 const formatJobTitle = (job: { scanJobId: string }) =>
 	`Scan Job (${job.scanJobId.slice(0, 6)})`;
 
-const formatTriggerSource = (triggerSource: string) =>
-	triggerSource === "schedule" ? "auto" : triggerSource;
+const formatTriggerSource = (t: ScanTranslation, triggerSource: string) =>
+	triggerSource === "schedule" ? scanT(t, "scan.jobs.auto", "auto") : triggerSource;
 
-const formatTokenUsage = (value?: number | null) => {
+const formatTokenUsage = (t: ScanTranslation, value?: number | null) => {
 	if (typeof value !== "number" || !Number.isFinite(value)) {
 		return "-";
 	}
-	return `${new Intl.NumberFormat().format(value)} tokens`;
+	return scanT(t, "scan.tokenUsage", "{{count}} tokens", {
+		count: new Intl.NumberFormat().format(value),
+	});
 };
 
 export const ShowScanJobs = ({ id, type }: Props) => {
+	const { t } = useTranslation("scan");
 	const router = useRouter();
 	const { projectId, environmentId } = router.query;
 	const routeSegment = "profiles";
@@ -68,9 +79,11 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 		<Card className="bg-background border-none">
 			<CardHeader className="flex flex-row items-center justify-between flex-wrap gap-2">
 				<div className="flex flex-col gap-2">
-					<CardTitle className="text-xl">Jobs</CardTitle>
+					<CardTitle className="text-xl">{scanT(t, "scan.jobs.title", "Jobs")}</CardTitle>
 					<CardDescription>
-						See the scan job queue for this {type}
+						{scanT(t, "scan.jobs.description", "See the scan job queue for this {{type}}", {
+							type: formatResourceTypeLabel(t, type),
+						})}
 					</CardDescription>
 				</div>
 			</CardHeader>
@@ -79,14 +92,14 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 					<div className="flex w-full flex-row items-center justify-center gap-3 pt-10 min-h-[25vh]">
 						<Loader2 className="size-6 text-muted-foreground animate-spin" />
 						<span className="text-base text-muted-foreground">
-							Loading jobs...
+							{scanT(t, "scan.jobs.loading", "Loading jobs...")}
 						</span>
 					</div>
 				) : jobs?.length === 0 ? (
 					<div className="flex w-full flex-col items-center justify-center gap-3 pt-10 min-h-[25vh]">
 						<RocketIcon className="size-8 text-muted-foreground" />
 						<span className="text-base text-muted-foreground">
-							No jobs found
+							{scanT(t, "scan.jobs.empty", "No jobs found")}
 						</span>
 					</div>
 				) : (
@@ -108,15 +121,17 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 										)}
 										{job.note && (
 											<span className="text-sm text-foreground/80 break-all">
-												Note: {job.note}
+												{scanT(t, "scan.jobs.note", "Note: {{note}}", {
+													note: job.note,
+												})}
 											</span>
 										)}
 										<div className="flex items-center gap-2 text-xs text-muted-foreground">
 											<Badge variant="outline">
-												{job.scanType === "delta" ? "Delta Scan" : "Full Scan"}
+												{formatScanTypeLabel(t, job.scanType)}
 											</Badge>
-											<span>{formatTriggerSource(job.triggerSource)}</span>
-											<span>{formatTokenUsage(job.totalTokens)}</span>
+											<span>{formatTriggerSource(t, job.triggerSource)}</span>
+											<span>{formatTokenUsage(t, job.totalTokens)}</span>
 										</div>
 									</div>
 									<div className="flex flex-col items-end gap-2">
@@ -127,7 +142,7 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 													statusColorMap[job.status],
 												)}
 											/>
-											{job.status}
+											{formatScanJobStatusLabel(t, job.status)}
 										</span>
 										<DateTooltip date={job.createdAt} />
 									</div>

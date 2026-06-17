@@ -39,7 +39,7 @@ export const prepareRepositoryForScanInContainer = async (input: {
 	const shellScript = [
 		`SCAN_ROOT='${escapeSingleQuotes(input.scanRootDir)}'`,
 		"mkdir -p \"$SCAN_ROOT\"",
-		"TASK_STDOUT=\"$SCAN_ROOT/task-stdout.log\"",
+		"TASK_STDOUT=\"$SCAN_ROOT/driver-stdout.log\"",
 		"PREPARE_STDOUT=\"$SCAN_ROOT/00_repository_prepare.stdout.log\"",
 		"PREPARE_STDERR=\"$SCAN_ROOT/00_repository_prepare.stderr.log\"",
 		": > \"$TASK_STDOUT\"",

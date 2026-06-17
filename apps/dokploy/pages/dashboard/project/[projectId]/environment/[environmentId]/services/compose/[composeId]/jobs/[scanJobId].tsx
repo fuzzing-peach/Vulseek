@@ -3,6 +3,7 @@ import type { GetServerSidePropsContext, InferGetServerSidePropsType } from "nex
 import type { ReactElement } from "react";
 import { ShowScanJobDetail } from "@/components/dashboard/scanning/show-scan-job-detail";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
+import { getLocale, serverSideTranslations } from "@/utils/i18n";
 
 const ScanJobDetailPage = (
 	props: InferGetServerSidePropsType<typeof getServerSideProps>,
@@ -49,6 +50,10 @@ export async function getServerSideProps(context: GetServerSidePropsContext) {
 
 	return {
 		props: {
+			...(await serverSideTranslations(getLocale(context.req.cookies), [
+				"common",
+				"scan",
+			])),
 			projectId,
 			environmentId,
 			composeId,

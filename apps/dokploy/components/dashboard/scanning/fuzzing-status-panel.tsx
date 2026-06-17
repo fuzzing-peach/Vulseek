@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "next-i18next";
 import {
 	CartesianGrid,
 	Legend,
@@ -11,6 +12,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { formatScanStatusLabel, scanT } from "./scan-i18n";
 
 type FuzzProgressRecord = {
 	line: number;
@@ -252,6 +254,7 @@ const FuzzLineChart = ({
 );
 
 export const FuzzingStatusPanel = ({ taskId }: FuzzingStatusPanelProps) => {
+	const { t } = useTranslation("scan");
 	const [records, setRecords] = useState<FuzzProgressRecord[]>([]);
 	const [metadata, setMetadata] = useState<FuzzProgressMetadata | null>(null);
 	const [connectionStatus, setConnectionStatus] =
@@ -327,17 +330,26 @@ export const FuzzingStatusPanel = ({ taskId }: FuzzingStatusPanelProps) => {
 				message?: string;
 			};
 			setConnectionStatus("error");
-			setErrorMessage(payload.message || "Fuzz progress stream failed");
+			setErrorMessage(
+				payload.message ||
+					scanT(t, "scan.fuzzing.streamFailed", "Fuzz progress stream failed"),
+			);
 		});
 		eventSource.onerror = () => {
 			setConnectionStatus("error");
-			setErrorMessage("Fuzz progress stream disconnected");
+			setErrorMessage(
+				scanT(
+					t,
+					"scan.fuzzing.streamDisconnected",
+					"Fuzz progress stream disconnected",
+				),
+			);
 		};
 
 		return () => {
 			eventSource.close();
 		};
-	}, [taskId]);
+	}, [taskId, t]);
 
 	const chartData = useMemo(() => buildChartData(records), [records]);
 	const latestRecord = useMemo(
@@ -360,14 +372,14 @@ export const FuzzingStatusPanel = ({ taskId }: FuzzingStatusPanelProps) => {
 	const rawTail = useMemo(() => records.slice(-RAW_TAIL_LIMIT), [records]);
 	const statusLabel =
 		connectionStatus === "waiting"
-			? "Waiting"
+			? scanT(t, "scan.fuzzing.status.waiting", "Waiting")
 			: connectionStatus === "connected"
-				? "Connected"
+				? scanT(t, "scan.fuzzing.status.connected", "Connected")
 				: connectionStatus === "closed"
-					? "Closed"
+					? scanT(t, "scan.fuzzing.status.closed", "Closed")
 					: connectionStatus === "error"
-						? "Error"
-						: "Connecting";
+						? scanT(t, "scan.fuzzing.status.error", "Error")
+						: scanT(t, "scan.fuzzing.status.connecting", "Connecting");
 
 	useEffect(() => {
 		const element = rawTailRef.current;
@@ -392,10 +404,14 @@ export const FuzzingStatusPanel = ({ taskId }: FuzzingStatusPanelProps) => {
 			<header className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
 				<div className="space-y-1">
 					<h2 className="text-2xl font-semibold tracking-tight">
-						Fuzzing Status
+						{scanT(t, "scan.fuzzing.title", "Fuzzing Status")}
 					</h2>
 					<p className="text-sm text-muted-foreground">
-						Live LibAFL progress from the task runtime directory.
+						{scanT(
+							t,
+							"scan.fuzzing.description",
+							"Live LibAFL progress from the task runtime directory.",
+						)}
 					</p>
 				</div>
 				<Badge
@@ -422,29 +438,45 @@ export const FuzzingStatusPanel = ({ taskId }: FuzzingStatusPanelProps) => {
 
 			{connectionStatus === "waiting" ? (
 				<div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100">
-					Waiting for {metadata?.progressFileName || "fuzz-progress.jsonl"} in
-					the task runtime directory.
+					{scanT(
+						t,
+						"scan.fuzzing.waitingFile",
+						"Waiting for {{file}} in the task runtime directory.",
+						{ file: metadata?.progressFileName || "fuzz-progress.jsonl" },
+					)}
 				</div>
 			) : null}
 
 			<div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
 				<MetricCard
-					label="Execs / Sec"
+					label={scanT(t, "scan.fuzzing.execsPerSec", "Execs / Sec")}
 					value={formatRate(latestRecord?.execsPerSec)}
 				/>
 				<MetricCard
-					label="Objectives"
+					label={scanT(t, "scan.fuzzing.objectives", "Objectives")}
 					value={formatNumber(latestRecord?.objectiveSize)}
 				/>
-				<MetricCard label="Coverage" value={formatCoverage(latestRecord)} />
-				<MetricCard label="Runtime" value={formatRuntime(latestRecord)} />
-				<MetricCard label="Log Records" value={formatNumber(records.length)} />
-				<MetricCard label="Task State" value={metadata?.status || "-"} />
+				<MetricCard
+					label={scanT(t, "scan.fuzzing.coverage", "Coverage")}
+					value={formatCoverage(latestRecord)}
+				/>
+				<MetricCard
+					label={scanT(t, "scan.fuzzing.runtime", "Runtime")}
+					value={formatRuntime(latestRecord)}
+				/>
+				<MetricCard
+					label={scanT(t, "scan.fuzzing.logRecords", "Log Records")}
+					value={formatNumber(records.length)}
+				/>
+				<MetricCard
+					label={scanT(t, "scan.fuzzing.taskState", "Task State")}
+					value={formatScanStatusLabel(t, metadata?.status)}
+				/>
 			</div>
 
 			<div className="grid gap-6 lg:grid-cols-2">
 				<FuzzLineChart
-					title="Execs"
+					title={scanT(t, "scan.fuzzing.execs", "Execs")}
 					dataKey="totalExecs"
 					color="#27272A"
 					data={chartData}
@@ -452,7 +484,7 @@ export const FuzzingStatusPanel = ({ taskId }: FuzzingStatusPanelProps) => {
 					axisLabel="execs"
 				/>
 				<FuzzLineChart
-					title="Corpus"
+					title={scanT(t, "scan.fuzzing.corpus", "Corpus")}
 					dataKey="corpusSize"
 					color="#82CA9D"
 					data={chartData}
@@ -463,12 +495,19 @@ export const FuzzingStatusPanel = ({ taskId }: FuzzingStatusPanelProps) => {
 
 			<Card className="bg-background">
 				<CardHeader className="pb-2">
-					<CardTitle className="text-sm font-medium">Latest Event</CardTitle>
+					<CardTitle className="text-sm font-medium">
+						{scanT(t, "scan.fuzzing.latestEvent", "Latest Event")}
+					</CardTitle>
 				</CardHeader>
 				<CardContent>
 					<div className="space-y-3">
 						<div className="whitespace-pre-wrap break-words text-sm">
-							{latestRecord?.eventMsg || "No LibAFL event has been recorded yet."}
+							{latestRecord?.eventMsg ||
+								scanT(
+									t,
+									"scan.fuzzing.noEvent",
+									"No LibAFL event has been recorded yet.",
+								)}
 						</div>
 						{latestRecord?.userStats &&
 						Object.keys(latestRecord.userStats).length > 0 ? (
@@ -489,9 +528,13 @@ export const FuzzingStatusPanel = ({ taskId }: FuzzingStatusPanelProps) => {
 
 			<Card className="bg-background">
 				<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-					<CardTitle className="text-sm font-medium">Raw JSONL Tail</CardTitle>
+					<CardTitle className="text-sm font-medium">
+						{scanT(t, "scan.fuzzing.rawTail", "Raw JSONL Tail")}
+					</CardTitle>
 					<span className="text-xs text-muted-foreground">
-						{autoFollowTail ? "Following" : "Paused"}
+						{autoFollowTail
+							? scanT(t, "scan.fuzzing.following", "Following")
+							: scanT(t, "scan.fuzzing.paused", "Paused")}
 					</span>
 				</CardHeader>
 				<CardContent>
@@ -501,7 +544,9 @@ export const FuzzingStatusPanel = ({ taskId }: FuzzingStatusPanelProps) => {
 						className="max-h-72 overflow-auto rounded-md border bg-muted/20 p-3 font-mono text-xs"
 					>
 						{rawTail.length === 0 ? (
-							<div className="text-muted-foreground">No records yet.</div>
+							<div className="text-muted-foreground">
+								{scanT(t, "scan.fuzzing.noRecords", "No records yet.")}
+							</div>
 						) : (
 							rawTail.map((record) => (
 								<div

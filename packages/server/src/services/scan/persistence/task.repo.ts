@@ -942,6 +942,27 @@ export const countTasksByScanJobAndStatusRepo = async (scanJobId: string) =>
 		.where(eq(tasks.scanJobId, scanJobId))
 		.groupBy(tasks.status);
 
+export const countOpenTasksByScanJobIdRepo = async (scanJobId: string) => {
+	const [row] = await db
+		.select({
+			count: sql<number>`count(*)::int`,
+		})
+		.from(tasks)
+		.where(
+			and(
+				eq(tasks.scanJobId, scanJobId),
+				inArray(tasks.status, [
+					"pending",
+					"launching",
+					"launched",
+					"starting",
+					"running",
+				]),
+			),
+		);
+	return Number(row?.count || 0);
+};
+
 export const countTasksByScanJobStageAndStatusRepo = async (
 	scanJobId: string,
 ) =>
