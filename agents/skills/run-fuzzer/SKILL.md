@@ -36,6 +36,13 @@ For exploration-oriented fuzzing, report newly reached paths or states, input
 classes discovered, coverage or proximity observations, and any unexpected
 behavior that should become a new analysis hypothesis.
 
+Exploration fuzzing may run in `short` or `full` mode. A short run is a 90
+second sprint used to decide whether the harness is discovering useful state.
+If a short run finds the final triggering input, report it and route back to
+analysis. If it does not find the trigger but makes exploration progress, set
+`promotionDecision.shouldPromote` to true so the pipeline can start a full run
+with the short result as context.
+
 ## Progress Metrics
 
 The task directory must contain `/task/fuzz-progress.jsonl`. Each line must be
@@ -56,11 +63,19 @@ than fabricating a progress file.
 
 ## Run Decision
 
-Always send the result back to analysis, whether a triggering input was found or
-not. The useful output is evidence: trigger path, corpus location, crash
-artifacts, logs, coverage notes, and remaining blockers.
+Send full runs, non-promoted short runs, and short runs with a triggering input
+back to analysis. For a short exploration run with no triggering input but clear
+progress, route to `run_fuzzer` for promotion to a full run.
+
+Use a Coverage/Corpus promotion strategy. Promote when the short run shows
+corpus growth, objective growth, edge coverage growth, non-empty
+`newPathsOrStatesReached`, non-empty `inputClassesDiscovered`, or coverage /
+proximity observations showing movement toward the requested target path.
+Do not promote when the short run already found the final triggering input.
 
 Populate structured fields such as `commandRun`, `exitStatus`, `crashSignal`,
 `observedBehavior`, `negativeEvidence`, `coverageProximity`,
 `newPathsOrStatesReached`, `inputClassesDiscovered`, `confidenceImpact`, and
-artifact paths when available.
+artifact paths when available. Always populate `promotionDecision` with
+`shouldPromote`, concrete `reasons`, and relevant `metrics` such as corpus size,
+objective size, edge coverage, execution count, or proximity notes.

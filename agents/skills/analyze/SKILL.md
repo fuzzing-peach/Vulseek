@@ -102,6 +102,18 @@ Do not reserve fuzzing only for strong vulnerability claims. If static analysis
 cannot reliably cover a path or state space, request a fuzzer even when the
 current goal is path discovery or negative evidence.
 
+Prefer `fuzzGoal: "exploration"` when the entry-to-candidate or entry-to-sink
+path is complex and static analysis is unlikely to enumerate the relevant
+states. Strong signals include parser, decoder, protocol, or state-machine
+logic; loop-heavy paths; complex preconditions; a clear attacker-controlled
+input model with a large state space; or existing harnesses, test fixtures, or
+corpora that can be adapted quickly.
+
+For exploration requests, make the exploration target explicit. Include the
+entry-to-sink path being targeted, the path/state boundary you want the fuzzer
+to cross, and the coverage or proximity signal that would show useful progress.
+Do not describe only a final vulnerability oracle.
+
 When requesting a fuzzer, populate the build request with:
 
 - `candidateId`
