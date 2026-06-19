@@ -108,6 +108,9 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 			`Repository: ${checkoutStatus.gitUrl}`,
 			`Branch: ${checkoutStatus.gitBranch}`,
 			`Enable Submodules: ${checkoutStatus.enableSubmodules ? "true" : "false"}`,
+			`Post Checkout Script: ${
+				checkoutStatus.postCheckoutScript?.trim() ? "configured" : "none"
+			}`,
 			`Build Probe: ${checkoutStatus.dockerBuildProbe}`,
 			"",
 			"===== Dockerfile =====",

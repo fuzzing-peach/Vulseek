@@ -7,6 +7,7 @@ import {
 	Folder,
 	Loader2,
 	Plus,
+	RefreshCw,
 	ShieldCheck,
 	Tag,
 	X,
@@ -17,6 +18,7 @@ import { useTranslation } from "next-i18next";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import {
 	buildCandidateListStateHref,
 	parseCandidateListQueryState,
@@ -61,6 +63,8 @@ interface Props {
 	serviceType: "application" | "compose";
 	routeSegment: "profiles" | "services";
 }
+
+const RERUNNABLE_CANDIDATE_STATUSES = new Set(["completed", "failed", "exited"]);
 
 const getAnalysisResultBadgeClassName = (result?: string | null) => {
 	if (result === "real_vulnerability") {
@@ -591,6 +595,7 @@ export const ShowScanCandidateDetail = ({
 		candidateListQueryState,
 		"candidates",
 	);
+	const jobTasksHref = `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}?tab=tasks`;
 
 	const applicationQuery = api.application.one.useQuery(
 		{ applicationId: serviceId },
@@ -648,6 +653,7 @@ export const ShowScanCandidateDetail = ({
 			{ enabled: !!candidateId && !!scanJobId && !!previewFilePath },
 		);
 	const { data: availableTags = [] } = api.scan.candidateTags.useQuery();
+	const analyzeCandidateMutation = api.scan.analyzeCandidate.useMutation();
 	const verifyCandidateMutation = api.scan.verifyCandidate.useMutation();
 	const updateCandidateMetadataMutation =
 		api.scan.updateCandidateMetadata.useMutation();
@@ -717,9 +723,19 @@ export const ShowScanCandidateDetail = ({
 	const canVerify =
 		candidate?.latestAnalysisResult?.result === "real_vulnerability" ||
 		candidate?.latestAnalysisResult?.result === "likely_vulnerability";
+	const canRerunAnalysis = candidate
+		? RERUNNABLE_CANDIDATE_STATUSES.has(candidate.status)
+		: false;
 	const verifyButtonLabel = candidate?.latestVerificationResult
 		? scanT(t, "scan.candidate.reverify", "Reverify")
 		: scanT(t, "scan.candidate.verify", "Verify");
+	const rerunAnalysisTitle = canRerunAnalysis
+		? scanT(t, "scan.candidates.rerunAnalysis", "Re-run analysis")
+		: scanT(
+				t,
+				"scan.candidates.rerunAnalysisDisabled",
+				"Analysis can be re-run after the candidate reaches a terminal state",
+			);
 	const normalizedTagInput = tagInput.trim();
 	const candidateMetadataDirty =
 		noteDraft !== (candidate?.note || "") ||
@@ -761,6 +777,50 @@ export const ShowScanCandidateDetail = ({
 			utils.scan.candidates.invalidate({ scanJobId }),
 			utils.scan.candidateTags.invalidate(),
 		]);
+	};
+	const rerunCandidateAnalysis = async () => {
+		if (!candidate || !scanJobId) {
+			return;
+		}
+		try {
+			const result = await analyzeCandidateMutation.mutateAsync({
+				vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
+				scanJobId,
+				scanFunctionTaskId:
+					scanFunctionTaskId || candidate.scanFunctionTaskId || undefined,
+			});
+			toast.success(
+				scanT(t, "scan.candidates.analysisRequeued", "Analysis requeued"),
+			);
+			await Promise.all([
+				utils.scan.candidate.invalidate({
+					vulnerabilityCandidateId: candidateId,
+					scanJobId,
+					scanFunctionTaskId: scanFunctionTaskId || undefined,
+				}),
+				utils.scan.candidates.invalidate({ scanJobId }),
+				utils.scan.one.invalidate({ scanJobId }),
+				utils.scan.statusView.invalidate({ scanJobId }),
+				utils.scan.candidateTaskLineage.invalidate({
+					vulnerabilityCandidateId: candidateId,
+					scanJobId,
+					scanFunctionTaskId: scanFunctionTaskId || undefined,
+				}),
+			]);
+			await router.push(
+				`${jobTasksHref}&taskId=${encodeURIComponent(result.taskId)}`,
+			);
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? error.message
+					: scanT(
+							t,
+							"scan.candidates.analysisRequeueError",
+							"Failed to requeue analysis",
+						),
+			);
+		}
 	};
 	const renderPathCard = (
 		label: string,
@@ -895,39 +955,55 @@ export const ShowScanCandidateDetail = ({
 								/>
 							</CardDescription>
 						</div>
-						{canVerify ? (
+						<div className="flex shrink-0 flex-wrap justify-end gap-2">
 							<Button
 								type="button"
-								className="shrink-0"
-								isLoading={verifyCandidateMutation.isLoading}
+								variant="outline"
+								title={rerunAnalysisTitle}
+								aria-label={rerunAnalysisTitle}
+								isLoading={analyzeCandidateMutation.isLoading}
 								disabled={
-									verifyCandidateMutation.isLoading ||
-									(candidate?.status === "running" &&
-										candidate?.currentStage === "verifying")
+									!canRerunAnalysis || analyzeCandidateMutation.isLoading
 								}
-								onClick={async () => {
-									try {
-										await verifyCandidateMutation.mutateAsync({
-											vulnerabilityCandidateId: candidateId,
-										});
-										await Promise.all([
-											utils.scan.candidate.invalidate({
-												vulnerabilityCandidateId: candidateId,
-											}),
-											utils.scan.candidateFilesTree.invalidate({
-												vulnerabilityCandidateId: candidateId,
-											}),
-										]);
-										await router.push(
-											`/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}?tab=verify`,
-										);
-									} catch {}
-								}}
+								onClick={rerunCandidateAnalysis}
 							>
-								<ShieldCheck className="mr-2 size-4" />
-								{verifyButtonLabel}
+								<RefreshCw className="mr-2 size-4" />
+								{scanT(t, "scan.candidates.rerunAnalysis", "Re-run analysis")}
 							</Button>
-						) : null}
+							{canVerify ? (
+								<Button
+									type="button"
+									className="shrink-0"
+									isLoading={verifyCandidateMutation.isLoading}
+									disabled={
+										verifyCandidateMutation.isLoading ||
+										(candidate?.status === "running" &&
+											candidate?.currentStage === "verifying")
+									}
+									onClick={async () => {
+										try {
+											await verifyCandidateMutation.mutateAsync({
+												vulnerabilityCandidateId: candidateId,
+											});
+											await Promise.all([
+												utils.scan.candidate.invalidate({
+													vulnerabilityCandidateId: candidateId,
+												}),
+												utils.scan.candidateFilesTree.invalidate({
+													vulnerabilityCandidateId: candidateId,
+												}),
+											]);
+											await router.push(
+												`/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}?tab=verify`,
+											);
+										} catch {}
+									}}
+								>
+									<ShieldCheck className="mr-2 size-4" />
+									{verifyButtonLabel}
+								</Button>
+							) : null}
+						</div>
 					</div>
 				</CardHeader>
 				<CardContent>

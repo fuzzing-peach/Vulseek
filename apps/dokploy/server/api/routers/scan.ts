@@ -16,10 +16,14 @@ import {
 	findScanJobStageGraph,
 	findScanJobStatusView,
 	findScanJobTerminalTasksPage,
+	findLatestScanEvaluationResult,
+	findScanJobResultSummary,
 	findTaskById,
 	findVulnerabilityCandidateById,
 	findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId,
 	findVulnerabilityCandidateWithLatestAnalysisResultById,
+	getAgentProfileById,
+	listScanEvaluationResults,
 	listCandidateTags,
 	listScanJobDirectory,
 	listScanTaskDirectory,
@@ -35,6 +39,8 @@ import {
 	startCandidateAnalysis,
 	startCandidateVerification,
 	startCheckoutScanEnvironment,
+	createScanEvaluationResult,
+	scanEvaluationConfigSchema,
 	syncFullScanTasksFromArtifacts,
 	updateVulnerabilityCandidateMetadata,
 	updateScanJobNote,
@@ -54,7 +60,7 @@ import {
 	ScanRuntimeSettingsSchema,
 } from "@/server/db/schema";
 import type { ScanQueueJob } from "@/server/queues/queue-types";
-import { scansQueue } from "@/server/queues/queueSetup";
+import { scanEvaluationsQueue, scansQueue } from "@/server/queues/queueSetup";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 
 const apiFindVulnerabilityCandidatesPageByScanJob = z
@@ -67,9 +73,16 @@ const apiFindVulnerabilityCandidatesPageByScanJob = z
 		verifyResults: z.string().default(""),
 		triageResults: z.string().default(""),
 		sortKey: z
-			.enum(["candidate", "analysis", "verify", "score"])
-			.default("candidate"),
-		sortDirection: z.enum(["asc", "desc"]).default("asc"),
+			.enum([
+				"latestResultUpdatedAt",
+				"createdAt",
+				"candidate",
+				"analysis",
+				"verify",
+				"score",
+			])
+			.default("latestResultUpdatedAt"),
+		sortDirection: z.enum(["asc", "desc"]).default("desc"),
 	})
 	.required();
 
@@ -115,6 +128,11 @@ const apiFindFullScanStageGraph = z
 const apiUpdateScanRuntimeSettings = z.object({
 	scanJobId: z.string().min(1),
 	scanRuntimeSettings: ScanRuntimeSettingsSchema,
+});
+
+const apiStartScanEvaluation = z.object({
+	scanJobId: z.string().min(1),
+	configSnapshot: scanEvaluationConfigSchema,
 });
 
 export const scanRouter = createTRPCRouter({
@@ -719,6 +737,136 @@ export const scanRouter = createTRPCRouter({
 			);
 		}),
 
+	startEvaluation: protectedProcedure
+		.input(apiStartScanEvaluation)
+		.mutation(async ({ input, ctx }) => {
+			const scanJob = await findScanJobById(input.scanJobId);
+			if (!scanJob.applicationId || scanJob.composeId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Evaluate only supports application scan jobs",
+				});
+			}
+			const application = await findApplicationById(scanJob.applicationId);
+			if (
+				application.environment.project.organizationId !==
+				ctx.session.activeOrganizationId
+			) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to evaluate this scan job",
+				});
+			}
+			if (input.configSnapshot.agentProfileId) {
+				const agentProfile = await getAgentProfileById(
+					input.configSnapshot.agentProfileId,
+				);
+				if (agentProfile.organizationId !== ctx.session.activeOrganizationId) {
+					throw new TRPCError({
+						code: "UNAUTHORIZED",
+						message:
+							"You are not authorized to use this evaluate agent profile",
+					});
+				}
+				if (!agentProfile.isEnabled) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "Evaluate agent profile is disabled",
+					});
+				}
+			}
+
+			const evaluation = await createScanEvaluationResult({
+				scanJobId: input.scanJobId,
+				configSnapshot: input.configSnapshot,
+			});
+			await scanEvaluationsQueue.add(
+				"scan-evaluations",
+				{ evaluateResultId: evaluation.evaluateResultId },
+				{
+					jobId: `scan-evaluation:${evaluation.evaluateResultId}`,
+					removeOnComplete: true,
+					removeOnFail: true,
+				},
+			);
+			return evaluation;
+		}),
+
+	latestEvaluation: protectedProcedure
+		.input(apiFindOneScanJob)
+		.query(async ({ input, ctx }) => {
+			const scanJob = await findScanJobById(input.scanJobId);
+			if (!scanJob.applicationId || scanJob.composeId) {
+				return null;
+			}
+			const application = await findApplicationById(scanJob.applicationId);
+			if (
+				application.environment.project.organizationId !==
+				ctx.session.activeOrganizationId
+			) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message:
+						"You are not authorized to access evaluations for this scan job",
+				});
+			}
+
+			return await findLatestScanEvaluationResult(input.scanJobId);
+		}),
+
+	evaluationHistory: protectedProcedure
+		.input(apiFindOneScanJob)
+		.query(async ({ input, ctx }) => {
+			const scanJob = await findScanJobById(input.scanJobId);
+			if (!scanJob.applicationId || scanJob.composeId) {
+				return [];
+			}
+			const application = await findApplicationById(scanJob.applicationId);
+			if (
+				application.environment.project.organizationId !==
+				ctx.session.activeOrganizationId
+			) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message:
+						"You are not authorized to access evaluations for this scan job",
+				});
+			}
+
+			return await listScanEvaluationResults(input.scanJobId);
+		}),
+
+	resultSummary: protectedProcedure
+		.input(apiFindOneScanJob)
+		.query(async ({ input, ctx }) => {
+			const scanJob = await findScanJobById(input.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message:
+						"You are not authorized to access result summary for this scan job",
+				});
+			}
+
+			return await findScanJobResultSummary(input.scanJobId);
+		}),
+
 	textSnapshot: protectedProcedure
 		.input(apiFindOneScanJob)
 		.query(async ({ input, ctx }) => {
@@ -1048,13 +1196,12 @@ export const scanRouter = createTRPCRouter({
 		.input(
 			z.object({
 				vulnerabilityCandidateId: z.string().min(1),
+				scanJobId: z.string().min(1),
+				scanFunctionTaskId: z.string().min(1).optional(),
 			}),
 		)
 		.mutation(async ({ input, ctx }) => {
-			const candidate = await findVulnerabilityCandidateById(
-				input.vulnerabilityCandidateId,
-			);
-			const scanJob = await findScanJobById(candidate.scanJobId);
+			const scanJob = await findScanJobById(input.scanJobId);
 			let organizationId: string | undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
@@ -1078,9 +1225,7 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 
-			const result = await startCandidateAnalysis(
-				input.vulnerabilityCandidateId,
-			);
+			const result = await startCandidateAnalysis(input);
 			const queueData: ScanQueueJob = {
 				scanJobId: result.scanJobId,
 				mode: "full",

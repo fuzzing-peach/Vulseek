@@ -6,6 +6,7 @@ export * from "./lib/auth";
 export * from "./lib/logger";
 export * from "./monitoring/utils";
 export * from "./services/admin";
+export * from "./services/ai";
 export * from "./services/application";
 export * from "./services/backup";
 export * from "./services/bitbucket";
@@ -38,6 +39,7 @@ export * from "./services/scan";
 export * from "./services/scan/constants";
 export * from "./services/scan/api/scan-jobs";
 export * from "./services/scan/api/candidate-records";
+export * from "./services/scan/api/evaluations";
 export * from "./services/scan/api/tasks";
 export * from "./services/scan/live-session";
 export type {

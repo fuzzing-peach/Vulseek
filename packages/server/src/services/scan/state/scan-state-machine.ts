@@ -19,6 +19,7 @@ export type ResolveScanPipelineStateInput = {
 		| "canceled";
 	modulePendingCount: number;
 	functionPendingCount: number;
+	openTaskCount?: number;
 	moduleFailed: number;
 	functionFailed: number;
 	analysisPendingCount: number;
@@ -53,6 +54,7 @@ export const resolveNextScanPipelineState = (
 		repositoryPending ||
 		input.functionPendingCount > 0 ||
 		input.modulePendingCount > 0 ||
+		(input.openTaskCount ?? 0) > 0 ||
 		input.analysisPendingCount > 0 ||
 		input.verificationPendingCount > 0 ||
 		(input.triagePendingCount ?? 0) > 0

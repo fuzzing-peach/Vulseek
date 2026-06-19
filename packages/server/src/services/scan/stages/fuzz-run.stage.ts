@@ -28,11 +28,30 @@ import type { FuzzBuildStageInput } from "./fuzz-build.stage";
 
 export type FuzzRunStageInput = FuzzBuildStageInput & {
 	buildResultPath: string;
+	runMode: "short" | "full";
+	previousRunResultPath?: string;
 };
 
 export type FuzzRunStageOutput = FuzzRunResult;
 
 const DEFAULT_FUZZING_BUDGET_SECONDS = 600;
+export const SHORT_FUZZING_BUDGET_SECONDS = 90;
+
+export const resolveFuzzRunBudgetSeconds = (input: {
+	runMode?: "short" | "full";
+	fuzzingBudgetSeconds: number;
+}) =>
+	input.runMode === "short"
+		? SHORT_FUZZING_BUDGET_SECONDS
+		: input.fuzzingBudgetSeconds || DEFAULT_FUZZING_BUDGET_SECONDS;
+
+export const shouldPromoteShortFuzzRun = (input: {
+	stageInput: Pick<FuzzRunStageInput, "runMode">;
+	stageOutput: FuzzRunResult;
+}) =>
+	input.stageInput.runMode === "short" &&
+	!input.stageOutput.foundTriggeringInput &&
+	input.stageOutput.promotionDecision.shouldPromote;
 
 export const buildFuzzRunPrompt = (
 	input: FuzzRunStageInput,
@@ -52,6 +71,8 @@ export const buildFuzzRunPrompt = (
 		candidateJsonPath: input.candidatePath,
 		buildRequestJsonPath: input.buildRequestPath,
 		buildResultJsonPath: input.buildResultPath,
+		runMode: input.runMode,
+		previousRunResultPath: input.previousRunResultPath || "none",
 		taskId: paths.taskId,
 	});
 
@@ -69,9 +90,12 @@ const executeFuzzRunStage = async (
 		containerNameParts: [candidate.id.slice(0, 8)],
 		codexHomeName: ".codex-fuzz-run",
 	});
-	const fuzzingBudgetSeconds =
-		(await resolveScanProfileConcurrencySettings(ctx.scanJobId))
-			.fuzzingBudgetSeconds || DEFAULT_FUZZING_BUDGET_SECONDS;
+	const fuzzingBudgetSeconds = resolveFuzzRunBudgetSeconds({
+		runMode: stageInput.runMode,
+		fuzzingBudgetSeconds:
+			(await resolveScanProfileConcurrencySettings(ctx.scanJobId))
+				.fuzzingBudgetSeconds || DEFAULT_FUZZING_BUDGET_SECONDS,
+	});
 
 	return await runSingleTurnAgentInContainer({
 		scanJob: stageInput.scanJob,

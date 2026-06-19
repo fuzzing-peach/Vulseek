@@ -7,6 +7,7 @@ import {
 	findEnvironmentById,
 	findGitProviderById,
 	findProjectById,
+	getAgentProfileById,
 	getApplicationStats,
 	IS_CLOUD,
 	mechanizeDockerContainer,
@@ -640,6 +641,24 @@ export const applicationRouter = createTRPCRouter({
 					code: "UNAUTHORIZED",
 					message: "You are not authorized to update this application",
 				});
+			}
+			if (input.evaluateConfig?.agentProfileId) {
+				const agentProfile = await getAgentProfileById(
+					input.evaluateConfig.agentProfileId,
+				);
+				if (agentProfile.organizationId !== ctx.session.activeOrganizationId) {
+					throw new TRPCError({
+						code: "UNAUTHORIZED",
+						message:
+							"You are not authorized to use this evaluate agent profile",
+					});
+				}
+				if (!agentProfile.isEnabled) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "Evaluate agent profile is disabled",
+					});
+				}
 			}
 			const { applicationId, ...rest } = input;
 			const updateApp = await updateApplication(applicationId, {

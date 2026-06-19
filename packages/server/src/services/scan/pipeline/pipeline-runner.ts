@@ -16,9 +16,11 @@ import {
 	findStageLaneRuntimeRepo,
 	listActiveStageGroupLaneMembershipsForStageRepo,
 	listStageGroupLaneMembershipsRepo,
+	listStageLaneRuntimesByScanJobIdRepo,
 	markStageGroupInstanceExitedRepo,
 	releaseStageLaneRuntimeRepo,
 	resetClaimedStageLaneRuntimeForFreshStartRepo,
+	resetStageLaneRuntimesByScanJobIdRepo,
 	resetStageLaneRuntimeByLaneForExitRepo,
 	resetStageLaneRuntimeForExitRepo,
 	resetStageLaneRuntimeSessionForExitRepo,
@@ -957,6 +959,56 @@ const releasePersistentLaneForTask = async (taskId: string) => {
 	await releaseStageLaneRuntimeRepo(taskId).catch(() => {});
 };
 
+const cleanupFinishedJobRuntime = async (scanJobId: string) => {
+	const scanJob = await findScanJobByIdRepo(scanJobId).catch(() => null);
+	if (scanJob?.status !== "finished") {
+		return {
+			cleaned: false,
+			reason: "job_not_finished",
+			containerCount: 0,
+		};
+	}
+	const openCount = await countOpenTasksByScanJobIdRepo(scanJobId).catch(
+		() => null,
+	);
+	if (openCount !== 0) {
+		return {
+			cleaned: false,
+			reason: "open_tasks_present",
+			containerCount: 0,
+		};
+	}
+
+	const [tasks, lanes] = await Promise.all([
+		listTasksByScanJobIdRepo(scanJobId).catch(() => []),
+		listStageLaneRuntimesByScanJobIdRepo(scanJobId).catch(() => []),
+	]);
+	const containerNames = new Set<string>();
+	for (const task of tasks) {
+		if (task.containerName) {
+			containerNames.add(task.containerName);
+		}
+	}
+	for (const lane of lanes) {
+		if (lane.containerName) {
+			containerNames.add(lane.containerName);
+		}
+	}
+
+	await Promise.all(
+		[...containerNames].map((containerName) =>
+			removeContainer(containerName).catch(() => {}),
+		),
+	);
+	await resetStageLaneRuntimesByScanJobIdRepo(scanJobId).catch(() => []);
+
+	return {
+		cleaned: true,
+		reason: null,
+		containerCount: containerNames.size,
+	};
+};
+
 const isOpenTaskStatus = (status: string) =>
 	status === "pending" ||
 	status === "launching" ||
@@ -1819,9 +1871,6 @@ const persistTerminalSuccess = async <
 		logPersistTiming("stop_reusable_sandbox_agent", stepStartedAt);
 	}
 	stepStartedAt = Date.now();
-	schedulePipelineStateRefresh(ctx);
-	logPersistTiming("schedule_pipeline_state_refresh", stepStartedAt);
-	stepStartedAt = Date.now();
 	if (stageCtx.laneIndex !== null) {
 		if (options?.exitLane) {
 			if (shouldRemoveContainerAfterTask(stage)) {
@@ -2104,6 +2153,7 @@ export const runStageOnce = async <
 			taskIdOverride,
 		});
 		await persistTerminalSuccess(stage, ctx, result.stageCtx, result.rawOutput);
+		await refreshPipelineState(ctx).catch(() => {});
 		return result.output;
 	} catch (error) {
 		const { stageCtx } = createTaskStageContext(
@@ -2660,6 +2710,7 @@ const launchStageExecution = async <
 				);
 				logLaunchTiming("dispatch_immediate_downstream", stepStartedAt);
 				await maybeMarkTaskStageGroupExited(execution.taskId, runtime);
+				await refreshPipelineState(runtime.ctx).catch(() => {});
 			}
 		}
 	} catch (error) {
@@ -2782,6 +2833,7 @@ const startStageRunAsync = <TPipelineContext extends PipelineContext>(
 						null,
 					);
 					await maybeMarkTaskStageGroupExited(task.taskId, runtime);
+					await refreshPipelineState(runtime.ctx).catch(() => {});
 				}
 				return;
 			}
@@ -3056,6 +3108,9 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 				stepStartedAt = Date.now();
 				await maybeMarkTaskStageGroupExited(task.taskId, runtime);
 				logInspectTiming("maybe_mark_group_exited", stepStartedAt);
+				stepStartedAt = Date.now();
+				await refreshPipelineState(runtime.ctx).catch(() => {});
+				logInspectTiming("refresh_pipeline_state", stepStartedAt);
 			}
 		} catch (error) {
 			if (hasExitSignal) {
@@ -3542,6 +3597,25 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 						errorMessage: getErrorMessage(error),
 					});
 				});
+				const cleanupResult = await cleanupFinishedJobRuntime(
+					runtime.ctx.scanJobId,
+				).catch((error) => {
+					logPipelineEvent("pipeline.finished_runtime_cleanup_failed", {
+						scanJobId: runtime.ctx.scanJobId,
+						pipelineName: runtime.pipeline.name,
+						errorMessage: getErrorMessage(error),
+					});
+					return null;
+				});
+				if (cleanupResult) {
+					logPipelineEvent("pipeline.finished_runtime_cleanup", {
+						scanJobId: runtime.ctx.scanJobId,
+						pipelineName: runtime.pipeline.name,
+						cleaned: cleanupResult.cleaned,
+						reason: cleanupResult.reason,
+						containerCount: cleanupResult.containerCount,
+					});
+				}
 			}
 			logPipelineEvent("loop.timing", {
 				scanJobId: runtime.ctx.scanJobId,

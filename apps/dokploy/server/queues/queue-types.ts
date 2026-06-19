@@ -34,3 +34,7 @@ export type ScanQueueJob = {
 	scanJobId: string;
 	mode?: "full" | "retry-failed-tasks" | "rerun-task";
 };
+
+export type ScanEvaluationQueueJob = {
+	evaluateResultId: string;
+};

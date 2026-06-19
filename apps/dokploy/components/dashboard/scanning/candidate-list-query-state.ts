@@ -1,6 +1,12 @@
 import type { ParsedUrlQuery } from "querystring";
 
-export type CandidateSortKey = "candidate" | "analysis" | "verify" | "score";
+export type CandidateSortKey =
+	| "latestResultUpdatedAt"
+	| "createdAt"
+	| "candidate"
+	| "analysis"
+	| "verify"
+	| "score";
 export type CandidateSortDirection = "asc" | "desc";
 
 export const ANALYSIS_RESULT_OPTIONS = [
@@ -45,6 +51,8 @@ const PAGE_PARAM = "candidatePage";
 const PAGE_SIZE_PARAM = "candidatePageSize";
 
 const CANDIDATE_SORT_KEYS: CandidateSortKey[] = [
+	"latestResultUpdatedAt",
+	"createdAt",
 	"candidate",
 	"analysis",
 	"verify",
@@ -109,12 +117,12 @@ export const parseCandidateListQueryState = (
 			rawSortKey as CandidateSortKey,
 		)
 			? (rawSortKey as CandidateSortKey)
-			: "candidate",
+			: "latestResultUpdatedAt",
 		candidateSortDirection: CANDIDATE_SORT_DIRECTIONS.includes(
 			rawSortDirection as CandidateSortDirection,
 		)
 			? (rawSortDirection as CandidateSortDirection)
-			: "asc",
+			: "desc",
 		candidatePage: normalizePositiveInteger(
 			getFirstQueryValue(query[PAGE_PARAM]),
 			1,
@@ -190,11 +198,11 @@ export const applyCandidateListQueryState = (
 		nextQuery[TRIAGE_FILTERS_PARAM] = state.triageFilters.join(",");
 	}
 
-	if (state.candidateSortKey !== "candidate") {
+	if (state.candidateSortKey !== "latestResultUpdatedAt") {
 		nextQuery[SORT_KEY_PARAM] = state.candidateSortKey;
 	}
 
-	if (state.candidateSortDirection !== "asc") {
+	if (state.candidateSortDirection !== "desc") {
 		nextQuery[SORT_DIRECTION_PARAM] = state.candidateSortDirection;
 	}
 
@@ -231,10 +239,10 @@ export const buildCandidateListStateHref = (
 	if (state.triageFilters.length > 0) {
 		params.set(TRIAGE_FILTERS_PARAM, state.triageFilters.join(","));
 	}
-	if (state.candidateSortKey !== "candidate") {
+	if (state.candidateSortKey !== "latestResultUpdatedAt") {
 		params.set(SORT_KEY_PARAM, state.candidateSortKey);
 	}
-	if (state.candidateSortDirection !== "asc") {
+	if (state.candidateSortDirection !== "desc") {
 		params.set(SORT_DIRECTION_PARAM, state.candidateSortDirection);
 	}
 	if (state.candidatePage !== 1) {

@@ -3,6 +3,7 @@ import {
 	ChevronRight,
 	ChevronsUpDown,
 	Clipboard,
+	ClipboardCheck,
 	Download,
 	FileIcon,
 	FileSearch,
@@ -67,15 +68,23 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import {
 	Popover,
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { idleSandboxAgentActivity } from "@/lib/scan/sandbox-agent-activity";
-import { api } from "@/utils/api";
+import { api, type RouterOutputs } from "@/utils/api";
 import {
 	formatAnalysisResultLabel,
 	formatScanJobStatusLabel,
@@ -108,7 +117,15 @@ type DirectoryCacheEntry = {
 	status: "idle" | "loading" | "loaded" | "error";
 };
 
-type ScanJobTab = "overview" | "tasks" | "candidates" | "monitoring" | "files";
+type ScanJobTab =
+	| "overview"
+	| "evaluate"
+	| "tasks"
+	| "candidates"
+	| "monitoring"
+	| "files";
+type ScanResultSummary = RouterOutputs["scan"]["resultSummary"];
+type ScanEvaluationResult = RouterOutputs["scan"]["latestEvaluation"];
 
 const RESULT_SHORT_LABELS: Record<string, string> = {
 	real_vulnerability: "Real",
@@ -245,6 +262,39 @@ const formatTaskRuntime = (
 	return `${seconds}s`;
 };
 
+const formatDurationSeconds = (value: number | null | undefined) => {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return "-";
+	}
+	const totalSeconds = Math.max(0, Math.floor(value));
+	const days = Math.floor(totalSeconds / 86400);
+	const hours = Math.floor((totalSeconds % 86400) / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const seconds = totalSeconds % 60;
+	if (days > 0) {
+		return `${days}d ${hours}h`;
+	}
+	if (hours > 0) {
+		return `${hours}h ${minutes}m`;
+	}
+	if (minutes > 0) {
+		return `${minutes}m ${seconds}s`;
+	}
+	return `${seconds}s`;
+};
+
+const formatEvaluationMetric = (value: unknown) =>
+	typeof value === "number" && Number.isFinite(value)
+		? value.toFixed(3)
+		: "-";
+
+const getEvaluationResult = (evaluation: ScanEvaluationResult) => {
+	const result = evaluation?.result;
+	return result && typeof result === "object" && !Array.isArray(result)
+		? (result as Record<string, unknown>)
+		: null;
+};
+
 const formatTokenUsage = (t: ScanTranslation, value?: number | null) => {
 	if (typeof value !== "number" || !Number.isFinite(value)) {
 		return "-";
@@ -302,6 +352,7 @@ const resolveRequestedTab = (
 		typeof value === "string" ? value : Array.isArray(value) ? value[0] : "";
 	if (
 		rawTab === "overview" ||
+		rawTab === "evaluate" ||
 		rawTab === "tasks" ||
 		rawTab === "candidates" ||
 		rawTab === "monitoring" ||
@@ -634,13 +685,13 @@ const getTaskStageLabel = (t: ScanTranslation, stage?: string) => {
 	return scanT(t, "scan.monitoring.task", "阶段任务");
 };
 
-const TERMINAL_CANDIDATE_STATUSES = new Set([
-	"completed",
-	"failed",
-	"exited",
-	"canceled",
-]);
+const RERUNNABLE_CANDIDATE_STATUSES = new Set(["completed", "failed", "exited"]);
 const RERUNNABLE_TASK_STATUSES = new Set(["completed", "failed", "exited"]);
+
+const buildCandidateReanalysisKey = (input: {
+	vulnerabilityCandidateId: string;
+	scanFunctionTaskId?: string | null;
+}) => `${input.scanFunctionTaskId || "default"}:${input.vulnerabilityCandidateId}`;
 
 const getTaskStatusLabel = (t: ScanTranslation, status?: string) => {
 	if (!status) {
@@ -735,6 +786,279 @@ const TERMINAL_TASK_STATUS_OPTIONS = [
 ];
 const TASK_PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
+const formatSummaryCount = (value?: number | null) =>
+	new Intl.NumberFormat().format(value ?? 0);
+
+const RESULT_FLOW_LAYOUT: Record<
+	string,
+	{
+		x: number;
+		y: number;
+		width: number;
+		height: number;
+		className: string;
+	}
+> = {
+	analysis_positive: {
+		x: 24,
+		y: 98,
+		width: 154,
+		height: 68,
+		className:
+			"fill-orange-50 stroke-orange-300 dark:fill-orange-950/40 dark:stroke-orange-500/70",
+	},
+	verify_positive: {
+		x: 280,
+		y: 24,
+		width: 154,
+		height: 54,
+		className:
+			"fill-emerald-50 stroke-emerald-300 dark:fill-emerald-950/40 dark:stroke-emerald-500/70",
+	},
+	verify_false: {
+		x: 280,
+		y: 106,
+		width: 154,
+		height: 54,
+		className:
+			"fill-slate-50 stroke-slate-300 dark:fill-slate-950/40 dark:stroke-slate-500/70",
+	},
+	verify_missing: {
+		x: 280,
+		y: 188,
+		width: 154,
+		height: 54,
+		className:
+			"fill-amber-50 stroke-amber-300 dark:fill-amber-950/40 dark:stroke-amber-500/70",
+	},
+	triage_security_issue: {
+		x: 536,
+		y: 24,
+		width: 154,
+		height: 54,
+		className:
+			"fill-red-50 stroke-red-300 dark:fill-red-950/40 dark:stroke-red-500/70",
+	},
+	triage_not_security: {
+		x: 536,
+		y: 106,
+		width: 154,
+		height: 54,
+		className:
+			"fill-slate-50 stroke-slate-300 dark:fill-slate-950/40 dark:stroke-slate-500/70",
+	},
+	triage_missing: {
+		x: 536,
+		y: 188,
+		width: 154,
+		height: 54,
+		className:
+			"fill-amber-50 stroke-amber-300 dark:fill-amber-950/40 dark:stroke-amber-500/70",
+	},
+};
+
+const getResultFlowStrokeClassName = (target: string) => {
+	if (target === "verify_positive" || target === "triage_security_issue") {
+		return "stroke-emerald-500";
+	}
+	if (target === "verify_false" || target === "triage_not_security") {
+		return "stroke-slate-400";
+	}
+	return "stroke-amber-400";
+};
+
+const getResultFlowCardClassName = (id: string) => {
+	if (id === "analysis_positive") {
+		return "border-orange-200 bg-orange-50 dark:border-orange-500/60 dark:bg-orange-950/30";
+	}
+	if (id === "verify_positive") {
+		return "border-emerald-200 bg-emerald-50 dark:border-emerald-500/60 dark:bg-emerald-950/30";
+	}
+	if (id === "triage_security_issue") {
+		return "border-red-200 bg-red-50 dark:border-red-500/60 dark:bg-red-950/30";
+	}
+	if (id === "verify_missing" || id === "triage_missing") {
+		return "border-amber-200 bg-amber-50 dark:border-amber-500/60 dark:bg-amber-950/30";
+	}
+	return "border-muted bg-muted/30";
+};
+
+const ResultFlowChart = ({
+	summary,
+}: {
+	summary?: ScanResultSummary | null;
+}) => {
+	const nodes = summary?.flow.nodes ?? [];
+	const links = summary?.flow.links ?? [];
+	const maxLinkCount = Math.max(1, ...links.map((link) => link.count));
+	const nodeById = new Map(nodes.map((node) => [node.id, node]));
+	const positiveCount = summary?.counts.analysisPositive ?? 0;
+
+	if (!summary || positiveCount === 0) {
+		return (
+			<div className="flex h-44 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
+				No positive analysis results to visualize.
+			</div>
+		);
+	}
+
+	return (
+		<>
+			<div className="grid gap-3 md:hidden">
+				{nodes
+					.filter((node) => node.id === "analysis_positive")
+					.map((node) => (
+						<div
+							key={node.id}
+							className={`rounded-lg border p-3 ${getResultFlowCardClassName(
+								node.id,
+							)}`}
+						>
+							<div className="text-sm font-medium">{node.label}</div>
+							<div className="mt-1 text-2xl font-semibold tabular-nums">
+								{formatSummaryCount(node.count)}
+							</div>
+						</div>
+					))}
+				<div className="grid gap-2">
+					<div className="text-xs font-medium uppercase text-muted-foreground">
+						Verify
+					</div>
+					{links
+						.filter((link) => link.source === "analysis_positive")
+						.map((link) => {
+							const target = nodeById.get(link.target);
+							return (
+								<div
+									key={`${link.source}-${link.target}`}
+									className={`flex items-center justify-between gap-3 rounded-lg border p-3 ${getResultFlowCardClassName(
+										link.target,
+									)}`}
+								>
+									<div className="min-w-0 text-sm font-medium">
+										{target?.label ?? link.target}
+									</div>
+									<div className="shrink-0 text-lg font-semibold tabular-nums">
+										{formatSummaryCount(link.count)}
+									</div>
+								</div>
+							);
+						})}
+				</div>
+				<div className="grid gap-2">
+					<div className="text-xs font-medium uppercase text-muted-foreground">
+						Triage
+					</div>
+					{links
+						.filter((link) => link.source.startsWith("verify_"))
+						.map((link) => {
+							const source = nodeById.get(link.source);
+							const target = nodeById.get(link.target);
+							return (
+								<div
+									key={`${link.source}-${link.target}`}
+									className={`rounded-lg border p-3 ${getResultFlowCardClassName(
+										link.target,
+									)}`}
+								>
+									<div className="flex items-center justify-between gap-3">
+										<div className="min-w-0 text-sm font-medium">
+											{target?.label ?? link.target}
+										</div>
+										<div className="shrink-0 text-lg font-semibold tabular-nums">
+											{formatSummaryCount(link.count)}
+										</div>
+									</div>
+									<div className="mt-1 text-xs text-muted-foreground">
+										from {source?.label ?? link.source}
+									</div>
+								</div>
+							);
+						})}
+				</div>
+			</div>
+			<div className="hidden w-full overflow-hidden md:block">
+			<svg
+				viewBox="0 0 714 270"
+				className="h-[270px] min-w-[714px] w-full"
+				role="img"
+				aria-label="Candidate result flow from analysis to verification and triage"
+			>
+				<title>Candidate result flow</title>
+				{links.map((link) => {
+					const source = RESULT_FLOW_LAYOUT[link.source];
+					const target = RESULT_FLOW_LAYOUT[link.target];
+					if (!source || !target) {
+						return null;
+					}
+					const sourceX = source.x + source.width;
+					const sourceY = source.y + source.height / 2;
+					const targetX = target.x;
+					const targetY = target.y + target.height / 2;
+					const strokeWidth = Math.max(
+						2,
+						Math.round((link.count / maxLinkCount) * 26),
+					);
+					return (
+						<path
+							key={`${link.source}-${link.target}`}
+							d={`M ${sourceX} ${sourceY} C ${sourceX + 70} ${sourceY}, ${
+								targetX - 70
+							} ${targetY}, ${targetX} ${targetY}`}
+							className={`${getResultFlowStrokeClassName(link.target)} opacity-30`}
+							fill="none"
+							strokeWidth={strokeWidth}
+							strokeLinecap="round"
+						/>
+					);
+				})}
+				{nodes.map((node) => {
+					const layout = RESULT_FLOW_LAYOUT[node.id];
+					if (!layout) {
+						return null;
+					}
+					return (
+						<g key={node.id}>
+							<rect
+								x={layout.x}
+								y={layout.y}
+								width={layout.width}
+								height={layout.height}
+								rx="8"
+								className={layout.className}
+							/>
+							<text
+								x={layout.x + 14}
+								y={layout.y + 24}
+								className="fill-foreground text-[13px] font-medium"
+							>
+								{nodeById.get(node.id)?.label ?? node.label}
+							</text>
+							<text
+								x={layout.x + 14}
+								y={layout.y + 46}
+								className="fill-muted-foreground text-[18px] font-semibold"
+							>
+								{formatSummaryCount(node.count)}
+							</text>
+						</g>
+					);
+				})}
+				<text x="24" y="14" className="fill-muted-foreground text-[11px]">
+					Analysis
+				</text>
+				<text x="280" y="14" className="fill-muted-foreground text-[11px]">
+					Verify
+				</text>
+				<text x="536" y="14" className="fill-muted-foreground text-[11px]">
+					Triage
+				</text>
+			</svg>
+			</div>
+		</>
+	);
+};
+
 const RunningCapacityBars = ({
 	running,
 	limit,
@@ -809,6 +1133,11 @@ export const ShowScanJobDetail = ({
 	);
 	const [isCandidateExportDialogOpen, setIsCandidateExportDialogOpen] =
 		useState(false);
+	const [isEvaluateDialogOpen, setIsEvaluateDialogOpen] = useState(false);
+	const [evaluateAgentProfileIdDraft, setEvaluateAgentProfileIdDraft] =
+		useState("");
+	const [evaluateGroundTruthPathDraft, setEvaluateGroundTruthPathDraft] =
+		useState("");
 	const [candidateExportFields, setCandidateExportFields] = useState<
 		CandidateExportField[]
 	>(() => [...DEFAULT_CANDIDATE_EXPORT_FIELDS]);
@@ -836,7 +1165,18 @@ export const ShowScanJobDetail = ({
 		serviceType === "application"
 			? api.application.one.useQuery({ applicationId: serviceId })
 			: api.compose.one.useQuery({ composeId: serviceId });
+	const { data: agentProfiles } = api.ai.getAgentProfiles.useQuery(undefined, {
+		enabled: serviceType === "application",
+	});
+	const enabledAgentProfiles =
+		agentProfiles?.filter((profile) => profile.isEnabled) ?? [];
 	const serviceData = serviceQuery.data;
+	const applicationEvaluateConfig =
+		serviceType === "application" &&
+		serviceData &&
+		"evaluateConfig" in serviceData
+			? serviceData.evaluateConfig
+			: { agentProfileId: "", groundTruthPath: "" };
 
 	const { data: scanJob, isLoading: isLoadingJob } = api.scan.one.useQuery(
 		{ scanJobId },
@@ -872,6 +1212,23 @@ export const ShowScanJobDetail = ({
 				refetchInterval: shouldLoadStatusView ? 1000 : false,
 			},
 		);
+	const { data: resultSummary, isLoading: isLoadingResultSummary } =
+		api.scan.resultSummary.useQuery(
+			{ scanJobId },
+			{
+				enabled: !!scanJobId && activeTab === "overview",
+				refetchInterval: activeTab === "overview" ? 2000 : false,
+			},
+		);
+	const { data: latestEvaluation, isLoading: isLoadingLatestEvaluation } =
+		api.scan.latestEvaluation.useQuery(
+				{ scanJobId },
+				{
+					enabled:
+						!!scanJobId && activeTab === "evaluate" && serviceType === "application",
+					refetchInterval: activeTab === "evaluate" ? 2000 : false,
+				},
+			);
 	const { data: terminalTasks, isLoading: isLoadingTerminalTasks } =
 		api.scan.terminalTasks.useQuery(
 			{
@@ -904,6 +1261,7 @@ export const ShowScanJobDetail = ({
 	const resumeScanJobMutation = api.scan.resume.useMutation();
 	const updateNoteMutation = api.scan.updateNote.useMutation();
 	const analyzeCandidateMutation = api.scan.analyzeCandidate.useMutation();
+	const startEvaluationMutation = api.scan.startEvaluation.useMutation();
 	const [reanalyzingCandidateId, setReanalyzingCandidateId] = useState<
 		string | null
 	>(null);
@@ -939,10 +1297,14 @@ export const ShowScanJobDetail = ({
 		scanJob?.status === "pending" ||
 		scanJob?.status === "running" ||
 		scanJob?.status === "paused";
+	const canEvaluateScanJob =
+		serviceType === "application" && Boolean(scanJob?.applicationId);
 	const refreshScanJobViews = async () => {
 		await Promise.all([
 			utils.scan.one.invalidate({ scanJobId }),
 			utils.scan.statusView.invalidate({ scanJobId }),
+			utils.scan.resultSummary.invalidate({ scanJobId }),
+			utils.scan.latestEvaluation.invalidate({ scanJobId }),
 			utils.scan.candidates.invalidate({ scanJobId }),
 			serviceType === "application"
 				? utils.scan.allByApplication.invalidate({
@@ -1178,20 +1540,31 @@ export const ShowScanJobDetail = ({
 	}, [finishedTaskPage, finishedTaskPagination.page]);
 
 	useEffect(() => {
-		if (sortedInProgressTasks.length === 0) {
+		if (
+			sortedInProgressTasks.length === 0 &&
+			scanJob?.status !== "running" &&
+			scanJob?.status !== "pending"
+		) {
 			return;
 		}
 		const timer = window.setInterval(() => {
 			setRuntimeNowMs(Date.now());
 		}, 1000);
 		return () => window.clearInterval(timer);
-	}, [sortedInProgressTasks.length]);
+	}, [sortedInProgressTasks.length, scanJob?.status]);
 
-	const handleAnalyzeCandidate = async (vulnerabilityCandidateId: string) => {
-		setReanalyzingCandidateId(vulnerabilityCandidateId);
+	const handleAnalyzeCandidate = async (candidate: {
+		vulnerabilityCandidateId: string;
+		scanJobId: string;
+		scanFunctionTaskId?: string | null;
+	}) => {
+		const reanalysisKey = buildCandidateReanalysisKey(candidate);
+		setReanalyzingCandidateId(reanalysisKey);
 		try {
-			await analyzeCandidateMutation.mutateAsync({
-				vulnerabilityCandidateId,
+			const result = await analyzeCandidateMutation.mutateAsync({
+				vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
+				scanJobId: candidate.scanJobId,
+				scanFunctionTaskId: candidate.scanFunctionTaskId || undefined,
 			});
 			toast.success(
 				scanT(t, "scan.candidates.analysisRequeued", "Analysis requeued"),
@@ -1201,6 +1574,11 @@ export const ShowScanJobDetail = ({
 				utils.scan.statusView.invalidate({ scanJobId }),
 				utils.scan.candidates.invalidate({ scanJobId }),
 			]);
+			await router.push(
+				`/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}?tab=tasks&taskId=${encodeURIComponent(
+					result.taskId,
+				)}`,
+			);
 		} catch (error) {
 			toast.error(
 				error instanceof Error
@@ -1213,7 +1591,7 @@ export const ShowScanJobDetail = ({
 			);
 		} finally {
 			setReanalyzingCandidateId((current) =>
-				current === vulnerabilityCandidateId ? null : current,
+				current === reanalysisKey ? null : current,
 			);
 		}
 	};
@@ -1321,6 +1699,50 @@ export const ShowScanJobDetail = ({
 		taskSearchQuery.trim().length > 0 ||
 		finishedTaskStageFilter !== "all" ||
 		taskStatusFilter !== "all";
+	const getCandidateLatestResultUpdate = (
+		candidate: CandidateListItem,
+	): {
+		date: string;
+		stageKey: string;
+		stageLabel: string;
+		timestamp: number;
+	} | null => {
+		const resultUpdates: Array<{
+			date: string;
+			stageKey: string;
+			stageLabel: string;
+			timestamp: number;
+		}> = [];
+		for (const item of [
+			{
+				date: candidate.latestAnalysisResult?.updatedAt,
+				stageKey: "scan.stage.analyze",
+				stageLabel: "Analyze",
+			},
+			{
+				date: candidate.latestVerificationResult?.updatedAt,
+				stageKey: "scan.stage.verify",
+				stageLabel: "Verify",
+			},
+			{
+				date: candidate.latestTriageResult?.updatedAt,
+				stageKey: "scan.stage.triage",
+				stageLabel: "Triage",
+			},
+		]) {
+			if (!item.date) {
+				continue;
+			}
+			const timestamp = Date.parse(item.date);
+			if (!Number.isFinite(timestamp)) {
+				continue;
+			}
+			resultUpdates.push({ ...item, date: item.date, timestamp });
+		}
+		resultUpdates.sort((left, right) => right.timestamp - left.timestamp);
+
+		return resultUpdates[0] || null;
+	};
 
 	const toggleCandidateSort = (key: CandidateSortKey) => {
 		if (candidateSortKey === key) {
@@ -1330,7 +1752,9 @@ export const ShowScanJobDetail = ({
 			return;
 		}
 		setCandidateSortKey(key);
-		setCandidateSortDirection("asc");
+		setCandidateSortDirection(
+			key === "latestResultUpdatedAt" || key === "createdAt" ? "desc" : "asc",
+		);
 	};
 
 	const toggleAnalysisFilter = (value: string) => {
@@ -1776,6 +2200,14 @@ export const ShowScanJobDetail = ({
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="overview">
 								{scanT(t, "scan.job.tabs.overview", "Overview")}
 							</TabsTrigger>
+							{serviceType === "application" ? (
+								<TabsTrigger
+									className="shrink-0 px-2 sm:px-3"
+									value="evaluate"
+								>
+									{scanT(t, "scan.evaluate.title", "Evaluate")}
+								</TabsTrigger>
+							) : null}
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="tasks">
 								{scanT(t, "scan.job.tabs.tasks", "阶段任务")}
 							</TabsTrigger>
@@ -1950,6 +2382,46 @@ export const ShowScanJobDetail = ({
 										)}
 									</div>
 									<ScanStageGraph scanJobId={scanJobId} />
+									<Card className="bg-background">
+										<CardHeader>
+											<CardTitle className="text-xl">
+												{scanT(t, "scan.results.title", "Results")}
+											</CardTitle>
+											<CardDescription>
+												{scanT(
+													t,
+													"scan.results.description",
+													"Latest candidate results across analysis, verification, and triage.",
+												)}
+											</CardDescription>
+										</CardHeader>
+										<CardContent className="grid gap-4">
+											<div className="rounded-lg border p-3">
+												<div className="mb-3 flex items-center justify-between gap-3">
+													<div>
+														<div className="font-medium">
+															{scanT(
+																t,
+																"scan.results.flowTitle",
+																"Candidate Flow",
+															)}
+														</div>
+														<div className="text-sm text-muted-foreground">
+															{scanT(
+																t,
+																"scan.results.flowDescription",
+																"Sankey-style flow from positive analysis results through verification and triage.",
+															)}
+														</div>
+													</div>
+													{isLoadingResultSummary ? (
+														<Loader2 className="size-4 animate-spin text-muted-foreground" />
+													) : null}
+												</div>
+												<ResultFlowChart summary={resultSummary} />
+											</div>
+										</CardContent>
+									</Card>
 									<div className="grid grid-cols-1 md:grid-cols-2 gap-3">
 										<div className="border rounded-lg p-3">
 											<div className="text-sm text-muted-foreground">
@@ -1975,6 +2447,16 @@ export const ShowScanJobDetail = ({
 											</div>
 											<div className="font-medium">
 												{formatTriggerSourceLabel(t, scanJob.triggerSource)}
+											</div>
+										</div>
+										<div className="border rounded-lg p-3">
+											<div className="text-sm text-muted-foreground">
+												{scanT(t, "scan.field.duration", "Duration")}
+											</div>
+											<div className="font-medium tabular-nums">
+												{formatDurationSeconds(
+													resultSummary?.taskTimeline.coveredSeconds,
+												)}
 											</div>
 										</div>
 										<div className="border rounded-lg p-3 md:col-span-2">
@@ -2134,6 +2616,193 @@ export const ShowScanJobDetail = ({
 											/>
 										</div>
 									</div>
+								</div>
+							)}
+						</TabsContent>
+
+						<TabsContent value="evaluate" className="pt-4">
+							{serviceType !== "application" ? (
+								<div className="flex items-center gap-2 text-muted-foreground">
+									<AlertCircle className="size-4" />
+									{scanT(
+										t,
+										"scan.evaluate.applicationOnly",
+										"Evaluate is only available for application scan jobs.",
+									)}
+								</div>
+							) : isLoadingJob ? (
+								<div className="flex items-center gap-2 text-muted-foreground">
+									<Loader2 className="size-4 animate-spin" />
+									{scanT(t, "scan.job.loading", "Loading job...")}
+								</div>
+							) : !scanJob ? (
+								<div className="flex items-center gap-2 text-muted-foreground">
+									<AlertCircle className="size-4" />
+									{scanT(t, "scan.job.notFound", "Job not found")}
+								</div>
+							) : (
+								<div className="grid gap-4">
+									<div className="rounded-lg border p-4">
+										<div className="flex flex-wrap items-center justify-between gap-3">
+											<div>
+												<div className="text-lg font-semibold">
+													{scanT(t, "scan.evaluate.title", "Evaluate")}
+												</div>
+												<div className="text-sm text-muted-foreground">
+													{scanT(
+														t,
+														"scan.evaluate.description",
+														"Latest manual evaluation against configured ground truth.",
+													)}
+												</div>
+											</div>
+											<Button
+												type="button"
+												variant="outline"
+												disabled={
+													!canEvaluateScanJob ||
+													startEvaluationMutation.isLoading
+												}
+												onClick={() => {
+													setEvaluateAgentProfileIdDraft(
+														applicationEvaluateConfig?.agentProfileId || "",
+													);
+													setEvaluateGroundTruthPathDraft(
+														applicationEvaluateConfig?.groundTruthPath ?? "",
+													);
+													setIsEvaluateDialogOpen(true);
+												}}
+											>
+												{startEvaluationMutation.isLoading ? (
+													<>
+														<Loader2 className="mr-2 size-4 animate-spin" />
+														{scanT(t, "scan.evaluate.starting", "Starting...")}
+													</>
+												) : (
+													<>
+														<ClipboardCheck className="mr-2 size-4" />
+														{scanT(t, "scan.evaluate.action", "Evaluate")}
+													</>
+												)}
+											</Button>
+										</div>
+									</div>
+									<Card className="bg-background">
+										<CardHeader>
+											<div className="flex items-start justify-between gap-3">
+												<div>
+													<CardTitle className="text-xl">
+														{scanT(t, "scan.evaluate.latest", "Latest Result")}
+													</CardTitle>
+													<CardDescription>
+														{scanT(
+															t,
+															"scan.evaluate.latestDescription",
+															"Metrics from the latest evaluation run for this job.",
+														)}
+													</CardDescription>
+												</div>
+												{isLoadingLatestEvaluation ? (
+													<Loader2 className="size-4 animate-spin text-muted-foreground" />
+												) : null}
+											</div>
+										</CardHeader>
+										<CardContent>
+											{latestEvaluation ? (
+												<div className="grid gap-3 md:grid-cols-4">
+													<div className="rounded-lg border p-3">
+														<div className="text-sm text-muted-foreground">
+															{scanT(t, "scan.field.status", "Status")}
+														</div>
+														<div className="font-medium capitalize">
+															{latestEvaluation.status}
+														</div>
+													</div>
+													<div className="rounded-lg border p-3">
+														<div className="text-sm text-muted-foreground">
+															{scanT(t, "scan.status.finished", "Finished")}
+														</div>
+														<div className="font-medium">
+															{latestEvaluation.finishedAt ? (
+																<DateTooltip date={latestEvaluation.finishedAt} />
+															) : (
+																"-"
+															)}
+														</div>
+													</div>
+													<div className="rounded-lg border p-3">
+														<div className="text-sm text-muted-foreground">
+															TP / FP / FN
+														</div>
+														<div className="font-medium tabular-nums">
+															{String(
+																getEvaluationResult(latestEvaluation)
+																	?.truePositive ?? "-",
+															)}
+															{" / "}
+															{String(
+																getEvaluationResult(latestEvaluation)
+																	?.falsePositive ?? "-",
+															)}
+															{" / "}
+															{String(
+																getEvaluationResult(latestEvaluation)
+																	?.falseNegative ?? "-",
+															)}
+														</div>
+													</div>
+													<div className="rounded-lg border p-3">
+														<div className="text-sm text-muted-foreground">
+															Precision / Recall / F1
+														</div>
+														<div className="font-medium tabular-nums">
+															{formatEvaluationMetric(
+																getEvaluationResult(latestEvaluation)?.precision,
+															)}
+															{" / "}
+															{formatEvaluationMetric(
+																getEvaluationResult(latestEvaluation)?.recall,
+															)}
+															{" / "}
+															{formatEvaluationMetric(
+																getEvaluationResult(latestEvaluation)?.f1,
+															)}
+														</div>
+													</div>
+													{getEvaluationResult(latestEvaluation)?.summary ? (
+														<div className="rounded-lg border p-3 md:col-span-4">
+															<div className="text-sm text-muted-foreground">
+																{scanT(t, "scan.field.summary", "Summary")}
+															</div>
+															<div className="font-medium">
+																{String(
+																	getEvaluationResult(latestEvaluation)?.summary,
+																)}
+															</div>
+														</div>
+													) : null}
+													{latestEvaluation.errorMessage ? (
+														<div className="rounded-lg border p-3 md:col-span-4">
+															<div className="text-sm text-muted-foreground">
+																{scanT(t, "scan.field.errorMessage", "Error")}
+															</div>
+															<div className="font-medium text-destructive break-all">
+																{latestEvaluation.errorMessage}
+															</div>
+														</div>
+													) : null}
+												</div>
+											) : (
+												<div className="text-sm text-muted-foreground">
+													{scanT(
+														t,
+														"scan.evaluate.empty",
+														"No evaluation has been run for this job.",
+													)}
+												</div>
+											)}
+										</CardContent>
+									</Card>
 								</div>
 							)}
 						</TabsContent>
@@ -2513,12 +3182,32 @@ export const ShowScanJobDetail = ({
 																		<ChevronsUpDown className="size-3.5" />
 																	</button>
 																</th>
-																<th className="w-[18%] px-4 py-3 font-medium">
+																<th className="w-[16%] px-4 py-3 font-medium">
 																	{scanT(
 																		t,
 																		"scan.filters.triageResult",
 																		"Triage Result",
 																	)}
+																</th>
+																<th className="w-[13%] px-4 py-3 font-medium">
+																	<button
+																		type="button"
+																		onClick={() =>
+																			toggleCandidateSort(
+																				"latestResultUpdatedAt",
+																			)
+																		}
+																		className="inline-flex items-center gap-1 hover:text-foreground"
+																	>
+																		<span>
+																			{scanT(
+																				t,
+																				"scan.field.latestResultUpdatedAt",
+																				"Latest Update",
+																			)}
+																		</span>
+																		<ChevronsUpDown className="size-3.5" />
+																	</button>
 																</th>
 																<th className="w-[14%] px-4 py-3 font-medium">
 																	<button
@@ -2543,16 +3232,18 @@ export const ShowScanJobDetail = ({
 																		candidate.latestVerificationResult?.result,
 																	);
 																const isTerminalCandidate =
-																	TERMINAL_CANDIDATE_STATUSES.has(
+																	RERUNNABLE_CANDIDATE_STATUSES.has(
 																		candidate.status,
 																	);
 																const isReanalyzingCandidate =
 																	reanalyzingCandidateId ===
-																	candidate.vulnerabilityCandidateId;
+																	buildCandidateReanalysisKey(candidate);
 																const isSelectedCandidate =
 																	selectedCandidateIds.has(
 																		candidate.vulnerabilityCandidateId,
 																	);
+																const latestResultUpdate =
+																	getCandidateLatestResultUpdate(candidate);
 																return (
 																	<tr
 																		key={candidate.vulnerabilityCandidateId}
@@ -2695,6 +3386,35 @@ export const ShowScanJobDetail = ({
 																				)}
 																			</Link>
 																		</td>
+																		<td className="px-4 py-3 align-top text-xs">
+																			<Link
+																				href={buildCandidateDetailHref(
+																					candidate,
+																				)}
+																				onClick={handleCandidateLinkClick}
+																				className="block"
+																			>
+																				{latestResultUpdate ? (
+																					<>
+																						<DateTooltip
+																							date={latestResultUpdate.date}
+																							className="text-xs"
+																						/>
+																						<div className="mt-1 text-muted-foreground">
+																							{scanT(
+																								t,
+																								latestResultUpdate.stageKey,
+																								latestResultUpdate.stageLabel,
+																							)}
+																						</div>
+																					</>
+																				) : (
+																					<span className="text-muted-foreground">
+																						-
+																					</span>
+																				)}
+																			</Link>
+																		</td>
 																		<td className="px-4 py-3 align-top text-xs text-muted-foreground">
 																			<Link
 																				href={buildCandidateDetailHref(
@@ -2744,9 +3464,7 @@ export const ShowScanJobDetail = ({
 																					isReanalyzingCandidate
 																				}
 																				onClick={() =>
-																					handleAnalyzeCandidate(
-																						candidate.vulnerabilityCandidateId,
-																					)
+																					handleAnalyzeCandidate(candidate)
 																				}
 																			>
 																				{isReanalyzingCandidate ? (
@@ -3622,6 +4340,158 @@ export const ShowScanJobDetail = ({
 							</div>
 						</TabsContent>
 					</Tabs>
+					<Dialog open={isEvaluateDialogOpen} onOpenChange={setIsEvaluateDialogOpen}>
+						<DialogContent className="sm:max-w-2xl">
+							<DialogHeader>
+								<DialogTitle>
+									{scanT(t, "scan.evaluate.title", "Evaluate")}
+								</DialogTitle>
+								<DialogDescription>
+									{scanT(
+										t,
+										"scan.evaluate.dialogDescription",
+										"Run a one-off evaluation using these settings. Changes here do not update application defaults.",
+									)}
+								</DialogDescription>
+							</DialogHeader>
+							<div className="grid gap-4">
+								<div className="grid gap-2">
+									<label
+										htmlFor="run-evaluate-agent-profile"
+										className="text-sm font-medium"
+									>
+										{scanT(
+											t,
+											"scan.evaluate.agentProfile",
+											"Agent Profile",
+										)}
+									</label>
+									<Select
+										value={evaluateAgentProfileIdDraft}
+										onValueChange={setEvaluateAgentProfileIdDraft}
+									>
+										<SelectTrigger id="run-evaluate-agent-profile">
+											<SelectValue placeholder="Select an agent profile" />
+										</SelectTrigger>
+										<SelectContent>
+											{enabledAgentProfiles.map((profile) => (
+												<SelectItem
+													key={profile.agentProfileId}
+													value={profile.agentProfileId}
+												>
+													{profile.name}
+												</SelectItem>
+											))}
+										</SelectContent>
+									</Select>
+								</div>
+								<div className="grid gap-2">
+									<label
+										htmlFor="run-evaluate-ground-truth-path"
+										className="text-sm font-medium"
+									>
+										{scanT(
+											t,
+											"scan.evaluate.groundTruthPath",
+											"Ground Truth Path",
+										)}
+									</label>
+									<Input
+										id="run-evaluate-ground-truth-path"
+										value={evaluateGroundTruthPathDraft}
+										onChange={(event) =>
+											setEvaluateGroundTruthPathDraft(
+												event.currentTarget.value,
+											)
+										}
+										placeholder="/workspace/repo/ground_truth.json"
+									/>
+									<p className="text-xs text-muted-foreground">
+										{scanT(
+											t,
+											"scan.evaluate.groundTruthHelp",
+											"Use an absolute path inside the evaluation container.",
+										)}
+									</p>
+								</div>
+							</div>
+							<DialogFooter>
+								<Button
+									type="button"
+									variant="outline"
+									onClick={() => setIsEvaluateDialogOpen(false)}
+								>
+									{scanT(t, "scan.dialog.cancel", "Cancel")}
+								</Button>
+								<Button
+									type="button"
+									disabled={startEvaluationMutation.isLoading}
+									onClick={async () => {
+										if (!evaluateAgentProfileIdDraft) {
+											toast.error(
+												scanT(
+													t,
+													"scan.evaluate.agentProfileRequired",
+													"Agent profile is required",
+												),
+											);
+											return;
+										}
+										const groundTruthPath =
+											evaluateGroundTruthPathDraft.trim();
+										if (!groundTruthPath.startsWith("/")) {
+											toast.error(
+												"Ground truth path must be an absolute container path",
+											);
+											return;
+										}
+										try {
+											await startEvaluationMutation.mutateAsync({
+												scanJobId,
+												configSnapshot: {
+													agentProfileId: evaluateAgentProfileIdDraft,
+													groundTruthPath,
+												},
+											});
+											setIsEvaluateDialogOpen(false);
+											toast.success(
+												scanT(
+													t,
+													"scan.evaluate.startedToast",
+													"Evaluation started",
+												),
+											);
+											await utils.scan.latestEvaluation.invalidate({
+												scanJobId,
+											});
+										} catch (error) {
+											toast.error(
+												error instanceof Error
+													? error.message
+													: scanT(
+															t,
+															"scan.evaluate.startError",
+															"Failed to start evaluation",
+														),
+											);
+										}
+									}}
+								>
+									{startEvaluationMutation.isLoading ? (
+										<>
+											<Loader2 className="mr-2 size-4 animate-spin" />
+											{scanT(t, "scan.evaluate.starting", "Starting...")}
+										</>
+									) : (
+										<>
+											<ClipboardCheck className="mr-2 size-4" />
+											{scanT(t, "scan.evaluate.run", "Run Evaluate")}
+										</>
+									)}
+								</Button>
+							</DialogFooter>
+						</DialogContent>
+					</Dialog>
 					<div className="pt-6">
 						<Link
 							className="text-sm text-muted-foreground underline"

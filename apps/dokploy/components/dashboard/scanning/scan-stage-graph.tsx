@@ -79,6 +79,8 @@ const NODE_GAP_Y = 104;
 const STAGES_PER_ROW = 4;
 const BACK_EDGE_OFFSET_Y = 28;
 const FORWARD_LONG_EDGE_OFFSET_Y = 30;
+const SELF_EDGE_OFFSET_X = 56;
+const SELF_EDGE_OFFSET_Y = 38;
 const DEFAULT_PROFILE_VALUE = "__service_default__";
 const REPOSITORY_STAGE_NAME = "repository-scan";
 const DELTA_SCOPE_STAGE_NAME = "delta-scope";
@@ -619,6 +621,29 @@ const getGroupBounds = (
 };
 
 const buildEdgePoints = (source: Point, target: Point) => {
+	if (source.x === target.x && source.y === target.y) {
+		const centerY = source.y + NODE_HEIGHT / 2;
+		const start = {
+			x: source.x + NODE_WIDTH,
+			y: centerY,
+		};
+		const end = {
+			x: source.x,
+			y: centerY,
+		};
+		const routeRightX = source.x + NODE_WIDTH + SELF_EDGE_OFFSET_X;
+		const routeLeftX = source.x - SELF_EDGE_OFFSET_X;
+		const routeBottomY = source.y + NODE_HEIGHT + SELF_EDGE_OFFSET_Y;
+		return [
+			start,
+			{ x: routeRightX, y: centerY },
+			{ x: routeRightX, y: routeBottomY },
+			{ x: routeLeftX, y: routeBottomY },
+			{ x: routeLeftX, y: centerY },
+			end,
+		];
+	}
+
 	const sourceRow = Math.round(
 		(source.y - GRAPH_PADDING) / (NODE_HEIGHT + NODE_GAP_Y),
 	);
@@ -879,7 +904,9 @@ const ScanStageGraphPanel = ({
 						)}
 				</div>
 			</div>
-			<div className={`relative bg-muted/10 ${heightClassName}`}>
+			<div
+				className={`relative border-t bg-muted/35 shadow-inner dark:bg-slate-950/55 ${heightClassName}`}
+			>
 				{isLoading || isLayoutLoading ? (
 					<div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
 						<Loader2 className="size-4 animate-spin" />
@@ -916,7 +943,7 @@ const ScanStageGraphPanel = ({
 						}}
 						proOptions={{ hideAttribution: true }}
 					>
-						<Background color="hsl(var(--muted-foreground) / 0.28)" />
+						<Background color="hsl(var(--muted-foreground) / 0.22)" />
 						<Controls showInteractive={false} />
 					</ReactFlow>
 				)}
@@ -1329,6 +1356,15 @@ const buildFullScanPreviewGraph = (
 				fork: false,
 				routeKey: "analysis",
 				isDefaultRoute: true,
+			},
+			{
+				id: "fuzz-run-short-to-full-run",
+				name: "fuzz-run-short-to-full-run",
+				source: "run-fuzzer",
+				target: "run-fuzzer",
+				fork: false,
+				routeKey: "run_fuzzer",
+				isDefaultRoute: false,
 			},
 			{
 				id: "critic-to-analysis",

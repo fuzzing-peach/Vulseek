@@ -6,6 +6,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(__dirname, "..");
 const sourceRoot = path.join(packageRoot, "src", "services", "scan");
 const outputRoot = path.join(packageRoot, "dist", "services", "scan");
+const dockerfilesSourceRoot = path.join(
+	packageRoot,
+	"src",
+	"services",
+	"dockerfiles",
+);
+const dockerfilesOutputRoot = path.join(
+	packageRoot,
+	"dist",
+	"services",
+	"dockerfiles",
+);
 
 const copyPromptTemplates = async (sourceDir) => {
 	const entries = await readdir(sourceDir, { withFileTypes: true });
@@ -26,3 +38,5 @@ const copyPromptTemplates = async (sourceDir) => {
 };
 
 await copyPromptTemplates(sourceRoot);
+await mkdir(dockerfilesOutputRoot, { recursive: true });
+await cp(dockerfilesSourceRoot, dockerfilesOutputRoot, { recursive: true });

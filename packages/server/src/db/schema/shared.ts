@@ -84,6 +84,18 @@ export const ScanStageSettingsSchema = z.record(ScanStageSettingSchema);
 export type ScanStageSetting = z.infer<typeof ScanStageSettingSchema>;
 export type ScanStageSettings = z.infer<typeof ScanStageSettingsSchema>;
 
+export const EvaluateConfigSchema = z.object({
+	agentProfileId: z.string().default(""),
+	groundTruthPath: z.string().default(""),
+});
+
+export type EvaluateConfig = z.infer<typeof EvaluateConfigSchema>;
+
+export const buildDefaultEvaluateConfig = (): EvaluateConfig => ({
+	agentProfileId: "",
+	groundTruthPath: "",
+});
+
 export const ScanRuntimeStageSettingSchema = z.object({
 	disabled: z.boolean().optional(),
 	agentProfileId: z.string().nullable().optional(),

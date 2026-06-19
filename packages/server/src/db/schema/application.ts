@@ -28,8 +28,11 @@ import { security } from "./security";
 import { server } from "./server";
 import {
 	applicationStatus,
+	buildDefaultEvaluateConfig,
 	buildDefaultScanStageSettings,
 	certificateType,
+	type EvaluateConfig,
+	EvaluateConfigSchema,
 	type HealthCheckSwarm,
 	HealthCheckSwarmSchema,
 	type LabelsSwarm,
@@ -125,6 +128,7 @@ export const applications = pgTable("application", {
 	autoDeploy: boolean("autoDeploy").$defaultFn(() => true),
 	autoDeltaScan: boolean("autoDeltaScan").$defaultFn(() => true),
 	fuzzingBudgetSeconds: integer("fuzzingBudgetSeconds").notNull().default(600),
+	postCheckoutScript: text("postCheckoutScript").notNull().default(""),
 	// Gitlab
 	gitlabProjectId: integer("gitlabProjectId"),
 	gitlabRepository: text("gitlabRepository"),
@@ -211,6 +215,10 @@ export const applications = pgTable("application", {
 		.$type<ScanStageSettings>()
 		.notNull()
 		.default(buildDefaultScanStageSettings()),
+	evaluateConfig: jsonb("evaluateConfig")
+		.$type<EvaluateConfig>()
+		.notNull()
+		.default(buildDefaultEvaluateConfig()),
 });
 
 export const applicationsRelations = relations(
@@ -265,9 +273,11 @@ const createSchema = createInsertSchema(applications, {
 	autoDeploy: z.boolean(),
 	autoDeltaScan: z.boolean(),
 	fuzzingBudgetSeconds: z.number().int().min(1).max(86400).default(600),
+	postCheckoutScript: z.string().max(20000).default(""),
 	scanStageSettings: ScanStageSettingsSchema.default(
 		buildDefaultScanStageSettings(),
 	),
+	evaluateConfig: EvaluateConfigSchema.default(buildDefaultEvaluateConfig()),
 	env: z.string().optional(),
 	buildArgs: z.string().optional(),
 	buildSecrets: z.string().optional(),

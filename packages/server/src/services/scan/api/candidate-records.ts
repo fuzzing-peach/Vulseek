@@ -16,6 +16,7 @@ import {
 	findTaskByIdRepo,
 	listAnalysisResultsByScanJobIdRepo,
 	listCandidateDescendantTasksByFunctionTaskIdRepo,
+	listTaskRuntimeIntervalsByScanJobIdRepo,
 	listTriageResultsByScanJobIdRepo,
 	listVerificationResultsByScanJobIdRepo,
 } from "../persistence/task.repo";
@@ -24,6 +25,8 @@ import type { Task } from "../types";
 import { resolveTaskRootSegment } from "../stages/full-scan-stage.runtime";
 
 export type CandidateListSortKey =
+	| "latestResultUpdatedAt"
+	| "createdAt"
 	| "candidate"
 	| "analysis"
 	| "verify"
@@ -358,6 +361,295 @@ export const findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId =
 		});
 	};
 
+const isPositiveAnalysisResult = (result: string | null | undefined) =>
+	result === "real_vulnerability" || result === "likely_vulnerability";
+
+const isPositiveVerificationResult = (result: string | null | undefined) =>
+	result === "true" || result === "likely";
+
+const isPositiveTriageResult = (
+	result: string | null | undefined,
+	isSecurityIssue?: boolean | null,
+) => isSecurityIssue === true || result === "security_issue";
+
+const incrementCount = <TKey extends string>(
+	counts: Record<TKey, number>,
+	key: TKey,
+	amount = 1,
+) => {
+	counts[key] += amount;
+};
+
+const ACTIVE_TASK_STATUSES = new Set([
+	"launching",
+	"launched",
+	"starting",
+	"running",
+]);
+
+const parseTimestampMs = (value: string | null | undefined) => {
+	if (!value) {
+		return null;
+	}
+	const timestamp = Date.parse(value);
+	return Number.isFinite(timestamp) ? timestamp : null;
+};
+
+const findScanJobTaskTimeline = async (scanJobId: string) => {
+	const nowMs = Date.now();
+	const intervals = await listTaskRuntimeIntervalsByScanJobIdRepo(scanJobId);
+	const normalizedIntervals: Array<{ startMs: number; endMs: number }> = [];
+	let activeTaskCount = 0;
+
+	for (const task of intervals) {
+		const startMs = parseTimestampMs(task.startedAt) ?? parseTimestampMs(task.createdAt);
+		if (startMs === null) {
+			continue;
+		}
+
+		const isActive = ACTIVE_TASK_STATUSES.has(task.status);
+		const endMs = isActive
+			? nowMs
+			: (parseTimestampMs(task.completedAt) ??
+				parseTimestampMs(task.updatedAt) ??
+				startMs);
+		if (isActive) {
+			activeTaskCount += 1;
+		}
+		normalizedIntervals.push({
+			startMs,
+			endMs: Math.max(startMs, endMs),
+		});
+	}
+
+	if (normalizedIntervals.length === 0) {
+		return {
+			taskCount: 0,
+			activeTaskCount: 0,
+			startedAt: null,
+			finishedAt: null,
+			spanSeconds: 0,
+			coveredSeconds: 0,
+		};
+	}
+
+	normalizedIntervals.sort((left, right) => left.startMs - right.startMs);
+	let coveredMs = 0;
+	let spanStartMs = normalizedIntervals[0]?.startMs ?? nowMs;
+	let spanEndMs = spanStartMs;
+	let currentStartMs = spanStartMs;
+	let currentEndMs = normalizedIntervals[0]?.endMs ?? spanStartMs;
+
+	for (const interval of normalizedIntervals) {
+		spanStartMs = Math.min(spanStartMs, interval.startMs);
+		spanEndMs = Math.max(spanEndMs, interval.endMs);
+		if (interval.startMs <= currentEndMs) {
+			currentEndMs = Math.max(currentEndMs, interval.endMs);
+			continue;
+		}
+		coveredMs += currentEndMs - currentStartMs;
+		currentStartMs = interval.startMs;
+		currentEndMs = interval.endMs;
+	}
+	coveredMs += currentEndMs - currentStartMs;
+
+	return {
+		taskCount: normalizedIntervals.length,
+		activeTaskCount,
+		startedAt: new Date(spanStartMs).toISOString(),
+		finishedAt: activeTaskCount > 0 ? null : new Date(spanEndMs).toISOString(),
+		spanSeconds: Math.max(0, Math.floor((spanEndMs - spanStartMs) / 1000)),
+		coveredSeconds: Math.max(0, Math.floor(coveredMs / 1000)),
+	};
+};
+
+export const findScanJobResultSummary = async (scanJobId: string) => {
+	const [candidates, taskTimeline] = await Promise.all([
+		findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId(scanJobId),
+		findScanJobTaskTimeline(scanJobId),
+	]);
+	const counts = {
+		candidatesTotal: candidates.length,
+		analysisPositive: 0,
+		analysisReal: 0,
+		analysisLikely: 0,
+		verificationTrue: 0,
+		verificationLikely: 0,
+		verificationPositive: 0,
+		triageSecurityIssue: 0,
+	};
+	const analysisPositiveFlow = {
+		verifyPositive: 0,
+		verifyFalse: 0,
+		verifyMissing: 0,
+		triageSecurityIssue: 0,
+		triageNotSecurity: 0,
+		triageMissing: 0,
+	};
+	const transitionLinks: Array<{
+		source: string;
+		target: string;
+		count: number;
+	}> = [];
+	const verifyBucketCounts = {
+		verify_positive: 0,
+		verify_false: 0,
+		verify_missing: 0,
+	};
+	const triageByVerifyBucket: Record<
+		keyof typeof verifyBucketCounts,
+		{
+			triage_security_issue: number;
+			triage_not_security: number;
+			triage_missing: number;
+		}
+	> = {
+		verify_positive: {
+			triage_security_issue: 0,
+			triage_not_security: 0,
+			triage_missing: 0,
+		},
+		verify_false: {
+			triage_security_issue: 0,
+			triage_not_security: 0,
+			triage_missing: 0,
+		},
+		verify_missing: {
+			triage_security_issue: 0,
+			triage_not_security: 0,
+			triage_missing: 0,
+		},
+	};
+
+	for (const candidate of candidates) {
+		const analysisResult = candidate.latestAnalysisResult?.result;
+		const verificationResult = candidate.latestVerificationResult?.result;
+		const triageResult = candidate.latestTriageResult?.result;
+		const triageIsSecurityIssue =
+			candidate.latestTriageResult?.isSecurityIssue ?? null;
+
+		if (isPositiveAnalysisResult(analysisResult)) {
+			counts.analysisPositive += 1;
+			if (analysisResult === "real_vulnerability") {
+				counts.analysisReal += 1;
+			}
+			if (analysisResult === "likely_vulnerability") {
+				counts.analysisLikely += 1;
+			}
+
+			const verifyBucket = isPositiveVerificationResult(verificationResult)
+				? "verify_positive"
+				: verificationResult === "false"
+					? "verify_false"
+					: "verify_missing";
+			incrementCount(verifyBucketCounts, verifyBucket);
+			if (verifyBucket === "verify_positive") {
+				analysisPositiveFlow.verifyPositive += 1;
+			} else if (verifyBucket === "verify_false") {
+				analysisPositiveFlow.verifyFalse += 1;
+			} else {
+				analysisPositiveFlow.verifyMissing += 1;
+			}
+
+			const triageBucket = candidate.latestTriageResult
+				? isPositiveTriageResult(triageResult, triageIsSecurityIssue)
+					? "triage_security_issue"
+					: "triage_not_security"
+				: "triage_missing";
+			triageByVerifyBucket[verifyBucket][triageBucket] += 1;
+			if (triageBucket === "triage_security_issue") {
+				analysisPositiveFlow.triageSecurityIssue += 1;
+			} else if (triageBucket === "triage_not_security") {
+				analysisPositiveFlow.triageNotSecurity += 1;
+			} else {
+				analysisPositiveFlow.triageMissing += 1;
+			}
+		}
+
+		if (verificationResult === "true") {
+			counts.verificationTrue += 1;
+		}
+		if (verificationResult === "likely") {
+			counts.verificationLikely += 1;
+		}
+		if (isPositiveVerificationResult(verificationResult)) {
+			counts.verificationPositive += 1;
+		}
+		if (isPositiveTriageResult(triageResult, triageIsSecurityIssue)) {
+			counts.triageSecurityIssue += 1;
+		}
+	}
+
+	for (const [target, count] of Object.entries(verifyBucketCounts)) {
+		if (count > 0) {
+			transitionLinks.push({
+				source: "analysis_positive",
+				target,
+				count,
+			});
+		}
+	}
+	for (const [source, targets] of Object.entries(triageByVerifyBucket)) {
+		for (const [target, count] of Object.entries(targets)) {
+			if (count > 0) {
+				transitionLinks.push({ source, target, count });
+			}
+		}
+	}
+
+	return {
+		counts,
+		taskTimeline,
+		flow: {
+			nodes: [
+				{
+					id: "analysis_positive",
+					label: "Analysis Real/Likely",
+					stage: "analysis",
+					count: counts.analysisPositive,
+				},
+				{
+					id: "verify_positive",
+					label: "Verify True/Likely",
+					stage: "verify",
+					count: analysisPositiveFlow.verifyPositive,
+				},
+				{
+					id: "verify_false",
+					label: "Verify False",
+					stage: "verify",
+					count: analysisPositiveFlow.verifyFalse,
+				},
+				{
+					id: "verify_missing",
+					label: "Verify Missing",
+					stage: "verify",
+					count: analysisPositiveFlow.verifyMissing,
+				},
+				{
+					id: "triage_security_issue",
+					label: "Triage True",
+					stage: "triage",
+					count: analysisPositiveFlow.triageSecurityIssue,
+				},
+				{
+					id: "triage_not_security",
+					label: "Triage False",
+					stage: "triage",
+					count: analysisPositiveFlow.triageNotSecurity,
+				},
+				{
+					id: "triage_missing",
+					label: "Triage Missing",
+					stage: "triage",
+					count: analysisPositiveFlow.triageMissing,
+				},
+			],
+			links: transitionLinks,
+		},
+	};
+};
+
 const RESULT_SORT_RANK: Record<string, number> = {
 	real_vulnerability: 4,
 	true: 4,
@@ -367,6 +659,26 @@ const RESULT_SORT_RANK: Record<string, number> = {
 	api_misuse: 1,
 	false_positive: 0,
 	false: 0,
+};
+
+const resolveCandidateLatestResultUpdatedAtMs = (candidate: {
+	createdAt: string;
+	latestAnalysisResult?: { updatedAt?: string | null } | null;
+	latestVerificationResult?: { updatedAt?: string | null } | null;
+	latestTriageResult?: { updatedAt?: string | null } | null;
+}) => {
+	const timestamps = [
+		candidate.latestAnalysisResult?.updatedAt,
+		candidate.latestVerificationResult?.updatedAt,
+		candidate.latestTriageResult?.updatedAt,
+	]
+		.map((value) => (value ? Date.parse(value) : Number.NaN))
+		.filter(Number.isFinite);
+	if (timestamps.length > 0) {
+		return Math.max(...timestamps);
+	}
+	const createdAtMs = Date.parse(candidate.createdAt);
+	return Number.isFinite(createdAtMs) ? createdAtMs : 0;
 };
 
 export const findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId =
@@ -456,6 +768,23 @@ export const findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId 
 
 		const direction = input.sortDirection === "asc" ? 1 : -1;
 		filteredCandidates.sort((left, right) => {
+			if (input.sortKey === "latestResultUpdatedAt") {
+				const leftUpdatedAtMs = resolveCandidateLatestResultUpdatedAtMs(left);
+				const rightUpdatedAtMs = resolveCandidateLatestResultUpdatedAtMs(right);
+				if (leftUpdatedAtMs !== rightUpdatedAtMs) {
+					return direction * (leftUpdatedAtMs - rightUpdatedAtMs);
+				}
+				return left.title.localeCompare(right.title);
+			}
+
+			if (input.sortKey === "createdAt") {
+				const createdAtCompare = left.createdAt.localeCompare(right.createdAt);
+				if (createdAtCompare !== 0) {
+					return direction * createdAtCompare;
+				}
+				return left.title.localeCompare(right.title);
+			}
+
 			if (input.sortKey === "candidate") {
 				return direction * left.title.localeCompare(right.title);
 			}

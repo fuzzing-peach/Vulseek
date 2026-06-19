@@ -1317,6 +1317,20 @@
       "when": 1779744000000,
       "tag": "0187_candidate_metadata_tags",
       "breakpoints": true
+    },
+    {
+      "idx": 188,
+      "version": "7",
+      "when": 1779744100000,
+      "tag": "0188_application_post_checkout_script",
+      "breakpoints": true
+    },
+    {
+      "idx": 189,
+      "version": "7",
+      "when": 1779744200000,
+      "tag": "0189_scan_evaluate_results",
+      "breakpoints": true
     }
   ]
 }

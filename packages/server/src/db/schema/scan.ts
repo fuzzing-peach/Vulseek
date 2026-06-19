@@ -15,6 +15,8 @@ import { z } from "zod";
 import { applications } from "./application";
 import { compose } from "./compose";
 import {
+	buildDefaultEvaluateConfig,
+	type EvaluateConfig,
 	type ScanRuntimeSettings,
 	ScanRuntimeSettingsSchema,
 } from "./shared";
@@ -38,6 +40,12 @@ export const scanJobStatusEnum = pgEnum("scanJobStatus", [
 	"paused",
 	"finished",
 	"canceled",
+]);
+export const scanEvaluateStatusEnum = pgEnum("scanEvaluateStatus", [
+	"pending",
+	"running",
+	"completed",
+	"failed",
 ]);
 export const taskStatusEnum = pgEnum("taskStatus", [
 	"pending",
@@ -345,6 +353,54 @@ export const candidateMetadata = pgTable(
 	}),
 );
 
+export const scanEvaluateResults = pgTable(
+	"scan_evaluate_results",
+	{
+		evaluateResultId: text("evaluateResultId")
+			.notNull()
+			.primaryKey()
+			.$defaultFn(() => nanoid()),
+		scanJobId: text("scanJobId")
+			.notNull()
+			.references(() => scanJobs.scanJobId, {
+				onDelete: "cascade",
+			}),
+		applicationId: text("applicationId")
+			.notNull()
+			.references(() => applications.applicationId, {
+				onDelete: "cascade",
+			}),
+		status: scanEvaluateStatusEnum("status").notNull().default("pending"),
+		configSnapshot: jsonb("configSnapshot")
+			.$type<EvaluateConfig>()
+			.notNull()
+			.default(buildDefaultEvaluateConfig()),
+		realVulnCsvPath: text("realVulnCsvPath"),
+		result: jsonb("result").$type<Record<string, unknown> | null>(),
+		errorMessage: text("errorMessage"),
+		startedAt: text("startedAt"),
+		finishedAt: text("finishedAt"),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		scanJobIdx: index("scan_evaluate_results_scan_job_idx").on(
+			table.scanJobId,
+		),
+		applicationIdx: index("scan_evaluate_results_application_idx").on(
+			table.applicationId,
+		),
+		scanJobCreatedAtIdx: index("scan_evaluate_results_scan_job_created_idx").on(
+			table.scanJobId,
+			table.createdAt,
+		),
+	}),
+);
+
 export const candidateTags = pgTable("candidate_tags", {
 	name: text("name").notNull().primaryKey(),
 	createdAt: text("createdAt")
@@ -366,6 +422,7 @@ export const scanJobsRelations = relations(scanJobs, ({ one, many }) => ({
 	}),
 	tasks: many(tasks),
 	candidateMetadata: many(candidateMetadata),
+	evaluateResults: many(scanEvaluateResults),
 }));
 
 export const tasksRelations = relations(tasks, ({ one, many }) => ({
@@ -389,6 +446,20 @@ export const candidateMetadataRelations = relations(
 		scanJob: one(scanJobs, {
 			fields: [candidateMetadata.scanJobId],
 			references: [scanJobs.scanJobId],
+		}),
+	}),
+);
+
+export const scanEvaluateResultsRelations = relations(
+	scanEvaluateResults,
+	({ one }) => ({
+		scanJob: one(scanJobs, {
+			fields: [scanEvaluateResults.scanJobId],
+			references: [scanJobs.scanJobId],
+		}),
+		application: one(applications, {
+			fields: [scanEvaluateResults.applicationId],
+			references: [applications.applicationId],
 		}),
 	}),
 );

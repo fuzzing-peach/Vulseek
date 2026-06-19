@@ -340,6 +340,11 @@ export const fuzzRunResultSchema = z.object({
 	newPathsOrStatesReached: z.array(z.string()),
 	inputClassesDiscovered: z.array(z.string()),
 	confidenceImpact: z.string().nullable(),
+	promotionDecision: z.object({
+		shouldPromote: z.boolean(),
+		reasons: z.array(z.string()),
+		metrics: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])),
+	}),
 	summary: z.string(),
 });
 

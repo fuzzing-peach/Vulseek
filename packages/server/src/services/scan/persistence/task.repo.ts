@@ -315,6 +315,34 @@ export const listTasksByScanJobIdRepo = async (scanJobId: string) =>
 		.where(eq(tasks.scanJobId, scanJobId))
 		.orderBy(desc(tasks.createdAt));
 
+export const listTaskRuntimeIntervalsByScanJobIdRepo = async (
+	scanJobId: string,
+) =>
+	await db
+		.select({
+			status: tasks.status,
+			createdAt: tasks.createdAt,
+			startedAt: tasks.startedAt,
+			completedAt: tasks.completedAt,
+			updatedAt: tasks.updatedAt,
+		})
+		.from(tasks)
+		.where(
+			and(
+				eq(tasks.scanJobId, scanJobId),
+				inArray(tasks.status, [
+					"launching",
+					"launched",
+					"starting",
+					"running",
+					"completed",
+					"failed",
+					"exited",
+					"canceled",
+				]),
+			),
+		);
+
 export const listTasksByScanJobAndStatusesRepo = async (input: {
 	scanJobId: string;
 	statuses: Array<(typeof taskStatusEnum.enumValues)[number]>;

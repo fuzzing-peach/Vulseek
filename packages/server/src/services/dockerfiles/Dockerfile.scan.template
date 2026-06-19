@@ -189,6 +189,7 @@ FROM ubuntu:24.04 AS repository-source
 ARG GIT_URL="<GIT_URL>"
 ARG GIT_BRANCH="<GIT_BRANCH>"
 ARG ENABLE_SUBMODULES="false"
+ARG POST_CHECKOUT_SCRIPT=""
 ARG GIT_TAG_WINDOW="5"
 ARG DEBIAN_FRONTEND=noninteractive
 ARG HTTP_PROXY
@@ -255,6 +256,12 @@ RUN set -eux; \
     fi; \
     if [ "${ENABLE_SUBMODULES}" = "true" ]; then \
       git submodule update --init --recursive --depth=1; \
+    fi; \
+    if [ -n "${POST_CHECKOUT_SCRIPT}" ]; then \
+      printf '%s\n' "[checkout] running post-checkout script"; \
+      printf '%s\n' "${POST_CHECKOUT_SCRIPT}" > /tmp/dokploy-post-checkout.sh; \
+      bash /tmp/dokploy-post-checkout.sh; \
+      rm -f /tmp/dokploy-post-checkout.sh; \
     fi
 
 FROM tools AS final
