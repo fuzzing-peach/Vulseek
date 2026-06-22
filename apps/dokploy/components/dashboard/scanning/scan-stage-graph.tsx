@@ -8,15 +8,18 @@ import {
 	Handle,
 	MarkerType,
 	type Node,
+	type NodeChange,
+	applyNodeChanges,
 	type NodeProps,
 	type NodeTypes,
 	Position,
 	ReactFlow,
+	useReactFlow,
 } from "@xyflow/react";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { useTranslation } from "next-i18next";
-import type { CSSProperties, ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
 	Dialog,
 	DialogContent,
@@ -68,8 +71,14 @@ type StageFlowNodeData = Record<string, unknown> & {
 	stageNode?: StageGraphNode;
 };
 type StageFlowNode = Node<StageFlowNodeData, "stage">;
+type EdgePointMoveHandler = (
+	edgeId: string,
+	pointIndex: number,
+	point: Point,
+) => void;
 type ElkSectionEdgeData = Record<string, unknown> & {
 	points: Point[];
+	onPointMove?: EdgePointMoveHandler;
 };
 type ElkSectionEdge = Edge<ElkSectionEdgeData, "elkSection">;
 type Side = "top" | "right" | "bottom" | "left";
@@ -111,15 +120,15 @@ const RULE_SCAN_BRANCH_LAYOUT: Record<string, { column: number; row: number }> =
 	"repository-scan": { column: 0, row: 1 },
 	"module-threat-model": { column: 1, row: 1 },
 	"design-rule": { column: 2, row: 1 },
-	[SCAN_RULE_STAGE_NAME]: { column: 3, row: 0.5 },
-	[SCAN_PATTERN_STAGE_NAME]: { column: 3, row: 1.5 },
+	[SCAN_RULE_STAGE_NAME]: { column: 3, row: 0.75 },
+	[SCAN_PATTERN_STAGE_NAME]: { column: 3, row: 1.25 },
 	[SINK_PRE_ANALYZE_STAGE_NAME]: { column: 4, row: 1 },
-	analyze: { column: 0, row: 4 },
-	"build-fuzzer": { column: 1, row: 3 },
-	"run-fuzzer": { column: 2, row: 3 },
-	criticize: { column: 1, row: 5 },
-	verify: { column: 3, row: 4 },
-	triage: { column: 4, row: 4 },
+	analyze: { column: 0, row: 2.7 },
+	"build-fuzzer": { column: 1, row: 2.25 },
+	"run-fuzzer": { column: 2, row: 2.25 },
+	criticize: { column: 1, row: 3.2 },
+	verify: { column: 3, row: 2.7 },
+	triage: { column: 4, row: 2.7 },
 };
 
 const emptyStageCounts = () => ({
@@ -313,19 +322,86 @@ const buildSectionPath = (points: Point[]) => {
 	].join(" ");
 };
 
+const withFlowEdgeEndpoints = (
+	points: Point[],
+	sourcePoint: Point,
+	targetPoint: Point,
+) => {
+	if (points.length <= 2) {
+		return [sourcePoint, targetPoint];
+	}
+	return [sourcePoint, ...points.slice(1, -1), targetPoint];
+};
+
 const ElkSectionEdgeComponent = ({
 	data,
 	id,
 	markerEnd,
+	sourceX,
+	sourceY,
 	style,
+	targetX,
+	targetY,
 }: EdgeProps<ElkSectionEdge>) => {
+	const { screenToFlowPosition } = useReactFlow();
+	const points = data?.points ?? [];
+	const renderedPoints = withFlowEdgeEndpoints(
+		points,
+		{ x: sourceX, y: sourceY },
+		{ x: targetX, y: targetY },
+	);
+	const onPointMove = data?.onPointMove;
+
+	const handlePointPointerDown =
+		(pointIndex: number) => (event: ReactPointerEvent<SVGCircleElement>) => {
+			if (!onPointMove) {
+				return;
+			}
+			event.preventDefault();
+			event.stopPropagation();
+			const handlePointerMove = (moveEvent: PointerEvent) => {
+				onPointMove(
+					id,
+					pointIndex,
+					screenToFlowPosition({
+						x: moveEvent.clientX,
+						y: moveEvent.clientY,
+					}),
+				);
+			};
+			const handlePointerUp = () => {
+				window.removeEventListener("pointermove", handlePointerMove);
+				window.removeEventListener("pointerup", handlePointerUp);
+				window.removeEventListener("pointercancel", handlePointerUp);
+			};
+			window.addEventListener("pointermove", handlePointerMove);
+			window.addEventListener("pointerup", handlePointerUp);
+			window.addEventListener("pointercancel", handlePointerUp);
+		};
+
 	return (
-		<BaseEdge
-			id={id}
-			path={buildSectionPath(data?.points ?? [])}
-			markerEnd={markerEnd}
-			style={style}
-		/>
+		<>
+			<BaseEdge
+				id={id}
+				path={buildSectionPath(renderedPoints)}
+				markerEnd={markerEnd}
+				style={style}
+			/>
+			{renderedPoints.slice(1, -1).map((point, index) => {
+				const pointIndex = index + 1;
+				return (
+					<circle
+						key={`${id}-point-${pointIndex}`}
+						cx={point.x}
+						cy={point.y}
+						r={5}
+						className="cursor-move fill-background stroke-muted-foreground opacity-0 transition-opacity hover:opacity-100"
+						strokeWidth={1.5}
+						onPointerDown={handlePointPointerDown(pointIndex)}
+					/>
+				);
+			})}
+		</>
 	);
 };
 
@@ -697,7 +773,7 @@ const buildSinkPreAnalyzeOutgoingEdgePoints = (
 		y: target.y,
 	};
 	const routeRightX = start.x + NODE_GAP_X / 2;
-	const routeY = end.y - FORWARD_LONG_EDGE_OFFSET_Y;
+	const routeY = end.y - NODE_HEIGHT - FORWARD_LONG_EDGE_OFFSET_Y;
 	return [
 		start,
 		{ x: routeRightX, y: start.y },
@@ -705,6 +781,53 @@ const buildSinkPreAnalyzeOutgoingEdgePoints = (
 		{ x: end.x, y: routeY },
 		end,
 	];
+};
+
+const getNodeAnchor = (nodePosition: Point, side: Side): Point => {
+	switch (side) {
+		case "top":
+			return { x: nodePosition.x + NODE_WIDTH / 2, y: nodePosition.y };
+		case "right":
+			return {
+				x: nodePosition.x + NODE_WIDTH,
+				y: nodePosition.y + NODE_HEIGHT / 2,
+			};
+		case "bottom":
+			return {
+				x: nodePosition.x + NODE_WIDTH / 2,
+				y: nodePosition.y + NODE_HEIGHT,
+			};
+		case "left":
+			return { x: nodePosition.x, y: nodePosition.y + NODE_HEIGHT / 2 };
+	}
+};
+
+const buildSideCorridorEdgePoints = (input: {
+	source: Point;
+	sourceSide: Side;
+	target: Point;
+	targetSide: Side;
+}) => {
+	const start = getNodeAnchor(input.source, input.sourceSide);
+	const end = getNodeAnchor(input.target, input.targetSide);
+	const midX = start.x + (end.x - start.x) / 2;
+	return [start, { x: midX, y: start.y }, { x: midX, y: end.y }, end];
+};
+
+const buildUpperCorridorEdgePoints = (source: Point, target: Point) => {
+	const start = getNodeAnchor(source, "top");
+	const end = getNodeAnchor(target, "top");
+	const routeY =
+		Math.min(source.y, target.y) - NODE_HEIGHT - FORWARD_LONG_EDGE_OFFSET_Y;
+	return [start, { x: start.x, y: routeY }, { x: end.x, y: routeY }, end];
+};
+
+const buildLowerCorridorEdgePoints = (source: Point, target: Point) => {
+	const start = getNodeAnchor(source, "bottom");
+	const end = getNodeAnchor(target, "bottom");
+	const routeY =
+		Math.max(source.y, target.y) + NODE_HEIGHT + FORWARD_LONG_EDGE_OFFSET_Y;
+	return [start, { x: start.x, y: routeY }, { x: end.x, y: routeY }, end];
 };
 
 const isScanRuleOrPatternStage = (stageName: string) =>
@@ -736,6 +859,45 @@ const buildEdgePoints = (input: {
 	const { source, target, sourceStageName, targetStageName } = input;
 	if (sourceStageName === SINK_PRE_ANALYZE_STAGE_NAME) {
 		return buildSinkPreAnalyzeOutgoingEdgePoints(source, target);
+	}
+	if (
+		sourceStageName === "analyze" &&
+		(targetStageName === "build-fuzzer" || targetStageName === "criticize")
+	) {
+		return buildSideCorridorEdgePoints({
+			source,
+			sourceSide: "right",
+			target,
+			targetSide: "left",
+		});
+	}
+	if (
+		sourceStageName === "build-fuzzer" &&
+		targetStageName === "analyze"
+	) {
+		return buildSideCorridorEdgePoints({
+			source,
+			sourceSide: "left",
+			target,
+			targetSide: "right",
+		});
+	}
+	if (sourceStageName === "criticize" && targetStageName === "analyze") {
+		return buildLowerCorridorEdgePoints(source, target);
+	}
+	if (
+		(sourceStageName === "analyze" && targetStageName === "verify") ||
+		(sourceStageName === "run-fuzzer" && targetStageName === "analyze")
+	) {
+		return buildUpperCorridorEdgePoints(source, target);
+	}
+	if (sourceStageName === "criticize" && targetStageName === "verify") {
+		return buildSideCorridorEdgePoints({
+			source,
+			sourceSide: "right",
+			target,
+			targetSide: "left",
+		});
 	}
 	if (
 		isScanRuleOrPatternStage(sourceStageName) ||
@@ -832,7 +994,47 @@ const buildEdgePoints = (input: {
 	return [start, { x: start.x, y: midY }, { x: end.x, y: midY }, end];
 };
 
-const buildFlowElements = (graph: StageGraph) => {
+const inferPointSide = (point: Point | undefined, nodePosition: Point): Side => {
+	if (!point) {
+		return "right";
+	}
+	const anchors: Array<{ side: Side; point: Point }> = [
+		{
+			side: "top",
+			point: { x: nodePosition.x + NODE_WIDTH / 2, y: nodePosition.y },
+		},
+		{
+			side: "right",
+			point: {
+				x: nodePosition.x + NODE_WIDTH,
+				y: nodePosition.y + NODE_HEIGHT / 2,
+			},
+		},
+		{
+			side: "bottom",
+			point: {
+				x: nodePosition.x + NODE_WIDTH / 2,
+				y: nodePosition.y + NODE_HEIGHT,
+			},
+		},
+		{
+			side: "left",
+			point: { x: nodePosition.x, y: nodePosition.y + NODE_HEIGHT / 2 },
+		},
+	];
+	return anchors.reduce((closest, candidate) => {
+		const closestDistance =
+			(point.x - closest.point.x) ** 2 + (point.y - closest.point.y) ** 2;
+		const candidateDistance =
+			(point.x - candidate.point.x) ** 2 + (point.y - candidate.point.y) ** 2;
+		return candidateDistance < closestDistance ? candidate : closest;
+	}).side;
+};
+
+const buildFlowElements = (
+	graph: StageGraph,
+	onEdgePointMove?: EdgePointMoveHandler,
+) => {
 	const groupById = new Map(graph.groups.map((group) => [group.id, group]));
 	const stagePositions = getNodeAbsolutePositions(graph);
 	const groupBoundsById = new Map(
@@ -897,8 +1099,8 @@ const buildFlowElements = (graph: StageGraph) => {
 					minHeight: NODE_HEIGHT,
 					padding: 0,
 				},
-				draggable: false,
-				selectable: false,
+				draggable: true,
+				selectable: true,
 				zIndex: 2,
 			};
 		}),
@@ -907,6 +1109,20 @@ const buildFlowElements = (graph: StageGraph) => {
 	const flowEdges: ElkSectionEdge[] = graph.edges.map((edge) => {
 		const source = stagePositions.get(edge.source);
 		const target = stagePositions.get(edge.target);
+		const points =
+			source && target
+				? buildEdgePoints({
+						source,
+						target,
+						sourceStageName: edge.source,
+						targetStageName: edge.target,
+					})
+				: [];
+		const sourceSide = inferPointSide(points[0], source ?? { x: 0, y: 0 });
+		const targetSide = inferPointSide(
+			points[points.length - 1],
+			target ?? { x: 0, y: 0 },
+		);
 		const sourceNode = graph.nodes.find((node) => node.stageName === edge.source);
 		const targetNode = graph.nodes.find((node) => node.stageName === edge.target);
 		const isInactiveEdge =
@@ -915,20 +1131,15 @@ const buildFlowElements = (graph: StageGraph) => {
 		return {
 			id: edge.id,
 			source: edge.source,
+			sourceHandle: `source-${sourceSide}`,
 			target: edge.target,
+			targetHandle: `target-${targetSide}`,
 			type: "elkSection" as const,
 			animated: true,
 			zIndex: 1,
 			data: {
-				points:
-					source && target
-						? buildEdgePoints({
-								source,
-								target,
-								sourceStageName: edge.source,
-								targetStageName: edge.target,
-							})
-						: [],
+				points,
+				onPointMove: onEdgePointMove,
 			},
 			markerEnd: {
 				type: MarkerType.ArrowClosed,
@@ -981,6 +1192,39 @@ const ScanStageGraphPanel = ({
 	const [selectedStage, setSelectedStage] = useState<StageGraphNode | null>(
 		null,
 	);
+	const handleNodesChange = useCallback(
+		(changes: NodeChange[]) => {
+			setElements((previousElements) => ({
+				...previousElements,
+				nodes: applyNodeChanges(changes, previousElements.nodes),
+			}));
+		},
+		[],
+	);
+	const handleEdgePointMove = useCallback<EdgePointMoveHandler>(
+		(edgeId, pointIndex, point) => {
+			setElements((previousElements) => ({
+				...previousElements,
+				edges: previousElements.edges.map((edge) => {
+					if (edge.id !== edgeId) {
+						return edge;
+					}
+					const data = edge.data as ElkSectionEdgeData | undefined;
+					const points = data?.points ?? [];
+					return {
+						...edge,
+						data: {
+							...data,
+							points: points.map((currentPoint, index) =>
+								index === pointIndex ? point : currentPoint,
+							),
+						},
+					};
+				}),
+			}));
+		},
+		[],
+	);
 	const isLayoutLoading = Boolean(
 		graph &&
 			graph.nodes.length > 0 &&
@@ -1002,7 +1246,10 @@ const ScanStageGraphPanel = ({
 
 		setLayoutError(null);
 		try {
-			const nextElements = buildFlowElements(effectiveGraph);
+			const nextElements = buildFlowElements(
+				effectiveGraph,
+				handleEdgePointMove,
+			);
 			if (!isCancelled) {
 				setElements(nextElements);
 			}
@@ -1020,7 +1267,7 @@ const ScanStageGraphPanel = ({
 		return () => {
 			isCancelled = true;
 		};
-	}, [effectiveGraph]);
+	}, [effectiveGraph, handleEdgePointMove]);
 
 	return (
 		<div className="rounded-lg border bg-background">
@@ -1062,9 +1309,10 @@ const ScanStageGraphPanel = ({
 						nodeTypes={NODE_TYPES}
 						edgeTypes={EDGE_TYPES}
 						fitView
-						nodesDraggable={false}
+						onNodesChange={handleNodesChange}
+						nodesDraggable
 						nodesConnectable={false}
-						elementsSelectable={false}
+						elementsSelectable
 						panOnScroll={false}
 						zoomOnScroll
 						zoomOnPinch
