@@ -53,8 +53,16 @@ type PreviewAgentProfile = NonNullable<StageGraphNode["agentProfile"]>;
 type PreviewAgentProfiles = RouterOutputs["ai"]["getAgentProfiles"] | undefined;
 type PreviewServiceData = Record<string, unknown> | null | undefined;
 type FullScanStageGraphTarget =
-	| { applicationId: string; composeId?: never; scanType?: "delta" | "full" }
-	| { composeId: string; applicationId?: never; scanType?: "delta" | "full" };
+	| {
+			applicationId: string;
+			composeId?: never;
+			scanType?: "delta" | "full" | "rule";
+	  }
+	| {
+			composeId: string;
+			applicationId?: never;
+			scanType?: "delta" | "full" | "rule";
+	  };
 type StageFlowNodeData = Record<string, unknown> & {
 	label: ReactNode;
 	stageNode?: StageGraphNode;
@@ -84,9 +92,34 @@ const SELF_EDGE_OFFSET_Y = 38;
 const DEFAULT_PROFILE_VALUE = "__service_default__";
 const REPOSITORY_STAGE_NAME = "repository-scan";
 const DELTA_SCOPE_STAGE_NAME = "delta-scope";
+const SCAN_RULE_STAGE_NAME = "scan-rule";
+const SCAN_PATTERN_STAGE_NAME = "scan-pattern";
+const SINK_PRE_ANALYZE_STAGE_NAME = "sink-pre-analyze";
 const EMPTY_FLOW_ELEMENTS = {
 	nodes: [] as Node[],
 	edges: [] as Edge[],
+};
+const RULE_SCAN_BRANCH_STAGE_NAMES = [
+	"repository-scan",
+	"module-threat-model",
+	"design-rule",
+	SCAN_RULE_STAGE_NAME,
+	SCAN_PATTERN_STAGE_NAME,
+	SINK_PRE_ANALYZE_STAGE_NAME,
+] as const;
+const RULE_SCAN_BRANCH_LAYOUT: Record<string, { column: number; row: number }> = {
+	"repository-scan": { column: 0, row: 1 },
+	"module-threat-model": { column: 1, row: 1 },
+	"design-rule": { column: 2, row: 1 },
+	[SCAN_RULE_STAGE_NAME]: { column: 3, row: 0.5 },
+	[SCAN_PATTERN_STAGE_NAME]: { column: 3, row: 1.5 },
+	[SINK_PRE_ANALYZE_STAGE_NAME]: { column: 4, row: 1 },
+	analyze: { column: 0, row: 4 },
+	"build-fuzzer": { column: 1, row: 3 },
+	"run-fuzzer": { column: 2, row: 3 },
+	criticize: { column: 1, row: 5 },
+	verify: { column: 3, row: 4 },
+	triage: { column: 4, row: 4 },
 };
 
 const emptyStageCounts = () => ({
@@ -539,10 +572,41 @@ const compareStageOrder = (left: StageGraphNode, right: StageGraphNode) => {
 		: leftOrder - rightOrder;
 };
 
+const isRuleScanBranchGraph = (graph: StageGraph) => {
+	const stageNames = new Set(graph.nodes.map((node) => node.stageName));
+	return (
+		RULE_SCAN_BRANCH_STAGE_NAMES.every((stageName) =>
+			stageNames.has(stageName),
+		) &&
+		graph.edges.some(
+			(edge) =>
+				edge.source === "design-rule" && edge.target === "scan-pattern",
+		) &&
+		!graph.edges.some(
+			(edge) => edge.source === "scan-rule" && edge.target === "scan-pattern",
+		)
+	);
+};
+
 const getNodeAbsolutePositions = (graph: StageGraph) => {
 	const nodeByStageName = new Map(
 		graph.nodes.map((node) => [node.stageName, node]),
 	);
+	if (isRuleScanBranchGraph(graph)) {
+		const positions = new Map<string, Point>();
+		const orderedNodes = [...graph.nodes].sort(compareStageOrder);
+		let fallbackColumn = 10;
+		for (const node of orderedNodes) {
+			const layout = RULE_SCAN_BRANCH_LAYOUT[node.stageName];
+			const column = layout?.column ?? fallbackColumn++;
+			const row = layout?.row ?? 1;
+			positions.set(node.stageName, {
+				x: GRAPH_PADDING + column * (NODE_WIDTH + NODE_GAP_X),
+				y: GRAPH_PADDING + row * (NODE_HEIGHT + NODE_GAP_Y),
+			});
+		}
+		return positions;
+	}
 	const groupByStageName = new Map(
 		graph.groups.flatMap((group) =>
 			group.stageNames.map((stageName) => [stageName, group] as const),
@@ -620,7 +684,68 @@ const getGroupBounds = (
 	};
 };
 
-const buildEdgePoints = (source: Point, target: Point) => {
+const buildSinkPreAnalyzeOutgoingEdgePoints = (
+	source: Point,
+	target: Point,
+) => {
+	const start = {
+		x: source.x + NODE_WIDTH,
+		y: source.y + NODE_HEIGHT / 2,
+	};
+	const end = {
+		x: target.x + NODE_WIDTH / 2,
+		y: target.y,
+	};
+	const routeRightX = start.x + NODE_GAP_X / 2;
+	const routeY = end.y - FORWARD_LONG_EDGE_OFFSET_Y;
+	return [
+		start,
+		{ x: routeRightX, y: start.y },
+		{ x: routeRightX, y: routeY },
+		{ x: end.x, y: routeY },
+		end,
+	];
+};
+
+const isScanRuleOrPatternStage = (stageName: string) =>
+	stageName === SCAN_RULE_STAGE_NAME || stageName === SCAN_PATTERN_STAGE_NAME;
+
+const buildScanRulePatternSideEdgePoints = (input: {
+	source: Point;
+	target: Point;
+}) => {
+	const { source, target } = input;
+	const start = {
+		x: source.x + NODE_WIDTH,
+		y: source.y + NODE_HEIGHT / 2,
+	};
+	const end = {
+		x: target.x,
+		y: target.y + NODE_HEIGHT / 2,
+	};
+	const midX = start.x + (end.x - start.x) / 2;
+	return [start, { x: midX, y: start.y }, { x: midX, y: end.y }, end];
+};
+
+const buildEdgePoints = (input: {
+	source: Point;
+	target: Point;
+	sourceStageName: string;
+	targetStageName: string;
+}) => {
+	const { source, target, sourceStageName, targetStageName } = input;
+	if (sourceStageName === SINK_PRE_ANALYZE_STAGE_NAME) {
+		return buildSinkPreAnalyzeOutgoingEdgePoints(source, target);
+	}
+	if (
+		isScanRuleOrPatternStage(sourceStageName) ||
+		isScanRuleOrPatternStage(targetStageName)
+	) {
+		return buildScanRulePatternSideEdgePoints({
+			source,
+			target,
+		});
+	}
 	if (source.x === target.x && source.y === target.y) {
 		const centerY = source.y + NODE_HEIGHT / 2;
 		const start = {
@@ -795,7 +920,15 @@ const buildFlowElements = (graph: StageGraph) => {
 			animated: true,
 			zIndex: 1,
 			data: {
-				points: source && target ? buildEdgePoints(source, target) : [],
+				points:
+					source && target
+						? buildEdgePoints({
+								source,
+								target,
+								sourceStageName: edge.source,
+								targetStageName: edge.target,
+							})
+						: [],
 			},
 			markerEnd: {
 				type: MarkerType.ArrowClosed,
@@ -1415,7 +1548,7 @@ export const FullScanStageGraphPreview = ({
 	serviceData?: PreviewServiceData;
 	scanRuntimeSettings?: ScanRuntimeSettingsDraft;
 	onScanRuntimeSettingsChange?: (settings: ScanRuntimeSettingsDraft) => void;
-	scanType?: "delta" | "full";
+	scanType?: "delta" | "full" | "rule";
 }) => {
 	const { t } = useTranslation("scan");
 	const target = useMemo<FullScanStageGraphTarget | null>(() => {
@@ -1463,7 +1596,9 @@ export const FullScanStageGraphPreview = ({
 					type:
 						scanType === "delta"
 							? scanT(t, "scan.scanType.delta", "Delta Scan")
-							: scanT(t, "scan.scanType.full", "Full Scan"),
+							: scanType === "rule"
+								? scanT(t, "scan.scanType.rule", "Rule Scan")
+								: scanT(t, "scan.scanType.full", "Full Scan"),
 				},
 			)}
 			heightClassName="h-[360px]"
