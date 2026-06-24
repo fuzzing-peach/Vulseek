@@ -54,6 +54,7 @@ export const findScanJobByIdRepo = async (scanJobId: string) => {
 			and(
 				eq(tasks.scanJobId, scanJobs.scanJobId),
 				or(
+					eq(tasks.stageName, "repository-profile"),
 					eq(tasks.stageName, "repository-scan"),
 					eq(tasks.stageName, "delta-scope"),
 				),
@@ -89,6 +90,7 @@ export const listScanJobsByApplicationIdRepo = async (applicationId: string) =>
 			and(
 				eq(tasks.scanJobId, scanJobs.scanJobId),
 				or(
+					eq(tasks.stageName, "repository-profile"),
 					eq(tasks.stageName, "repository-scan"),
 					eq(tasks.stageName, "delta-scope"),
 				),
@@ -106,6 +108,7 @@ export const listScanJobsByComposeIdRepo = async (composeId: string) =>
 			and(
 				eq(tasks.scanJobId, scanJobs.scanJobId),
 				or(
+					eq(tasks.stageName, "repository-profile"),
 					eq(tasks.stageName, "repository-scan"),
 					eq(tasks.stageName, "delta-scope"),
 				),
@@ -123,6 +126,7 @@ export const listUnfinishedScanJobsRepo = async () =>
 			and(
 				eq(tasks.scanJobId, scanJobs.scanJobId),
 				or(
+					eq(tasks.stageName, "repository-profile"),
 					eq(tasks.stageName, "repository-scan"),
 					eq(tasks.stageName, "delta-scope"),
 				),
@@ -155,7 +159,11 @@ export const createScanJobRepo = async (input: {
 			scanType: input.scanType as typeof scanJobs.$inferInsert.scanType,
 			title:
 				input.title ||
-				(input.scanType === "delta" ? "Delta Scan Job" : "Full Scan Job"),
+				(input.scanType === "delta"
+					? "Delta Scan Job"
+					: input.scanType === "rule"
+						? "Rule Scan Job"
+						: "Full Scan Job"),
 			description: input.description || "",
 			triggerSource: input.triggerSource || "manual",
 			commitSha: input.commitSha,
@@ -179,8 +187,10 @@ export const createScanJobRepo = async (input: {
 
 	await createTaskRepo({
 		scanJobId: created[0].scanJobId,
-		name: input.scanType === "delta" ? "delta-scoping" : "repository-scanning",
-		stageName: input.scanType === "delta" ? "delta-scope" : "repository-scan",
+		name:
+			input.scanType === "delta" ? "delta-scoping" : "repository-profiling",
+		stageName:
+			input.scanType === "delta" ? "delta-scope" : "repository-profile",
 		status: "pending",
 	});
 
@@ -237,7 +247,7 @@ export const updateScanJobStatusRepo = async (
 		patch.finishedAt = null;
 	}
 
-	if (status === "finished" || status === "canceled") {
+	if (status === "finished" || status === "failed" || status === "canceled") {
 		patch.finishedAt = new Date().toISOString();
 	}
 
@@ -397,12 +407,18 @@ export const recalculateScanTaskCountsRepo = async (scanJobId: string) => {
 	const updated = await db
 		.update(scanJobs)
 		.set({
-			moduleTasksTotal: countBy("module-scan"),
-			moduleTasksCompleted: countBy("module-scan", "completed"),
-			moduleTasksFailed: countBy("module-scan", "failed"),
-			functionTasksTotal: countBy("function-scan"),
-			functionTasksCompleted: countBy("function-scan", "completed"),
-			functionTasksFailed: countBy("function-scan", "failed"),
+			moduleTasksTotal: countBy("identify-target") + countBy("module-scan"),
+			moduleTasksCompleted:
+				countBy("identify-target", "completed") +
+				countBy("module-scan", "completed"),
+			moduleTasksFailed:
+				countBy("identify-target", "failed") + countBy("module-scan", "failed"),
+			functionTasksTotal: countBy("scan-target") + countBy("function-scan"),
+			functionTasksCompleted:
+				countBy("scan-target", "completed") +
+				countBy("function-scan", "completed"),
+			functionTasksFailed:
+				countBy("scan-target", "failed") + countBy("function-scan", "failed"),
 		})
 		.where(eq(scanJobs.scanJobId, scanJobId))
 		.returning();

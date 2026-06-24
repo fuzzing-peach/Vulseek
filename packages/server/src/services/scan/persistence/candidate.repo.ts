@@ -42,6 +42,12 @@ type DerivedCandidateRecord = {
 	updatedAt: string;
 };
 
+const CANDIDATE_PRODUCER_STAGE_NAMES = [
+	"scan-target",
+	"function-scan",
+	"sink-pre-analyze",
+];
+
 const asRecord = (value: unknown): Record<string, unknown> | null =>
 	value && typeof value === "object"
 		? (value as Record<string, unknown>)
@@ -301,11 +307,32 @@ const buildDerivedCandidatesFromTasks = async (input: {
 const listDerivedCandidatesByScanJobId = async (
 	scanJobId: string,
 ): Promise<DerivedCandidateRecord[] | null> => {
-	const [functionTasks, analysisTasks, verificationTasks, triageTasks] =
-		await Promise.all([
+	const [
+		scanTargetTasks,
+		functionTasks,
+		sinkPreAnalyzeTasks,
+		analysisTasks,
+		legacyAnalysisTasks,
+		verificationTasks,
+		legacyVerificationTasks,
+		triageTasks,
+		legacyTriageTasks,
+	] = await Promise.all([
+			listTasksByScanJobAndStageRepo({
+				scanJobId,
+				stageName: "scan-target",
+			}),
 			listTasksByScanJobAndStageRepo({
 				scanJobId,
 				stageName: "function-scan",
+			}),
+			listTasksByScanJobAndStageRepo({
+				scanJobId,
+				stageName: "sink-pre-analyze",
+			}),
+			listTasksByScanJobAndStageRepo({
+				scanJobId,
+				stageName: "analyze-finding",
 			}),
 			listTasksByScanJobAndStageRepo({
 				scanJobId,
@@ -313,7 +340,15 @@ const listDerivedCandidatesByScanJobId = async (
 			}),
 			listTasksByScanJobAndStageRepo({
 				scanJobId,
+				stageName: "verify-finding",
+			}),
+			listTasksByScanJobAndStageRepo({
+				scanJobId,
 				stageName: "verify",
+			}),
+			listTasksByScanJobAndStageRepo({
+				scanJobId,
+				stageName: "triage-finding",
 			}),
 			listTasksByScanJobAndStageRepo({
 				scanJobId,
@@ -322,19 +357,24 @@ const listDerivedCandidatesByScanJobId = async (
 		]);
 
 	const hasUnifiedTaskPipeline =
+		scanTargetTasks.length > 0 ||
 		functionTasks.length > 0 ||
+		sinkPreAnalyzeTasks.length > 0 ||
 		analysisTasks.length > 0 ||
+		legacyAnalysisTasks.length > 0 ||
 		verificationTasks.length > 0 ||
-		triageTasks.length > 0;
+		legacyVerificationTasks.length > 0 ||
+		triageTasks.length > 0 ||
+		legacyTriageTasks.length > 0;
 	if (!hasUnifiedTaskPipeline) {
 		return null;
 	}
 
 	return buildDerivedCandidatesFromTasks({
-		functionTasks,
-		analysisTasks,
-		verificationTasks,
-		triageTasks,
+		functionTasks: [...scanTargetTasks, ...functionTasks, ...sinkPreAnalyzeTasks],
+		analysisTasks: [...analysisTasks, ...legacyAnalysisTasks],
+		verificationTasks: [...verificationTasks, ...legacyVerificationTasks],
+		triageTasks: [...triageTasks, ...legacyTriageTasks],
 	}).then(withCandidateMetadata);
 };
 
@@ -346,24 +386,31 @@ const findDerivedCandidateById = async (
 		.from(tasks)
 		.where(
 			or(
+				eq(tasks.stageName, "scan-target"),
 				eq(tasks.stageName, "function-scan"),
+				eq(tasks.stageName, "sink-pre-analyze"),
+				eq(tasks.stageName, "analyze-finding"),
 				eq(tasks.stageName, "analyze"),
+				eq(tasks.stageName, "verify-finding"),
 				eq(tasks.stageName, "verify"),
+				eq(tasks.stageName, "triage-finding"),
 				eq(tasks.stageName, "triage"),
 			),
 		)
 		.orderBy(desc(tasks.createdAt));
 
 	const functionTasks = stageTasks.filter(
-		(task) => task.stageName === "function-scan",
+		(task) => CANDIDATE_PRODUCER_STAGE_NAMES.includes(task.stageName),
 	);
 	const analysisTasks = stageTasks.filter(
-		(task) => task.stageName === "analyze",
+		(task) => task.stageName === "analyze" || task.stageName === "analyze-finding",
 	);
 	const verificationTasks = stageTasks.filter(
-		(task) => task.stageName === "verify",
+		(task) => task.stageName === "verify" || task.stageName === "verify-finding",
 	);
-	const triageTasks = stageTasks.filter((task) => task.stageName === "triage");
+	const triageTasks = stageTasks.filter(
+		(task) => task.stageName === "triage" || task.stageName === "triage-finding",
+	);
 
 	const candidates = await buildDerivedCandidatesFromTasks({
 		functionTasks,
@@ -398,7 +445,7 @@ const findVulnerabilityCandidateByFunctionTaskRepo = async (input: {
 	}
 	if (
 		functionTask.scanJobId !== input.scanJobId ||
-		functionTask.stageName !== "function-scan"
+		!CANDIDATE_PRODUCER_STAGE_NAMES.includes(functionTask.stageName)
 	) {
 		return null;
 	}
@@ -418,11 +465,15 @@ const findVulnerabilityCandidateByFunctionTaskRepo = async (input: {
 	});
 	const derivedCandidates = await buildDerivedCandidatesFromTasks({
 		functionTasks: [functionTask],
-		analysisTasks: candidateTasks.filter((task) => task.stageName === "analyze"),
-		verificationTasks: candidateTasks.filter(
-			(task) => task.stageName === "verify",
+		analysisTasks: candidateTasks.filter(
+			(task) => task.stageName === "analyze" || task.stageName === "analyze-finding",
 		),
-		triageTasks: candidateTasks.filter((task) => task.stageName === "triage"),
+		verificationTasks: candidateTasks.filter(
+			(task) => task.stageName === "verify" || task.stageName === "verify-finding",
+		),
+		triageTasks: candidateTasks.filter(
+			(task) => task.stageName === "triage" || task.stageName === "triage-finding",
+		),
 	}).then(withCandidateMetadata);
 
 	return (
@@ -449,10 +500,16 @@ export const findVulnerabilityCandidateByIdAndScanJobIdRepo = async (input: {
 		}
 	}
 
-	const functionTasks = await listTasksByScanJobAndStageRepo({
-		scanJobId: input.scanJobId,
-		stageName: "function-scan",
-	});
+	const functionTasks = (
+		await Promise.all(
+			CANDIDATE_PRODUCER_STAGE_NAMES.map((stageName) =>
+				listTasksByScanJobAndStageRepo({
+					scanJobId: input.scanJobId,
+					stageName,
+				}),
+			),
+		)
+	).flat();
 
 	for (const functionTask of functionTasks) {
 		const candidates = await parseFunctionTaskCandidates(functionTask);
@@ -472,12 +529,18 @@ export const findVulnerabilityCandidateByIdAndScanJobIdRepo = async (input: {
 		const derivedCandidates = await buildDerivedCandidatesFromTasks({
 			functionTasks: [functionTask],
 			analysisTasks: candidateTasks.filter(
-				(task) => task.stageName === "analyze",
+				(task) =>
+					task.stageName === "analyze" ||
+					task.stageName === "analyze-finding",
 			),
 			verificationTasks: candidateTasks.filter(
-				(task) => task.stageName === "verify",
+				(task) =>
+					task.stageName === "verify" || task.stageName === "verify-finding",
 			),
-			triageTasks: candidateTasks.filter((task) => task.stageName === "triage"),
+			triageTasks: candidateTasks.filter(
+				(task) =>
+					task.stageName === "triage" || task.stageName === "triage-finding",
+			),
 		}).then(withCandidateMetadata);
 		const derivedCandidate = derivedCandidates.find(
 			(candidate) =>

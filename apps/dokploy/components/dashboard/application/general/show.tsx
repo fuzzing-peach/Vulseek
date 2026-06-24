@@ -26,6 +26,9 @@ interface Props {
 	applicationId: string;
 }
 
+const SCAN_BUTTON_CLASS_NAME =
+	"flex items-center gap-1.5 border border-black bg-black text-white hover:bg-black/90 focus-visible:ring-2 focus-visible:ring-offset-2 dark:border-white dark:bg-white dark:text-black dark:hover:bg-white/90";
+
 export const ShowGeneralApplication = ({ applicationId }: Props) => {
 	const { t } = useTranslation("scan");
 	const router = useRouter();
@@ -107,6 +110,7 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 			`Image: ${checkoutStatus.imageTag}`,
 			`Repository: ${checkoutStatus.gitUrl}`,
 			`Branch: ${checkoutStatus.gitBranch}`,
+			`Tag: ${checkoutStatus.gitTag || "none"}`,
 			`Enable Submodules: ${checkoutStatus.enableSubmodules ? "true" : "false"}`,
 			`Post Checkout Script: ${
 				checkoutStatus.postCheckoutScript?.trim() ? "configured" : "none"
@@ -154,11 +158,11 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 				<CardContent className="flex flex-row gap-4 flex-wrap">
 					<TooltipProvider delayDuration={0} disableHoverableContent={false}>
 						<CreateScanDialog
-							title={scanT(t, "scan.actions.fullScan", "Full Scan")}
+							title={scanT(t, "scan.actions.fullScan", "漏洞挖掘")}
 							description={scanT(
 								t,
 								"scan.actions.fullScanDescription",
-								"Configure ref and tag for this full scan. If tag is empty, Dokploy will scan the most recent tag version.",
+								"Configure ref and tag for this vulnerability scan. If tag is empty, Dokploy will scan the most recent tag version.",
 							)}
 							isLoading={isCreatingScanJob}
 							showCommitWindow={false}
@@ -187,7 +191,7 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 										scanT(
 											t,
 											"scan.actions.fullScanPending",
-											"A full scan is already pending",
+											"A vulnerability scan is already pending",
 										),
 									);
 									return;
@@ -206,7 +210,7 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 											scanT(
 												t,
 												"scan.actions.fullScanStarted",
-												"Full scan started successfully",
+												"Vulnerability scan started successfully",
 											),
 										);
 										refetch();
@@ -219,7 +223,7 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 											scanT(
 												t,
 												"scan.actions.fullScanStartError",
-												"Error starting full scan",
+												"Error starting vulnerability scan",
 											),
 										);
 									});
@@ -228,13 +232,13 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 								<Button
 									variant="default"
 									isLoading={isCreatingScanJob}
-									className="flex items-center gap-1.5 border border-black bg-black text-white hover:bg-black/90 focus-visible:ring-2 focus-visible:ring-offset-2 dark:border-white dark:bg-white dark:text-black dark:hover:bg-white/90"
+									className={SCAN_BUTTON_CLASS_NAME}
 								>
 									<Tooltip>
 										<TooltipTrigger asChild>
 											<div className="flex items-center">
 												<Shield className="size-4 mr-1" />
-												{scanT(t, "scan.actions.fullScan", "Full Scan")}
+												{scanT(t, "scan.actions.fullScan", "漏洞挖掘")}
 											</div>
 										</TooltipTrigger>
 										<TooltipPrimitive.Portal>
@@ -243,7 +247,7 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 													{scanT(
 														t,
 														"scan.actions.fullScanTooltip",
-														"Scans the full codebase from the current source",
+														"Profiles the repository, models attack surfaces, identifies targets, and scans candidate findings",
 													)}
 												</p>
 											</TooltipContent>
@@ -326,9 +330,9 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 							}}
 							trigger={
 								<Button
-									variant="secondary"
+									variant="default"
 									isLoading={isCreatingScanJob}
-									className="flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-offset-2"
+									className={SCAN_BUTTON_CLASS_NAME}
 								>
 									<Tooltip>
 										<TooltipTrigger asChild>
@@ -343,7 +347,7 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 													{scanT(
 														t,
 														"scan.actions.deltaScanTooltip",
-														"Scans functions impacted by the target/base diff",
+														"Scans targets impacted by the target/base diff",
 													)}
 												</p>
 											</TooltipContent>
@@ -544,6 +548,47 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 												t,
 												"scan.actions.cleanCacheUpdateError",
 												"Error updating Clean Cache",
+											),
+										);
+									});
+							}}
+							className="flex flex-row gap-2 items-center data-[state=checked]:bg-primary"
+						/>
+					</div>
+					<div className="flex flex-row items-center gap-2 rounded-md px-4 py-2 border">
+						<span className="text-sm font-medium">
+							{scanT(t, "scan.actions.autoDeltaScan", "Auto Delta Scan")}
+						</span>
+						<Switch
+							aria-label="Toggle auto delta scan"
+							checked={data?.autoDeltaScan || false}
+							onCheckedChange={async (enabled) => {
+								await update({
+									applicationId,
+									autoDeltaScan: enabled,
+								})
+									.then(async () => {
+										toast.success(
+											enabled
+												? scanT(
+														t,
+														"scan.actions.autoDeltaScanEnabled",
+														"Auto Delta Scan enabled",
+													)
+												: scanT(
+														t,
+														"scan.actions.autoDeltaScanDisabled",
+														"Auto Delta Scan disabled",
+													),
+										);
+										await refetch();
+									})
+									.catch(() => {
+										toast.error(
+											scanT(
+												t,
+												"scan.actions.autoDeltaScanUpdateError",
+												"Error updating Auto Delta Scan",
 											),
 										);
 									});

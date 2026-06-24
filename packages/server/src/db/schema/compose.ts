@@ -61,7 +61,7 @@ export const compose = pgTable("compose", {
 	owner: text("owner"),
 	branch: text("branch"),
 	autoDeploy: boolean("autoDeploy").$defaultFn(() => true),
-	autoDeltaScan: boolean("autoDeltaScan").$defaultFn(() => true),
+	autoDeltaScan: boolean("autoDeltaScan").$defaultFn(() => false),
 	fuzzingBudgetSeconds: integer("fuzzingBudgetSeconds").notNull().default(600),
 	// Gitlab
 	gitlabProjectId: integer("gitlabProjectId"),
@@ -166,7 +166,7 @@ export const composeRelations = relations(compose, ({ one, many }) => ({
 const createSchema = createInsertSchema(compose, {
 	name: z.string().min(1),
 	description: z.string(),
-	autoDeltaScan: z.boolean(),
+	autoDeltaScan: z.boolean().default(false),
 	fuzzingBudgetSeconds: z.number().int().min(1).max(86400).default(600),
 	scanStageSettings: ScanStageSettingsSchema.default(
 		buildDefaultScanStageSettings(),

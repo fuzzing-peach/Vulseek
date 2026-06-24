@@ -115,7 +115,7 @@ const apiFindFullScanStageGraph = z
 	.object({
 		applicationId: z.string().min(1).optional(),
 		composeId: z.string().min(1).optional(),
-		scanType: z.enum(["delta", "full"]).optional(),
+		scanType: z.enum(["delta", "full", "rule"]).optional(),
 	})
 	.refine(
 		(value) => Boolean(value.applicationId) !== Boolean(value.composeId),
@@ -780,6 +780,12 @@ export const scanRouter = createTRPCRouter({
 				scanJobId: input.scanJobId,
 				configSnapshot: input.configSnapshot,
 			});
+			if (!evaluation) {
+				throw new TRPCError({
+					code: "INTERNAL_SERVER_ERROR",
+					message: "Failed to create scan evaluation result",
+				});
+			}
 			await scanEvaluationsQueue.add(
 				"scan-evaluations",
 				{ evaluateResultId: evaluation.evaluateResultId },

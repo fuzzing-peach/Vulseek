@@ -91,6 +91,7 @@ export const createApplication = async (
 			.values({
 				...input,
 				appName,
+				autoDeltaScan: false,
 				scanStageSettings: buildDefaultScanStageSettings(
 					defaultAgentProfile?.agentProfileId ?? null,
 				),

@@ -99,7 +99,7 @@ const FORWARD_LONG_EDGE_OFFSET_Y = 30;
 const SELF_EDGE_OFFSET_X = 56;
 const SELF_EDGE_OFFSET_Y = 38;
 const DEFAULT_PROFILE_VALUE = "__service_default__";
-const REPOSITORY_STAGE_NAME = "repository-scan";
+const REPOSITORY_STAGE_NAME = "repository-profile";
 const DELTA_SCOPE_STAGE_NAME = "delta-scope";
 const SCAN_RULE_STAGE_NAME = "scan-rule";
 const SCAN_PATTERN_STAGE_NAME = "scan-pattern";
@@ -109,7 +109,7 @@ const EMPTY_FLOW_ELEMENTS = {
 	edges: [] as Edge[],
 };
 const RULE_SCAN_BRANCH_STAGE_NAMES = [
-	"repository-scan",
+	"repository-profile",
 	"module-threat-model",
 	"design-rule",
 	SCAN_RULE_STAGE_NAME,
@@ -117,18 +117,18 @@ const RULE_SCAN_BRANCH_STAGE_NAMES = [
 	SINK_PRE_ANALYZE_STAGE_NAME,
 ] as const;
 const RULE_SCAN_BRANCH_LAYOUT: Record<string, { column: number; row: number }> = {
-	"repository-scan": { column: 0, row: 1 },
+	"repository-profile": { column: 0, row: 1 },
 	"module-threat-model": { column: 1, row: 1 },
 	"design-rule": { column: 2, row: 1 },
 	[SCAN_RULE_STAGE_NAME]: { column: 3, row: 0.75 },
 	[SCAN_PATTERN_STAGE_NAME]: { column: 3, row: 1.25 },
 	[SINK_PRE_ANALYZE_STAGE_NAME]: { column: 4, row: 1 },
-	analyze: { column: 0, row: 2.7 },
+	"analyze-finding": { column: 0, row: 2.7 },
 	"build-fuzzer": { column: 1, row: 2.25 },
 	"run-fuzzer": { column: 2, row: 2.25 },
-	criticize: { column: 1, row: 3.2 },
-	verify: { column: 3, row: 2.7 },
-	triage: { column: 4, row: 2.7 },
+	"critique-finding": { column: 1, row: 3.2 },
+	"verify-finding": { column: 3, row: 2.7 },
+	"triage-finding": { column: 4, row: 2.7 },
 };
 
 const emptyStageCounts = () => ({
@@ -1530,260 +1530,61 @@ const buildFullScanPreviewGraph = (
 	serviceData: PreviewServiceData,
 	agentProfiles: PreviewAgentProfiles,
 ): StageGraph => {
+	const stages = [
+		{ stageName: "repository-profile", name: "Repository Profile", role: "scan", concurrency: 1 },
+		{ stageName: "attack-surface-model", name: "Attack Surface Model", role: "scan", concurrency: 4 },
+		{ stageName: "identify-target", name: "Identify Target", role: "scan", concurrency: 4 },
+		{ stageName: "scan-target", name: "Scan Target", role: "scan", concurrency: 4 },
+		{ stageName: "analyze-finding", name: "Analyze Finding", role: "analysis", concurrency: 2 },
+		{ stageName: "critique-finding", name: "Critique Finding", role: "analysis", concurrency: 2 },
+		{ stageName: "verify-finding", name: "Verify Finding", role: "verification", concurrency: 1 },
+		{ stageName: "triage-finding", name: "Triage Finding", role: "verification", concurrency: 1 },
+	] as const;
+
 	return {
 		pipelineName: "full-scan-programmatic",
-		nodes: [
+		nodes: stages.map((stage, order) =>
 			createPreviewNode({
-				stageName: "repository-scan",
-				name: "Scan Repository",
-				order: 0,
-				agentProfile: getPreviewAgentProfile(
-					serviceData,
-					agentProfiles,
-					"repository-scan",
-					"scan",
-				),
-			}),
-			createPreviewNode({
-				stageName: "module-scan",
-				name: "Scan Module",
-				order: 1,
+				stageName: stage.stageName,
+				name: stage.name,
+				order,
 				concurrencyLimit: getPreviewConcurrencyLimit(
 					serviceData,
-					"module-scan",
-					4,
+					stage.stageName,
+					stage.concurrency,
 				),
 				agentProfile: getPreviewAgentProfile(
 					serviceData,
 					agentProfiles,
-					"module-scan",
-					"scan",
+					stage.stageName,
+					stage.role,
 				),
 			}),
-			createPreviewNode({
-				stageName: "function-scan",
-				name: "Scan Function",
-				order: 2,
-				concurrencyLimit: getPreviewConcurrencyLimit(
-					serviceData,
-					"function-scan",
-					4,
-				),
-				agentProfile: getPreviewAgentProfile(
-					serviceData,
-					agentProfiles,
-					"function-scan",
-					"scan",
-				),
-			}),
-			createPreviewNode({
-				stageName: "analyze",
-				name: "Analyze",
-				order: 3,
-				groupId: "analysis-fuzzing-debate",
-				concurrencyLimit: getPreviewConcurrencyLimit(serviceData, "analyze", 2),
-				agentProfile: getPreviewAgentProfile(
-					serviceData,
-					agentProfiles,
-					"analyze",
-					"analysis",
-				),
-			}),
-			createPreviewNode({
-				stageName: "build-fuzzer",
-				name: "Build Fuzzer",
-				order: 4,
-				groupId: "analysis-fuzzing-debate",
-				concurrencyLimit: getPreviewConcurrencyLimit(
-					serviceData,
-					"build-fuzzer",
-					2,
-				),
-				agentProfile: getPreviewAgentProfile(
-					serviceData,
-					agentProfiles,
-					"build-fuzzer",
-					"analysis",
-				),
-			}),
-			createPreviewNode({
-				stageName: "run-fuzzer",
-				name: "Run Fuzzer",
-				order: 5,
-				groupId: "analysis-fuzzing-debate",
-				concurrencyLimit: getPreviewConcurrencyLimit(
-					serviceData,
-					"run-fuzzer",
-					2,
-				),
-				agentProfile: getPreviewAgentProfile(
-					serviceData,
-					agentProfiles,
-					"run-fuzzer",
-					"analysis",
-				),
-			}),
-			createPreviewNode({
-				stageName: "criticize",
-				name: "Criticize",
-				order: 6,
-				groupId: "analysis-fuzzing-debate",
-				concurrencyLimit: getPreviewConcurrencyLimit(
-					serviceData,
-					"criticize",
-					2,
-				),
-				agentProfile: getPreviewAgentProfile(
-					serviceData,
-					agentProfiles,
-					"criticize",
-					"analysis",
-				),
-			}),
-			createPreviewNode({
-				stageName: "verify",
-				name: "Verify",
-				order: 7,
-				concurrencyLimit: getPreviewConcurrencyLimit(serviceData, "verify", 1),
-				agentProfile: getPreviewAgentProfile(
-					serviceData,
-					agentProfiles,
-					"verify",
-					"verification",
-				),
-			}),
-			createPreviewNode({
-				stageName: "triage",
-				name: "Triage",
-				order: 8,
-				concurrencyLimit: getPreviewConcurrencyLimit(serviceData, "triage", 1),
-				agentProfile: getPreviewAgentProfile(
-					serviceData,
-					agentProfiles,
-					"triage",
-					"verification",
-				),
-			}),
-		],
-		edges: [
-			{
-				id: "repository-to-module",
-				name: "repository-to-module",
-				source: "repository-scan",
-				target: "module-scan",
-				fork: true,
-				routeKey: null,
-				isDefaultRoute: false,
-			},
-			{
-				id: "module-to-function",
-				name: "module-to-function",
-				source: "module-scan",
-				target: "function-scan",
-				fork: true,
-				routeKey: null,
-				isDefaultRoute: false,
-			},
-			{
-				id: "function-to-analysis",
-				name: "function-to-analysis",
-				source: "function-scan",
-				target: "analyze",
-				fork: false,
-				routeKey: null,
-				isDefaultRoute: false,
-			},
-			{
-				id: "analysis-to-fuzz-build",
-				name: "analysis-to-fuzz-build",
-				source: "analyze",
-				target: "build-fuzzer",
-				fork: true,
-				routeKey: "build_fuzzer",
-				isDefaultRoute: true,
-			},
-			{
-				id: "analysis-to-critic",
-				name: "analysis-to-critic",
-				source: "analyze",
-				target: "criticize",
-				fork: false,
-				routeKey: "critic",
-				isDefaultRoute: false,
-			},
-			{
-				id: "fuzz-build-to-fuzz-run",
-				name: "fuzz-build-to-fuzz-run",
-				source: "build-fuzzer",
-				target: "run-fuzzer",
-				fork: true,
-				routeKey: "run_fuzzer",
-				isDefaultRoute: false,
-			},
-			{
-				id: "fuzz-build-to-analysis",
-				name: "fuzz-build-to-analysis",
-				source: "build-fuzzer",
-				target: "analyze",
-				fork: false,
-				routeKey: "analysis",
-				isDefaultRoute: true,
-			},
-			{
-				id: "fuzz-run-to-analysis",
-				name: "fuzz-run-to-analysis",
-				source: "run-fuzzer",
-				target: "analyze",
-				fork: false,
-				routeKey: "analysis",
-				isDefaultRoute: true,
-			},
-			{
-				id: "fuzz-run-short-to-full-run",
-				name: "fuzz-run-short-to-full-run",
-				source: "run-fuzzer",
-				target: "run-fuzzer",
-				fork: false,
-				routeKey: "run_fuzzer",
-				isDefaultRoute: false,
-			},
-			{
-				id: "critic-to-analysis",
-				name: "critic-to-analysis",
-				source: "criticize",
-				target: "analyze",
-				fork: false,
-				routeKey: null,
-				isDefaultRoute: false,
-			},
-			{
-				id: "analysis-to-verification",
-				name: "analysis-to-verification",
-				source: "analyze",
-				target: "verify",
-				fork: false,
-				routeKey: "verification",
-				isDefaultRoute: false,
-			},
-			{
-				id: "verification-to-triage",
-				name: "verification-to-triage",
-				source: "verify",
-				target: "triage",
-				fork: false,
-				routeKey: null,
-				isDefaultRoute: false,
-			},
-		],
-		groups: [
-			{
-				id: "analysis-fuzzing-debate",
-				name: "analysis-fuzzing-debate",
-				leaderStageName: "analyze",
-				memberStageNames: ["build-fuzzer", "run-fuzzer", "criticize"],
-				stageNames: ["analyze", "build-fuzzer", "run-fuzzer", "criticize"],
-			},
-		],
+		),
+		edges: ([
+			["repository-profile", "attack-surface-model"],
+			["attack-surface-model", "identify-target"],
+			["identify-target", "scan-target"],
+			["scan-target", "analyze-finding"],
+			["analyze-finding", "critique-finding"],
+			["critique-finding", "analyze-finding"],
+			["analyze-finding", "verify-finding"],
+			["verify-finding", "triage-finding"],
+		] as Array<[string, string]>).map(([source, target]) => ({
+			id: `${source}-to-${target}`,
+			name: `${source}-to-${target}`,
+			source,
+			target,
+			fork: false,
+			routeKey:
+				source === "analyze-finding" && target === "critique-finding"
+					? "critic"
+					: source === "analyze-finding" && target === "verify-finding"
+						? "verification"
+						: null,
+			isDefaultRoute: false,
+		})),
+		groups: [],
 	};
 };
 
@@ -1846,7 +1647,7 @@ export const FullScanStageGraphPreview = ({
 							? scanT(t, "scan.scanType.delta", "Delta Scan")
 							: scanType === "rule"
 								? scanT(t, "scan.scanType.rule", "Rule Scan")
-								: scanT(t, "scan.scanType.full", "Full Scan"),
+								: scanT(t, "scan.scanType.full", "漏洞挖掘"),
 				},
 			)}
 			heightClassName="h-[360px]"

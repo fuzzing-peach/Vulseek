@@ -18,10 +18,23 @@ const titleCase = (value: string) =>
 
 const STAGE_DEFAULTS: Record<string, string> = {
 	"delta-scope": "Delta Scope",
+	"repository-profile": "Repository Profile",
+	"attack-surface-model": "Attack Surface Model",
+	"identify-target": "Identify Target",
+	"scan-target": "Scan Target",
+	"analyze-finding": "Analyze Finding",
+	"critique-finding": "Critique Finding",
+	"verify-finding": "Verify Finding",
+	"triage-finding": "Triage Finding",
 	"repository-scan": "Scan Repository",
 	repository: "Repository",
 	"module-scan": "Scan Module",
 	module: "Module",
+	"module-threat-model": "Module Threat Model",
+	"design-rule": "Design Rule",
+	"scan-rule": "Scan Rule",
+	"scan-pattern": "Scan Pattern",
+	"sink-pre-analyze": "Sink Pre-Analyze",
 	"function-scan": "Scan Function",
 	function: "Function",
 	analyze: "Analyze",
@@ -34,10 +47,37 @@ const STAGE_DEFAULTS: Record<string, string> = {
 
 const STAGE_ALIASES: Record<string, string> = {
 	"delta scoping": "delta-scope",
+	"repository profile": "repository-profile",
+	"repository profiling": "repository-profile",
+	"attack surface model": "attack-surface-model",
+	"attack surface modeling": "attack-surface-model",
+	"identify target": "identify-target",
+	"target identification": "identify-target",
+	"scan target": "scan-target",
+	"target scanning": "scan-target",
+	"analyze finding": "analyze-finding",
+	"finding analysis": "analyze-finding",
+	"critique finding": "critique-finding",
+	"finding critique": "critique-finding",
+	"verify finding": "verify-finding",
+	"finding verification": "verify-finding",
+	"triage finding": "triage-finding",
+	"finding triage": "triage-finding",
 	"scan repository": "repository-scan",
 	"repository scanning": "repository-scan",
 	"scan module": "module-scan",
 	"module scanning": "module-scan",
+	"module threat model": "module-threat-model",
+	"module threat modeling": "module-threat-model",
+	"design rule": "design-rule",
+	"rule designing": "design-rule",
+	"scan rule": "scan-rule",
+	"rule scanning": "scan-rule",
+	"scan pattern": "scan-pattern",
+	"pattern scanning": "scan-pattern",
+	"sink pre analyze": "sink-pre-analyze",
+	"sink pre-analyze": "sink-pre-analyze",
+	"sink pre analyzing": "sink-pre-analyze",
 	"scan function": "function-scan",
 	"function scanning": "function-scan",
 	analyzing: "analyze",
@@ -97,6 +137,7 @@ const SCAN_JOB_STATUS_DEFAULTS: Record<string, string> = {
 	running: "Running",
 	paused: "Paused",
 	finished: "Finished",
+	failed: "Failed",
 	canceled: "Canceled",
 };
 
@@ -163,7 +204,9 @@ export const formatScanTypeLabel = (
 ) =>
 	scanType === "delta"
 		? scanT(t, "scan.scanType.delta", "Delta Scan")
-		: scanT(t, "scan.scanType.full", "Full Scan");
+		: scanType === "rule"
+			? scanT(t, "scan.scanType.rule", "Rule Scan")
+		: scanT(t, "scan.scanType.full", "Vulnerability Mining");
 
 export const formatResourceTypeLabel = (
 	t: ScanTranslation,

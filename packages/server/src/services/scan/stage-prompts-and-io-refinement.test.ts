@@ -8,10 +8,13 @@ import {
 	candidateSchema,
 	deltaScopeManifestSchema,
 	functionScanManifestSchema,
+	fuzzRunResultSchema,
 	moduleScanManifestSchema,
 	moduleSchema,
 	repositoryModuleSchema,
 	repositoryScanManifestSchema,
+	scanTargetManifestSchema,
+	targetSchema,
 	triageSchema,
 	verificationSchema,
 } from "./artifacts/contracts/domain-object.contract";
@@ -19,6 +22,7 @@ import { buildFunctionScannerPrompt } from "./prompts/function-scanner.prompt";
 import { buildDeltaScopePrompt } from "./prompts/delta-scope.prompt";
 import { buildModuleScannerPrompt } from "./prompts/module-scanner.prompt";
 import { buildRepositoryScannerPrompt } from "./prompts/repository-scanner.prompt";
+import { buildScanTargetPrompt } from "./prompts/scan-target.prompt";
 import { buildStructuredOutputPromptSuffix } from "./runtime/run-single-turn-agent";
 
 const scanDir = dirname(fileURLToPath(import.meta.url));
@@ -178,15 +182,15 @@ test("repository, module, and function prompts stay concise while delegating det
 	});
 	assert.match(repositoryPrompt, /scan-repository skill/);
 	assert.match(repositoryPrompt, /entryPoints, trustBoundaries, attackSurfaces, vulnerabilityThemes, and runtimeComponents/);
-	assert.match(repositoryPrompt, /at least 4 modules and no more than 20 modules/);
+	assert.match(repositoryPrompt, /Produce at least 4 modules/);
+	assert.match(repositoryPrompt, /Large repositories may produce more than 20 modules/);
 	assert.doesNotMatch(repositoryPrompt, /attackerControlledInputs/);
 	assert.doesNotMatch(repositoryPrompt, /dangerousSinks/);
 
 	const repositorySkill = readSkillSource("scan-repository");
-	assert.match(repositorySkill, /Required range for normal repositories: 4 to 20 modules/i);
-	assert.match(repositorySkill, /source of truth/i);
-	assert.match(repositorySkill, /Externally reachable entry points/i);
-	assert.match(repositorySkill, /Trust boundaries and attacker-controlled input boundaries/i);
+	assert.match(repositorySkill, /downstream generic vulnerability mining/i);
+	assert.match(repositorySkill, /runtime and security-relevant boundaries/i);
+	assert.match(repositorySkill, /HTTP, RPC, CLI, webhook, queue, worker/i);
 	assert.doesNotMatch(repositorySkill, /securityModel/);
 	assert.doesNotMatch(repositorySkill, /dangerousSinks/);
 
@@ -202,13 +206,10 @@ test("repository, module, and function prompts stay concise while delegating det
 	assert.doesNotMatch(modulePrompt, /sourceToSinkHint/);
 
 	const moduleSkill = readSkillSource("scan-module");
-	assert.match(
-		moduleSkill,
-		/attack surface, trust boundary, entry point, or validation stack/,
-	);
+	assert.match(moduleSkill, /function-level scan tasks/);
 	assert.match(moduleSkill, /tree-sitter extracted symbol identity/i);
-	assert.match(moduleSkill, /worth scanning now/i);
-	assert.match(moduleSkill, /do not require global unique ownership/i);
+	assert.match(moduleSkill, /Required Noise-Exclusion Pass/i);
+	assert.match(moduleSkill, /A module is not an exclusive ownership partition/i);
 
 	const functionPrompt = buildFunctionScannerPrompt({
 		scanJobId: "job",
@@ -225,9 +226,34 @@ test("repository, module, and function prompts stay concise while delegating det
 	assert.doesNotMatch(functionPrompt, /needsFuzzing/);
 
 	const functionSkill = readSkillSource("scan-function");
-	assert.match(functionSkill, /needsFuzzing/);
-	assert.match(functionSkill, /complex control flow, state/);
-	assert.match(functionSkill, /structured evidence/i);
+	assert.match(functionSkill, /Mark fuzzing as needed/);
+	assert.match(functionSkill, /complex normalization/);
+	assert.match(functionSkill, /local code evidence/i);
+
+	const scanTargetPrompt = buildScanTargetPrompt({
+		scanJobId: "job",
+		moduleId: "api",
+		moduleName: "API",
+		targetId: "api-user-get",
+		targetName: "GET /api/users/:id",
+		targetKind: "route-handler",
+		filePath: "src/routes/users.ts",
+		line: 12,
+		summary: "User lookup route",
+		repositoryJsonPath: "/task/inputs/repository.json",
+		moduleJsonPath: "/task/inputs/module.json",
+		threatModelJsonPath: "/task/inputs/module-threat-model.json",
+		targetJsonPath: "/task/inputs/target.json",
+	});
+	assert.match(scanTargetPrompt, /scan-target skill/);
+	assert.match(scanTargetPrompt, /target_kind: route-handler/);
+	assert.match(scanTargetPrompt, /source -> missing\/weak check -> sink/);
+	assert.doesNotMatch(scanTargetPrompt, /function_json_path/);
+
+	const scanTargetSkill = readSkillSource("scan-target");
+	assert.match(scanTargetSkill, /route registration, middleware/i);
+	assert.match(scanTargetSkill, /auth bypass, missing authorization, IDOR\/BOLA/i);
+	assert.match(scanTargetSkill, /C\/C\+\+ memory safety/i);
 });
 
 test("delta scope prompt and schema stay limited to repository and functions", () => {
@@ -319,10 +345,44 @@ test("stage boundary manifests use task artifact paths instead of object lists",
 		true,
 	);
 	assert.equal(
+		scanTargetManifestSchema.safeParse({
+			candidates: ["/task/candidates/c1.json"],
+		}).success,
+		true,
+	);
+	assert.equal(
 		functionScanManifestSchema.safeParse({
 			candidates: ["candidates/c1.json"],
 		}).success,
 		false,
+	);
+	assert.equal(
+		targetSchema.safeParse({
+			id: "api-user-get",
+			moduleId: "api",
+			moduleName: "API",
+			targetId: "api-user-get",
+			targetName: "GET /api/users/:id",
+			targetKind: "route-handler",
+			language: "TypeScript",
+			framework: "Express",
+			sourceFiles: ["src/routes/users.ts"],
+			filePath: "src/routes/users.ts",
+			line: 12,
+			routePath: "/api/users/:id",
+			httpMethods: ["GET"],
+			priority: 1,
+			summary: "User lookup route",
+			attackerInputs: ["params.id"],
+			sinks: ["database query"],
+			trustBoundary: "HTTP request to app",
+			likelyVulnerabilityTypes: ["IDOR"],
+			evidence: ["Route parameter controls user lookup"],
+			score: 0.7,
+			excludeReason: null,
+			priorityReason: "Externally reachable route",
+		}).success,
+		true,
 	);
 });
 
@@ -382,21 +442,16 @@ test("structured output prompts include annotated task artifact schemas", () => 
 	assert.match(analysisExitSuffix, /stage prompt explicitly instructs/);
 });
 
-test("analysis and fuzz prompts allow exploration-oriented fuzzing without route changes", () => {
+test("analysis prompt removes fuzz routing while legacy fuzz schemas still validate", () => {
 	const analysisPromptTemplate = readStagePromptTemplate("analyze.prompt.md");
-	assert.match(analysisPromptTemplate, /analyze/);
-	assert.match(analysisPromptTemplate, /build_fuzzer/);
+	assert.match(analysisPromptTemplate, /Analyze Finding/);
+	assert.doesNotMatch(analysisPromptTemplate, /build_fuzzer/);
 	assert.match(analysisPromptTemplate, /verification/);
+	assert.match(analysisPromptTemplate, /Do not request fuzzer construction/);
 
 	const deepAnalysisSkill = readSkillSource("analyze");
-	assert.match(
-		deepAnalysisSkill,
-		/Need fuzzing evidence or dynamic exploration/,
-	);
-	assert.match(
-		deepAnalysisSkill,
-		/Do not reserve fuzzing only for strong vulnerability claims/,
-	);
+	assert.match(deepAnalysisSkill, /analysis-critic workflow/);
+	assert.match(deepAnalysisSkill, /does not route to fuzzer construction/);
 
 	assert.equal(
 		buildFuzzerRequestSchema.safeParse({
@@ -430,10 +485,50 @@ test("analysis and fuzz prompts allow exploration-oriented fuzzing without route
 
 	const runPromptTemplate = readStagePromptTemplate("run-fuzzer.prompt.md");
 	assert.match(runPromptTemplate, /run-fuzzer skill/);
-	assert.match(runPromptTemplate, /Always route back to analysis/);
+	assert.match(runPromptTemplate, /run_mode/);
+	assert.match(runPromptTemplate, /promotionDecision/);
+	assert.match(runPromptTemplate, /route to run_fuzzer/);
 	const runSkill = readSkillSource("run-fuzzer");
 	assert.match(runSkill, /path\/state exploration/);
 	assert.match(runSkill, /newly reached paths or states/);
+	assert.match(runSkill, /Coverage\/Corpus promotion strategy/);
+	assert.match(runSkill, /promotionDecision/);
+
+	assert.equal(
+		fuzzRunResultSchema.safeParse({
+			id: "run-1",
+			buildResultId: "build-1",
+			runtimeSeconds: 90,
+			commandRun: "./fuzzer",
+			exitStatus: "timeout",
+			crashSignal: null,
+			usedLibAflMonitor: true,
+			progressJsonlPath: "/task/fuzz-progress.jsonl",
+			progressJsonlRecords: 3,
+			foundTriggeringInput: false,
+			triggeringInputPath: null,
+			corpusPath: "/task/corpus",
+			crashArtifactsPath: null,
+			logsPath: "/task/logs.txt",
+			observedBehavior: "Corpus grew and parser states advanced.",
+			negativeEvidence: [],
+			coverageProximity: "Reached parse_record before auth gate.",
+			newPathsOrStatesReached: ["parse_record:header"],
+			inputClassesDiscovered: ["valid header with oversized length"],
+			confidenceImpact: "raises confidence in reachability",
+			promotionDecision: {
+				shouldPromote: true,
+				reasons: ["corpus grew", "new parser state reached"],
+				metrics: {
+					corpusSize: 7,
+					objectiveSize: 0,
+					edgeCoverage: 123,
+				},
+			},
+			summary: "Short exploration run made useful path progress.",
+		}).success,
+		true,
+	);
 });
 
 test("verification is a three-value sanity check and triage owns security classification", () => {

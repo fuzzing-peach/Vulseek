@@ -1,0 +1,1 @@
+ALTER TYPE "scanType" ADD VALUE IF NOT EXISTS 'rule';

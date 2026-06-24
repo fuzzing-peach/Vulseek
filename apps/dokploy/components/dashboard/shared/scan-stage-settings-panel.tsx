@@ -79,20 +79,124 @@ type StageDefinition = {
 
 const STAGES: StageDefinition[] = [
 	{
-		stageName: "repository-scan",
-		label: "Scan Repository",
+		stageName: "repository-profile",
+		label: "Repository Profile",
 		role: "scan",
 		defaultConcurrency: 1,
 		maxConcurrency: 8,
-		description: "Repository-wide planner and module partitioning.",
+		description: "Repository-wide runtime and security surface profiling.",
 	},
 	{
-		stageName: "module-scan",
-		label: "Scan Module",
+		stageName: "attack-surface-model",
+		label: "Attack Surface Model",
 		role: "scan",
 		defaultConcurrency: 4,
 		maxConcurrency: 32,
-		description: "Module-level source review and function discovery.",
+		description: "Module-level threat and attack-surface modeling.",
+	},
+	{
+		stageName: "identify-target",
+		label: "Identify Target",
+		role: "scan",
+		defaultConcurrency: 4,
+		maxConcurrency: 32,
+		description: "Find route, handler, config, parser, function, and other scan targets.",
+	},
+	{
+		stageName: "scan-target",
+		label: "Scan Target",
+		role: "scan",
+		defaultConcurrency: 4,
+		maxConcurrency: 64,
+		description: "Target-level candidate discovery.",
+	},
+	{
+		stageName: "analyze-finding",
+		label: "Analyze Finding",
+		role: "analysis",
+		defaultConcurrency: 2,
+		maxConcurrency: 16,
+		description: "Candidate analysis and critic routing.",
+	},
+	{
+		stageName: "critique-finding",
+		label: "Critique Finding",
+		role: "analysis",
+		defaultConcurrency: 2,
+		maxConcurrency: 16,
+		description: "Challenges analysis results before verification.",
+	},
+	{
+		stageName: "verify-finding",
+		label: "Verify Finding",
+		role: "verification",
+		defaultConcurrency: 1,
+		maxConcurrency: 16,
+		description: "Fact-checks target, paths, and evidence.",
+	},
+	{
+		stageName: "triage-finding",
+		label: "Triage Finding",
+		role: "verification",
+		defaultConcurrency: 1,
+		maxConcurrency: 8,
+		description: "Final security classification and severity.",
+	},
+	{
+		stageName: "repository-scan",
+		label: "Scan Repository (Legacy)",
+		role: "scan",
+		defaultConcurrency: 1,
+		maxConcurrency: 8,
+		description: "Legacy repository planner.",
+	},
+	{
+		stageName: "module-scan",
+		label: "Scan Module (Legacy)",
+		role: "scan",
+		defaultConcurrency: 4,
+		maxConcurrency: 32,
+		description: "Legacy module-level function discovery.",
+	},
+	{
+		stageName: "module-threat-model",
+		label: "Model Threats",
+		role: "scan",
+		defaultConcurrency: 4,
+		maxConcurrency: 32,
+		description: "Rule Scan module threat modeling before rule design.",
+	},
+	{
+		stageName: "design-rule",
+		label: "Design Rule",
+		role: "scan",
+		defaultConcurrency: 4,
+		maxConcurrency: 32,
+		description: "Rule Scan LLM rule and review target design.",
+	},
+	{
+		stageName: "scan-rule",
+		label: "Scan Rule",
+		role: "scan",
+		defaultConcurrency: 4,
+		maxConcurrency: 32,
+		description: "Rule Scan executable rule scans.",
+	},
+	{
+		stageName: "scan-pattern",
+		label: "Scan Pattern",
+		role: "scan",
+		defaultConcurrency: 4,
+		maxConcurrency: 32,
+		description: "Rule Scan abstract pattern emission.",
+	},
+	{
+		stageName: "sink-pre-analyze",
+		label: "Sink Pre-Analyze",
+		role: "scan",
+		defaultConcurrency: 4,
+		maxConcurrency: 32,
+		description: "Rule Scan target normalization and low-value filtering.",
 	},
 	{
 		stageName: "function-scan",
@@ -270,7 +374,7 @@ export const ScanStageSettingsPanel = ({
 					Stage Agent Settings
 				</CardTitle>
 				<CardDescription>
-					Configure agent profile and concurrency per full scan stage.
+					Configure agent profile and concurrency per scan stage.
 				</CardDescription>
 			</CardHeader>
 			<CardContent>

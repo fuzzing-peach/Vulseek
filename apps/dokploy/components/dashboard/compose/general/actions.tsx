@@ -21,6 +21,10 @@ import { DockerTerminalModal } from "../../settings/web-server/docker-terminal-m
 interface Props {
 	composeId: string;
 }
+
+const SCAN_BUTTON_CLASS_NAME =
+	"flex items-center gap-1.5 border border-black bg-black text-white hover:bg-black/90 focus-visible:ring-2 focus-visible:ring-offset-2 dark:border-white dark:bg-white dark:text-black dark:hover:bg-white/90";
+
 export const ComposeActions = ({ composeId }: Props) => {
 	const { t } = useTranslation("scan");
 	const router = useRouter();
@@ -101,6 +105,7 @@ export const ComposeActions = ({ composeId }: Props) => {
 			`Image: ${checkoutStatus.imageTag}`,
 			`Repository: ${checkoutStatus.gitUrl}`,
 			`Branch: ${checkoutStatus.gitBranch}`,
+			`Tag: ${checkoutStatus.gitTag || "none"}`,
 			`Enable Submodules: ${checkoutStatus.enableSubmodules ? "true" : "false"}`,
 			`Build Probe: ${checkoutStatus.dockerBuildProbe}`,
 			"",
@@ -138,11 +143,11 @@ export const ComposeActions = ({ composeId }: Props) => {
 			<div className="flex flex-row gap-4 w-full flex-wrap ">
 				<TooltipProvider delayDuration={0} disableHoverableContent={false}>
 					<CreateScanDialog
-						title={scanT(t, "scan.actions.fullScan", "Full Scan")}
+						title={scanT(t, "scan.actions.fullScan", "漏洞挖掘")}
 						description={scanT(
 							t,
 							"scan.actions.fullScanDescription",
-							"Configure ref and tag for this full scan. If tag is empty, Dokploy will scan the most recent tag version.",
+							"Configure ref and tag for this vulnerability scan. If tag is empty, Dokploy will scan the most recent tag version.",
 						)}
 						isLoading={isCreatingScanJob}
 						showCommitWindow={false}
@@ -171,7 +176,7 @@ export const ComposeActions = ({ composeId }: Props) => {
 									scanT(
 										t,
 										"scan.actions.fullScanPending",
-										"A full scan is already pending",
+										"A vulnerability scan is already pending",
 									),
 								);
 								return;
@@ -190,7 +195,7 @@ export const ComposeActions = ({ composeId }: Props) => {
 										scanT(
 											t,
 											"scan.actions.fullScanStarted",
-											"Full scan started successfully",
+											"Vulnerability scan started successfully",
 										),
 									);
 									refetch();
@@ -203,7 +208,7 @@ export const ComposeActions = ({ composeId }: Props) => {
 										scanT(
 											t,
 											"scan.actions.fullScanStartError",
-											"Error starting full scan",
+											"Error starting vulnerability scan",
 										),
 									);
 								});
@@ -212,13 +217,13 @@ export const ComposeActions = ({ composeId }: Props) => {
 							<Button
 								variant="default"
 								isLoading={isCreatingScanJob}
-								className="flex items-center gap-1.5 border border-black bg-black text-white hover:bg-black/90 focus-visible:ring-2 focus-visible:ring-offset-2 dark:border-white dark:bg-white dark:text-black dark:hover:bg-white/90"
+								className={SCAN_BUTTON_CLASS_NAME}
 							>
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<div className="flex items-center">
 											<Shield className="size-4 mr-1" />
-											{scanT(t, "scan.actions.fullScan", "Full Scan")}
+											{scanT(t, "scan.actions.fullScan", "漏洞挖掘")}
 										</div>
 									</TooltipTrigger>
 									<TooltipPrimitive.Portal>
@@ -227,7 +232,7 @@ export const ComposeActions = ({ composeId }: Props) => {
 												{scanT(
 													t,
 													"scan.actions.fullScanTooltip",
-													"Scans the full codebase from the current source",
+													"Profiles the repository, models attack surfaces, identifies targets, and scans candidate findings",
 												)}
 											</p>
 										</TooltipContent>
@@ -310,9 +315,9 @@ export const ComposeActions = ({ composeId }: Props) => {
 						}}
 						trigger={
 							<Button
-								variant="secondary"
+								variant="default"
 								isLoading={isCreatingScanJob}
-								className="flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-offset-2"
+								className={SCAN_BUTTON_CLASS_NAME}
 							>
 								<Tooltip>
 									<TooltipTrigger asChild>
@@ -327,7 +332,7 @@ export const ComposeActions = ({ composeId }: Props) => {
 												{scanT(
 													t,
 													"scan.actions.deltaScanTooltip",
-													"Scans functions impacted by the target/base diff",
+													"Scans targets impacted by the target/base diff",
 												)}
 											</p>
 										</TooltipContent>

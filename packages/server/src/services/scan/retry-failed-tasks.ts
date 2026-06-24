@@ -6,8 +6,21 @@ import type {
 
 export const RETRYABLE_TASK_STAGE_NAMES = [
 	"delta-scope",
+	"repository-profile",
+	"attack-surface-model",
+	"identify-target",
+	"scan-target",
+	"analyze-finding",
+	"critique-finding",
+	"verify-finding",
+	"triage-finding",
 	"repository-scan",
 	"module-scan",
+	"module-threat-model",
+	"design-rule",
+	"scan-rule",
+	"scan-pattern",
+	"sink-pre-analyze",
 	"function-scan",
 	"analyze",
 	"verify",
@@ -38,18 +51,44 @@ type RetryFailedTasksDeps = {
 
 const RETRY_STAGE_ORDER: Record<RetryableTaskStageName, number> = {
 	"delta-scope": 0,
+	"repository-profile": 1,
+	"attack-surface-model": 2,
+	"identify-target": 3,
+	"scan-target": 4,
+	"analyze-finding": 5,
+	"critique-finding": 6,
+	"verify-finding": 7,
+	"triage-finding": 8,
 	"repository-scan": 1,
 	"module-scan": 2,
-	"function-scan": 3,
-	analyze: 4,
-	verify: 5,
-	triage: 6,
+	"module-threat-model": 3,
+	"design-rule": 4,
+	"scan-rule": 5,
+	"scan-pattern": 6,
+	"sink-pre-analyze": 7,
+	"function-scan": 8,
+	analyze: 9,
+	verify: 10,
+	triage: 11,
 };
 
 const createEmptyRetryCounts = (): RetryFailedTasksByStage => ({
 	"delta-scope": 0,
+	"repository-profile": 0,
+	"attack-surface-model": 0,
+	"identify-target": 0,
+	"scan-target": 0,
+	"analyze-finding": 0,
+	"critique-finding": 0,
+	"verify-finding": 0,
+	"triage-finding": 0,
 	"repository-scan": 0,
 	"module-scan": 0,
+	"module-threat-model": 0,
+	"design-rule": 0,
+	"scan-rule": 0,
+	"scan-pattern": 0,
+	"sink-pre-analyze": 0,
 	"function-scan": 0,
 	analyze: 0,
 	verify: 0,
@@ -77,16 +116,17 @@ export const retryFailedScanJobTasksWithDeps = async (
 	deps: RetryFailedTasksDeps,
 ): Promise<RetryFailedTasksResult> => {
 	const scanJob = await deps.loadScanJob(scanJobId);
-	if (scanJob.scanType !== "full") {
+	if (scanJob.scanType !== "full" && scanJob.scanType !== "rule") {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
-			message: "Retry failed tasks is only supported for full scan jobs",
+			message:
+				"Retry failed tasks is only supported for full or rule scan jobs",
 		});
 	}
 	if (scanJob.status !== "finished") {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
-			message: "Only finished full scan jobs can retry failed tasks",
+			message: "Only finished full or rule scan jobs can retry failed tasks",
 		});
 	}
 

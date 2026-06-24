@@ -31,6 +31,7 @@ const statusColorMap = {
 	running: "bg-yellow-500",
 	paused: "bg-blue-500",
 	finished: "bg-green-500",
+	failed: "bg-destructive",
 	canceled: "bg-destructive",
 } as const;
 
@@ -38,7 +39,11 @@ const formatJobTitle = (job: { scanJobId: string }) =>
 	`Scan Job (${job.scanJobId.slice(0, 6)})`;
 
 const formatTriggerSource = (t: ScanTranslation, triggerSource: string) =>
-	triggerSource === "schedule" ? scanT(t, "scan.jobs.auto", "auto") : triggerSource;
+	triggerSource === "schedule"
+		? scanT(t, "scan.jobs.auto", "auto")
+		: triggerSource === "manual"
+			? scanT(t, "scan.jobs.manual", "manual")
+			: triggerSource;
 
 const formatTokenUsage = (t: ScanTranslation, value?: number | null) => {
 	if (typeof value !== "number" || !Number.isFinite(value)) {

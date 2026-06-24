@@ -1,5 +1,6 @@
 import {
 	bindTaskRuntimeRepo,
+	cancelOpenTasksByScanJobIdRepo,
 	countTasksByScanJobAndStatusRepo,
 	countTasksByScanJobStageAndStatusRepo,
 	createTaskRepo,
@@ -55,6 +56,11 @@ export const updateTaskStatus = async (
 		| "canceled",
 	errorMessage?: string | null,
 ) => await updateTaskStatusRepo({ taskId, status, errorMessage });
+
+export const cancelOpenScanJobTasks = async (
+	scanJobId: string,
+	errorMessage?: string | null,
+) => await cancelOpenTasksByScanJobIdRepo(scanJobId, errorMessage);
 
 export const bindTaskRuntime = async (input: {
 	taskId: string;

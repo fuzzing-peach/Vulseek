@@ -122,7 +122,7 @@ const getTaskStageLabel = (t: ScanTranslation, stage?: string | null) => {
 	if (stage === "Triage" || stage === "triage" || stage === "triaging") {
 		return formatScanStageLabel(t, "triage");
 	}
-	return stage || "-";
+	return formatScanStageLabel(t, stage);
 };
 
 const isRunFuzzerStage = (stage?: string | null) =>

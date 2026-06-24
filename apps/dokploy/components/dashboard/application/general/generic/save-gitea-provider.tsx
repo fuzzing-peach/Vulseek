@@ -73,6 +73,7 @@ const GiteaProviderSchema = z.object({
 		})
 		.required(),
 	branch: z.string().min(1, "Branch is required"),
+	targetTag: z.string().optional(),
 	giteaId: z.string().min(1, "Gitea Provider is required"),
 	watchPaths: z.array(z.string()).default([]),
 	enableSubmodules: z.boolean().optional(),
@@ -100,6 +101,7 @@ export const SaveGiteaProvider = ({ applicationId }: Props) => {
 			},
 			giteaId: "",
 			branch: "",
+			targetTag: "",
 			watchPaths: [],
 			enableSubmodules: false,
 		},
@@ -154,6 +156,7 @@ export const SaveGiteaProvider = ({ applicationId }: Props) => {
 				},
 				buildPath: data.giteaBuildPath || "/",
 				giteaId: data.giteaId || "",
+				targetTag: data.targetTag || "",
 				watchPaths: data.watchPaths || [],
 				enableSubmodules: data.enableSubmodules || false,
 			});
@@ -163,6 +166,7 @@ export const SaveGiteaProvider = ({ applicationId }: Props) => {
 	const onSubmit = async (data: GiteaProvider) => {
 		await mutateAsync({
 			giteaBranch: data.branch,
+			targetTag: data.targetTag || null,
 			giteaRepository: data.repository.repo,
 			giteaOwner: data.repository.owner,
 			giteaBuildPath: data.buildPath,
@@ -410,6 +414,19 @@ export const SaveGiteaProvider = ({ applicationId }: Props) => {
 
 										<FormMessage />
 									</Popover>
+								</FormItem>
+							)}
+						/>
+						<FormField
+							control={form.control}
+							name="targetTag"
+							render={({ field }) => (
+								<FormItem className="block w-full">
+									<FormLabel>Tag (optional)</FormLabel>
+									<FormControl>
+										<Input placeholder="Tag for scan checkout" {...field} />
+									</FormControl>
+									<FormMessage />
 								</FormItem>
 							)}
 						/>

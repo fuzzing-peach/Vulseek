@@ -124,7 +124,59 @@ export const buildDefaultScanStageSettings = (
 		agentProfileId: agentProfileId ?? null,
 		concurrency: 1,
 	},
+	"repository-profile": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 1,
+	},
+	"attack-surface-model": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	"identify-target": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	"scan-target": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	"analyze-finding": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 2,
+	},
+	"critique-finding": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 2,
+	},
+	"verify-finding": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 1,
+	},
+	"triage-finding": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 1,
+	},
 	"module-scan": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	"module-threat-model": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	"design-rule": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	"scan-rule": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	"scan-pattern": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	"sink-pre-analyze": {
 		agentProfileId: agentProfileId ?? null,
 		concurrency: 4,
 	},

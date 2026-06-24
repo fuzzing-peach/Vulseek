@@ -107,6 +107,11 @@ export const installRuntimeSkillsInContainer = async (input: {
         `docker exec ${input.containerName} bash -lc "mkdir -p /workspace/repo/.agents && cd /workspace/repo && skills add '${containerRepoRoot}' ${skillFlags} -a claude-code -a codex --copy -y"`,
       ),
     );
+    await timed("workspace_agents_skills_copy", () =>
+      execAsync(
+        `docker exec ${input.containerName} bash -lc "mkdir -p /workspace/repo/.agents/skills && cp -a '${containerRepoRoot}/skills/.' /workspace/repo/.agents/skills/"`,
+      ),
+    );
 
     return copiedSkills;
   } finally {

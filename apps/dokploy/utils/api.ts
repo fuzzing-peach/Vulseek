@@ -18,7 +18,7 @@ import superjson from "superjson";
 import type { AppRouter } from "@/server/api/root";
 
 const getBaseUrl = () => {
-	if (typeof window !== "undefined") return ""; // browser should use relative url
+	if (typeof window !== "undefined") return window.location.origin;
 	return `http://localhost:${process.env.PORT ?? 3000}`; // dev SSR should use localhost
 };
 
@@ -28,7 +28,7 @@ const getWsUrl = () => {
 	const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 	const host = window.location.host;
 
-	return `${protocol}${host}/drawer-logs`;
+	return `${protocol}//${host}/drawer-logs`;
 };
 
 // Create WebSocket client with delayed connection

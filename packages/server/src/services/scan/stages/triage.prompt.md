@@ -13,7 +13,7 @@ verify_result: {{verifyResult}}
 verify_summary: {{verifySummary}}
 repository_json_path: {{repositoryJsonPath}}
 module_json_path: {{moduleJsonPath}}
-function_json_path: {{functionJsonPath}}
+target_json_path: {{functionJsonPath}}
 candidate_json_path: {{candidateJsonPath}}
 analysis_result_json_path: {{analysisResultJsonPath}}
 verify_result_json_path: {{verifyResultJsonPath}}

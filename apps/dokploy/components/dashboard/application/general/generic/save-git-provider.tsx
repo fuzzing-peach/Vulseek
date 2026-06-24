@@ -41,6 +41,7 @@ const GitProviderSchema = z.object({
 		message: "Repository URL is required",
 	}),
 	branch: z.string().min(1, "Branch required"),
+	targetTag: z.string().optional(),
 	sshKey: z.string().optional(),
 	watchPaths: z.array(z.string()).optional(),
 	enableSubmodules: z.boolean().default(false),
@@ -63,6 +64,7 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 	const form = useForm<GitProvider>({
 		defaultValues: {
 			branch: "",
+			targetTag: "",
 			repositoryURL: "",
 			sshKey: undefined,
 			watchPaths: [],
@@ -76,6 +78,7 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 			form.reset({
 				sshKey: data.customGitSSHKeyId || undefined,
 				branch: data.customGitBranch || "",
+				targetTag: data.targetTag || "",
 				repositoryURL: data.customGitUrl || "",
 				watchPaths: data.watchPaths || [],
 				enableSubmodules: data.enableSubmodules ?? false,
@@ -86,6 +89,7 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 	const onSubmit = async (values: GitProvider) => {
 		await mutateAsync({
 			customGitBranch: values.branch,
+			targetTag: values.targetTag || null,
 			customGitBuildPath: "/",
 			customGitUrl: values.repositoryURL,
 			customGitSSHKeyId: values.sshKey === "none" ? null : values.sshKey,
@@ -197,6 +201,19 @@ export const SaveGitProvider = ({ applicationId }: Props) => {
 									<FormLabel>Branch</FormLabel>
 									<FormControl>
 										<Input placeholder="Branch" {...field} />
+									</FormControl>
+									<FormMessage />
+								</FormItem>
+							)}
+						/>
+						<FormField
+							control={form.control}
+							name="targetTag"
+							render={({ field }) => (
+								<FormItem>
+									<FormLabel>Tag (optional)</FormLabel>
+									<FormControl>
+										<Input placeholder="Tag for scan checkout" {...field} />
 									</FormControl>
 									<FormMessage />
 								</FormItem>

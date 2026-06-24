@@ -534,7 +534,7 @@ const getScanJobStatusClassName = (status?: string) => {
 		return "text-green-600";
 	}
 
-	if (status === "canceled") {
+	if (status === "failed" || status === "canceled") {
 		return "text-destructive";
 	}
 
@@ -555,7 +555,9 @@ const formatTriggerSourceLabel = (
 ) =>
 	triggerSource === "schedule"
 		? scanT(t, "scan.jobs.auto", "auto")
-		: triggerSource || "manual";
+		: triggerSource === "manual" || !triggerSource
+			? scanT(t, "scan.jobs.manual", "manual")
+			: triggerSource;
 
 const getAnalysisResultBadgeClassName = (result?: string | null) => {
 	if (result === "real_vulnerability") {
@@ -637,27 +639,75 @@ const getTaskStageLabel = (t: ScanTranslation, stage?: string) => {
 	}
 	if (
 		stage === "Scan Repository" ||
-		stage === "repository-scan" ||
 		stage === "repository_scanning"
 	) {
+		return formatScanStageLabel(t, "repository-profile");
+	}
+	if (stage === "repository-scan") {
 		return formatScanStageLabel(t, "repository-scan");
 	}
 	if (
+		stage === "Attack Surface Model" ||
+		stage === "attack-surface-model" ||
+		stage === "attack_surface_modeling"
+	) {
+		return formatScanStageLabel(t, "attack-surface-model");
+	}
+	if (
 		stage === "Scan Module" ||
-		stage === "module-scan" ||
 		stage === "module_scanning"
 	) {
+		return formatScanStageLabel(t, "identify-target");
+	}
+	if (stage === "module-scan") {
 		return formatScanStageLabel(t, "module-scan");
 	}
 	if (
+		stage === "Module Threat Model" ||
+		stage === "module-threat-model" ||
+		stage === "module_threat_modeling"
+	) {
+		return formatScanStageLabel(t, "module-threat-model");
+	}
+	if (
+		stage === "Design Rule" ||
+		stage === "design-rule" ||
+		stage === "rule_designing"
+	) {
+		return formatScanStageLabel(t, "design-rule");
+	}
+	if (
+		stage === "Scan Rule" ||
+		stage === "scan-rule" ||
+		stage === "rule_scanning"
+	) {
+		return formatScanStageLabel(t, "scan-rule");
+	}
+	if (
+		stage === "Scan Pattern" ||
+		stage === "scan-pattern" ||
+		stage === "pattern_scanning"
+	) {
+		return formatScanStageLabel(t, "scan-pattern");
+	}
+	if (
+		stage === "Sink Pre-Analyze" ||
+		stage === "sink-pre-analyze" ||
+		stage === "sink_pre_analyzing"
+	) {
+		return formatScanStageLabel(t, "sink-pre-analyze");
+	}
+	if (
 		stage === "Scan Function" ||
-		stage === "function-scan" ||
 		stage === "function_scanning"
 	) {
+		return formatScanStageLabel(t, "scan-target");
+	}
+	if (stage === "function-scan") {
 		return formatScanStageLabel(t, "function-scan");
 	}
 	if (stage === "Analyze" || stage === "analyze" || stage === "analyzing") {
-		return formatScanStageLabel(t, "analyze");
+		return formatScanStageLabel(t, "analyze-finding");
 	}
 	if (
 		stage === "Build Fuzzer" ||
@@ -674,15 +724,15 @@ const getTaskStageLabel = (t: ScanTranslation, stage?: string) => {
 		stage === "criticize" ||
 		stage === "criticizing"
 	) {
-		return formatScanStageLabel(t, "criticize");
+		return formatScanStageLabel(t, "critique-finding");
 	}
 	if (stage === "Verify" || stage === "verify" || stage === "verifying") {
-		return formatScanStageLabel(t, "verify");
+		return formatScanStageLabel(t, "verify-finding");
 	}
 	if (stage === "Triage" || stage === "triage" || stage === "triaging") {
-		return formatScanStageLabel(t, "triage");
+		return formatScanStageLabel(t, "triage-finding");
 	}
-	return scanT(t, "scan.monitoring.task", "阶段任务");
+	return formatScanStageLabel(t, stage);
 };
 
 const RERUNNABLE_CANDIDATE_STATUSES = new Set(["completed", "failed", "exited"]);
@@ -731,7 +781,7 @@ const localizeTaskListText = (
 		return formatScanStageLabel(t, "delta-scope");
 	}
 	if (text === "Repository Scanner") {
-		return formatScanStageLabel(t, "repository-scan");
+		return formatScanStageLabel(t, "repository-profile");
 	}
 	if (text === "Diff impact function scoping") {
 		return scanT(
@@ -768,16 +818,56 @@ const getTaskListDisplay = (
 const RUNNING_TASK_STAGE_ORDER: Record<string, number> = {
 	delta_scoping: 0,
 	repository_scanning: 1,
-	module_scanning: 2,
-	function_scanning: 3,
-	analyzing: 4,
-	fuzz_building: 5,
-	fuzzing: 6,
-	criticizing: 7,
-	verifying: 8,
+	attack_surface_modeling: 2,
+	module_scanning: 3,
+	module_threat_modeling: 4,
+	rule_designing: 5,
+	rule_scanning: 6,
+	pattern_scanning: 7,
+	sink_pre_analyzing: 8,
+	function_scanning: 9,
+	analyzing: 10,
+	fuzz_building: 11,
+	fuzzing: 12,
+	criticizing: 13,
+	verifying: 14,
+	triaging: 15,
 };
 
-const TASK_STAGE_OPTIONS = Object.keys(RUNNING_TASK_STAGE_ORDER);
+const TASK_STAGE_OPTION_BY_STAGE_NAME: Record<string, string> = {
+	"delta-scope": "delta_scoping",
+	"repository-profile": "repository_scanning",
+	"repository-scan": "repository_scanning",
+	"attack-surface-model": "attack_surface_modeling",
+	"identify-target": "module_scanning",
+	"module-scan": "module_scanning",
+	"module-threat-model": "module_threat_modeling",
+	"design-rule": "rule_designing",
+	"scan-rule": "rule_scanning",
+	"scan-pattern": "pattern_scanning",
+	"sink-pre-analyze": "sink_pre_analyzing",
+	"scan-target": "function_scanning",
+	"function-scan": "function_scanning",
+	"analyze-finding": "analyzing",
+	analyze: "analyzing",
+	"build-fuzzer": "fuzz_building",
+	"run-fuzzer": "fuzzing",
+	"critique-finding": "criticizing",
+	criticize: "criticizing",
+	"verify-finding": "verifying",
+	verify: "verifying",
+	"triage-finding": "triaging",
+	triage: "triaging",
+};
+
+const normalizeTaskStageOption = (stage?: string | null) => {
+	if (!stage) {
+		return null;
+	}
+	return TASK_STAGE_OPTION_BY_STAGE_NAME[stage] ||
+		(stage in RUNNING_TASK_STAGE_ORDER ? stage : null);
+};
+
 const TERMINAL_TASK_STATUS_OPTIONS = [
 	"completed",
 	"failed",
@@ -799,15 +889,23 @@ const RESULT_FLOW_LAYOUT: Record<
 		className: string;
 	}
 > = {
-	analysis_positive: {
+	analysis_real: {
 		x: 24,
-		y: 98,
+		y: 86,
 		width: 154,
-		height: 68,
+		height: 54,
+		className:
+			"fill-red-50 stroke-red-300 dark:fill-red-950/40 dark:stroke-red-500/70",
+	},
+	analysis_likely: {
+		x: 24,
+		y: 190,
+		width: 154,
+		height: 54,
 		className:
 			"fill-orange-50 stroke-orange-300 dark:fill-orange-950/40 dark:stroke-orange-500/70",
 	},
-	verify_positive: {
+	verify_true: {
 		x: 280,
 		y: 24,
 		width: 154,
@@ -815,9 +913,17 @@ const RESULT_FLOW_LAYOUT: Record<
 		className:
 			"fill-emerald-50 stroke-emerald-300 dark:fill-emerald-950/40 dark:stroke-emerald-500/70",
 	},
+	verify_likely: {
+		x: 280,
+		y: 92,
+		width: 154,
+		height: 54,
+		className:
+			"fill-orange-50 stroke-orange-300 dark:fill-orange-950/40 dark:stroke-orange-500/70",
+	},
 	verify_false: {
 		x: 280,
-		y: 106,
+		y: 160,
 		width: 154,
 		height: 54,
 		className:
@@ -825,7 +931,7 @@ const RESULT_FLOW_LAYOUT: Record<
 	},
 	verify_missing: {
 		x: 280,
-		y: 188,
+		y: 228,
 		width: 154,
 		height: 54,
 		className:
@@ -833,7 +939,7 @@ const RESULT_FLOW_LAYOUT: Record<
 	},
 	triage_security_issue: {
 		x: 536,
-		y: 24,
+		y: 58,
 		width: 154,
 		height: 54,
 		className:
@@ -841,7 +947,7 @@ const RESULT_FLOW_LAYOUT: Record<
 	},
 	triage_not_security: {
 		x: 536,
-		y: 106,
+		y: 142,
 		width: 154,
 		height: 54,
 		className:
@@ -849,7 +955,7 @@ const RESULT_FLOW_LAYOUT: Record<
 	},
 	triage_missing: {
 		x: 536,
-		y: 188,
+		y: 226,
 		width: 154,
 		height: 54,
 		className:
@@ -858,8 +964,11 @@ const RESULT_FLOW_LAYOUT: Record<
 };
 
 const getResultFlowStrokeClassName = (target: string) => {
-	if (target === "verify_positive" || target === "triage_security_issue") {
+	if (target === "verify_true" || target === "triage_security_issue") {
 		return "stroke-emerald-500";
+	}
+	if (target === "verify_likely") {
+		return "stroke-orange-400";
 	}
 	if (target === "verify_false" || target === "triage_not_security") {
 		return "stroke-slate-400";
@@ -868,11 +977,17 @@ const getResultFlowStrokeClassName = (target: string) => {
 };
 
 const getResultFlowCardClassName = (id: string) => {
-	if (id === "analysis_positive") {
+	if (id === "analysis_real") {
+		return "border-red-200 bg-red-50 dark:border-red-500/60 dark:bg-red-950/30";
+	}
+	if (id === "analysis_likely") {
 		return "border-orange-200 bg-orange-50 dark:border-orange-500/60 dark:bg-orange-950/30";
 	}
-	if (id === "verify_positive") {
+	if (id === "verify_true") {
 		return "border-emerald-200 bg-emerald-50 dark:border-emerald-500/60 dark:bg-emerald-950/30";
+	}
+	if (id === "verify_likely") {
+		return "border-orange-200 bg-orange-50 dark:border-orange-500/60 dark:bg-orange-950/30";
 	}
 	if (id === "triage_security_issue") {
 		return "border-red-200 bg-red-50 dark:border-red-500/60 dark:bg-red-950/30";
@@ -883,10 +998,65 @@ const getResultFlowCardClassName = (id: string) => {
 	return "border-muted bg-muted/30";
 };
 
+const getResultFlowNodeLabel = (
+	t: ScanTranslation,
+	id: string,
+	fallback: string,
+) => {
+	switch (id) {
+		case "analysis_real":
+			return scanT(
+				t,
+				"scan.results.flow.node.analysisReal",
+				"Analysis Real",
+			);
+		case "analysis_likely":
+			return scanT(
+				t,
+				"scan.results.flow.node.analysisLikely",
+				"Analysis Likely",
+			);
+		case "verify_true":
+			return scanT(
+				t,
+				"scan.results.flow.node.verifyTrue",
+				"Verify True",
+			);
+		case "verify_likely":
+			return scanT(
+				t,
+				"scan.results.flow.node.verifyLikely",
+				"Verify Likely",
+			);
+		case "verify_false":
+			return scanT(t, "scan.results.flow.node.verifyFalse", "Verify False");
+		case "verify_missing":
+			return scanT(
+				t,
+				"scan.results.flow.node.verifyMissing",
+				"Wait Verifying",
+			);
+		case "triage_security_issue":
+			return scanT(t, "scan.results.flow.node.triageTrue", "Triage True");
+		case "triage_not_security":
+			return scanT(t, "scan.results.flow.node.triageFalse", "Triage False");
+		case "triage_missing":
+			return scanT(
+				t,
+				"scan.results.flow.node.triageMissing",
+				"Wait Triage",
+			);
+		default:
+			return fallback;
+	}
+};
+
 const ResultFlowChart = ({
 	summary,
+	t,
 }: {
 	summary?: ScanResultSummary | null;
+	t: ScanTranslation;
 }) => {
 	const nodes = summary?.flow.nodes ?? [];
 	const links = summary?.flow.links ?? [];
@@ -897,7 +1067,11 @@ const ResultFlowChart = ({
 	if (!summary || positiveCount === 0) {
 		return (
 			<div className="flex h-44 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
-				No positive analysis results to visualize.
+				{scanT(
+					t,
+					"scan.results.flow.empty",
+					"No positive analysis results to visualize.",
+				)}
 			</div>
 		);
 	}
@@ -906,7 +1080,9 @@ const ResultFlowChart = ({
 		<>
 			<div className="grid gap-3 md:hidden">
 				{nodes
-					.filter((node) => node.id === "analysis_positive")
+					.filter(
+						(node) => node.id === "analysis_real" || node.id === "analysis_likely",
+					)
 					.map((node) => (
 						<div
 							key={node.id}
@@ -914,7 +1090,9 @@ const ResultFlowChart = ({
 								node.id,
 							)}`}
 						>
-							<div className="text-sm font-medium">{node.label}</div>
+							<div className="text-sm font-medium">
+								{getResultFlowNodeLabel(t, node.id, node.label)}
+							</div>
 							<div className="mt-1 text-2xl font-semibold tabular-nums">
 								{formatSummaryCount(node.count)}
 							</div>
@@ -922,24 +1100,39 @@ const ResultFlowChart = ({
 					))}
 				<div className="grid gap-2">
 					<div className="text-xs font-medium uppercase text-muted-foreground">
-						Verify
+						{scanT(t, "scan.results.flow.column.verify", "Verify")}
 					</div>
 					{links
-						.filter((link) => link.source === "analysis_positive")
+						.filter((link) => link.source.startsWith("analysis_"))
 						.map((link) => {
 							const target = nodeById.get(link.target);
+							const source = nodeById.get(link.source);
 							return (
 								<div
 									key={`${link.source}-${link.target}`}
-									className={`flex items-center justify-between gap-3 rounded-lg border p-3 ${getResultFlowCardClassName(
+									className={`rounded-lg border p-3 ${getResultFlowCardClassName(
 										link.target,
 									)}`}
 								>
-									<div className="min-w-0 text-sm font-medium">
-										{target?.label ?? link.target}
+									<div className="flex items-center justify-between gap-3">
+										<div className="min-w-0 text-sm font-medium">
+											{getResultFlowNodeLabel(
+												t,
+												link.target,
+												target?.label ?? link.target,
+											)}
+										</div>
+										<div className="shrink-0 text-lg font-semibold tabular-nums">
+											{formatSummaryCount(link.count)}
+										</div>
 									</div>
-									<div className="shrink-0 text-lg font-semibold tabular-nums">
-										{formatSummaryCount(link.count)}
+									<div className="mt-1 text-xs text-muted-foreground">
+										{scanT(t, "scan.results.flow.from", "from")}{" "}
+										{getResultFlowNodeLabel(
+											t,
+											link.source,
+											source?.label ?? link.source,
+										)}
 									</div>
 								</div>
 							);
@@ -947,7 +1140,7 @@ const ResultFlowChart = ({
 				</div>
 				<div className="grid gap-2">
 					<div className="text-xs font-medium uppercase text-muted-foreground">
-						Triage
+						{scanT(t, "scan.results.flow.column.triage", "Triage")}
 					</div>
 					{links
 						.filter((link) => link.source.startsWith("verify_"))
@@ -963,14 +1156,23 @@ const ResultFlowChart = ({
 								>
 									<div className="flex items-center justify-between gap-3">
 										<div className="min-w-0 text-sm font-medium">
-											{target?.label ?? link.target}
+											{getResultFlowNodeLabel(
+												t,
+												link.target,
+												target?.label ?? link.target,
+											)}
 										</div>
 										<div className="shrink-0 text-lg font-semibold tabular-nums">
 											{formatSummaryCount(link.count)}
 										</div>
 									</div>
 									<div className="mt-1 text-xs text-muted-foreground">
-										from {source?.label ?? link.source}
+										{scanT(t, "scan.results.flow.from", "from")}{" "}
+										{getResultFlowNodeLabel(
+											t,
+											link.source,
+											source?.label ?? link.source,
+										)}
 									</div>
 								</div>
 							);
@@ -979,12 +1181,16 @@ const ResultFlowChart = ({
 			</div>
 			<div className="hidden w-full overflow-hidden md:block">
 			<svg
-				viewBox="0 0 714 270"
-				className="h-[270px] min-w-[714px] w-full"
+				viewBox="0 0 714 330"
+				className="h-[330px] min-w-[714px] w-full"
 				role="img"
-				aria-label="Candidate result flow from analysis to verification and triage"
+				aria-label={scanT(
+					t,
+					"scan.results.flow.ariaLabel",
+					"Candidate result flow from analysis to verification and triage",
+				)}
 			>
-				<title>Candidate result flow</title>
+				<title>{scanT(t, "scan.results.flow.svgTitle", "Candidate result flow")}</title>
 				{links.map((link) => {
 					const source = RESULT_FLOW_LAYOUT[link.source];
 					const target = RESULT_FLOW_LAYOUT[link.target];
@@ -1032,7 +1238,11 @@ const ResultFlowChart = ({
 								y={layout.y + 24}
 								className="fill-foreground text-[13px] font-medium"
 							>
-								{nodeById.get(node.id)?.label ?? node.label}
+								{getResultFlowNodeLabel(
+									t,
+									node.id,
+									nodeById.get(node.id)?.label ?? node.label,
+								)}
 							</text>
 							<text
 								x={layout.x + 14}
@@ -1045,13 +1255,13 @@ const ResultFlowChart = ({
 					);
 				})}
 				<text x="24" y="14" className="fill-muted-foreground text-[11px]">
-					Analysis
+					{scanT(t, "scan.results.flow.column.analysis", "Analysis")}
 				</text>
 				<text x="280" y="14" className="fill-muted-foreground text-[11px]">
-					Verify
+					{scanT(t, "scan.results.flow.column.verify", "Verify")}
 				</text>
 				<text x="536" y="14" className="fill-muted-foreground text-[11px]">
-					Triage
+					{scanT(t, "scan.results.flow.column.triage", "Triage")}
 				</text>
 			</svg>
 			</div>
@@ -1464,6 +1674,31 @@ export const ShowScanJobDetail = ({
 			return right.updatedAt.localeCompare(left.updatedAt);
 		});
 	}, [statusView?.inProgressTasks]);
+	const taskStageOptions = useMemo(() => {
+		const seen = new Set<string>();
+		const addStage = (stage?: string | null) => {
+			const option = normalizeTaskStageOption(stage);
+			if (option) {
+				seen.add(option);
+			}
+		};
+
+		for (const queue of queuePendingCounts) {
+			addStage(queue.stageName);
+		}
+		for (const task of sortedInProgressTasks) {
+			addStage(task.stage);
+		}
+		for (const task of terminalTasks?.items ?? []) {
+			addStage(task.stage);
+		}
+
+		return [...seen].sort(
+			(left, right) =>
+				(RUNNING_TASK_STAGE_ORDER[left] ?? Number.MAX_SAFE_INTEGER) -
+				(RUNNING_TASK_STAGE_ORDER[right] ?? Number.MAX_SAFE_INTEGER),
+		);
+	}, [queuePendingCounts, sortedInProgressTasks, terminalTasks?.items]);
 	const filteredInProgressTasks = useMemo(() => {
 		const query = taskSearchQuery.trim().toLowerCase();
 		return sortedInProgressTasks.filter((task) => {
@@ -1538,6 +1773,23 @@ export const ShowScanJobDetail = ({
 			setFinishedTaskPage(finishedTaskPagination.page);
 		}
 	}, [finishedTaskPage, finishedTaskPagination.page]);
+
+	useEffect(() => {
+		if (
+			runningTaskStageFilter !== "all" &&
+			!taskStageOptions.includes(runningTaskStageFilter)
+		) {
+			setRunningTaskStageFilter("all");
+			setRunningTaskPage(1);
+		}
+		if (
+			finishedTaskStageFilter !== "all" &&
+			!taskStageOptions.includes(finishedTaskStageFilter)
+		) {
+			setFinishedTaskStageFilter("all");
+			setFinishedTaskPage(1);
+		}
+	}, [finishedTaskStageFilter, runningTaskStageFilter, taskStageOptions]);
 
 	useEffect(() => {
 		if (
@@ -2200,6 +2452,12 @@ export const ShowScanJobDetail = ({
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="overview">
 								{scanT(t, "scan.job.tabs.overview", "Overview")}
 							</TabsTrigger>
+							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="tasks">
+								{scanT(t, "scan.job.tabs.tasks", "阶段任务")}
+							</TabsTrigger>
+							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="candidates">
+								{scanT(t, "scan.job.tabs.candidates", "Candidates")}
+							</TabsTrigger>
 							{serviceType === "application" ? (
 								<TabsTrigger
 									className="shrink-0 px-2 sm:px-3"
@@ -2208,12 +2466,6 @@ export const ShowScanJobDetail = ({
 									{scanT(t, "scan.evaluate.title", "Evaluate")}
 								</TabsTrigger>
 							) : null}
-							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="tasks">
-								{scanT(t, "scan.job.tabs.tasks", "阶段任务")}
-							</TabsTrigger>
-							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="candidates">
-								{scanT(t, "scan.job.tabs.candidates", "Candidates")}
-							</TabsTrigger>
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="monitoring">
 								{scanT(t, "scan.monitoring.title", "Monitoring")}
 							</TabsTrigger>
@@ -2418,7 +2670,7 @@ export const ShowScanJobDetail = ({
 														<Loader2 className="size-4 animate-spin text-muted-foreground" />
 													) : null}
 												</div>
-												<ResultFlowChart summary={resultSummary} />
+												<ResultFlowChart summary={resultSummary} t={t} />
 											</div>
 										</CardContent>
 									</Card>
@@ -3749,7 +4001,7 @@ export const ShowScanJobDetail = ({
 																className="border-b last:border-b-0"
 															>
 																<td className="w-[46%] px-4 py-3 align-top font-medium">
-																	{queue.title}
+																	{formatScanStageLabel(t, queue.stageName || queue.title)}
 																</td>
 																<td
 																	className="w-[18%] px-4 py-3 text-right align-top"
@@ -3826,7 +4078,7 @@ export const ShowScanJobDetail = ({
 													<option value="all">
 														{scanT(t, "scan.filters.allStages", "全部阶段")}
 													</option>
-													{TASK_STAGE_OPTIONS.map((stage) => (
+													{taskStageOptions.map((stage) => (
 														<option key={stage} value={stage}>
 															{getTaskStageLabel(t, stage)}
 														</option>
@@ -4066,7 +4318,7 @@ export const ShowScanJobDetail = ({
 													<option value="all">
 														{scanT(t, "scan.filters.allStages", "全部阶段")}
 													</option>
-													{TASK_STAGE_OPTIONS.map((stage) => (
+													{taskStageOptions.map((stage) => (
 														<option key={stage} value={stage}>
 															{getTaskStageLabel(t, stage)}
 														</option>

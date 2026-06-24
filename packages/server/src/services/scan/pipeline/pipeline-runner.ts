@@ -959,12 +959,12 @@ const releasePersistentLaneForTask = async (taskId: string) => {
 	await releaseStageLaneRuntimeRepo(taskId).catch(() => {});
 };
 
-const cleanupFinishedJobRuntime = async (scanJobId: string) => {
+const cleanupTerminalJobRuntime = async (scanJobId: string) => {
 	const scanJob = await findScanJobByIdRepo(scanJobId).catch(() => null);
-	if (scanJob?.status !== "finished") {
+	if (scanJob?.status !== "finished" && scanJob?.status !== "failed") {
 		return {
 			cleaned: false,
-			reason: "job_not_finished",
+			reason: "job_not_terminal",
 			containerCount: 0,
 		};
 	}
@@ -3597,7 +3597,7 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 						errorMessage: getErrorMessage(error),
 					});
 				});
-				const cleanupResult = await cleanupFinishedJobRuntime(
+				const cleanupResult = await cleanupTerminalJobRuntime(
 					runtime.ctx.scanJobId,
 				).catch((error) => {
 					logPipelineEvent("pipeline.finished_runtime_cleanup_failed", {

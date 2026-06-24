@@ -1,9 +1,9 @@
 ---
 name: analyze
-description: Analyze a vulnerability candidate in depth, establish reachability and constraints, decide whether fuzzing or critic review is needed, and prepare final analysis for verification.
+description: Analyze a vulnerability candidate in depth, establish reachability and constraints, decide whether critic review is needed, and prepare final analysis for verification.
 ---
 
-Analyze a given vulnerability candidate in depth and decide whether it is a real vulnerability, under what trigger conditions it can be reached, and which paths are worth prioritizing for further runtime validation.
+Analyze a given vulnerability candidate in depth and decide whether it is a real vulnerability, under what trigger conditions it can be reached, and which evidence is still missing.
 
 # Analyze
 
@@ -11,19 +11,18 @@ Use this skill when Vulseek asks an analysis agent to investigate one specific `
 
 ## Coordinator Decision Loop
 
-In the analysis-fuzzing-debate workflow, this skill is a coordinator. The
+In the analysis-critic workflow, this skill is a coordinator. The
 analysis agent decides which result type the current turn needs. The stage
 prompt defines the exact schema and route markers for each decision.
 
 Allowed decisions:
 
-- Need fuzzing evidence or dynamic exploration: request fuzzer construction.
 - Current draft analysis appears established: submit a draft analysis to the critic.
 - The latest critic response is `convinced` for the same analysis fingerprint: finalize the analysis for verification.
 
 Do not route `verification` directly from your own judgment. A matching convinced
 critic response is required first. If the critic objects, or if your own view
-changes, continue the build/fuzz/critic loop.
+changes, continue the analysis/critic loop.
 
 ## Analysis Result Content
 
@@ -35,19 +34,20 @@ the stage prompt.
 Also keep the structured analysis object evidence-oriented. Populate:
 
 - `hypothesis`: the current vulnerability claim or false-positive hypothesis
-- `evidenceTable`: code, negative, runtime, fuzz, and critic evidence collected
+- `evidenceTable`: code, negative, runtime, and critic evidence collected
   so far
 - `attackPath`: entry-to-candidate path, source-to-sink path, and control-flow
   constraints
-- `blockers`: missing data, failed tooling, unknown preconditions, or blocked
-  dynamic exploration
+- `blockers`: missing data, failed tooling, unknown preconditions, or evidence
+  that would require dynamic validation outside this pipeline version
 - `rulingRationale`: why the current result follows from the evidence
 - `missingEvidenceRequest`: what would most efficiently change confidence
-- `feedbackHistory`: relevant fuzz-build, fuzz-run, critic, and manual feedback
+- `feedbackHistory`: relevant critic and manual feedback
 
 For final critic-approved analysis, include the critic approval, the analysis
-fingerprint, the evidence bundle, any fuzz evidence, verified attack path
-details available so far, reproduction hints, and residual uncertainty.
+fingerprint, the evidence bundle, verified attack path details available so far,
+reproduction hints, and residual uncertainty. Leave `fuzzEvidence` empty unless
+the candidate already provides imported dynamic evidence.
 
 Recommended result enum values:
 
@@ -86,51 +86,14 @@ Optional helpful inputs:
 - repository state summary
 - codeql database path
 - semgrep rules or semgrep skill path
-- fuzzing-related code, harnesses, corpora, or build scripts
+- target artifact, threat model, and framework or runtime metadata
 
-## Fuzzing Decision
+## Dynamic Evidence Boundary
 
-Actively consider fuzzing. Fuzzing is useful for two reasons:
-
-- evidence: validate or disprove a concrete hypothesis and expected trigger
-  condition
-- exploration: explore complex control flow, parser boundaries, state machines,
-  protocol interaction, input classes, unexpected states, or hard-to-enumerate
-  preconditions
-
-Do not reserve fuzzing only for strong vulnerability claims. If static analysis
-cannot reliably cover a path or state space, request a fuzzer even when the
-current goal is path discovery or negative evidence.
-
-Prefer `fuzzGoal: "exploration"` when the entry-to-candidate or entry-to-sink
-path is complex and static analysis is unlikely to enumerate the relevant
-states. Strong signals include parser, decoder, protocol, or state-machine
-logic; loop-heavy paths; complex preconditions; a clear attacker-controlled
-input model with a large state space; or existing harnesses, test fixtures, or
-corpora that can be adapted quickly.
-
-For exploration requests, make the exploration target explicit. Include the
-entry-to-sink path being targeted, the path/state boundary you want the fuzzer
-to cross, and the coverage or proximity signal that would show useful progress.
-Do not describe only a final vulnerability oracle.
-
-When requesting a fuzzer, populate the build request with:
-
-- `candidateId`
-- `analysisFingerprint`
-- `fuzzGoal` as `evidence` or `exploration`
-- `entryToCandidatePath`
-- `harnessRequirements`
-- `harnessEntry`
-- `inputModel`
-- `expectedOracle`
-- `seedCorpusHints`
-- `buildCommandHints`
-- `sanitizerRuntimeAssumptions`
-- `expectedTriggerCondition`
-- `targetFunction`
-- `targetFilePath`
-- `notes`
+This pipeline version does not route to fuzzer construction or dynamic exploit
+execution. If dynamic evidence would materially change confidence, record the
+specific missing evidence in `blockers` or `missingEvidenceRequest` and continue
+with critic review when the static evidence is organized enough.
 
 ## High-Level Objective
 
@@ -140,7 +103,7 @@ For the given candidate:
 2. identify all plausible untrusted-input entry points that may reach this scenario
 3. determine whether the entry points can actually reach the candidate through data flow and control flow
 4. collect the control-flow constraints and environmental assumptions that must hold along each reachable path
-5. prioritize deeper, loop-heavy, stateful, and fuzzing-hard paths
+5. identify deeper, loop-heavy, stateful, and dynamically hard paths as explicit missing evidence when static reasoning is insufficient
 6. decide whether the candidate corresponds to a real vulnerability, a likely vulnerability, a weak hypothesis, or a false positive
 
 The key point is path-grounded judgment:

@@ -479,12 +479,35 @@ export const findScanJobResultSummary = async (scanJobId: string) => {
 		triageSecurityIssue: 0,
 	};
 	const analysisPositiveFlow = {
-		verifyPositive: 0,
+		verifyTrue: 0,
+		verifyLikely: 0,
 		verifyFalse: 0,
 		verifyMissing: 0,
 		triageSecurityIssue: 0,
 		triageNotSecurity: 0,
 		triageMissing: 0,
+	};
+	const analysisFlowBySource: Record<
+		"analysis_real" | "analysis_likely",
+		{
+			verify_true: number;
+			verify_likely: number;
+			verify_false: number;
+			verify_missing: number;
+		}
+	> = {
+		analysis_real: {
+			verify_true: 0,
+			verify_likely: 0,
+			verify_false: 0,
+			verify_missing: 0,
+		},
+		analysis_likely: {
+			verify_true: 0,
+			verify_likely: 0,
+			verify_false: 0,
+			verify_missing: 0,
+		},
 	};
 	const transitionLinks: Array<{
 		source: string;
@@ -492,7 +515,8 @@ export const findScanJobResultSummary = async (scanJobId: string) => {
 		count: number;
 	}> = [];
 	const verifyBucketCounts = {
-		verify_positive: 0,
+		verify_true: 0,
+		verify_likely: 0,
 		verify_false: 0,
 		verify_missing: 0,
 	};
@@ -504,7 +528,12 @@ export const findScanJobResultSummary = async (scanJobId: string) => {
 			triage_missing: number;
 		}
 	> = {
-		verify_positive: {
+		verify_true: {
+			triage_security_issue: 0,
+			triage_not_security: 0,
+			triage_missing: 0,
+		},
+		verify_likely: {
 			triage_security_issue: 0,
 			triage_not_security: 0,
 			triage_missing: 0,
@@ -536,15 +565,25 @@ export const findScanJobResultSummary = async (scanJobId: string) => {
 			if (analysisResult === "likely_vulnerability") {
 				counts.analysisLikely += 1;
 			}
+			const analysisBucket =
+				analysisResult === "real_vulnerability"
+					? "analysis_real"
+					: "analysis_likely";
 
-			const verifyBucket = isPositiveVerificationResult(verificationResult)
-				? "verify_positive"
-				: verificationResult === "false"
-					? "verify_false"
-					: "verify_missing";
+			let verifyBucket: keyof typeof verifyBucketCounts = "verify_missing";
+			if (verificationResult === "true") {
+				verifyBucket = "verify_true";
+			} else if (verificationResult === "likely") {
+				verifyBucket = "verify_likely";
+			} else if (verificationResult === "false") {
+				verifyBucket = "verify_false";
+			}
 			incrementCount(verifyBucketCounts, verifyBucket);
-			if (verifyBucket === "verify_positive") {
-				analysisPositiveFlow.verifyPositive += 1;
+			analysisFlowBySource[analysisBucket][verifyBucket] += 1;
+			if (verifyBucket === "verify_true") {
+				analysisPositiveFlow.verifyTrue += 1;
+			} else if (verifyBucket === "verify_likely") {
+				analysisPositiveFlow.verifyLikely += 1;
 			} else if (verifyBucket === "verify_false") {
 				analysisPositiveFlow.verifyFalse += 1;
 			} else {
@@ -580,13 +619,15 @@ export const findScanJobResultSummary = async (scanJobId: string) => {
 		}
 	}
 
-	for (const [target, count] of Object.entries(verifyBucketCounts)) {
-		if (count > 0) {
-			transitionLinks.push({
-				source: "analysis_positive",
-				target,
-				count,
-			});
+	for (const [source, targets] of Object.entries(analysisFlowBySource)) {
+		for (const [target, count] of Object.entries(targets)) {
+			if (count > 0) {
+				transitionLinks.push({
+					source,
+					target,
+					count,
+				});
+			}
 		}
 	}
 	for (const [source, targets] of Object.entries(triageByVerifyBucket)) {
@@ -603,16 +644,28 @@ export const findScanJobResultSummary = async (scanJobId: string) => {
 		flow: {
 			nodes: [
 				{
-					id: "analysis_positive",
-					label: "Analysis Real/Likely",
+					id: "analysis_real",
+					label: "Analysis Real",
 					stage: "analysis",
-					count: counts.analysisPositive,
+					count: counts.analysisReal,
 				},
 				{
-					id: "verify_positive",
-					label: "Verify True/Likely",
+					id: "analysis_likely",
+					label: "Analysis Likely",
+					stage: "analysis",
+					count: counts.analysisLikely,
+				},
+				{
+					id: "verify_true",
+					label: "Verify True",
 					stage: "verify",
-					count: analysisPositiveFlow.verifyPositive,
+					count: analysisPositiveFlow.verifyTrue,
+				},
+				{
+					id: "verify_likely",
+					label: "Verify Likely",
+					stage: "verify",
+					count: analysisPositiveFlow.verifyLikely,
 				},
 				{
 					id: "verify_false",

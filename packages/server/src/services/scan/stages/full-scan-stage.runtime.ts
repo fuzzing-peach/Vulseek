@@ -72,23 +72,25 @@ const resolveStageContainerPrefix = (stageName: string) => {
 		case SCAN_STAGE_IDS.deltaScope:
 			return "delta-scope";
 		case SCAN_STAGE_IDS.repositoryScan:
-			return "repository-scan";
+			return "repository-profile";
+		case SCAN_STAGE_IDS.attackSurfaceModel:
+			return "attack-surface-model";
 		case SCAN_STAGE_IDS.moduleScan:
-			return "module-scan";
+			return "identify-target";
 		case SCAN_STAGE_IDS.functionScan:
-			return "function-scan";
+			return "scan-target";
 		case SCAN_STAGE_IDS.analysis:
-			return "analysis";
+			return "analyze-finding";
 		case SCAN_STAGE_IDS.fuzzBuild:
 			return "fuzz-build";
 		case SCAN_STAGE_IDS.fuzzRun:
 			return "fuzz-run";
 		case SCAN_STAGE_IDS.analysisCritic:
-			return "analysis-critic";
+			return "critique-finding";
 		case SCAN_STAGE_IDS.verification:
-			return "verify";
+			return "verify-finding";
 		case SCAN_STAGE_IDS.triage:
-			return "triage";
+			return "triage-finding";
 		default:
 			return sanitizeContainerNamePart(stageName);
 	}

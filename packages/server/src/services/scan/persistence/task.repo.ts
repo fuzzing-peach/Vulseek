@@ -834,10 +834,13 @@ export const requeueTaskRepo = async (taskId: string) => {
 export const listAnalysisResultsByScanJobIdRepo = async (
 	scanJobId: string,
 ): Promise<AnalysisResult[]> => {
-	const analysisTasks = await listTasksByScanJobAndStageRepo({
-		scanJobId,
-		stageName: "analyze",
-	});
+	const analysisTasks = (
+		await Promise.all(
+			["analyze-finding", "analyze"].map((stageName) =>
+				listTasksByScanJobAndStageRepo({ scanJobId, stageName }),
+			),
+		)
+	).flat();
 	return (
 		await Promise.all(analysisTasks.map(buildAnalysisTaskResultView))
 	).filter((item): item is AnalysisResult => Boolean(item));
@@ -846,10 +849,13 @@ export const listAnalysisResultsByScanJobIdRepo = async (
 export const listVerificationResultsByScanJobIdRepo = async (
 	scanJobId: string,
 ): Promise<VerificationResult[]> => {
-	const verificationTasks = await listTasksByScanJobAndStageRepo({
-		scanJobId,
-		stageName: "verify",
-	});
+	const verificationTasks = (
+		await Promise.all(
+			["verify-finding", "verify"].map((stageName) =>
+				listTasksByScanJobAndStageRepo({ scanJobId, stageName }),
+			),
+		)
+	).flat();
 	return (
 		await Promise.all(verificationTasks.map(buildVerificationTaskResultView))
 	).filter((item): item is VerificationResult => Boolean(item));
@@ -858,10 +864,13 @@ export const listVerificationResultsByScanJobIdRepo = async (
 export const listTriageResultsByScanJobIdRepo = async (
 	scanJobId: string,
 ): Promise<TriageResult[]> => {
-	const triageTasks = await listTasksByScanJobAndStageRepo({
-		scanJobId,
-		stageName: "triage",
-	});
+	const triageTasks = (
+		await Promise.all(
+			["triage-finding", "triage"].map((stageName) =>
+				listTasksByScanJobAndStageRepo({ scanJobId, stageName }),
+			),
+		)
+	).flat();
 	return (
 		await Promise.all(triageTasks.map(buildTriageTaskResultView))
 	).filter((item): item is TriageResult => Boolean(item));
@@ -879,7 +888,7 @@ export const findLatestAnalysisResultByCandidateIdRepo = async (input: {
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
 			});
 		for (const task of candidateTasks) {
-			if (task.stageName !== "analyze") {
+			if (task.stageName !== "analyze" && task.stageName !== "analyze-finding") {
 				continue;
 			}
 			const result = await buildAnalysisTaskResultView(task);
@@ -910,7 +919,7 @@ export const findLatestVerificationResultByCandidateIdRepo = async (input: {
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
 			});
 		for (const task of candidateTasks) {
-			if (task.stageName !== "verify") {
+			if (task.stageName !== "verify" && task.stageName !== "verify-finding") {
 				continue;
 			}
 			const result = await buildVerificationTaskResultView(task);
@@ -941,7 +950,7 @@ export const findLatestTriageResultByCandidateIdRepo = async (input: {
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
 			});
 		for (const task of candidateTasks) {
-			if (task.stageName !== "triage") {
+			if (task.stageName !== "triage" && task.stageName !== "triage-finding") {
 				continue;
 			}
 			const result = await buildTriageTaskResultView(task);
@@ -990,6 +999,32 @@ export const countOpenTasksByScanJobIdRepo = async (scanJobId: string) => {
 		);
 	return Number(row?.count || 0);
 };
+
+export const cancelOpenTasksByScanJobIdRepo = async (
+	scanJobId: string,
+	errorMessage?: string | null,
+) =>
+	await db
+		.update(tasks)
+		.set({
+			status: "canceled",
+			errorMessage: errorMessage ?? null,
+			completedAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+		})
+		.where(
+			and(
+				eq(tasks.scanJobId, scanJobId),
+				inArray(tasks.status, [
+					"pending",
+					"launching",
+					"launched",
+					"starting",
+					"running",
+				]),
+			),
+		)
+		.returning();
 
 export const countTasksByScanJobStageAndStatusRepo = async (
 	scanJobId: string,

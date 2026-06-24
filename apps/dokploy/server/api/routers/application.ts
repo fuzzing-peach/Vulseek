@@ -407,6 +407,7 @@ export const applicationRouter = createTRPCRouter({
 			await updateApplication(input.applicationId, {
 				repository: input.repository,
 				branch: input.branch,
+				targetTag: input.targetTag || null,
 				sourceType: "github",
 				owner: input.owner,
 				buildPath: input.buildPath,
@@ -436,6 +437,7 @@ export const applicationRouter = createTRPCRouter({
 				gitlabRepository: input.gitlabRepository,
 				gitlabOwner: input.gitlabOwner,
 				gitlabBranch: input.gitlabBranch,
+				targetTag: input.targetTag || null,
 				gitlabBuildPath: input.gitlabBuildPath,
 				sourceType: "gitlab",
 				applicationStatus: "idle",
@@ -465,6 +467,7 @@ export const applicationRouter = createTRPCRouter({
 				bitbucketRepository: input.bitbucketRepository,
 				bitbucketOwner: input.bitbucketOwner,
 				bitbucketBranch: input.bitbucketBranch,
+				targetTag: input.targetTag || null,
 				bitbucketBuildPath: input.bitbucketBuildPath,
 				sourceType: "bitbucket",
 				applicationStatus: "idle",
@@ -492,6 +495,7 @@ export const applicationRouter = createTRPCRouter({
 				giteaRepository: input.giteaRepository,
 				giteaOwner: input.giteaOwner,
 				giteaBranch: input.giteaBranch,
+				targetTag: input.targetTag || null,
 				giteaBuildPath: input.giteaBuildPath,
 				sourceType: "gitea",
 				applicationStatus: "idle",
@@ -541,6 +545,7 @@ export const applicationRouter = createTRPCRouter({
 			}
 			await updateApplication(input.applicationId, {
 				customGitBranch: input.customGitBranch,
+				targetTag: input.targetTag || null,
 				customGitBuildPath: input.customGitBuildPath,
 				customGitUrl: input.customGitUrl,
 				customGitSSHKeyId: input.customGitSSHKeyId,
@@ -571,6 +576,7 @@ export const applicationRouter = createTRPCRouter({
 				// GitHub fields
 				repository: null,
 				branch: null,
+				targetTag: null,
 				owner: null,
 				buildPath: "/",
 				githubId: null,

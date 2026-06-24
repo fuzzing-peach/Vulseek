@@ -1,13 +1,13 @@
 ---
 name: scan-repository
-description: Build repository context and split the repository into downstream scan modules.
+description: Build repository context and split the repository into downstream vulnerability-mining modules.
 ---
 
 # Scan Repository
 
 ## Purpose
 
-Create repository-level context and split the checked-out repository into modules for downstream scanning.
+Create repository-level context and split the checked-out repository into modules for downstream generic vulnerability mining.
 
 This stage is a routing stage. It should preserve security-relevant module boundaries while removing obvious repository noise.
 
@@ -56,7 +56,7 @@ Follow one pass:
 
 ## Module Splitting Policy
 
-Create modules that preserve security-relevant boundaries for downstream scanning.
+Create modules that preserve runtime and security-relevant boundaries for downstream attack-surface modeling and target identification.
 
 A module should group code that shares a similar runtime role, trust boundary, threat model, privilege level, language/runtime integration point, or security responsibility.
 
@@ -83,7 +83,7 @@ Prefer boundaries in this order:
 
    Consider:
 
-   - HTTP, RPC, CLI, webhook, queue, worker, browser, plugin, LLM tool, or smart contract entrypoints
+   - HTTP, RPC, CLI, webhook, queue, worker, browser, plugin, LLM tool, GraphQL, server action, controller, middleware, or smart contract entrypoints
    - user input, network input, uploaded files, parsed documents, queue messages, third-party API responses, database-loaded state, environment variables, filesystem state, plugin output, or LLM output
 
 3. Sensitive responsibility boundaries
@@ -103,7 +103,7 @@ Prefer boundaries in this order:
 
    Consider:
 
-   - API server, worker, CLI, frontend, backend, core library, language binding, integration provider, platform adapter, deployment or infrastructure component
+   - API server, web app, worker, CLI, frontend, backend, core library, language binding, integration provider, platform adapter, deployment or infrastructure component
    - unauthenticated user-facing code, authenticated user actions, admin-only functionality, internal service-to-service code, sandboxed execution, plugin runtime, LLM agent/runtime, supply-chain or build logic, smart contract/on-chain execution
 
 5. Core responsibility and directory fallback
@@ -187,7 +187,7 @@ Set numeric priority.
 
 Stay within the repository-stage contract.
 
-Do not produce function inventories, vulnerability candidates, exploit hypotheses, detailed attack paths, call graphs, or data-flow summaries.
+Do not produce target inventories, function inventories, vulnerability candidates, exploit hypotheses, detailed attack paths, call graphs, or data-flow summaries.
 
 Do not run commands that install dependencies, build, test, fuzz, modify repository state, use external services, or perform web/network access.
 

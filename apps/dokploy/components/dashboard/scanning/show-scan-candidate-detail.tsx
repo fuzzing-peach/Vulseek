@@ -166,7 +166,7 @@ const getTaskStageLabel = (t: ScanTranslation, stage?: string | null) => {
 	if (stage === "triage") {
 		return formatScanStageLabel(t, "triage");
 	}
-	return stage || "-";
+	return formatScanStageLabel(t, stage);
 };
 
 const getTaskStatusBadgeClassName = (status?: string | null) => {

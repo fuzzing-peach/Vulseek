@@ -118,6 +118,7 @@ export const applications = pgTable("application", {
 	command: text("command"),
 	refreshToken: text("refreshToken").$defaultFn(() => nanoid()),
 	sourceType: sourceType("sourceType").notNull().default("github"),
+	targetTag: text("targetTag"),
 	cleanCache: boolean("cleanCache").default(false),
 	// Github
 	repository: text("repository"),
@@ -126,7 +127,7 @@ export const applications = pgTable("application", {
 	buildPath: text("buildPath").default("/"),
 	triggerType: triggerType("triggerType").default("push"),
 	autoDeploy: boolean("autoDeploy").$defaultFn(() => true),
-	autoDeltaScan: boolean("autoDeltaScan").$defaultFn(() => true),
+	autoDeltaScan: boolean("autoDeltaScan").$defaultFn(() => false),
 	fuzzingBudgetSeconds: integer("fuzzingBudgetSeconds").notNull().default(600),
 	postCheckoutScript: text("postCheckoutScript").notNull().default(""),
 	// Gitlab
@@ -271,7 +272,7 @@ const createSchema = createInsertSchema(applications, {
 	createdAt: z.string(),
 	applicationId: z.string(),
 	autoDeploy: z.boolean(),
-	autoDeltaScan: z.boolean(),
+	autoDeltaScan: z.boolean().default(false),
 	fuzzingBudgetSeconds: z.number().int().min(1).max(86400).default(600),
 	postCheckoutScript: z.string().max(20000).default(""),
 	scanStageSettings: ScanStageSettingsSchema.default(
@@ -299,6 +300,7 @@ const createSchema = createInsertSchema(applications, {
 	repository: z.string().optional(),
 	dockerfile: z.string().optional(),
 	branch: z.string().optional(),
+	targetTag: z.string().optional(),
 	customGitBranch: z.string().optional(),
 	customGitBuildPath: z.string().optional(),
 	customGitUrl: z.string().optional(),
@@ -404,6 +406,7 @@ export const apiSaveGithubProvider = createSchema
 		applicationId: true,
 		repository: true,
 		branch: true,
+		targetTag: true,
 		owner: true,
 		buildPath: true,
 		githubId: true,
@@ -419,6 +422,7 @@ export const apiSaveGitlabProvider = createSchema
 	.pick({
 		applicationId: true,
 		gitlabBranch: true,
+		targetTag: true,
 		gitlabBuildPath: true,
 		gitlabOwner: true,
 		gitlabRepository: true,
@@ -433,6 +437,7 @@ export const apiSaveGitlabProvider = createSchema
 export const apiSaveBitbucketProvider = createSchema
 	.pick({
 		bitbucketBranch: true,
+		targetTag: true,
 		bitbucketBuildPath: true,
 		bitbucketOwner: true,
 		bitbucketRepository: true,
@@ -447,6 +452,7 @@ export const apiSaveGiteaProvider = createSchema
 	.pick({
 		applicationId: true,
 		giteaBranch: true,
+		targetTag: true,
 		giteaBuildPath: true,
 		giteaOwner: true,
 		giteaRepository: true,
@@ -469,6 +475,7 @@ export const apiSaveDockerProvider = createSchema
 export const apiSaveGitProvider = createSchema
 	.pick({
 		customGitBranch: true,
+		targetTag: true,
 		applicationId: true,
 		customGitBuildPath: true,
 		customGitUrl: true,

@@ -144,6 +144,53 @@ export const functionSchema = z.object({
 	likelyVulnerabilityTypes: z.array(z.string()),
 });
 
+export const targetKindSchema = z.enum([
+	"function",
+	"route-handler",
+	"middleware",
+	"api-route",
+	"server-action",
+	"page-loader",
+	"controller-action",
+	"view-function",
+	"resolver",
+	"job-handler",
+	"cli-command",
+	"security-config",
+	"template-render",
+	"parser-deserializer",
+	"data-access",
+	"unknown",
+]);
+
+export const targetSchema = z
+	.object({
+		id: z.string().min(1),
+		moduleId: z.string().min(1),
+		moduleName: z.string().min(1),
+		targetId: z.string().min(1),
+		targetName: z.string().min(1),
+		targetKind: targetKindSchema,
+		language: z.string().nullable(),
+		framework: z.string().nullable(),
+		sourceFiles: z.array(z.string()).min(1),
+		filePath: z.string().nullable(),
+		line: z.number().int().nullable(),
+		routePath: z.string().nullable(),
+		httpMethods: z.array(z.string()),
+		priority: z.number().int(),
+		summary: z.string().nullable(),
+		attackerInputs: z.array(z.string()),
+		sinks: z.array(z.string()),
+		trustBoundary: z.string().nullable(),
+		likelyVulnerabilityTypes: z.array(z.string()),
+		evidence: z.array(z.string()),
+		score: z.number().nullable(),
+		excludeReason: z.string().nullable(),
+		priorityReason: z.string(),
+	})
+	.strict();
+
 export const moduleSchema = z
 	.object({
 		id: z
@@ -228,6 +275,186 @@ export const moduleScanManifestSchema = z.object({
 	functions: artifactPathListOf(functionSchema),
 });
 
+export const identifyTargetManifestSchema = z
+	.object({
+		repository: artifactPathOf(repositorySchema),
+		module: artifactPathOf(moduleSchema),
+		threatModel: artifactPathOf(z.lazy(() => moduleThreatModelSchema)),
+		targets: artifactPathListOf(targetSchema),
+	})
+	.strict();
+
+export const moduleThreatModelSchema = z
+	.object({
+		moduleId: z.string().min(1),
+		moduleName: z.string().min(1),
+		modulePath: z.string().min(1),
+		assets: z.array(z.string()),
+		entrypoints: z.array(z.string()),
+		trustBoundaries: z.array(z.string()),
+		attackerInputs: z.array(z.string()),
+		sinkClasses: z.array(z.string()),
+		likelyVulnerabilityClasses: z.array(z.string()).default([]),
+		rulePriorities: z.array(z.string()),
+		securityAssumptions: z.array(z.string()).default([]),
+		assumptions: z.array(z.string()),
+		limitations: z.array(z.string()),
+		summary: z.string(),
+	})
+	.strict();
+
+export const moduleThreatModelManifestSchema = z
+	.object({
+		repository: artifactPathOf(repositorySchema),
+		module: artifactPathOf(moduleSchema),
+		threatModel: artifactPathOf(moduleThreatModelSchema),
+	})
+	.strict();
+
+export const executableRuleEngineSchema = z.enum(["semgrep", "ripgrep"]);
+
+export const ruleEngineSchema = z.enum(["semgrep", "ripgrep", "abstract"]);
+
+export const rulePrioritySchema = z.enum(["high", "medium", "low"]);
+
+export const rulePatternModeSchema = z.enum(["literal", "regex"]);
+
+export const rulePlanSchema = z
+	.object({
+		module: z.object({
+			moduleId: z.string().min(1),
+			moduleName: z.string().min(1),
+			modulePath: z.string().min(1),
+		}),
+		threatModelPath: artifactPathOf(moduleThreatModelSchema),
+		rules: z.array(
+			z
+				.object({
+					ruleId: z.string().min(1),
+					engine: executableRuleEngineSchema,
+					riskClass: z.string().min(1),
+					intent: z.string().min(1),
+					targetKinds: z.array(z.string()),
+					priority: rulePrioritySchema,
+					fileScopes: z.array(z.string()),
+					artifactPath: z.string().nullable(),
+					execution: z
+						.object({
+							patterns: z.array(z.string()).default([]),
+							patternMode: rulePatternModeSchema.nullable().default(null),
+							semgrepRule: z.string().nullable().default(null),
+						})
+						.default({ patterns: [], patternMode: null, semgrepRule: null }),
+				})
+				.strict(),
+		),
+		abstractPatterns: z.array(
+			z
+				.object({
+					patternId: z.string().min(1),
+					riskClass: z.string().min(1),
+					priority: rulePrioritySchema,
+					location: z
+						.object({
+							filePath: z.string().nullable(),
+							line: z.number().int().nullable(),
+							symbolName: z.string().nullable(),
+						})
+						.strict(),
+					reviewQuestions: z.array(z.string()),
+					evidenceToCollect: z.array(z.string()),
+					discardIf: z.array(z.string()),
+					summary: z.string(),
+				})
+				.strict(),
+		),
+		assumptions: z.array(z.string()),
+		limitations: z.array(z.string()),
+		summary: z.string(),
+	})
+	.strict();
+
+export const rulePlanManifestSchema = z
+	.object({
+		repository: artifactPathOf(repositorySchema),
+		module: artifactPathOf(moduleSchema),
+		threatModel: artifactPathOf(moduleThreatModelSchema),
+		rulePlan: artifactPathOf(rulePlanSchema),
+	})
+	.strict();
+
+export const ruleFindingSchema = z
+	.object({
+		findingId: z.string().min(1),
+		ruleId: z.string().min(1),
+		engine: ruleEngineSchema,
+		riskClass: z.string().min(1),
+		priority: rulePrioritySchema,
+		location: z
+			.object({
+				filePath: z.string().nullable(),
+				line: z.number().int().nullable(),
+				column: z.number().int().nullable(),
+				symbolName: z.string().nullable(),
+			})
+			.strict(),
+		message: z.string(),
+		matchedText: z.string().nullable(),
+		metadata: z.record(z.unknown()).default({}),
+	})
+	.strict();
+
+export const sinkReviewTargetSchema = z
+	.object({
+		targetId: z.string().min(1),
+		moduleId: z.string().min(1),
+		targetType: z.enum(["rule_finding", "abstract_pattern"]),
+		riskClass: z.string().min(1),
+		priority: rulePrioritySchema,
+		location: z
+			.object({
+				filePath: z.string().nullable(),
+				line: z.number().int().nullable(),
+				column: z.number().int().nullable(),
+				symbolName: z.string().nullable(),
+			})
+			.strict(),
+		ruleEvidence: z.array(z.string()),
+		reviewQuestions: z.array(z.string()),
+		evidenceToCollect: z.array(z.string()),
+		discardIf: z.array(z.string()),
+		normalization: z
+			.object({
+				key: z.string().min(1),
+				snippet: z.string().nullable(),
+				mergedFindingIds: z.array(z.string()),
+			})
+			.strict(),
+		summary: z.string(),
+	})
+	.strict();
+
+export const findingManifestSchema = z
+	.object({
+		rawFindings: artifactPathListOf(ruleFindingSchema),
+		executionReports: z.array(
+			z
+				.object({
+					ruleId: z.string().min(1),
+					engine: ruleEngineSchema,
+					status: z.enum(["completed", "failed", "skipped"]),
+					command: z.string().nullable(),
+					exitCode: z.number().int().nullable(),
+					findings: z.number().int().nonnegative(),
+					errorMessage: z.string().nullable(),
+					artifactPath: z.string().nullable(),
+				})
+				.strict(),
+		),
+		summary: z.string(),
+	})
+	.strict();
+
 export const candidateSchema = z.object({
 	id: z.string().min(1),
 	// scanJobId: z.string().min(1),
@@ -244,6 +471,8 @@ export const candidateSchema = z.object({
 	score: z.number().nullable(),
 	claim: z.string(),
 	rootCauseKey: z.string().nullable(),
+	targetId: z.string().nullable().optional(),
+	targetKind: targetKindSchema.nullable().optional(),
 	evidence: z.array(evidenceSchema),
 	attackerControl: z.string().nullable(),
 	affectedSink: z.string().nullable(),
@@ -258,6 +487,18 @@ export const candidateSchema = z.object({
 export const functionScanManifestSchema = z.object({
 	candidates: artifactPathListOf(candidateSchema),
 });
+
+export const scanTargetManifestSchema = functionScanManifestSchema;
+
+export const sinkPreAnalyzeManifestSchema = z
+	.object({
+		normalizedTargets: artifactPathListOf(sinkReviewTargetSchema),
+		candidates: artifactPathListOf(candidateSchema),
+		syntheticFunctions: artifactPathListOf(functionSchema),
+		discardedTargets: artifactPathListOf(sinkReviewTargetSchema),
+		summary: z.string(),
+	})
+	.strict();
 
 export const analysisSchema = z.object({
 	id: z.string().min(1),
@@ -441,10 +682,23 @@ export type DeltaScopeManifest = z.infer<typeof deltaScopeManifestSchema>;
 export type RepositoryModule = z.infer<typeof repositoryModuleSchema>;
 export type Module = z.infer<typeof moduleSchema>;
 export type ModuleScanManifest = z.infer<typeof moduleScanManifestSchema>;
+export type Target = z.infer<typeof targetSchema>;
+export type IdentifyTargetManifest = z.infer<typeof identifyTargetManifestSchema>;
+export type ModuleThreatModel = z.infer<typeof moduleThreatModelSchema>;
+export type ModuleThreatModelManifest = z.infer<
+	typeof moduleThreatModelManifestSchema
+>;
+export type RulePlan = z.infer<typeof rulePlanSchema>;
+export type RulePlanManifest = z.infer<typeof rulePlanManifestSchema>;
+export type RuleFinding = z.infer<typeof ruleFindingSchema>;
+export type FindingManifest = z.infer<typeof findingManifestSchema>;
+export type SinkReviewTarget = z.infer<typeof sinkReviewTargetSchema>;
+export type SinkPreAnalyzeManifest = z.infer<typeof sinkPreAnalyzeManifestSchema>;
 export type Function = z.infer<typeof functionSchema>;
 export type Evidence = z.infer<typeof evidenceSchema>;
 export type Candidate = z.infer<typeof candidateSchema>;
 export type FunctionScanManifest = z.infer<typeof functionScanManifestSchema>;
+export type ScanTargetManifest = z.infer<typeof scanTargetManifestSchema>;
 export type Analysis = z.infer<typeof analysisSchema>;
 export type BuildFuzzerRequest = z.infer<typeof buildFuzzerRequestSchema>;
 export type FuzzBuildResult = z.infer<typeof fuzzBuildResultSchema>;

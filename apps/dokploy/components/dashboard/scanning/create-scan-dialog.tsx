@@ -52,7 +52,7 @@ interface Props {
 	defaultCommitWindow?: number;
 	showCommitWindow?: boolean;
 	showFullScanPreview?: boolean;
-	scanType?: "delta" | "full";
+	scanType?: "delta" | "full" | "rule";
 	onSubmit: (input: {
 		targetRef?: string;
 		targetTag?: string;
@@ -89,12 +89,18 @@ export const CreateScanDialog = ({
 			? scanT(
 					t,
 					"scan.dialog.deltaPreview",
-					"Delta Scan scopes functions impacted by the target/base diff, then runs function scanning, candidate analysis, fuzzing, verification, and triage.",
+					"Delta Scan scopes targets impacted by the target/base diff, then runs target scanning, finding analysis, verification, and triage.",
 				)
+			: scanType === "rule"
+				? scanT(
+						t,
+						"scan.dialog.rulePreview",
+						"Rule Scan builds module threat models, runs generated rules, pre-screens sink targets, then analyzes candidate findings with the existing verification and triage pipeline.",
+					)
 			: scanT(
 					t,
 					"scan.dialog.fullPreview",
-					"Full Scan checks out the selected source, scans repository structure, expands module and function tasks, analyzes candidate findings, and only sends verified or likely findings to triage.",
+					"Vulnerability Scan checks out the selected source, profiles the repository, models attack surfaces, identifies targets, scans candidate findings, and sends verified or likely findings to triage.",
 				);
 
 	useEffect(() => {

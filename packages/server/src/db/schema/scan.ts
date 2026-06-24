@@ -33,12 +33,13 @@ type TaskAgentProfileSnapshot = {
 	thinkingLevelEnabled?: boolean | null;
 };
 
-export const scanTypeEnum = pgEnum("scanType", ["delta", "full"]);
+export const scanTypeEnum = pgEnum("scanType", ["delta", "full", "rule"]);
 export const scanJobStatusEnum = pgEnum("scanJobStatus", [
 	"pending",
 	"running",
 	"paused",
 	"finished",
+	"failed",
 	"canceled",
 ]);
 export const scanEvaluateStatusEnum = pgEnum("scanEvaluateStatus", [

@@ -47,6 +47,9 @@ const { handler, api } = betterAuth({
 					...(admin.user.serverIp
 						? [`http://${admin.user.serverIp}:3000`]
 						: []),
+					...(admin.user.serverIp && process.env.NODE_ENV !== "production"
+						? [`http://${admin.user.serverIp}:23000`]
+						: []),
 					...(admin.user.host ? [`https://${admin.user.host}`] : []),
 				];
 			}

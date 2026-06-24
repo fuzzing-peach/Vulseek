@@ -57,6 +57,7 @@ const BitbucketProviderSchema = z.object({
 		})
 		.required(),
 	branch: z.string().min(1, "Branch is required"),
+	targetTag: z.string().optional(),
 	bitbucketId: z.string().min(1, "Bitbucket Provider is required"),
 	watchPaths: z.array(z.string()).optional(),
 	enableSubmodules: z.boolean().optional(),
@@ -85,6 +86,7 @@ export const SaveBitbucketProvider = ({ applicationId }: Props) => {
 			},
 			bitbucketId: "",
 			branch: "",
+			targetTag: "",
 			watchPaths: [],
 			enableSubmodules: false,
 		},
@@ -132,6 +134,7 @@ export const SaveBitbucketProvider = ({ applicationId }: Props) => {
 				},
 				buildPath: data.bitbucketBuildPath || "/",
 				bitbucketId: data.bitbucketId || "",
+				targetTag: data.targetTag || "",
 				watchPaths: data.watchPaths || [],
 				enableSubmodules: data.enableSubmodules || false,
 			});
@@ -141,6 +144,7 @@ export const SaveBitbucketProvider = ({ applicationId }: Props) => {
 	const onSubmit = async (data: BitbucketProvider) => {
 		await mutateAsync({
 			bitbucketBranch: data.branch,
+			targetTag: data.targetTag || null,
 			bitbucketRepository: data.repository.repo,
 			bitbucketOwner: data.repository.owner,
 			bitbucketBuildPath: data.buildPath,
@@ -377,6 +381,19 @@ export const SaveBitbucketProvider = ({ applicationId }: Props) => {
 
 										<FormMessage />
 									</Popover>
+								</FormItem>
+							)}
+						/>
+						<FormField
+							control={form.control}
+							name="targetTag"
+							render={({ field }) => (
+								<FormItem className="block w-full">
+									<FormLabel>Tag (optional)</FormLabel>
+									<FormControl>
+										<Input placeholder="Tag for scan checkout" {...field} />
+									</FormControl>
+									<FormMessage />
 								</FormItem>
 							)}
 						/>

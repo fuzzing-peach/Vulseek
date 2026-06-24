@@ -56,6 +56,7 @@ const GithubProviderSchema = z.object({
 		})
 		.required(),
 	branch: z.string().min(1, "Branch is required"),
+	targetTag: z.string().optional(),
 	githubId: z.string().min(1, "Github Provider is required"),
 	watchPaths: z.array(z.string()).optional(),
 	triggerType: z.enum(["push", "tag"]).default("push"),
@@ -84,6 +85,7 @@ export const SaveGithubProvider = ({ applicationId }: Props) => {
 			},
 			githubId: "",
 			branch: "",
+			targetTag: "",
 			triggerType: "push",
 			enableSubmodules: false,
 		},
@@ -129,6 +131,7 @@ export const SaveGithubProvider = ({ applicationId }: Props) => {
 				},
 				buildPath: data.buildPath || "/",
 				githubId: data.githubId || "",
+				targetTag: data.targetTag || "",
 				watchPaths: data.watchPaths || [],
 				triggerType: data.triggerType || "push",
 				enableSubmodules: data.enableSubmodules ?? false,
@@ -139,6 +142,7 @@ export const SaveGithubProvider = ({ applicationId }: Props) => {
 	const onSubmit = async (data: GithubProvider) => {
 		await mutateAsync({
 			branch: data.branch,
+			targetTag: data.targetTag || null,
 			repository: data.repository.repo,
 			applicationId,
 			owner: data.repository.owner,
@@ -373,6 +377,19 @@ export const SaveGithubProvider = ({ applicationId }: Props) => {
 
 										<FormMessage />
 									</Popover>
+								</FormItem>
+							)}
+						/>
+						<FormField
+							control={form.control}
+							name="targetTag"
+							render={({ field }) => (
+								<FormItem className="block w-full">
+									<FormLabel>Tag (optional)</FormLabel>
+									<FormControl>
+										<Input placeholder="Tag for scan checkout" {...field} />
+									</FormControl>
+									<FormMessage />
 								</FormItem>
 							)}
 						/>

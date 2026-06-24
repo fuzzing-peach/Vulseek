@@ -1331,6 +1331,34 @@
       "when": 1779744200000,
       "tag": "0189_scan_evaluate_results",
       "breakpoints": true
+    },
+    {
+      "idx": 190,
+      "version": "7",
+      "when": 1779744300000,
+      "tag": "0190_rule_scan_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 191,
+      "version": "7",
+      "when": 1779744400000,
+      "tag": "0191_application_target_tag",
+      "breakpoints": true
+    },
+    {
+      "idx": 192,
+      "version": "7",
+      "when": 1779744500000,
+      "tag": "0192_auto_delta_scan_default_false",
+      "breakpoints": true
+    },
+    {
+      "idx": 193,
+      "version": "7",
+      "when": 1779744600000,
+      "tag": "0193_scan_job_status_failed",
+      "breakpoints": true
     }
   ]
 }

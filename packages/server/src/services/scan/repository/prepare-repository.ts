@@ -19,7 +19,7 @@ export type PreparedRepositoryState = {
 
 export const prepareRepositoryForScanInContainer = async (input: {
 	containerName: string;
-	scanType: "delta" | "full";
+	scanType: "delta" | "full" | "rule";
 	targetRef?: string | null;
 	targetTag?: string | null;
 	commitSha?: string | null;
@@ -28,7 +28,8 @@ export const prepareRepositoryForScanInContainer = async (input: {
 	scanRootDir: string;
 }): Promise<PreparedRepositoryState> => {
 	const forceLatestRef = input.scanType === "delta";
-	const preferLatestTag = input.scanType === "full";
+	const preferLatestTag =
+		input.scanType === "full" || input.scanType === "rule";
 	const targetRef = input.targetRef?.trim() || "";
 	const targetTag = input.targetTag?.trim() || "";
 	const requestedCommit = input.commitSha?.trim() || "";

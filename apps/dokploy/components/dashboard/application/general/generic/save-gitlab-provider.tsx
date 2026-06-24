@@ -59,6 +59,7 @@ const GitlabProviderSchema = z.object({
 		})
 		.required(),
 	branch: z.string().min(1, "Branch is required"),
+	targetTag: z.string().optional(),
 	gitlabId: z.string().min(1, "Gitlab Provider is required"),
 	watchPaths: z.array(z.string()).optional(),
 	enableSubmodules: z.boolean().default(false),
@@ -88,6 +89,7 @@ export const SaveGitlabProvider = ({ applicationId }: Props) => {
 			},
 			gitlabId: "",
 			branch: "",
+			targetTag: "",
 			enableSubmodules: false,
 		},
 		resolver: zodResolver(GitlabProviderSchema),
@@ -147,6 +149,7 @@ export const SaveGitlabProvider = ({ applicationId }: Props) => {
 				},
 				buildPath: data.gitlabBuildPath || "/",
 				gitlabId: data.gitlabId || "",
+				targetTag: data.targetTag || "",
 				watchPaths: data.watchPaths || [],
 				enableSubmodules: data.enableSubmodules ?? false,
 			});
@@ -156,6 +159,7 @@ export const SaveGitlabProvider = ({ applicationId }: Props) => {
 	const onSubmit = async (data: GitlabProvider) => {
 		await mutateAsync({
 			gitlabBranch: data.branch,
+			targetTag: data.targetTag || null,
 			gitlabRepository: data.repository.repo,
 			gitlabOwner: data.repository.owner,
 			gitlabBuildPath: data.buildPath,
@@ -404,6 +408,19 @@ export const SaveGitlabProvider = ({ applicationId }: Props) => {
 
 										<FormMessage />
 									</Popover>
+								</FormItem>
+							)}
+						/>
+						<FormField
+							control={form.control}
+							name="targetTag"
+							render={({ field }) => (
+								<FormItem className="block w-full">
+									<FormLabel>Tag (optional)</FormLabel>
+									<FormControl>
+										<Input placeholder="Tag for scan checkout" {...field} />
+									</FormControl>
+									<FormMessage />
 								</FormItem>
 							)}
 						/>

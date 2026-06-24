@@ -1,4 +1,5 @@
 import {
+	cancelOpenScanJobTasks,
 	findScanJobById,
 	getScanJobConcurrencySetting,
 	reconcileScanJobCandidatePipelineStatus,
@@ -54,7 +55,17 @@ export const scansWorker = new Worker(
 
 		try {
 			const scanJob = await findScanJobById(job.data.scanJobId);
-			if (scanJob.status === "canceled" || scanJob.status === "paused") {
+			if (
+				scanJob.status === "failed" ||
+				scanJob.status === "canceled" ||
+				scanJob.status === "paused"
+			) {
+				if (scanJob.status === "failed") {
+					await cancelOpenScanJobTasks(
+						job.data.scanJobId,
+						scanJob.errorMessage,
+					).catch(() => {});
+				}
 				return;
 			}
 
@@ -71,9 +82,16 @@ export const scansWorker = new Worker(
 			if (mode === "full") {
 				const latestScanJob = await findScanJobById(job.data.scanJobId);
 				if (
+					latestScanJob.status === "failed" ||
 					latestScanJob.status === "canceled" ||
 					latestScanJob.status === "paused"
 				) {
+					if (latestScanJob.status === "failed") {
+						await cancelOpenScanJobTasks(
+							job.data.scanJobId,
+							latestScanJob.errorMessage,
+						).catch(() => {});
+					}
 					return;
 				}
 				if (latestScanJob.status === "running") {
@@ -130,11 +148,19 @@ export const scansWorker = new Worker(
 				) {
 					return;
 				}
+				if (latestScanJob.status === "failed") {
+					await cancelOpenScanJobTasks(
+						job.data.scanJobId,
+						latestScanJob.errorMessage,
+					).catch(() => {});
+					return;
+				}
 			} catch (_) {}
 
 			const message = error instanceof Error ? error.message : "Unknown error";
 			try {
-				await updateScanJobStatus(job.data.scanJobId, "finished", message);
+				await updateScanJobStatus(job.data.scanJobId, "failed", message);
+				await cancelOpenScanJobTasks(job.data.scanJobId, message);
 			} catch (_) {}
 			console.log(
 				"[scans-worker]",

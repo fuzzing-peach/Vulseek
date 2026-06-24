@@ -3,6 +3,7 @@ export type ScanPipelineJobStatus =
 	| "running"
 	| "paused"
 	| "finished"
+	| "failed"
 	| "canceled";
 
 export type ResolveScanPipelineStateInput = {
@@ -44,6 +45,12 @@ export const resolveNextScanPipelineState = (
 		};
 	}
 
+	if (input.scanJobStatus === "failed") {
+		return {
+			status: "failed",
+		};
+	}
+
 	const repositoryPending =
 		input.repositoryTaskStatus !== "completed" &&
 		input.repositoryTaskStatus !== "failed" &&
@@ -66,7 +73,7 @@ export const resolveNextScanPipelineState = (
 
 	if (input.repositoryTaskStatus === "failed") {
 		return {
-			status: "finished",
+			status: "failed",
 			errorMessage: "Repository scanning failed",
 		};
 	}
