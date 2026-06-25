@@ -37,6 +37,7 @@ import {
 	resumeScanJob,
 	retryFailedScanJobTasks,
 	startCandidateAnalysis,
+	startCandidateReviewContainer,
 	startCandidateVerification,
 	startCheckoutScanEnvironment,
 	createScanEvaluationResult,
@@ -133,6 +134,11 @@ const apiUpdateScanRuntimeSettings = z.object({
 const apiStartScanEvaluation = z.object({
 	scanJobId: z.string().min(1),
 	configSnapshot: scanEvaluationConfigSchema,
+});
+
+const apiStartCandidateReviewContainer = z.object({
+	scanJobId: z.string().min(1),
+	candidateIds: z.array(z.string().min(1)).min(1),
 });
 
 export const scanRouter = createTRPCRouter({
@@ -1244,6 +1250,36 @@ export const scanRouter = createTRPCRouter({
 			});
 
 			return result;
+		}),
+
+	startCandidateReviewContainer: protectedProcedure
+		.input(apiStartCandidateReviewContainer)
+		.mutation(async ({ input, ctx }) => {
+			const scanJob = await findScanJobById(input.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message:
+						"You are not authorized to launch a review container for this scan job",
+				});
+			}
+
+			return await startCandidateReviewContainer(input);
 		}),
 
 	verifyCandidate: protectedProcedure

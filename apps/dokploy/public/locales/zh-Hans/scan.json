@@ -445,6 +445,10 @@
   "scan.candidates.downloaded": "候选点位 JSON 已下载",
   "scan.candidates.copied": "候选点位 JSON 已复制",
   "scan.candidates.copyFailed": "复制候选点位 JSON 失败",
+  "scan.candidates.mountAndStartContainer": "挂载并启动容器",
+  "scan.candidates.mountAndStartContainerStarting": "启动中...",
+  "scan.candidates.mountAndStartContainerError": "启动复查容器失败",
+  "scan.candidates.mountAndStartContainerOpened": "复查容器已启动",
   "scan.pagination.showing": "显示 {{start}}-{{end}} / {{total}}",
   "scan.pagination.selected": "（已选 {{count}}）",
   "scan.field.candidate": "候选点位",
@@ -527,6 +531,9 @@
   "dialog": {
     "fullPreview": "漏洞挖掘会检出选定源码，进行仓库画像、攻击面建模、识别目标、扫描候选漏洞，并把已验证或较可信的发现送入分级。"
   },
+  "scan.reviewTerminal.title": "候选点位复查终端",
+  "scan.reviewTerminal.description": "Codex 会直接在挂载好的复查工作区中启动。需要手动查看文件时，可以切换到 bash 或 /bin/sh。",
+  "scan.reviewTerminal.missingContainer": "缺少容器 ID。",
   "stage": {
     "repository-profile": "仓库画像",
     "attack-surface-model": "攻击面建模",

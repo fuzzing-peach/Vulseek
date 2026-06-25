@@ -38,9 +38,12 @@ export const ShowAgentProfile = ({ applicationId }: Props) => {
 	const [postCheckoutScript, setPostCheckoutScript] = useState("");
 	const [evaluateAgentProfileId, setEvaluateAgentProfileId] = useState("");
 	const [evaluateGroundTruthPath, setEvaluateGroundTruthPath] = useState("");
+	const [analysisReportTemplate, setAnalysisReportTemplate] = useState("");
 	const [isSavingPostCheckoutScript, setIsSavingPostCheckoutScript] =
 		useState(false);
 	const [isSavingEvaluateConfig, setIsSavingEvaluateConfig] = useState(false);
+	const [isSavingAnalysisReportTemplate, setIsSavingAnalysisReportTemplate] =
+		useState(false);
 	const enabledAgentProfiles =
 		agentProfiles?.filter((profile) => profile.isEnabled) ?? [];
 
@@ -52,6 +55,10 @@ export const ShowAgentProfile = ({ applicationId }: Props) => {
 		setEvaluateAgentProfileId(data?.evaluateConfig?.agentProfileId || "");
 		setEvaluateGroundTruthPath(data?.evaluateConfig?.groundTruthPath ?? "");
 	}, [data?.evaluateConfig]);
+
+	useEffect(() => {
+		setAnalysisReportTemplate(data?.analysisReportTemplate ?? "");
+	}, [data?.analysisReportTemplate]);
 
 	return (
 		<div className="grid gap-4">
@@ -105,6 +112,57 @@ export const ShowAgentProfile = ({ applicationId }: Props) => {
 										toast.error("Failed to update post-checkout script");
 									} finally {
 										setIsSavingPostCheckoutScript(false);
+									}
+								}}
+							>
+								Save
+							</Button>
+						</div>
+					</div>
+				</CardContent>
+			</Card>
+			<Card className="bg-background">
+				<CardHeader>
+					<CardTitle className="text-xl flex items-center gap-2">
+						<ClipboardCheck className="size-5 text-muted-foreground" />
+						Analysis Report Template
+					</CardTitle>
+					<CardDescription>
+						Custom markdown template injected into every analyze task. The
+						analysis agent will read the saved file and format the report to
+						match it.
+					</CardDescription>
+				</CardHeader>
+				<CardContent>
+					<div className="grid gap-3">
+						<Textarea
+							value={analysisReportTemplate}
+							onChange={(event) =>
+								setAnalysisReportTemplate(event.currentTarget.value)
+							}
+							placeholder={"# Analysis Report\n\n## Summary\n- ..."}
+							className="min-h-56 font-mono text-sm"
+							spellCheck={false}
+						/>
+						<div className="flex justify-end">
+							<Button
+								type="button"
+								disabled={isSavingAnalysisReportTemplate}
+								onClick={async () => {
+									setIsSavingAnalysisReportTemplate(true);
+									try {
+										await mutateAsync({
+											applicationId,
+											analysisReportTemplate,
+										});
+										await utils.application.one.invalidate({ applicationId });
+										toast.success("Analysis report template updated");
+									} catch {
+										toast.error(
+											"Failed to update analysis report template",
+										);
+									} finally {
+										setIsSavingAnalysisReportTemplate(false);
 									}
 								}}
 							>

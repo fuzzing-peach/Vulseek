@@ -26,6 +26,7 @@ export type CandidateAnalysisStageInput = {
 	modulePath: string;
 	functionPath: string;
 	candidatePath: string;
+	analysisReportTemplatePath?: string | null;
 	feedbackPath?: string | null;
 };
 
@@ -61,6 +62,8 @@ export const buildCandidateAnalysisPrompt = (
 		moduleJsonPath: stageInput.modulePath,
 		functionJsonPath: stageInput.functionPath,
 		candidateJsonPath: stageInput.candidatePath,
+		analysisReportTemplatePath:
+			stageInput.analysisReportTemplatePath || "none",
 		feedbackJsonPath: stageInput.feedbackPath || "none",
 		taskId: input.taskId,
 	});

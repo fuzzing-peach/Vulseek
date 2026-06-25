@@ -31,6 +31,9 @@ export const setupDockerContainerTerminalWebSocketServer = (
 		const url = new URL(req.url || "", `http://${req.headers.host}`);
 		const containerId = url.searchParams.get("containerId");
 		const activeWay = url.searchParams.get("activeWay");
+		const rawMode = url.searchParams.get("mode");
+		const mode =
+			rawMode === "attach" || rawMode === "codex" ? rawMode : "exec";
 		const serverId = url.searchParams.get("serverId");
 		const { user, session } = await validateRequest(req);
 
@@ -54,8 +57,14 @@ export const setupDockerContainerTerminalWebSocketServer = (
 				let _stderr = "";
 				conn
 					.once("ready", () => {
+						const remoteCommand =
+							mode === "attach"
+								? `docker attach ${containerId}`
+								: mode === "codex"
+									? `docker exec -it -e TERM=xterm-256color -e COLORTERM=truecolor -w /workspace/review ${containerId} bash -lc 'exec codex'`
+								: `docker exec -it -w / ${containerId} ${activeWay}`;
 						conn.exec(
-							`docker exec -it -w / ${containerId} ${activeWay}`,
+							remoteCommand,
 							{ pty: true },
 							(err, stream) => {
 								if (err) throw err;
@@ -105,9 +114,15 @@ export const setupDockerContainerTerminalWebSocketServer = (
 					});
 			} else {
 				const shell = getShell();
+				const command =
+					mode === "attach"
+						? `docker attach ${containerId}`
+						: mode === "codex"
+							? `docker exec -it -e TERM=xterm-256color -e COLORTERM=truecolor -w /workspace/review ${containerId} bash -lc 'exec codex'`
+						: `docker exec -it -w / ${containerId} ${activeWay}`;
 				const ptyProcess = spawn(
 					shell,
-					["-c", `docker exec -it -w / ${containerId} ${activeWay}`],
+					["-c", command],
 					{},
 				);
 

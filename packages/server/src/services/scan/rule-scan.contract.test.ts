@@ -99,7 +99,7 @@ test("rule plan supports semgrep, ripgrep, and abstract patterns", () => {
 
 test("sink pre-analyze manifest carries candidate artifact paths compatible with candidate schema", () => {
 	const candidate = candidateSchema.parse({
-		id: "rule-target-1",
+		id: "candidate-a1b2c3",
 		functionId: "target-1",
 		title: "sql-injection: raw query target",
 		description: "Rule target",
@@ -121,7 +121,7 @@ test("sink pre-analyze manifest carries candidate artifact paths compatible with
 
 	const manifest = sinkPreAnalyzeManifestSchema.parse({
 		normalizedTargets: ["/task/targets/target-1.json"],
-		candidates: ["/task/candidates/rule-target-1.json"],
+		candidates: ["/task/candidates/candidate-a1b2c3.json"],
 		syntheticFunctions: ["/task/functions/target-1.json"],
 		discardedTargets: ["/task/discarded-targets/discarded-target-1.json"],
 		summary: "one candidate",
@@ -150,10 +150,10 @@ test("sink pre-analyze manifest carries candidate artifact paths compatible with
 		summary: "Discarded low-value rule target.",
 	});
 
-	assert.equal(candidate.id, "rule-target-1");
+	assert.equal(candidate.id, "candidate-a1b2c3");
 	assert.equal(discardedTarget.priority, "low");
 	assert.deepEqual(manifest.candidates, [
-		"/task/candidates/rule-target-1.json",
+		"/task/candidates/candidate-a1b2c3.json",
 	]);
 	assert.deepEqual(manifest.discardedTargets, [
 		"/task/discarded-targets/discarded-target-1.json",

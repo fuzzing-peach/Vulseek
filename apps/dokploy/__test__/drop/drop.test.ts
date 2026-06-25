@@ -46,6 +46,7 @@ const baseApp: ApplicationNested = {
 	autoDeltaScan: true,
 	fuzzingBudgetSeconds: 600,
 	postCheckoutScript: "",
+	analysisReportTemplate: "",
 	scanStageSettings: {},
 	evaluateConfig: {
 		agentProfileId: "",

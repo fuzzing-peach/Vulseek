@@ -478,15 +478,6 @@ export const findScanJobResultSummary = async (scanJobId: string) => {
 		verificationPositive: 0,
 		triageSecurityIssue: 0,
 	};
-	const analysisPositiveFlow = {
-		verifyTrue: 0,
-		verifyLikely: 0,
-		verifyFalse: 0,
-		verifyMissing: 0,
-		triageSecurityIssue: 0,
-		triageNotSecurity: 0,
-		triageMissing: 0,
-	};
 	const analysisFlowBySource: Record<
 		"analysis_real" | "analysis_likely",
 		{
@@ -556,6 +547,22 @@ export const findScanJobResultSummary = async (scanJobId: string) => {
 		const triageResult = candidate.latestTriageResult?.result;
 		const triageIsSecurityIssue =
 			candidate.latestTriageResult?.isSecurityIssue ?? null;
+		let verifyBucket: keyof typeof verifyBucketCounts = "verify_missing";
+		if (verificationResult === "true") {
+			verifyBucket = "verify_true";
+		} else if (verificationResult === "likely") {
+			verifyBucket = "verify_likely";
+		} else if (verificationResult === "false") {
+			verifyBucket = "verify_false";
+		}
+		incrementCount(verifyBucketCounts, verifyBucket);
+
+		const triageBucket = candidate.latestTriageResult
+			? isPositiveTriageResult(triageResult, triageIsSecurityIssue)
+				? "triage_security_issue"
+				: "triage_not_security"
+			: "triage_missing";
+		triageByVerifyBucket[verifyBucket][triageBucket] += 1;
 
 		if (isPositiveAnalysisResult(analysisResult)) {
 			counts.analysisPositive += 1;
@@ -569,40 +576,7 @@ export const findScanJobResultSummary = async (scanJobId: string) => {
 				analysisResult === "real_vulnerability"
 					? "analysis_real"
 					: "analysis_likely";
-
-			let verifyBucket: keyof typeof verifyBucketCounts = "verify_missing";
-			if (verificationResult === "true") {
-				verifyBucket = "verify_true";
-			} else if (verificationResult === "likely") {
-				verifyBucket = "verify_likely";
-			} else if (verificationResult === "false") {
-				verifyBucket = "verify_false";
-			}
-			incrementCount(verifyBucketCounts, verifyBucket);
 			analysisFlowBySource[analysisBucket][verifyBucket] += 1;
-			if (verifyBucket === "verify_true") {
-				analysisPositiveFlow.verifyTrue += 1;
-			} else if (verifyBucket === "verify_likely") {
-				analysisPositiveFlow.verifyLikely += 1;
-			} else if (verifyBucket === "verify_false") {
-				analysisPositiveFlow.verifyFalse += 1;
-			} else {
-				analysisPositiveFlow.verifyMissing += 1;
-			}
-
-			const triageBucket = candidate.latestTriageResult
-				? isPositiveTriageResult(triageResult, triageIsSecurityIssue)
-					? "triage_security_issue"
-					: "triage_not_security"
-				: "triage_missing";
-			triageByVerifyBucket[verifyBucket][triageBucket] += 1;
-			if (triageBucket === "triage_security_issue") {
-				analysisPositiveFlow.triageSecurityIssue += 1;
-			} else if (triageBucket === "triage_not_security") {
-				analysisPositiveFlow.triageNotSecurity += 1;
-			} else {
-				analysisPositiveFlow.triageMissing += 1;
-			}
 		}
 
 		if (verificationResult === "true") {
@@ -659,43 +633,55 @@ export const findScanJobResultSummary = async (scanJobId: string) => {
 					id: "verify_true",
 					label: "Verify True",
 					stage: "verify",
-					count: analysisPositiveFlow.verifyTrue,
+					count: verifyBucketCounts.verify_true,
 				},
 				{
 					id: "verify_likely",
 					label: "Verify Likely",
 					stage: "verify",
-					count: analysisPositiveFlow.verifyLikely,
+					count: verifyBucketCounts.verify_likely,
 				},
 				{
 					id: "verify_false",
 					label: "Verify False",
 					stage: "verify",
-					count: analysisPositiveFlow.verifyFalse,
+					count: verifyBucketCounts.verify_false,
 				},
 				{
 					id: "verify_missing",
 					label: "Verify Missing",
 					stage: "verify",
-					count: analysisPositiveFlow.verifyMissing,
+					count: verifyBucketCounts.verify_missing,
 				},
 				{
 					id: "triage_security_issue",
 					label: "Triage True",
 					stage: "triage",
-					count: analysisPositiveFlow.triageSecurityIssue,
+					count:
+						triageByVerifyBucket.verify_true.triage_security_issue +
+						triageByVerifyBucket.verify_likely.triage_security_issue +
+						triageByVerifyBucket.verify_false.triage_security_issue +
+						triageByVerifyBucket.verify_missing.triage_security_issue,
 				},
 				{
 					id: "triage_not_security",
 					label: "Triage False",
 					stage: "triage",
-					count: analysisPositiveFlow.triageNotSecurity,
+					count:
+						triageByVerifyBucket.verify_true.triage_not_security +
+						triageByVerifyBucket.verify_likely.triage_not_security +
+						triageByVerifyBucket.verify_false.triage_not_security +
+						triageByVerifyBucket.verify_missing.triage_not_security,
 				},
 				{
 					id: "triage_missing",
 					label: "Triage Missing",
 					stage: "triage",
-					count: analysisPositiveFlow.triageMissing,
+					count:
+						triageByVerifyBucket.verify_true.triage_missing +
+						triageByVerifyBucket.verify_likely.triage_missing +
+						triageByVerifyBucket.verify_false.triage_missing +
+						triageByVerifyBucket.verify_missing.triage_missing,
 				},
 			],
 			links: transitionLinks,

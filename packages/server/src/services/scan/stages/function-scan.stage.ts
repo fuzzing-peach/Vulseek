@@ -12,6 +12,7 @@ import {
 	launchAgentStageRuntime,
 	resolveAgentStageRuntime,
 } from "./agent-stage-runtime";
+import { rewriteCandidateManifestIds } from "./candidate-manifest-normalizer";
 import {
 	type PipelineContext,
 	resolveStageConcurrencySetting,
@@ -195,5 +196,15 @@ export const createFunctionScanningStageDefinition = <
 				completion: "deferred",
 				threadId: result.threadId,
 			};
+		},
+		validateOutput: async (ctx, _stageInput, rawOutput) => {
+			const manifest = functionScanManifestSchema.parse(JSON.parse(rawOutput));
+			const rewritten = await rewriteCandidateManifestIds({
+				taskDir: await (ctx as unknown as StageContext).taskDir(),
+				manifest,
+			});
+			return functionScanManifestSchema.parse(
+				rewritten.manifest,
+			) as FunctionScanManifest | null;
 		},
 	});

@@ -68,6 +68,28 @@ export const writeTaskJsonArtifact = async (input: {
 	return path.posix.join(TASK_ROOT_IN_CONTAINER, normalizedRelativePath);
 };
 
+export const writeTaskTextArtifact = async (input: {
+	taskDir: string;
+	relativePath: string;
+	value: string;
+}) => {
+	const normalizedRelativePath = path.posix.normalize(input.relativePath);
+	if (
+		!normalizedRelativePath ||
+		normalizedRelativePath === "." ||
+		normalizedRelativePath.startsWith("../") ||
+		path.posix.isAbsolute(normalizedRelativePath)
+	) {
+		throw new Error(
+			`Invalid task artifact relative path: ${input.relativePath}`,
+		);
+	}
+	const hostPath = path.join(input.taskDir, normalizedRelativePath);
+	await fs.mkdir(path.dirname(hostPath), { recursive: true });
+	await fs.writeFile(hostPath, input.value, "utf-8");
+	return path.posix.join(TASK_ROOT_IN_CONTAINER, normalizedRelativePath);
+};
+
 export const readTaskJsonArtifact = async <T = unknown>(input: {
 	taskDir: string;
 	containerPath: string;

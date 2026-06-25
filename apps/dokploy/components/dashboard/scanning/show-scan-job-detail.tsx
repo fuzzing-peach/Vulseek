@@ -13,6 +13,7 @@ import {
 	Play,
 	RefreshCw,
 	Search,
+	SquareTerminal,
 } from "lucide-react";
 import Head from "next/head";
 import { useTranslation } from "next-i18next";
@@ -1471,6 +1472,8 @@ export const ShowScanJobDetail = ({
 	const resumeScanJobMutation = api.scan.resume.useMutation();
 	const updateNoteMutation = api.scan.updateNote.useMutation();
 	const analyzeCandidateMutation = api.scan.analyzeCandidate.useMutation();
+	const startCandidateReviewContainerMutation =
+		api.scan.startCandidateReviewContainer.useMutation();
 	const startEvaluationMutation = api.scan.startEvaluation.useMutation();
 	const [reanalyzingCandidateId, setReanalyzingCandidateId] = useState<
 		string | null
@@ -1844,6 +1847,40 @@ export const ShowScanJobDetail = ({
 		} finally {
 			setReanalyzingCandidateId((current) =>
 				current === reanalysisKey ? null : current,
+			);
+		}
+	};
+
+	const handleStartCandidateReviewContainer = async () => {
+		const candidateIds = selectedCurrentPageCandidates.map(
+			(candidate) => candidate.vulnerabilityCandidateId,
+		);
+		if (candidateIds.length === 0) {
+			return;
+		}
+
+		try {
+			const result = await startCandidateReviewContainerMutation.mutateAsync({
+				scanJobId,
+				candidateIds,
+			});
+			window.open(result.terminalUrl, "_blank", "noopener,noreferrer");
+			toast.success(
+				scanT(
+					t,
+					"scan.candidates.mountAndStartContainerOpened",
+					"Review container started",
+				),
+			);
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? error.message
+					: scanT(
+							t,
+							"scan.candidates.mountAndStartContainerError",
+							"Failed to start review container",
+						),
 			);
 		}
 	};
@@ -3277,6 +3314,31 @@ export const ShowScanJobDetail = ({
 															: ""}
 													</div>
 													<div className="flex flex-wrap items-center gap-2">
+														<Button
+															type="button"
+															variant="outline"
+															size="sm"
+															disabled={
+																selectedCandidateCount === 0 ||
+																startCandidateReviewContainerMutation.isLoading
+															}
+															onClick={handleStartCandidateReviewContainer}
+														>
+															{startCandidateReviewContainerMutation.isLoading ? (
+																<Loader2 className="mr-2 size-4 animate-spin" />
+															) : (
+																<SquareTerminal className="mr-2 size-4" />
+															)}
+															{scanT(
+																t,
+																startCandidateReviewContainerMutation.isLoading
+																	? "scan.candidates.mountAndStartContainerStarting"
+																	: "scan.candidates.mountAndStartContainer",
+																startCandidateReviewContainerMutation.isLoading
+																	? "Starting..."
+																	: "Mount and Start Container",
+															)}
+														</Button>
 														<Button
 															type="button"
 															variant="outline"

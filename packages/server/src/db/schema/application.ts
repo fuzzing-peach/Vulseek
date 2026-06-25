@@ -130,6 +130,9 @@ export const applications = pgTable("application", {
 	autoDeltaScan: boolean("autoDeltaScan").$defaultFn(() => false),
 	fuzzingBudgetSeconds: integer("fuzzingBudgetSeconds").notNull().default(600),
 	postCheckoutScript: text("postCheckoutScript").notNull().default(""),
+	analysisReportTemplate: text("analysisReportTemplate")
+		.notNull()
+		.default(""),
 	// Gitlab
 	gitlabProjectId: integer("gitlabProjectId"),
 	gitlabRepository: text("gitlabRepository"),
@@ -275,6 +278,7 @@ const createSchema = createInsertSchema(applications, {
 	autoDeltaScan: z.boolean().default(false),
 	fuzzingBudgetSeconds: z.number().int().min(1).max(86400).default(600),
 	postCheckoutScript: z.string().max(20000).default(""),
+	analysisReportTemplate: z.string().max(100000).default(""),
 	scanStageSettings: ScanStageSettingsSchema.default(
 		buildDefaultScanStageSettings(),
 	),

@@ -445,6 +445,10 @@
   "scan.candidates.downloaded": "Candidate JSON downloaded",
   "scan.candidates.copied": "Candidate JSON copied",
   "scan.candidates.copyFailed": "Failed to copy candidate JSON",
+  "scan.candidates.mountAndStartContainer": "Mount and Start Container",
+  "scan.candidates.mountAndStartContainerStarting": "Starting...",
+  "scan.candidates.mountAndStartContainerError": "Failed to start review container",
+  "scan.candidates.mountAndStartContainerOpened": "Review container started",
   "scan.pagination.showing": "Showing {{start}}-{{end}} of {{total}}",
   "scan.pagination.selected": "({{count}} selected)",
   "scan.field.candidate": "Candidate",
@@ -527,6 +531,9 @@
   "dialog": {
     "fullPreview": "Vulnerability Scan checks out the selected source, profiles the repository, models attack surfaces, identifies targets, scans candidate findings, and sends verified or likely findings to triage."
   },
+  "scan.reviewTerminal.title": "Candidate Review Terminal",
+  "scan.reviewTerminal.description": "Codex starts directly in the mounted review workspace. Switch to bash or /bin/sh if you need to inspect files manually.",
+  "scan.reviewTerminal.missingContainer": "Container ID is missing.",
   "stage": {
     "repository-profile": "Repository Profile",
     "attack-surface-model": "Attack Surface Model",

@@ -44,6 +44,11 @@ Also keep the structured analysis object evidence-oriented. Populate:
 - `missingEvidenceRequest`: what would most efficiently change confidence
 - `feedbackHistory`: relevant critic and manual feedback
 
+If the stage prompt provides an analysis report template file path, read that
+file and format the markdown report to follow it closely. Treat the template as
+the required report structure unless it conflicts with the structured schema
+fields or the stage prompt.
+
 For final critic-approved analysis, include the critic approval, the analysis
 fingerprint, the evidence bundle, verified attack path details available so far,
 reproduction hints, and residual uncertainty. Leave `fuzzEvidence` empty unless

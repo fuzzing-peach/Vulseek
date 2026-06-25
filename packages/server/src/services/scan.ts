@@ -38,6 +38,7 @@ import {
 	copyTaskJsonArtifact,
 	readTaskJsonArtifact,
 	writeTaskJsonArtifact,
+	writeTaskTextArtifact,
 } from "./scan/artifacts/task-artifact-paths";
 import { DEFAULT_DELTA_COMMIT_WINDOW } from "./scan/constants";
 import {
@@ -45,6 +46,7 @@ import {
 	findVulnerabilityCandidateByIdRepo,
 	findVulnerabilityCandidatesByScanJobIdRepo,
 } from "./scan/persistence/candidate.repo";
+import { findCandidateTaskLineage } from "./scan/api/candidate-records";
 import { readTaskJsonArtifactForTask } from "./scan/persistence/task-artifact-resolver";
 import {
 	findScanJobByIdRepo,
@@ -2134,8 +2136,6 @@ const CODEX_AUTO_APPROVE_CONFIG_TOML = [
 	`sandbox_mode = "danger-full-access"`,
 	"",
 ].join("\n");
-const CODEX_HOME_HOST_MOUNT_PATH = "/host-agent-home";
-
 const resolveCodexAuthMode = (
 	agentProfile: AgentProfileLike | null | undefined,
 ) => (agentProfile?.authMode === "host_home" ? "host_home" : "api_key");
@@ -2144,7 +2144,9 @@ const resolveCodexHomeHostPath = (
 	agentProfile: AgentProfileLike | null | undefined,
 ) => agentProfile?.homePath?.trim() || "";
 
-const buildCodexHomeHostMountArg = (
+const REVIEW_CONTAINER_HOST_CODEX_HOME = "/host-codex-home";
+
+const buildReviewContainerCodexHomeMountArg = (
 	agentProfile: AgentProfileLike | null | undefined,
 ) => {
 	if (!agentProfile) {
@@ -2157,7 +2159,7 @@ const buildCodexHomeHostMountArg = (
 	if (!hostPath) {
 		return "";
 	}
-	return `-v '${escapeSingleQuotes(hostPath)}:${CODEX_HOME_HOST_MOUNT_PATH}:ro'`;
+	return `-v '${escapeSingleQuotes(hostPath)}:${REVIEW_CONTAINER_HOST_CODEX_HOME}:ro'`;
 };
 
 const withCodexAutoApproveConfigToml = (configToml: string) => {
@@ -2234,6 +2236,12 @@ const buildCodexConfigToml = (agentProfile: AgentProfileLike) => {
 	);
 };
 
+const withTrustedReviewWorkspaceConfig = (configToml: string) =>
+	joinTomlBlocks(
+		configToml,
+		`[projects."/workspace/review"]\ntrust_level = "trusted"`,
+	);
+
 const loadCodexMcpConfigToml = async (agentsDir: string | null) => {
 	if (!agentsDir) {
 		return "";
@@ -2282,36 +2290,6 @@ const buildCodexAuthJson = (agentProfile: AgentProfileLike) =>
 		null,
 		2,
 	);
-
-const copyMountedCodexHomeCredentialFilesToContainer = async (input: {
-	containerName: string;
-	sourceDir: string;
-	targetDir: string;
-}) => {
-	await execAsync(
-		`docker exec ${input.containerName} bash -lc "test -d '${escapeSingleQuotes(
-			input.sourceDir,
-		)}' && test -f '${escapeSingleQuotes(
-			path.posix.join(input.sourceDir, "auth.json"),
-		)}' && mkdir -p '${escapeSingleQuotes(
-			input.targetDir,
-		)}' && cp -a '${escapeSingleQuotes(
-			path.posix.join(input.sourceDir, "auth.json"),
-		)}' '${escapeSingleQuotes(path.posix.join(input.targetDir, "auth.json"))}'"`,
-	);
-};
-
-const loadMountedCodexHomeSourceConfigToml = async (
-	containerName: string,
-	sourceDir: string,
-) => {
-	const { stdout } = await execAsync(
-		`docker exec ${containerName} bash -lc "cat '${escapeSingleQuotes(
-			path.posix.join(sourceDir, "config.toml"),
-		)}' 2>/dev/null || true"`,
-	);
-	return stdout;
-};
 
 const parseAgentProfileEnvPairs = (agentProfile: AgentProfileLike) =>
 	(agentProfile.envs || "")
@@ -2457,21 +2435,20 @@ const copyCodexAssetsToContainerHome = async (
 						"Codex host home auth mode is enabled but no home path was configured on the agent profile.",
 					);
 				}
-				const sourceConfigToml = await loadMountedCodexHomeSourceConfigToml(
-					containerName,
-					CODEX_HOME_HOST_MOUNT_PATH,
+				const { stdout: sourceConfigToml } = await execAsync(
+					`docker exec ${containerName} bash -lc "cat '${REVIEW_CONTAINER_HOST_CODEX_HOME}/config.toml' 2>/dev/null || true"`,
 				);
-				await copyMountedCodexHomeCredentialFilesToContainer({
-					containerName,
-					sourceDir: CODEX_HOME_HOST_MOUNT_PATH,
-					targetDir: codexHome,
-				});
+				await execAsync(
+					`docker exec ${containerName} bash -lc "mkdir -p '${codexHome}' && cp -a '${REVIEW_CONTAINER_HOST_CODEX_HOME}/.' '${codexHome}/'"`,
+				);
 				await writeContainerFile(
 					containerName,
 					`${codexHome}/config.toml`,
-					joinTomlBlocks(
-						withCodexProfileRuntimeConfig(sourceConfigToml, agentProfile),
-						mcpConfigToml,
+					withTrustedReviewWorkspaceConfig(
+						joinTomlBlocks(
+							withCodexProfileRuntimeConfig(sourceConfigToml, agentProfile),
+							mcpConfigToml,
+						),
 					),
 				);
 				return;
@@ -2479,7 +2456,9 @@ const copyCodexAssetsToContainerHome = async (
 			await writeContainerFile(
 				containerName,
 				`${codexHome}/config.toml`,
-				joinTomlBlocks(buildCodexConfigToml(agentProfile), mcpConfigToml),
+				withTrustedReviewWorkspaceConfig(
+					joinTomlBlocks(buildCodexConfigToml(agentProfile), mcpConfigToml),
+				),
 			);
 			await writeContainerFile(
 				containerName,
@@ -2500,9 +2479,11 @@ const copyCodexAssetsToContainerHome = async (
 		await writeContainerFile(
 			containerName,
 			`${codexHome}/config.toml`,
-			joinTomlBlocks(
-				withCodexAutoApproveConfigToml(baseConfigToml),
-				mcpConfigToml,
+			withTrustedReviewWorkspaceConfig(
+				joinTomlBlocks(
+					withCodexAutoApproveConfigToml(baseConfigToml),
+					mcpConfigToml,
+				),
 			),
 		);
 	} catch {
@@ -2510,13 +2491,15 @@ const copyCodexAssetsToContainerHome = async (
 			await writeContainerFile(
 				containerName,
 				`${codexHome}/config.toml`,
-				joinTomlBlocks(CODEX_AUTO_APPROVE_CONFIG_TOML, mcpConfigToml),
+				withTrustedReviewWorkspaceConfig(
+					joinTomlBlocks(CODEX_AUTO_APPROVE_CONFIG_TOML, mcpConfigToml),
+				),
 			);
 		} else {
 			await writeContainerFile(
 				containerName,
 				`${codexHome}/config.toml`,
-				CODEX_AUTO_APPROVE_CONFIG_TOML,
+				withTrustedReviewWorkspaceConfig(CODEX_AUTO_APPROVE_CONFIG_TOML),
 			);
 		}
 	}
@@ -2598,6 +2581,35 @@ const buildHostProjectProfileContextRoot = (
 		sanitizeContextPathPart(projectName),
 		"profiles",
 		sanitizeContextPathPart(profileName),
+	);
+
+const buildTaskHostRootForScanJob = (input: {
+	hostProfileDir: string;
+	scanJobId: string;
+	stageName: string;
+	taskName: string;
+	taskId: string;
+}) =>
+	path.join(
+		input.hostProfileDir,
+		"jobs",
+		input.scanJobId,
+		resolveTaskRootSegment(input.stageName, input.taskName, input.taskId),
+	);
+
+const buildTaskMountPathForReview = (input: {
+	scanJobId: string;
+	stageName: string;
+	taskName: string;
+	taskId: string;
+}) =>
+	path.posix.join(
+		CONTAINER_TASK_RUNTIME_ROOT,
+		"jobs",
+		input.scanJobId,
+		resolveTaskRootSegment(input.stageName, input.taskName, input.taskId)
+			.split(path.sep)
+			.join(path.posix.sep),
 	);
 
 const resolveConfiguredScanContextHostPath = () =>
@@ -6159,6 +6171,7 @@ const buildCandidateAnalysisStageInput = (input: {
 		modulePath: "",
 		functionPath: "",
 		candidatePath: "",
+		analysisReportTemplatePath: null,
 		legacyCandidate: {
 			...input.candidate,
 			scanJob: input.scanJob,
@@ -6288,6 +6301,14 @@ const copyAnalysisBaseInputArtifacts = async (input: {
 			toRelativePath: "inputs/candidate.json",
 		}),
 	};
+	if (input.stageInput.analysisReportTemplatePath) {
+		base.analysisReportTemplatePath = await copyArtifactToDownstreamInput({
+			fromTaskDir: input.fromTaskDir,
+			fromPath: input.stageInput.analysisReportTemplatePath,
+			toTaskDir: input.toTaskDir,
+			toRelativePath: "inputs/analysis-report-template.md",
+		});
+	}
 	if (input.stageInput.feedbackPath) {
 		base.feedbackPath = await copyArtifactToDownstreamInput({
 			fromTaskDir: input.fromTaskDir,
@@ -6297,6 +6318,25 @@ const copyAnalysisBaseInputArtifacts = async (input: {
 		});
 	}
 	return base;
+};
+
+const writeAnalysisReportTemplateInput = async (input: {
+	scanJob: ScanJob;
+	toTaskDir: string;
+}) => {
+	if (!input.scanJob.applicationId || input.scanJob.composeId) {
+		return null;
+	}
+	const application = await findApplicationById(input.scanJob.applicationId);
+	const template = application.analysisReportTemplate?.trim();
+	if (!template) {
+		return null;
+	}
+	return await writeTaskTextArtifact({
+		taskDir: input.toTaskDir,
+		relativePath: "inputs/analysis-report-template.md",
+		value: template,
+	});
 };
 
 const buildFullScanPipeline = (context: FullScanPipelineContext) => {
@@ -6974,6 +7014,11 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 							toTaskDir,
 							toRelativePath: "inputs/candidate.json",
 						}),
+						analysisReportTemplatePath:
+							await writeAnalysisReportTemplateInput({
+								scanJob: manifestInput.scanJob,
+								toTaskDir,
+							}),
 					};
 					const task = await createTaskRepo({
 						taskId,
@@ -8348,6 +8393,11 @@ const buildRuleScanPipeline = (context: FullScanPipelineContext) => {
 							toTaskDir,
 							toRelativePath: "inputs/candidate.json",
 						}),
+						analysisReportTemplatePath:
+							await writeAnalysisReportTemplateInput({
+								scanJob: manifestInput.scanJob,
+								toTaskDir,
+							}),
 					};
 					const task = await createTaskRepo({
 						taskId,
@@ -9972,6 +10022,10 @@ export const startCandidateAnalysis = async (input: {
 			toTaskDir: analysisTaskDir,
 			toRelativePath: "inputs/candidate.json",
 		}),
+		analysisReportTemplatePath: await writeAnalysisReportTemplateInput({
+			scanJob,
+			toTaskDir: analysisTaskDir,
+		}),
 	};
 	const analysisTask = await createTaskRepo({
 		taskId: analysisTaskId,
@@ -10001,4 +10055,213 @@ export const startCandidateAnalysis = async (input: {
 		taskId: analysisTask.taskId,
 		scanJobId: scanJob.scanJobId,
 	};
+};
+
+export const startCandidateReviewContainer = async (input: {
+	scanJobId: string;
+	candidateIds: string[];
+}) => {
+	const scanJob = await findScanJobByIdRepo(input.scanJobId);
+	if (input.candidateIds.length === 0) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Select at least one candidate",
+		});
+	}
+
+	const executionContext = await resolveScanExecutionContext(scanJob);
+	const repositoryProfile = await resolveStageAgentProfile(
+		scanJob,
+		"scan",
+		SCAN_STAGE_IDS.repositoryScan,
+	);
+	if (!repositoryProfile || repositoryProfile.provider !== "codex") {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message:
+				"Repository profile stage must use a Codex agent profile before launching a review container",
+		});
+	}
+
+	const configuredHostRoot = resolveConfiguredScanContextHostPath();
+	if (!configuredHostRoot) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message:
+				"Scan context host path is not configured. Restart dokploy-dev from dev.sh.",
+		});
+	}
+
+	const hostProfileDir = buildHostProjectProfileContextRoot(
+		configuredHostRoot,
+		executionContext.projectName,
+		executionContext.serviceName,
+	);
+	await fs.mkdir(hostProfileDir, { recursive: true });
+
+	const uniqueCandidateIds = Array.from(
+		new Set(
+			input.candidateIds
+				.map((candidateId) => candidateId.trim())
+				.filter(Boolean),
+		),
+	);
+	const lineageByCandidate = await Promise.all(
+		uniqueCandidateIds.map(async (candidateId) => {
+			const candidate = await findVulnerabilityCandidateByIdAndScanJobIdRepo({
+				vulnerabilityCandidateId: candidateId,
+				scanJobId: input.scanJobId,
+			});
+			const lineage = await findCandidateTaskLineage({
+				vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
+				scanJobId: input.scanJobId,
+				scanFunctionTaskId: candidate.scanFunctionTaskId || undefined,
+			});
+			return { candidate, lineage };
+		}),
+	);
+
+	const taskMounts = new Map<
+		string,
+		{
+			taskId: string;
+			stageName: string;
+			taskName: string;
+			hostPath: string;
+			containerPath: string;
+		}
+	>();
+	for (const { lineage } of lineageByCandidate) {
+		for (const task of lineage.tasks) {
+			if (taskMounts.has(task.taskId)) {
+				continue;
+			}
+			taskMounts.set(task.taskId, {
+				taskId: task.taskId,
+				stageName: task.stageName,
+				taskName: task.name,
+				hostPath: buildTaskHostRootForScanJob({
+					hostProfileDir,
+					scanJobId: task.scanJobId,
+					stageName: task.stageName,
+					taskName: task.name,
+					taskId: task.taskId,
+				}),
+				containerPath: buildTaskMountPathForReview({
+					scanJobId: task.scanJobId,
+					stageName: task.stageName,
+					taskName: task.name,
+					taskId: task.taskId,
+				}),
+			});
+		}
+	}
+	if (taskMounts.size === 0) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Selected candidates do not have any task context to mount",
+		});
+	}
+
+	const reviewId = nanoid(10).toLowerCase();
+	const containerName = `scan-candidate-review-${scanJob.scanJobId.toLowerCase()}-${reviewId}`;
+	const reviewHostDir = path.join(
+		os.tmpdir(),
+		"dokploy-candidate-review",
+		containerName,
+	);
+	const reviewContainerDir = "/workspace/review";
+	const reviewManifest = {
+		scanJobId: scanJob.scanJobId,
+		containerName,
+		candidates: lineageByCandidate.map(({ candidate, lineage }) => ({
+			candidateId: candidate.vulnerabilityCandidateId,
+			title: candidate.title,
+			status: candidate.status,
+			scanFunctionTaskId: candidate.scanFunctionTaskId,
+			tasks: lineage.tasks.map((task) => ({
+				taskId: task.taskId,
+				stageName: task.stageName,
+				name: task.name,
+				relation: task.relation,
+				mountedPath: taskMounts.get(task.taskId)?.containerPath || null,
+			})),
+		})),
+		tasks: Array.from(taskMounts.values()).map((task) => ({
+			taskId: task.taskId,
+			stageName: task.stageName,
+			name: task.taskName,
+			hostPath: task.hostPath,
+			containerPath: task.containerPath,
+		})),
+	};
+	const readme = [
+		"# Candidate Review Workspace",
+		"",
+		"Open the terminal in Codex mode to start the CLI inside this workspace.",
+		`Task directories are mounted under ${CONTAINER_TASK_RUNTIME_ROOT}/jobs/${scanJob.scanJobId}/...`,
+		"",
+		"Open candidate-review.json for the mounted task manifest.",
+	].join("\n");
+	await fs.mkdir(reviewHostDir, { recursive: true });
+	await fs.writeFile(
+		path.join(reviewHostDir, "candidate-review.json"),
+		JSON.stringify(reviewManifest, null, 2),
+		"utf-8",
+	);
+	await fs.writeFile(path.join(reviewHostDir, "README.md"), readme, "utf-8");
+
+	const allEnvPairs = [
+		...getGlobalContainerEnvironmentPairs(),
+		...parseAgentProfileEnvPairs(repositoryProfile),
+	];
+	const dockerEnvArgs = allEnvPairs
+		.map((pair) => {
+			const separatorIndex = pair.indexOf("=");
+			const key = separatorIndex === -1 ? pair : pair.slice(0, separatorIndex);
+			const value =
+				separatorIndex === -1 ? "" : pair.slice(separatorIndex + 1);
+			return `-e '${escapeSingleQuotes(key)}=${escapeSingleQuotes(value)}'`;
+		})
+		.join(" ");
+	const mountArgs = [
+		`-v '${escapeSingleQuotes(hostProfileDir)}:${CONTAINER_SCAN_CONTEXT_ROOT}:ro'`,
+		`-v '${escapeSingleQuotes(reviewHostDir)}:${reviewContainerDir}'`,
+		...Array.from(taskMounts.values()).map(
+			(task) =>
+				`-v '${escapeSingleQuotes(task.hostPath)}:${task.containerPath}:ro'`,
+		),
+	]
+		.filter(Boolean)
+		.join(" ");
+	const containerNetworkArg = await resolveCurrentDockerNetworkArg();
+	const codexHomeMountArg =
+		buildReviewContainerCodexHomeMountArg(repositoryProfile);
+	const agentsDir = await resolveAgentsDirectory();
+
+	try {
+		await execAsync(`docker rm -f ${containerName}`).catch(() => {});
+		await execAsync(
+			`docker run -d -i -t --init --name ${containerName} ${containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${mountArgs} ${codexHomeMountArg} ${dockerEnvArgs} ${executionContext.imageTag} bash -lc "mkdir -p /root/.codex '${reviewContainerDir}' && sleep infinity"`,
+		);
+		await copyCodexAssetsToContainerHome(
+			containerName,
+			"/root/.codex",
+			agentsDir,
+			repositoryProfile,
+		);
+		const { stdout: containerId } = await execAsync(
+			`docker inspect --format '{{.Id}}' ${containerName}`,
+		);
+		return {
+			containerId: containerId.trim(),
+			containerName,
+			terminalUrl: `/dashboard/scan-review-terminal?containerId=${encodeURIComponent(
+				containerId.trim(),
+			)}`,
+		};
+	} catch (error) {
+		await execAsync(`docker rm -f ${containerName}`).catch(() => {});
+		throw error;
+	}
 };

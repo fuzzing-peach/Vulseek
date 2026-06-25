@@ -17,6 +17,7 @@ import {
 	readTaskJsonArtifact,
 	writeTaskJsonArtifact,
 } from "../artifacts/task-artifact-paths";
+import { createCandidateId } from "../candidate-id";
 import {
 	classifyRuleFileScope,
 	classifyRuleModuleScope,
@@ -78,9 +79,9 @@ const stringArrayMetadata = (
 		: [];
 };
 
-const buildCandidate = (target: SinkReviewTarget): Candidate =>
+const buildCandidate = (target: SinkReviewTarget, candidateId: string): Candidate =>
 	candidateSchema.parse({
-		id: `rule-${sha1(target.normalization.key)}`,
+		id: candidateId,
 		functionId: target.targetId,
 		title: `${target.riskClass}: ${target.summary}`.slice(0, 180),
 		description: [
@@ -338,6 +339,15 @@ export const createSinkPreAnalyzeStageDefinition = <
 			const normalizedTargets: string[] = [];
 			const candidates: string[] = [];
 			const syntheticFunctions: string[] = [];
+			const candidateIds = new Set<string>();
+			const nextCandidateId = () => {
+				let candidateId = createCandidateId();
+				while (candidateIds.has(candidateId)) {
+					candidateId = createCandidateId();
+				}
+				candidateIds.add(candidateId);
+				return candidateId;
+			};
 			for (const target of sortedTargets) {
 				normalizedTargets.push(
 					await writeTaskJsonArtifact({
@@ -346,7 +356,7 @@ export const createSinkPreAnalyzeStageDefinition = <
 						value: target,
 					}),
 				);
-				const candidate = buildCandidate(target);
+				const candidate = buildCandidate(target, nextCandidateId());
 				candidates.push(
 					await writeTaskJsonArtifact({
 						taskDir,
