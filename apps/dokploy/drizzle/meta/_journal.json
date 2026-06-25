@@ -1331,6 +1331,13 @@
       "when": 1779744200000,
       "tag": "0189_scan_evaluate_results",
       "breakpoints": true
+    },
+    {
+      "idx": 190,
+      "version": "7",
+      "when": 1780800000000,
+      "tag": "0194_application_analysis_report_template",
+      "breakpoints": true
     }
   ]
 }

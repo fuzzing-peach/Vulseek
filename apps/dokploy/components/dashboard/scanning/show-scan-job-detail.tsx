@@ -2200,14 +2200,7 @@ export const ShowScanJobDetail = ({
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="overview">
 								{scanT(t, "scan.job.tabs.overview", "Overview")}
 							</TabsTrigger>
-							{serviceType === "application" ? (
-								<TabsTrigger
-									className="shrink-0 px-2 sm:px-3"
-									value="evaluate"
-								>
-									{scanT(t, "scan.evaluate.title", "Evaluate")}
-								</TabsTrigger>
-							) : null}
+
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="tasks">
 								{scanT(t, "scan.job.tabs.tasks", "阶段任务")}
 							</TabsTrigger>
