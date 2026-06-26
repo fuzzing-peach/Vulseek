@@ -462,190 +462,89 @@ const findScanJobTaskTimeline = async (scanJobId: string) => {
 		coveredSeconds: Math.max(0, Math.floor(coveredMs / 1000)),
 	};
 };
-
 export const findScanJobResultSummary = async (scanJobId: string) => {
 	const [candidates, taskTimeline] = await Promise.all([
 		findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId(scanJobId),
 		findScanJobTaskTimeline(scanJobId),
 	]);
-	const counts = {
-		candidatesTotal: candidates.length,
-		analysisPositive: 0,
-		analysisReal: 0,
-		analysisLikely: 0,
-		verificationTrue: 0,
-		verificationLikely: 0,
-		verificationPositive: 0,
-		triageSecurityIssue: 0,
-	};
-	const analysisPositiveFlow = {
-		verifyPositive: 0,
-		verifyFalse: 0,
-		verifyMissing: 0,
-		triageSecurityIssue: 0,
-		triageNotSecurity: 0,
-		triageMissing: 0,
-	};
-	const transitionLinks: Array<{
-		source: string;
-		target: string;
-		count: number;
-	}> = [];
-	const verifyBucketCounts = {
-		verify_positive: 0,
-		verify_false: 0,
-		verify_missing: 0,
-	};
-	const triageByVerifyBucket: Record<
-		keyof typeof verifyBucketCounts,
-		{
-			triage_security_issue: number;
-			triage_not_security: number;
-			triage_missing: number;
-		}
-	> = {
-		verify_positive: {
-			triage_security_issue: 0,
-			triage_not_security: 0,
-			triage_missing: 0,
-		},
-		verify_false: {
-			triage_security_issue: 0,
-			triage_not_security: 0,
-			triage_missing: 0,
-		},
-		verify_missing: {
-			triage_security_issue: 0,
-			triage_not_security: 0,
-			triage_missing: 0,
-		},
-	};
+
+	const analysisNodeIds = ["analysis_real_vulnerability", "analysis_likely_vulnerability", "analysis_plausible_but_unproven", "analysis_false_positive"];
+	const verifyNodeIds = ["verify_true", "verify_likely", "verify_false"];
+	const triageNodeIds = ["triage_security_issue", "triage_non_security", "triage_hardening", "triage_needs_review"];
+
+	const a2v: Record<string, Record<string, number>> = {};
+	for (const a of analysisNodeIds) { a2v[a] = {}; for (const v of verifyNodeIds) { a2v[a][v] = 0; } }
+	const v2t: Record<string, Record<string, number>> = {};
+	for (const v of verifyNodeIds) { v2t[v] = {}; for (const t of triageNodeIds) { v2t[v][t] = 0; } }
+
+	const analysisTotals: Record<string, number> = {};
+	for (const id of analysisNodeIds) { analysisTotals[id] = 0; }
+	const verifyTotals: Record<string, number> = {};
+	for (const id of verifyNodeIds) { verifyTotals[id] = 0; }
 
 	for (const candidate of candidates) {
-		const analysisResult = candidate.latestAnalysisResult?.result;
-		const verificationResult = candidate.latestVerificationResult?.result;
-		const triageResult = candidate.latestTriageResult?.result;
-		const triageIsSecurityIssue =
-			candidate.latestTriageResult?.isSecurityIssue ?? null;
+		const ar = candidate.latestAnalysisResult?.result;
+		const vr = candidate.latestVerificationResult?.result;
+		const tr = candidate.latestTriageResult;
 
-		if (isPositiveAnalysisResult(analysisResult)) {
-			counts.analysisPositive += 1;
-			if (analysisResult === "real_vulnerability") {
-				counts.analysisReal += 1;
-			}
-			if (analysisResult === "likely_vulnerability") {
-				counts.analysisLikely += 1;
-			}
+		const aid = ar ? `analysis_${ar}` : null;
+		const vid = (!vr || vr === "true" || vr === "likely") ? `verify_${vr || "missing"}` : vr === "false" ? "verify_false" : "verify_missing";
+		const tid = tr ? (tr.result === "security_issue" ? "triage_security_issue" : tr.result === "hardening" ? "triage_hardening" : tr.result === "needs_review" ? "triage_needs_review" : "triage_non_security") : "triage_missing";
 
-			const verifyBucket = isPositiveVerificationResult(verificationResult)
-				? "verify_positive"
-				: verificationResult === "false"
-					? "verify_false"
-					: "verify_missing";
-			incrementCount(verifyBucketCounts, verifyBucket);
-			if (verifyBucket === "verify_positive") {
-				analysisPositiveFlow.verifyPositive += 1;
-			} else if (verifyBucket === "verify_false") {
-				analysisPositiveFlow.verifyFalse += 1;
-			} else {
-				analysisPositiveFlow.verifyMissing += 1;
+		if (aid && analysisTotals[aid] !== undefined) { analysisTotals[aid] += 1; }
+		if (verifyTotals[vid] !== undefined) { verifyTotals[vid] += 1; }
+			if (aid && a2v[aid]) {
+				const row = a2v[aid];
+				if (row && row[vid] !== undefined) row[vid] += 1;
 			}
-
-			const triageBucket = candidate.latestTriageResult
-				? isPositiveTriageResult(triageResult, triageIsSecurityIssue)
-					? "triage_security_issue"
-					: "triage_not_security"
-				: "triage_missing";
-			triageByVerifyBucket[verifyBucket][triageBucket] += 1;
-			if (triageBucket === "triage_security_issue") {
-				analysisPositiveFlow.triageSecurityIssue += 1;
-			} else if (triageBucket === "triage_not_security") {
-				analysisPositiveFlow.triageNotSecurity += 1;
-			} else {
-				analysisPositiveFlow.triageMissing += 1;
-			}
-		}
-
-		if (verificationResult === "true") {
-			counts.verificationTrue += 1;
-		}
-		if (verificationResult === "likely") {
-			counts.verificationLikely += 1;
-		}
-		if (isPositiveVerificationResult(verificationResult)) {
-			counts.verificationPositive += 1;
-		}
-		if (isPositiveTriageResult(triageResult, triageIsSecurityIssue)) {
-			counts.triageSecurityIssue += 1;
-		}
+			const vRow = v2t[vid];
+			if (vRow && vRow[tid] !== undefined) { vRow[tid] += 1; }
 	}
 
-	for (const [target, count] of Object.entries(verifyBucketCounts)) {
-		if (count > 0) {
-			transitionLinks.push({
-				source: "analysis_positive",
-				target,
-				count,
-			});
-		}
-	}
-	for (const [source, targets] of Object.entries(triageByVerifyBucket)) {
+	const links: Array<{ source: string; target: string; count: number }> = [];
+	for (const [source, targets] of Object.entries(a2v)) {
 		for (const [target, count] of Object.entries(targets)) {
-			if (count > 0) {
-				transitionLinks.push({ source, target, count });
-			}
+			if (count > 0) links.push({ source, target, count });
 		}
 	}
+	for (const [source, targets] of Object.entries(v2t)) {
+		for (const [target, count] of Object.entries(targets)) {
+			if (count > 0) links.push({ source, target, count });
+		}
+	}
+
+	const nodeCount = (id: string, stage: string) => {
+		if (stage === "analysis") return analysisTotals[id] || 0;
+		if (stage === "verify") return verifyTotals[id] || 0;
+		let c = 0; for (const v of verifyNodeIds) { c += (v2t[v]?.[id] || 0); } return c;
+	};
+
+	const titleCase = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
+	const makeNode = (id: string, stage: string) => ({
+		id, stage: stage as "analysis"|"verify"|"triage",
+		label: titleCase(stage === "analysis" ? id.replace("analysis_", "") : stage === "verify" ? id.replace("verify_", "") : id.replace("triage_", "")),
+		count: nodeCount(id, stage),
+	});
 
 	return {
-		counts,
+		counts: {
+			candidatesTotal: candidates.length,
+			analysisPositive: nodeCount("analysis_real_vulnerability", "analysis") + nodeCount("analysis_likely_vulnerability", "analysis"),
+			analysisReal: nodeCount("analysis_real_vulnerability", "analysis"),
+			analysisLikely: nodeCount("analysis_likely_vulnerability", "analysis"),
+			verificationTrue: nodeCount("verify_true", "verify"),
+			verificationLikely: nodeCount("verify_likely", "verify"),
+			verificationPositive: nodeCount("verify_true", "verify") + nodeCount("verify_likely", "verify"),
+			triageSecurityIssue: nodeCount("triage_security_issue", "triage"),
+		},
 		taskTimeline,
 		flow: {
 			nodes: [
-				{
-					id: "analysis_positive",
-					label: "Analysis Real/Likely",
-					stage: "analysis",
-					count: counts.analysisPositive,
-				},
-				{
-					id: "verify_positive",
-					label: "Verify True/Likely",
-					stage: "verify",
-					count: analysisPositiveFlow.verifyPositive,
-				},
-				{
-					id: "verify_false",
-					label: "Verify False",
-					stage: "verify",
-					count: analysisPositiveFlow.verifyFalse,
-				},
-				{
-					id: "verify_missing",
-					label: "Verify Missing",
-					stage: "verify",
-					count: analysisPositiveFlow.verifyMissing,
-				},
-				{
-					id: "triage_security_issue",
-					label: "Triage True",
-					stage: "triage",
-					count: analysisPositiveFlow.triageSecurityIssue,
-				},
-				{
-					id: "triage_not_security",
-					label: "Triage False",
-					stage: "triage",
-					count: analysisPositiveFlow.triageNotSecurity,
-				},
-				{
-					id: "triage_missing",
-					label: "Triage Missing",
-					stage: "triage",
-					count: analysisPositiveFlow.triageMissing,
-				},
+				...analysisNodeIds.map(id => makeNode(id, "analysis")),
+				...verifyNodeIds.map(id => makeNode(id, "verify")),
+				...triageNodeIds.map(id => makeNode(id, "triage")),
 			],
-			links: transitionLinks,
+			links,
 		},
 	};
 };

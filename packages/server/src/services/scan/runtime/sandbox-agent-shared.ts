@@ -195,6 +195,33 @@ export const getUsageUpdateUsedTokens = (
 	};
 };
 
+// Like getUsageUpdateUsedTokens but prefers cumulative totals for snapshot-based monitoring.
+// For Claude Code: uses total.totalTokens (cumulative) rather than last.totalTokens (per-request).
+// For Deepseek/Codex: uses record.used (cumulative context window usage).
+export const getUsageUpdateCumulativeTokens = (
+	update: MaybeSandboxAgentSessionUpdate,
+) => {
+	const record = asRecord(update);
+	if (!record || asString(record.sessionUpdate) !== "usage_update") {
+		return null;
+	}
+	const directUsed = asNumber(record.used);
+	const tokenUsage = asRecord(record.tokenUsage);
+	const total = asRecord(tokenUsage?.total);
+	const last = asRecord(tokenUsage?.last);
+	const totalUsed = asNumber(total?.totalTokens);
+	const used = directUsed ?? totalUsed;
+	if (used === null) {
+		return null;
+	}
+	return {
+		used,
+		cachedReadTokens: asNumber(total?.cachedInputTokens) ?? asNumber(last?.cachedInputTokens),
+		contextSize:
+			asNumber(record.size) ?? asNumber(tokenUsage?.modelContextWindow),
+	};
+};
+
 export const summarizeSandboxAgentTokenUsage = (
 	content: string,
 ): SandboxAgentTokenUsageSummary | null => {

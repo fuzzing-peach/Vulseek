@@ -126,7 +126,7 @@ export const applications = pgTable("application", {
 	buildPath: text("buildPath").default("/"),
 	triggerType: triggerType("triggerType").default("push"),
 	autoDeploy: boolean("autoDeploy").$defaultFn(() => true),
-	autoDeltaScan: boolean("autoDeltaScan").$defaultFn(() => true),
+	autoDeltaScan: boolean("autoDeltaScan").$defaultFn(() => false),
 	fuzzingBudgetSeconds: integer("fuzzingBudgetSeconds").notNull().default(600),
 	postCheckoutScript: text("postCheckoutScript").notNull().default(""),
 	// Gitlab

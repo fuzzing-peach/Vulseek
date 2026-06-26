@@ -157,6 +157,27 @@ export const formatTruthResultLabel = (
 	);
 };
 
+const TRIAGE_RESULT_DEFAULTS: Record<string, string> = {
+	security_issue: "Security Issue",
+	non_security: "Non Security",
+	hardening: "Hardening",
+	needs_review: "Needs Review",
+};
+
+export const formatTriageResultLabel = (
+	t: ScanTranslation,
+	result?: string | null,
+) => {
+	if (!result) {
+		return "-";
+	}
+	return scanT(
+		t,
+		`scan.triageResult.${result}`,
+		TRIAGE_RESULT_DEFAULTS[result] || titleCase(result),
+	);
+};
+
 export const formatScanTypeLabel = (
 	t: ScanTranslation,
 	scanType?: string | null,

@@ -156,20 +156,14 @@ const MENU: Menu = {
 			title: "Schedules",
 			url: "/dashboard/schedules",
 			icon: Clock,
-			// Only enabled in non-cloud environments
-			isEnabled: ({ isCloud, auth }) => !isCloud && auth?.role === "owner",
+			isEnabled: () => false,
 		},
 		{
 			isSingle: true,
 			title: "Traefik File System",
 			url: "/dashboard/traefik",
 			icon: GalleryVerticalEnd,
-			// Only enabled for admins and users with access to Traefik files in non-cloud environments
-			isEnabled: ({ auth, isCloud }) =>
-				!!(
-					(auth?.role === "owner" || auth?.canAccessToTraefikFiles) &&
-					!isCloud
-				),
+			isEnabled: () => false,
 		},
 		{
 			isSingle: true,
@@ -185,18 +179,14 @@ const MENU: Menu = {
 			title: "Swarm",
 			url: "/dashboard/swarm",
 			icon: PieChart,
-			// Only enabled for admins and users with access to Docker in non-cloud environments
-			isEnabled: ({ auth, isCloud }) =>
-				!!((auth?.role === "owner" || auth?.canAccessToDocker) && !isCloud),
+			isEnabled: () => false,
 		},
 		{
 			isSingle: true,
 			title: "Requests",
 			url: "/dashboard/requests",
 			icon: Forward,
-			// Only enabled for admins and users with access to Docker in non-cloud environments
-			isEnabled: ({ auth, isCloud }) =>
-				!!((auth?.role === "owner" || auth?.canAccessToDocker) && !isCloud),
+			isEnabled: () => false,
 		},
 
 		// Legacy unused menu, adjusted to the new structure

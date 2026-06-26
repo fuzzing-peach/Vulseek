@@ -11,9 +11,7 @@ import {
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { scanT } from "./scan-i18n";
-
-type ScanMonitoringMode = "job" | "task";
+import { scanT } from "@/components/dashboard/scanning/scan-i18n";
 
 type TaskTokenSnapshot = {
 	taskId: string;
@@ -76,41 +74,15 @@ type TokenThroughputSample = {
 	aggregateTokensPerSecond: number;
 };
 
-type ScanMonitoringProps = {
-	mode: ScanMonitoringMode;
-	scanJobId: string;
-	taskId?: string;
-	title?: string;
-	description?: string;
-};
-
 const emptySample: ScanMonitoringSample = {
 	time: "",
 	runningContainerCount: 0,
 	containers: [],
-	cpu: {
-		percent: 0,
-		capacityPercent: 100,
-	},
-	memory: {
-		usedBytes: 0,
-		limitBytes: 0,
-		percent: 0,
-	},
-	block: {
-		readBytes: 0,
-		writeBytes: 0,
-	},
-	network: {
-		rxBytes: 0,
-		txBytes: 0,
-	},
-	tokenSnapshot: {
-		timestampMs: 0,
-		totalTokens: 0,
-		cachedReadTokens: 0,
-		tasks: [],
-	},
+	cpu: { percent: 0, capacityPercent: 100 },
+	memory: { usedBytes: 0, limitBytes: 0, percent: 0 },
+	block: { readBytes: 0, writeBytes: 0 },
+	network: { rxBytes: 0, txBytes: 0 },
+	tokenSnapshot: { timestampMs: 0, totalTokens: 0, cachedReadTokens: 0, tasks: [] },
 	activeJobCount: 0,
 };
 
@@ -124,9 +96,7 @@ const formatVcpu = (value: number) =>
 	`${(Number.isFinite(value) ? value : 0).toFixed(2)} vCPU`;
 
 const formatBytes = (value: number) => {
-	if (!Number.isFinite(value) || value <= 0) {
-		return "0 B";
-	}
+	if (!Number.isFinite(value) || value <= 0) return "0 B";
 	const units = ["B", "KB", "MB", "GB", "TB"];
 	let size = value;
 	let unitIndex = 0;
@@ -138,10 +108,7 @@ const formatBytes = (value: number) => {
 	return `${size.toFixed(precision)} ${units[unitIndex]}`;
 };
 
-type AxisUnitOption = {
-	label: string;
-	scale: number;
-};
+type AxisUnitOption = { label: string; scale: number };
 
 const BYTE_AXIS_UNITS: AxisUnitOption[] = [
 	{ label: "B", scale: 1 },
@@ -175,15 +142,11 @@ const formatCompactNumber = (value: number) => {
 };
 
 const resolveAxisUnit = (value: number, units?: AxisUnitOption[]) => {
-	if (!units?.length) {
-		return { label: "", scale: 1 };
-	}
+	if (!units?.length) return { label: "", scale: 1 };
 	const safeValue = Math.abs(Number.isFinite(value) ? value : 0);
 	let resolved = units[0] || { label: "", scale: 1 };
 	for (const unit of units) {
-		if (safeValue >= unit.scale) {
-			resolved = unit;
-		}
+		if (safeValue >= unit.scale) resolved = unit;
 	}
 	return resolved;
 };
@@ -217,9 +180,7 @@ const buildTokenChartData = (samples: TokenThroughputSample[]) =>
 	samples.map((sample, index) => ({
 		name: `Point ${index + 1}`,
 		time: sample.time,
-		aggregateTokensPerSecond: Number(
-			sample.aggregateTokensPerSecond.toFixed(2),
-		),
+		aggregateTokensPerSecond: Number(sample.aggregateTokensPerSecond.toFixed(2)),
 	}));
 
 const MONITORING_SAMPLE_LIMIT = 240;
@@ -233,11 +194,7 @@ const UsageChart = ({
 	axisUnits,
 }: {
 	data: Array<Record<string, number | string>>;
-	keys: {
-		key: string;
-		name: string;
-		color: string;
-	}[];
+	keys: { key: string; name: string; color: string }[];
 	max?: number;
 	formatter: (value: number) => string;
 	axisUnitLabel?: string;
@@ -268,18 +225,9 @@ const UsageChart = ({
 			<ResponsiveContainer>
 				<AreaChart
 					data={data}
-					margin={{
-						top: axisUnit.label ? 22 : 10,
-						right: 24,
-						left: 0,
-						bottom: 0,
-					}}
+					margin={{ top: axisUnit.label ? 22 : 10, right: 24, left: 0, bottom: 0 }}
 				>
-					<CartesianGrid
-						strokeDasharray="3 3"
-						stroke="#27272A"
-						opacity={0.35}
-					/>
+					<CartesianGrid strokeDasharray="3 3" stroke="#27272A" opacity={0.35} />
 					<YAxis
 						stroke="#A1A1AA"
 						domain={max ? [0, max] : undefined}
@@ -288,9 +236,7 @@ const UsageChart = ({
 					/>
 					<Tooltip
 						content={({ active, payload }) => {
-							if (!active || !payload?.length) {
-								return null;
-							}
+							if (!active || !payload?.length) return null;
 							const time = payload[0]?.payload?.time;
 							return (
 								<div className="rounded-md border bg-background p-2 text-xs shadow-lg">
@@ -300,10 +246,7 @@ const UsageChart = ({
 										</div>
 									) : null}
 									{payload.map((item) => (
-										<div
-											key={String(item.dataKey)}
-											style={{ color: item.color }}
-										>
+										<div key={String(item.dataKey)} style={{ color: item.color }}>
 											{item.name}: {formatter(Number(item.value))}
 										</div>
 									))}
@@ -329,17 +272,10 @@ const UsageChart = ({
 	);
 };
 
-export const ScanMonitoring = ({
-	mode,
-	scanJobId,
-	taskId,
-	title,
-	description,
-}: ScanMonitoringProps) => {
+export const GlobalScanMonitoring = () => {
 	const { t } = useTranslation("scan");
 	const [samples, setSamples] = useState<ScanMonitoringSample[]>([]);
-	const [currentData, setCurrentData] =
-		useState<ScanMonitoringSample>(emptySample);
+	const [currentData, setCurrentData] = useState<ScanMonitoringSample>(emptySample);
 	const [error, setError] = useState<string | null>(null);
 	const [hasReceivedSample, setHasReceivedSample] = useState(false);
 
@@ -349,25 +285,15 @@ export const ScanMonitoring = ({
 		setError(null);
 		setHasReceivedSample(false);
 
-		if (!scanJobId || (mode === "task" && !taskId)) {
-			return;
-		}
-
 		const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-		const pagePath = window.location.pathname.replace(/\/+$/, "");
-		const monitoringPath = `${pagePath}/monitoring`;
 		const ws = new WebSocket(
-			`${protocol}//${window.location.host}${monitoringPath}`,
+			`${protocol}//${window.location.host}/dashboard/monitoring/scan-stats`,
 		);
 
 		ws.onmessage = (event) => {
 			const message = JSON.parse(event.data) as ScanMonitoringMessage;
-			if (message.error) {
-				setError(message.error);
-			}
-			if (!message.data) {
-				return;
-			}
+			if (message.error) setError(message.error);
+			if (!message.data) return;
 			setCurrentData(message.data);
 			setHasReceivedSample(true);
 			setSamples((previous) =>
@@ -376,13 +302,11 @@ export const ScanMonitoring = ({
 		};
 
 		ws.onclose = (event) => {
-			if (event.reason) {
-				setError(event.reason);
-			}
+			if (event.reason) setError(event.reason);
 		};
 
 		return () => ws.close();
-	}, [mode, scanJobId, taskId]);
+	}, []);
 
 	const prevSnapshotRef = useRef<TokenSnapshot | null>(null);
 	const [tokenSamples, setTokenSamples] = useState<TokenThroughputSample[]>([]);
@@ -436,20 +360,8 @@ export const ScanMonitoring = ({
 		prevSnapshotRef.current = snap;
 	}, [currentData.tokenSnapshot]);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: reset token state when monitoring target changes
-	useEffect(() => {
-		prevSnapshotRef.current = null;
-		setTokenSamples([]);
-		setTokenRates([]);
-		setAggregateTokensPerSecond(0);
-		setLatestTokens(0);
-	}, [mode, scanJobId, taskId]);
-
 	const chartData = useMemo(() => buildChartData(samples), [samples]);
-	const tokenChartData = useMemo(
-		() => buildTokenChartData(tokenSamples),
-		[tokenSamples],
-	);
+	const tokenChartData = useMemo(() => buildTokenChartData(tokenSamples), [tokenSamples]);
 	const maxTaskTokensPerSecond = Math.max(
 		1,
 		...tokenRates.map((rate) => rate.tokensPerSecond),
@@ -457,38 +369,37 @@ export const ScanMonitoring = ({
 	const cpuCapacityPercent = currentData.cpu.capacityPercent || 100;
 	const cpuCapacityVcpu = cpuCapacityPercent / 100;
 	const cpuUsedVcpu = currentData.cpu.percent / 100;
-	const noRunningContainers =
-		hasReceivedSample && currentData.runningContainerCount === 0;
+	const noRunningContainers = hasReceivedSample && currentData.runningContainerCount === 0;
+	const activeJobCount = currentData.activeJobCount ?? 0;
 
 	return (
 		<div className="flex flex-col gap-4">
 			<header className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
 				<div className="space-y-1">
 					<h2 className="text-2xl font-semibold tracking-tight">
-						{title || scanT(t, "scan.monitoring.title", "Monitoring")}
+						{scanT(t, "scan.monitoring.globalTitle", "Global Scan Activity")}
 					</h2>
 					<p className="text-sm text-muted-foreground">
-						{description ||
-							(mode === "job"
-								? scanT(
-										t,
-										"scan.monitoring.jobDescription",
-										"Aggregated live usage for currently running scan tasks.",
-									)
-								: scanT(
-										t,
-										"scan.monitoring.taskDescription",
-										"Live usage for this scan task container.",
-									))}
+						{scanT(
+							t,
+							"scan.monitoring.globalDescription",
+							"Aggregated live usage across all running scan tasks.",
+						)}
 					</p>
 				</div>
-				<div className="rounded-lg border px-3 py-2 text-sm">
-					<span className="text-muted-foreground">
-						{scanT(t, "scan.monitoring.runningContainers", "Running containers:")}{" "}
-					</span>
-					<span className="font-medium">
-						{currentData.runningContainerCount}
-					</span>
+				<div className="flex flex-row gap-2">
+					<div className="rounded-lg border px-3 py-2 text-sm">
+						<span className="text-muted-foreground">
+							{scanT(t, "scan.monitoring.activeJobs", "Active jobs:")}{" "}
+						</span>
+						<span className="font-medium">{activeJobCount}</span>
+					</div>
+					<div className="rounded-lg border px-3 py-2 text-sm">
+						<span className="text-muted-foreground">
+							{scanT(t, "scan.monitoring.runningContainers", "Running containers:")}{" "}
+						</span>
+						<span className="font-medium">{currentData.runningContainerCount}</span>
+					</div>
 				</div>
 			</header>
 
@@ -504,7 +415,7 @@ export const ScanMonitoring = ({
 						t,
 						"scan.monitoring.noRunningContainer",
 						"No running container is currently available for this {{mode}}.",
-						{ mode },
+						{ mode: "global" },
 					)}
 				</div>
 			) : null}
@@ -545,61 +456,54 @@ export const ScanMonitoring = ({
 								keys={[
 									{
 										key: "aggregateTokensPerSecond",
-										name:
-											mode === "job"
-												? scanT(t, "scan.monitoring.job", "Job")
-												: scanT(t, "scan.monitoring.task", "Task"),
+										name: scanT(t, "scan.monitoring.globalTitle", "Global Scan Activity"),
 										color: "#7C3AED",
 									},
 								]}
 								formatter={formatTokensPerSecond}
 								axisUnits={TOKEN_RATE_AXIS_UNITS}
 							/>
-							{mode === "job" ? (
-								<div className="grid gap-2 md:grid-cols-2">
-									{tokenRates.length === 0 ? (
-										<div className="text-sm text-muted-foreground">
-											{scanT(
-												t,
-												"scan.monitoring.waitingTokens",
-												"Waiting for token usage updates from running tasks.",
-											)}
-										</div>
-									) : (
-										tokenRates.map((rate) => (
-											<div
-												key={rate.taskId}
-												className="rounded-md border bg-muted/10 px-3 py-2"
-											>
-												<div className="flex items-center justify-between gap-3 text-sm">
-													<span className="min-w-0 truncate capitalize">
-														{rate.label}
-													</span>
-													<span className="shrink-0 font-medium">
-														{formatTokensPerSecond(rate.tokensPerSecond)}
-													</span>
-												</div>
-												<div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-													<div
-														className="h-full rounded-full bg-violet-600"
-														style={{
-															width: `${clampProgress(
-																(rate.tokensPerSecond /
-																	maxTaskTokensPerSecond) *
-																	100,
-															)}%`,
-														}}
-													/>
-												</div>
-												<div className="mt-1 text-xs text-muted-foreground">
-													{scanT(t, "scan.monitoring.latest", "Latest:")}{" "}
-													{formatTokens(rate.latestTokens)}
-												</div>
+							<div className="grid gap-2 md:grid-cols-2">
+								{tokenRates.length === 0 ? (
+									<div className="text-sm text-muted-foreground">
+										{scanT(
+											t,
+											"scan.monitoring.waitingTokens",
+											"Waiting for token usage updates from running tasks.",
+										)}
+									</div>
+								) : (
+									tokenRates.map((rate) => (
+										<div
+											key={rate.taskId}
+											className="rounded-md border bg-muted/10 px-3 py-2"
+										>
+											<div className="flex items-center justify-between gap-3 text-sm">
+												<span className="min-w-0 truncate capitalize">
+													{rate.label}
+												</span>
+												<span className="shrink-0 font-medium">
+													{formatTokensPerSecond(rate.tokensPerSecond)}
+												</span>
 											</div>
-										))
-									)}
-								</div>
-							) : null}
+											<div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+												<div
+													className="h-full rounded-full bg-violet-600"
+													style={{
+														width: `${clampProgress(
+															(rate.tokensPerSecond / maxTaskTokensPerSecond) * 100,
+														)}%`,
+													}}
+												/>
+											</div>
+											<div className="mt-1 text-xs text-muted-foreground">
+												{scanT(t, "scan.monitoring.latest", "Latest:")}{" "}
+												{formatTokens(rate.latestTokens)}
+											</div>
+										</div>
+									))
+								)}
+							</div>
 						</div>
 					</CardContent>
 				</Card>
@@ -620,20 +524,12 @@ export const ScanMonitoring = ({
 								{formatPercent(currentData.cpu.percent)})
 							</span>
 							<Progress
-								value={clampProgress(
-									(currentData.cpu.percent / cpuCapacityPercent) * 100,
-								)}
+								value={clampProgress((currentData.cpu.percent / cpuCapacityPercent) * 100)}
 								className="w-full"
 							/>
 							<UsageChart
 								data={chartData}
-								keys={[
-									{
-										key: "cpuVcpu",
-										name: scanT(t, "scan.monitoring.cpu", "CPU"),
-										color: "#27272A",
-									},
-								]}
+								keys={[{ key: "cpuVcpu", name: scanT(t, "scan.monitoring.cpu", "CPU"), color: "#27272A" }]}
 								formatter={formatVcpu}
 								axisUnitLabel="vCPU"
 							/>
@@ -661,13 +557,7 @@ export const ScanMonitoring = ({
 							/>
 							<UsageChart
 								data={chartData}
-								keys={[
-									{
-										key: "memoryBytes",
-										name: scanT(t, "scan.monitoring.memory", "Memory"),
-										color: "#27272A",
-									},
-								]}
+								keys={[{ key: "memoryBytes", name: scanT(t, "scan.monitoring.memory", "Memory"), color: "#27272A" }]}
 								formatter={formatBytes}
 								axisUnits={BYTE_AXIS_UNITS}
 							/>
@@ -692,16 +582,8 @@ export const ScanMonitoring = ({
 							<UsageChart
 								data={chartData}
 								keys={[
-									{
-										key: "blockReadBytes",
-										name: scanT(t, "scan.monitoring.read", "Read:"),
-										color: "#27272A",
-									},
-									{
-										key: "blockWriteBytes",
-										name: scanT(t, "scan.monitoring.write", "Write:"),
-										color: "#82CA9D",
-									},
+									{ key: "blockReadBytes", name: scanT(t, "scan.monitoring.read", "Read:"), color: "#27272A" },
+									{ key: "blockWriteBytes", name: scanT(t, "scan.monitoring.write", "Write:"), color: "#82CA9D" },
 								]}
 								formatter={formatBytes}
 								axisUnits={BYTE_AXIS_UNITS}
@@ -727,16 +609,8 @@ export const ScanMonitoring = ({
 							<UsageChart
 								data={chartData}
 								keys={[
-									{
-										key: "networkRxBytes",
-										name: scanT(t, "scan.monitoring.in", "In:"),
-										color: "#8884D8",
-									},
-									{
-										key: "networkTxBytes",
-										name: scanT(t, "scan.monitoring.out", "Out:"),
-										color: "#82CA9D",
-									},
+									{ key: "networkRxBytes", name: scanT(t, "scan.monitoring.in", "In:"), color: "#8884D8" },
+									{ key: "networkTxBytes", name: scanT(t, "scan.monitoring.out", "Out:"), color: "#82CA9D" },
 								]}
 								formatter={formatBytes}
 								axisUnits={BYTE_AXIS_UNITS}
