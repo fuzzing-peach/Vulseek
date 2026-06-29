@@ -61,6 +61,7 @@ export const sourceType = pgEnum("sourceType", [
 	"bitbucket",
 	"gitea",
 	"drop",
+	"local",
 ]);
 
 export const buildType = pgEnum("buildType", [
@@ -167,6 +168,8 @@ export const applications = pgTable("application", {
 	dockerBuildStage: text("dockerBuildStage"),
 	// Drop
 	dropBuildPath: text("dropBuildPath"),
+	// Local Path
+	localPath: text("localPath"),
 	// Docker swarm json
 	healthCheckSwarm: json("healthCheckSwarm").$type<HealthCheckSwarm>(),
 	restartPolicySwarm: json("restartPolicySwarm").$type<RestartPolicySwarm>(),
@@ -305,7 +308,7 @@ const createSchema = createInsertSchema(applications, {
 	buildPath: z.string().optional(),
 	environmentId: z.string(),
 	sourceType: z
-		.enum(["github", "docker", "git", "gitlab", "bitbucket", "gitea", "drop"])
+		.enum(["github", "docker", "git", "gitlab", "bitbucket", "gitea", "drop", "local"])
 		.optional(),
 	applicationStatus: z.enum(["idle", "running", "done", "error"]),
 	buildType: z.enum([
@@ -481,6 +484,19 @@ export const apiSaveGitProvider = createSchema
 			customGitSSHKeyId: true,
 		}),
 	);
+
+export const apiSaveLocalProvider = createSchema
+	.pick({
+		applicationId: true,
+	})
+	.required()
+	.extend({
+		localPath: z
+			.string()
+			.min(1, "Path is required")
+			.regex(/^\//, "Must be an absolute path (start with /)")
+			.max(4096, "Path too long"),
+	});
 
 export const apiSaveEnvironmentVariables = createSchema
 	.pick({

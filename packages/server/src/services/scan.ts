@@ -1411,6 +1411,7 @@ type CheckoutTask = {
 	enableSubmodules: boolean;
 	postCheckoutScript: string;
 	dockerfileTemplate: string;
+	localPath?: string | null;
 	stdout: string;
 	stderr: string;
 	errorMessage?: string;
@@ -1482,6 +1483,7 @@ export const resolveScanGitRepositoryContext = async (
 	let enableSubmodules = false;
 	let postCheckoutScript = "";
 	let imageNameSeed = "scan";
+	let localPath: string | null = null;
 
 	if (input.applicationId) {
 		const application = await findApplicationById(input.applicationId);
@@ -1546,6 +1548,11 @@ export const resolveScanGitRepositoryContext = async (
 							)
 						: "<GIT_URL>");
 				gitBranch = application.giteaBranch || "main";
+				break;
+			case "local":
+				localPath = application.localPath || null;
+				gitUrl = "";
+				gitBranch = "";
 				break;
 			default:
 				gitUrl = "<GIT_URL>";
@@ -1621,6 +1628,7 @@ export const resolveScanGitRepositoryContext = async (
 		gitBranch,
 		enableSubmodules,
 		postCheckoutScript,
+		localPath,
 	};
 };
 
@@ -1634,6 +1642,7 @@ const resolveCheckoutContext = async (
 		gitBranch,
 		enableSubmodules,
 		postCheckoutScript,
+		localPath,
 	} =
 		await resolveScanGitRepositoryContext(input);
 
@@ -1644,6 +1653,7 @@ const resolveCheckoutContext = async (
 		gitBranch,
 		enableSubmodules,
 		postCheckoutScript,
+		localPath,
 		dockerfileTemplate,
 	};
 };
@@ -1662,6 +1672,7 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 		tempDir,
 		"codex-acp-fork-0.14.0.patch",
 	);
+	const isLocalPath = !!task.localPath;
 	const args = [
 		"build",
 		"--progress=plain",
@@ -1669,14 +1680,18 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 		dockerfilePath,
 		"-t",
 		task.imageTag,
-		"--build-arg",
-		`GIT_URL=${task.gitUrl}`,
-		"--build-arg",
-		`GIT_BRANCH=${task.gitBranch}`,
-		"--build-arg",
-		`ENABLE_SUBMODULES=${task.enableSubmodules ? "true" : "false"}`,
-		"--build-arg",
-		`POST_CHECKOUT_SCRIPT=${task.postCheckoutScript}`,
+		...(isLocalPath
+			? ["--build-arg", `POST_CHECKOUT_SCRIPT=${task.postCheckoutScript}`]
+			: [
+					"--build-arg",
+					`GIT_URL=${task.gitUrl}`,
+					"--build-arg",
+					`GIT_BRANCH=${task.gitBranch}`,
+					"--build-arg",
+					`ENABLE_SUBMODULES=${task.enableSubmodules ? "true" : "false"}`,
+					"--build-arg",
+					`POST_CHECKOUT_SCRIPT=${task.postCheckoutScript}`,
+				]),
 	];
 	const containerBuildArgs = getGlobalContainerEnvironmentPairs();
 	for (const pair of containerBuildArgs) {
@@ -1718,7 +1733,36 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 			await resolveCodexAcpForkPatchPath(),
 			tempCodexAcpForkPatchPath,
 		);
-		await fs.writeFile(dockerfilePath, task.dockerfileTemplate, "utf-8");
+
+		let dockerfileContent = task.dockerfileTemplate;
+		if (isLocalPath && task.localPath) {
+			// Pre-copy the local directory into tempDir/repo so it's in the build context
+			const repoDir = path.join(tempDir, "repo");
+			await fs.cp(task.localPath, repoDir, { recursive: true });
+
+			// Replace the repository-source stage to use COPY instead of git clone
+			const localRepositorySourceStage = `FROM ubuntu:24.04 AS repository-source
+
+ARG POST_CHECKOUT_SCRIPT=""
+
+WORKDIR /workspace
+
+COPY repo /workspace/repo
+
+RUN if [ -n "\${POST_CHECKOUT_SCRIPT}" ]; then \\
+      cd /workspace/repo; \\
+      printf '%s\\n' "\${POST_CHECKOUT_SCRIPT}" > /tmp/dokploy-post-checkout.sh; \\
+      bash /tmp/dokploy-post-checkout.sh; \\
+      rm -f /tmp/dokploy-post-checkout.sh; \\
+    fi`;
+
+			// Replace everything from "FROM ubuntu:24.04 AS repository-source" up to the next "FROM"
+			dockerfileContent = dockerfileContent.replace(
+				/FROM ubuntu:24\.04 AS repository-source[\s\S]*?(?=FROM )/,
+				`${localRepositorySourceStage}\n\n`,
+			);
+		}
+		await fs.writeFile(dockerfilePath, dockerfileContent, "utf-8");
 		await new Promise<void>((resolve, reject) => {
 			const child = spawn("docker", args, {
 				stdio: ["ignore", "pipe", "pipe"],
@@ -1777,6 +1821,7 @@ export const startCheckoutScanEnvironment = async (
 		gitBranch: context.gitBranch,
 		enableSubmodules: context.enableSubmodules,
 		postCheckoutScript: context.postCheckoutScript,
+		localPath: context.localPath,
 		dockerfileTemplate: context.dockerfileTemplate,
 		stdout: "",
 		stderr: "",

@@ -1338,6 +1338,13 @@
       "when": 1780800000000,
       "tag": "0194_application_analysis_report_template",
       "breakpoints": true
+    },
+    {
+      "idx": 191,
+      "version": "7",
+      "when": 1782000000000,
+      "tag": "0195_local_source_type",
+      "breakpoints": true
     }
   ]
 }

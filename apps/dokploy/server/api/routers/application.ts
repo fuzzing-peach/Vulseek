@@ -55,6 +55,7 @@ import {
 	apiSaveGithubProvider,
 	apiSaveGitlabProvider,
 	apiSaveGitProvider,
+	apiSaveLocalProvider,
 	apiUpdateApplication,
 	applications,
 } from "@/server/db/schema";
@@ -550,6 +551,26 @@ export const applicationRouter = createTRPCRouter({
 				enableSubmodules: input.enableSubmodules,
 			});
 
+			return true;
+		}),
+	saveLocalProvider: protectedProcedure
+		.input(apiSaveLocalProvider)
+		.mutation(async ({ input, ctx }) => {
+			const application = await findApplicationById(input.applicationId);
+			if (
+				application.environment.project.organizationId !==
+				ctx.session.activeOrganizationId
+			) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to save this local provider",
+				});
+			}
+			await updateApplication(input.applicationId, {
+				localPath: input.localPath,
+				sourceType: "local",
+				applicationStatus: "idle",
+			});
 			return true;
 		}),
 	disconnectGitProvider: protectedProcedure
