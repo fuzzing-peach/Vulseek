@@ -1,4 +1,4 @@
-import { GitBranch, Loader2, UploadCloud } from "lucide-react";
+import { Folder, GitBranch, Loader2, UploadCloud } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -20,6 +20,7 @@ import { api } from "@/utils/api";
 import { SaveBitbucketProvider } from "./save-bitbucket-provider";
 import { SaveDragNDrop } from "./save-drag-n-drop";
 import { SaveGitlabProvider } from "./save-gitlab-provider";
+import { SaveLocalProvider } from "./save-local-provider";
 import { UnauthorizedGitProvider } from "./unauthorized-git-provider";
 
 type TabState =
@@ -29,7 +30,8 @@ type TabState =
 	| "drop"
 	| "gitlab"
 	| "bitbucket"
-	| "gitea";
+	| "gitea"
+	| "local";
 
 interface Props {
 	applicationId: string;
@@ -103,7 +105,8 @@ export const ShowProviderForm = ({ applicationId }: Props) => {
 		application &&
 		!application.hasGitProviderAccess &&
 		application.sourceType !== "docker" &&
-		application.sourceType !== "drop"
+		application.sourceType !== "drop" &&
+		application.sourceType !== "local"
 	) {
 		return (
 			<Card className="group relative w-full bg-transparent">
