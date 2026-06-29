@@ -1,4 +1,6 @@
 import { format, formatDistanceToNow } from "date-fns";
+import { zhCN } from "date-fns/locale";
+import { useTranslation } from "next-i18next";
 import {
 	Tooltip,
 	TooltipContent,
@@ -14,6 +16,8 @@ interface Props {
 }
 
 export const DateTooltip = ({ date, children, className }: Props) => {
+	const { i18n } = useTranslation();
+	const locale = i18n.language?.startsWith("zh") ? zhCN : undefined;
 	return (
 		<TooltipProvider delayDuration={0}>
 			<Tooltip>
@@ -28,10 +32,11 @@ export const DateTooltip = ({ date, children, className }: Props) => {
 						{children}{" "}
 						{formatDistanceToNow(new Date(date), {
 							addSuffix: true,
+							locale,
 						})}
 					</span>
 				</TooltipTrigger>
-				<TooltipContent>{format(new Date(date), "PPpp")}</TooltipContent>
+				<TooltipContent>{format(new Date(date), "PPpp", { locale })}</TooltipContent>
 			</Tooltip>
 		</TooltipProvider>
 	);

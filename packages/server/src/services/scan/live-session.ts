@@ -8,7 +8,7 @@ import {
 	projects,
 	scanJobs,
 } from "@dokploy/server/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { findApplicationById } from "../application";
 import { findComposeById } from "../compose";
 import { execAsync } from "../../utils/process/execAsync";
@@ -19,7 +19,12 @@ import {
 	listTasksByScanJobAndStatusesRepo,
 	listTasksByScanJobAndStageRepo,
 } from "./persistence/task.repo";
-import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "./runtime/sandbox-agent-shared";
+import {
+	SANDBOX_AGENT_RUNTIME_FILE_NAMES,
+	getEventUpdate,
+	getUsageUpdateCumulativeTokens,
+	summarizeSandboxAgentTokenUsage,
+} from "./runtime/sandbox-agent-shared";
 import type { Task } from "./types";
 
 const sanitizePathPart = (value: string) =>
@@ -416,6 +421,67 @@ export const findRunningSandboxAgentTaskRuntimesByScanJobId = async (
 		statuses: ["running"],
 	});
 	return await Promise.all(runningTasks.map(buildSandboxAgentTaskRuntime));
+};
+
+export const listRunningScanJobsByOrganizationId = async (
+	organizationId: string,
+): Promise<{ scanJobId: string }[]> => {
+	const statusFilter = or(
+		eq(scanJobs.status, "pending"),
+		eq(scanJobs.status, "running"),
+	);
+	const [appJobs, composeJobs] = await Promise.all([
+		db
+			.select({ scanJobId: scanJobs.scanJobId })
+			.from(scanJobs)
+			.innerJoin(
+				applications,
+				eq(scanJobs.applicationId, applications.applicationId),
+			)
+			.innerJoin(
+				environments,
+				eq(applications.environmentId, environments.environmentId),
+			)
+			.innerJoin(projects, eq(environments.projectId, projects.projectId))
+			.where(and(eq(projects.organizationId, organizationId), statusFilter)),
+		db
+			.select({ scanJobId: scanJobs.scanJobId })
+			.from(scanJobs)
+			.innerJoin(compose, eq(scanJobs.composeId, compose.composeId))
+			.innerJoin(
+				environments,
+				eq(compose.environmentId, environments.environmentId),
+			)
+			.innerJoin(projects, eq(environments.projectId, projects.projectId))
+			.where(and(eq(projects.organizationId, organizationId), statusFilter)),
+	]);
+	return [...appJobs, ...composeJobs];
+};
+
+export const readTaskCurrentTokenUsage = async (
+	jsonlPath: string,
+): Promise<{ totalTokens: number; cachedReadTokens: number }> => {
+	try {
+		const content = await fs.readFile(jsonlPath, "utf-8");
+		let totalTokens = 0;
+		let cachedReadTokens = 0;
+		for (const rawLine of content.split("\n")) {
+			const trimmed = rawLine.trim();
+			if (!trimmed) continue;
+			try {
+				const parsed = JSON.parse(trimmed);
+				const usage = getUsageUpdateCumulativeTokens(getEventUpdate(parsed));
+				if (!usage) continue;
+				totalTokens = usage.used;
+				if (usage.cachedReadTokens !== null) {
+					cachedReadTokens = usage.cachedReadTokens;
+				}
+			} catch {}
+		}
+		return { totalTokens, cachedReadTokens };
+	} catch {
+		return { totalTokens: 0, cachedReadTokens: 0 };
+	}
 };
 
 export const findCandidateSandboxAgentSession = async (input: {

@@ -92,6 +92,7 @@ import {
 	formatScanStageLabel,
 	formatScanStatusLabel,
 	formatScanTypeLabel,
+	formatTriageResultLabel,
 	formatTruthResultLabel,
 	scanT,
 	type ScanTranslation,
@@ -535,7 +536,7 @@ const getScanJobStatusClassName = (status?: string) => {
 		return "text-green-600";
 	}
 
-	if (status === "failed" || status === "canceled") {
+	if (status === "canceled") {
 		return "text-destructive";
 	}
 

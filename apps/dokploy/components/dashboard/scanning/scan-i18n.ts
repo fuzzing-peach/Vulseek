@@ -215,3 +215,15 @@ export const formatResourceTypeLabel = (
 	resourceType === "application"
 		? scanT(t, "scan.resource.application", "application")
 		: scanT(t, "scan.resource.compose", "compose");
+
+const TRIAGE_RESULT_DEFAULTS: Record<string, string> = {
+	security_issue: "Security Issue",
+	non_security: "Non Security",
+	hardening: "Hardening",
+	needs_review: "Needs Review",
+};
+
+export const formatTriageResultLabel = (
+	t: ScanTranslation,
+	triageResult: string,
+) => scanT(t, `scan.triageResult.${triageResult}`, TRIAGE_RESULT_DEFAULTS[triageResult] || triageResult);

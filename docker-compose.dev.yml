@@ -87,6 +87,7 @@ services:
     environment:
       # 开发环境配置
       - NODE_ENV=development
+      - NODE_OPTIONS=--max-old-space-size=4096
       - CHOKIDAR_USEPOLLING=true
       - WATCHPACK_POLLING=true
       
@@ -153,6 +154,7 @@ volumes:
   dokploy_data:
   docker_config:
   postgres_data:
+    external: true
   redis_data:
   traefik_data:
 

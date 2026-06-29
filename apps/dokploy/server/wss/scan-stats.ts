@@ -4,9 +4,13 @@ import {
 	execAsync,
 	findApplicationById,
 	findComposeById,
+	findRunningSandboxAgentTaskRuntimesByScanJobId,
+	findSandboxAgentTaskRuntimeByTaskId,
 	findScanJobById,
 	findTaskById,
 	findTasksByScanJobId,
+	listRunningScanJobsByOrganizationId,
+	readTaskCurrentTokenUsage,
 	validateRequest,
 } from "@dokploy/server";
 import { WebSocketServer } from "ws";
@@ -37,13 +41,18 @@ type ScanStatsContainer = {
 	status: "running";
 };
 
-type ScanStatsMonitoringRoute = {
-	mode: "job" | "task";
-	scanJobId: string;
-	taskId?: string;
-};
+type ScanStatsMonitoringRoute =
+	| {
+			mode: "job" | "task";
+			scanJobId: string;
+			taskId?: string;
+	  }
+	| {
+			mode: "global";
+	  };
 
 const SCAN_MONITORING_LEGACY_PATH = "/listen-scan-stats-monitoring";
+const GLOBAL_SCAN_MONITORING_PATH = "/dashboard/monitoring/scan-stats";
 const scanJobMonitoringPathPattern =
 	/^\/dashboard\/project\/[^/]+\/environment\/[^/]+\/(?:profiles|services)\/(?:application|compose)\/[^/]+\/jobs\/([^/]+)\/monitoring$/;
 const scanTaskMonitoringPathPattern =
@@ -52,6 +61,10 @@ const scanTaskMonitoringPathPattern =
 const parseScanStatsMonitoringRoute = (
 	url: URL,
 ): ScanStatsMonitoringRoute | null => {
+	if (url.pathname === GLOBAL_SCAN_MONITORING_PATH) {
+		return { mode: "global" };
+	}
+
 	if (url.pathname === SCAN_MONITORING_LEGACY_PATH) {
 		const mode = url.searchParams.get("mode");
 		const scanJobId = url.searchParams.get("scanJobId");
@@ -86,6 +99,18 @@ const parseScanStatsMonitoringRoute = (
 	return null;
 };
 
+const emptyTokenSnapshot = () => ({
+	timestampMs: Date.now(),
+	totalTokens: 0,
+	cachedReadTokens: 0,
+	tasks: [] as Array<{
+		taskId: string;
+		label: string;
+		totalTokens: number;
+		cachedReadTokens: number;
+	}>,
+});
+
 const emptyStatsSample = (
 	containers: ScanStatsContainer[] = [],
 	cpuCapacityPercent = 100,
@@ -110,6 +135,8 @@ const emptyStatsSample = (
 		rxBytes: 0,
 		txBytes: 0,
 	},
+	tokenSnapshot: emptyTokenSnapshot(),
+	activeJobCount: 0,
 });
 
 const parsePercent = (value: string | undefined) => {
@@ -357,16 +384,23 @@ export const setupScanStatsMonitoringSocketServer = (
 		}
 
 		try {
-			await authorizeScanJob(route.scanJobId, session.activeOrganizationId);
-			if (route.mode === "task") {
-				if (!route.taskId) {
-					ws.close(4000, "taskId is required");
+			if (route.mode === "global") {
+				if (!session.activeOrganizationId) {
+					ws.close(4000, "Unauthorized scan monitoring request");
 					return;
 				}
-				const task = await findTaskById(route.taskId);
-				if (task.scanJobId !== route.scanJobId) {
-					ws.close(4000, "Task not found for this scan job");
-					return;
+			} else {
+				await authorizeScanJob(route.scanJobId, session.activeOrganizationId);
+				if (route.mode === "task") {
+					if (!route.taskId) {
+						ws.close(4000, "taskId is required");
+						return;
+					}
+					const task = await findTaskById(route.taskId);
+					if (task.scanJobId !== route.scanJobId) {
+						ws.close(4000, "Task not found for this scan job");
+						return;
+					}
 				}
 			}
 		} catch (error) {
@@ -379,6 +413,9 @@ export const setupScanStatsMonitoringSocketServer = (
 			return;
 		}
 
+		const formatTaskLabel = (taskKind: string, taskId: string) =>
+			`${taskKind.replace(/_/g, " ")} ${taskId.slice(0, 8)}`;
+
 		let isSampling = false;
 		const sampleAndSend = async () => {
 			if (isSampling || ws.readyState !== ws.OPEN) {
@@ -386,10 +423,75 @@ export const setupScanStatsMonitoringSocketServer = (
 			}
 			isSampling = true;
 			try {
+				if (route.mode === "global") {
+					const organizationId = session.activeOrganizationId;
+					if (!organizationId) {
+						ws.send(
+							JSON.stringify({
+								error: "Unauthorized",
+								data: emptyStatsSample(),
+							}),
+						);
+						return;
+					}
+					const runningJobs =
+						await listRunningScanJobsByOrganizationId(organizationId);
+					const activeJobCount = runningJobs.length;
+
+					const allRuntimes = (
+						await Promise.all(
+							runningJobs.map((job) =>
+								findRunningSandboxAgentTaskRuntimesByScanJobId(job.scanJobId),
+							),
+						)
+					).flat();
+
+					const containerNames: string[] = [];
+					const taskIdsByContainerName = new Map<string, string>();
+					for (const runtime of allRuntimes) {
+						if (runtime.containerName) {
+							containerNames.push(runtime.containerName);
+							taskIdsByContainerName.set(runtime.containerName, runtime.taskId);
+						}
+					}
+					const containers = await resolveRunningContainers(
+						containerNames,
+						taskIdsByContainerName,
+					);
+					const dockerData = await readDockerStats(containers);
+
+					const taskUsages = await Promise.all(
+						allRuntimes.map(async (runtime) => ({
+							taskId: runtime.taskId,
+							label: formatTaskLabel(runtime.taskKind, runtime.taskId),
+							...(await readTaskCurrentTokenUsage(runtime.jsonlPath)),
+						})),
+					);
+					const tokenSnapshot = {
+						timestampMs: Date.now(),
+						totalTokens: taskUsages.reduce((s, t) => s + t.totalTokens, 0),
+						cachedReadTokens: taskUsages.reduce(
+							(s, t) => s + t.cachedReadTokens,
+							0,
+						),
+						tasks: taskUsages,
+					};
+
+					ws.send(
+						JSON.stringify({
+							data: { ...dockerData, tokenSnapshot, activeJobCount },
+						}),
+					);
+					return;
+				}
+
 				let containerNames: string[] = [];
 				const taskIdsByContainerName = new Map<string, string>();
 
 				if (route.mode === "task") {
+					const runtime = route.taskId
+						? await findSandboxAgentTaskRuntimeByTaskId(route.taskId)
+						: null;
 					const task = route.taskId
 						? await findTaskById(route.taskId).catch(() => null)
 						: null;
@@ -397,7 +499,36 @@ export const setupScanStatsMonitoringSocketServer = (
 						containerNames = [task.containerName];
 						taskIdsByContainerName.set(task.containerName, task.taskId);
 					}
+					const containers = await resolveRunningContainers(
+						containerNames,
+						taskIdsByContainerName,
+					);
+					const dockerData = await readDockerStats(containers);
+					const taskUsage = runtime
+						? await readTaskCurrentTokenUsage(runtime.jsonlPath)
+						: { totalTokens: 0, cachedReadTokens: 0 };
+					const tokenSnapshot = {
+						timestampMs: Date.now(),
+						totalTokens: taskUsage.totalTokens,
+						cachedReadTokens: taskUsage.cachedReadTokens,
+						tasks: route.taskId
+							? [
+									{
+										taskId: route.taskId,
+										label: runtime
+											? formatTaskLabel(runtime.taskKind, runtime.taskId)
+											: route.taskId.slice(0, 8),
+										...taskUsage,
+									},
+								]
+							: [],
+					};
+					ws.send(JSON.stringify({ data: { ...dockerData, tokenSnapshot, activeJobCount: 1 } }));
 				} else {
+					const runtimes =
+						await findRunningSandboxAgentTaskRuntimesByScanJobId(
+							route.scanJobId,
+						);
 					const tasks = await findTasksByScanJobId(route.scanJobId);
 					for (const task of tasks) {
 						if (task.containerName && ACTIVE_TASK_STATUSES.has(task.status)) {
@@ -405,14 +536,33 @@ export const setupScanStatsMonitoringSocketServer = (
 							taskIdsByContainerName.set(task.containerName, task.taskId);
 						}
 					}
+					const containers = await resolveRunningContainers(
+						containerNames,
+						taskIdsByContainerName,
+					);
+					const dockerData = await readDockerStats(containers);
+					const taskUsages = await Promise.all(
+						runtimes.map(async (runtime) => ({
+							taskId: runtime.taskId,
+							label: formatTaskLabel(runtime.taskKind, runtime.taskId),
+							...(await readTaskCurrentTokenUsage(runtime.jsonlPath)),
+						})),
+					);
+					const tokenSnapshot = {
+						timestampMs: Date.now(),
+						totalTokens: taskUsages.reduce((s, t) => s + t.totalTokens, 0),
+						cachedReadTokens: taskUsages.reduce(
+							(s, t) => s + t.cachedReadTokens,
+							0,
+						),
+						tasks: taskUsages,
+					};
+					ws.send(
+						JSON.stringify({
+							data: { ...dockerData, tokenSnapshot, activeJobCount: 1 },
+						}),
+					);
 				}
-
-				const containers = await resolveRunningContainers(
-					containerNames,
-					taskIdsByContainerName,
-				);
-				const data = await readDockerStats(containers);
-				ws.send(JSON.stringify({ data }));
 			} catch (error) {
 				ws.send(
 					JSON.stringify({
