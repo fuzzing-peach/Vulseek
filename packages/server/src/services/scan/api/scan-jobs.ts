@@ -33,6 +33,7 @@ export const findScanJobById = async (scanJobId: string) => {
 			.select({
 				inputTokens: tasks.inputTokens,
 				outputTokens: tasks.outputTokens,
+				cachedReadTokens: tasks.cachedReadTokens,
 				agentProfile: tasks.agentProfile,
 			})
 			.from(tasks)
@@ -41,7 +42,7 @@ export const findScanJobById = async (scanJobId: string) => {
 
 	let estimatedCost: number | null = null;
 	for (const row of taskRows) {
-		const cost = computeTaskCost(row.inputTokens, row.outputTokens, row.agentProfile);
+		const cost = computeTaskCost(row.inputTokens, row.outputTokens, row.cachedReadTokens, row.agentProfile);
 		if (cost != null) {
 			estimatedCost = (estimatedCost ?? 0) + cost;
 		}

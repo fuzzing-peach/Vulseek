@@ -27,6 +27,7 @@ const withEstimatedCost = <T extends Task>(task: T) => ({
 	estimatedCost: computeTaskCost(
 		task.inputTokens,
 		task.outputTokens,
+		task.cachedReadTokens,
 		task.agentProfile as TaskAgentProfileSnapshot | null,
 	),
 });
