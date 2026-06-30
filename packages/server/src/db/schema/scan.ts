@@ -1,6 +1,7 @@
 import { relations } from "drizzle-orm";
 import {
 	AnyPgColumn,
+	bigint,
 	index,
 	integer,
 	jsonb,
@@ -21,7 +22,7 @@ import {
 	ScanRuntimeSettingsSchema,
 } from "./shared";
 
-type TaskAgentProfileSnapshot = {
+export type TaskAgentProfileSnapshot = {
 	agentProfileId: string | null;
 	name: string | null;
 	provider: "codex" | "claude_code" | null;
@@ -29,6 +30,7 @@ type TaskAgentProfileSnapshot = {
 	homePath: string | null;
 	baseUrl: string | null;
 	model: string | null;
+	pricingProvider: string | null;
 	thinkingLevel: string | null;
 	thinkingLevelEnabled?: boolean | null;
 };
@@ -86,12 +88,12 @@ export const scanJobs = pgTable("scan_jobs", {
 	functionTasksTotal: integer("functionTasksTotal").notNull().default(0),
 	functionTasksCompleted: integer("functionTasksCompleted").notNull().default(0),
 	functionTasksFailed: integer("functionTasksFailed").notNull().default(0),
-	inputTokens: integer("input_tokens").notNull().default(0),
-	outputTokens: integer("output_tokens").notNull().default(0),
-	thoughtTokens: integer("thought_tokens").notNull().default(0),
-	totalTokens: integer("total_tokens").notNull().default(0),
-	cachedReadTokens: integer("cached_read_tokens").notNull().default(0),
-	cachedWriteTokens: integer("cached_write_tokens").notNull().default(0),
+	inputTokens: bigint("input_tokens", { mode: "number" }).notNull().default(0),
+	outputTokens: bigint("output_tokens", { mode: "number" }).notNull().default(0),
+	thoughtTokens: bigint("thought_tokens", { mode: "number" }).notNull().default(0),
+	totalTokens: bigint("total_tokens", { mode: "number" }).notNull().default(0),
+	cachedReadTokens: bigint("cached_read_tokens", { mode: "number" }).notNull().default(0),
+	cachedWriteTokens: bigint("cached_write_tokens", { mode: "number" }).notNull().default(0),
 	applicationId: text("applicationId").references(
 		() => applications.applicationId,
 		{
@@ -150,12 +152,12 @@ export const tasks = pgTable(
 			stageGroupInstanceId: text("stageGroupInstanceId"),
 			input: jsonb("input").$type<unknown | null>(),
 			output: jsonb("output").$type<unknown | null>(),
-			inputTokens: integer("input_tokens"),
-			outputTokens: integer("output_tokens"),
-			thoughtTokens: integer("thought_tokens"),
-			totalTokens: integer("total_tokens"),
-			cachedReadTokens: integer("cached_read_tokens"),
-			cachedWriteTokens: integer("cached_write_tokens"),
+			inputTokens: bigint("input_tokens", { mode: "number" }),
+			outputTokens: bigint("output_tokens", { mode: "number" }),
+			thoughtTokens: bigint("thought_tokens", { mode: "number" }),
+			totalTokens: bigint("total_tokens", { mode: "number" }),
+			cachedReadTokens: bigint("cached_read_tokens", { mode: "number" }),
+			cachedWriteTokens: bigint("cached_write_tokens", { mode: "number" }),
 			errorMessage: text("errorMessage"),
 		exitReason: text("exitReason").$type<
 			"agent_exit" | "leader_exit" | null

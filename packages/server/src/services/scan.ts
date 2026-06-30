@@ -10,7 +10,7 @@ import { nanoid } from "nanoid";
 import { SandboxAgent } from "sandbox-agent";
 import { Agent, type Dispatcher } from "undici";
 import { getGlobalContainerEnvironmentPairs } from "../utils/docker/utils";
-import { execAsync } from "../utils/process/execAsync";
+import { execAsync, execAsyncStream } from "../utils/process/execAsync";
 import { getAgentProfileById } from "./ai";
 import { findApplicationById } from "./application";
 import { findComposeById } from "./compose";
@@ -1630,6 +1630,7 @@ type CheckoutTask = {
 	enableSubmodules: boolean;
 	postCheckoutScript: string;
 	dockerfileTemplate: string;
+	localPath?: string;
 	stdout: string;
 	stderr: string;
 	errorMessage?: string;
@@ -1702,6 +1703,7 @@ export const resolveScanGitRepositoryContext = async (
 	let enableSubmodules = false;
 	let postCheckoutScript = "";
 	let imageNameSeed = "scan";
+	let localPath: string | null = null;
 
 	if (input.applicationId) {
 		const application = await findApplicationById(input.applicationId);
@@ -1767,6 +1769,10 @@ export const resolveScanGitRepositoryContext = async (
 							)
 						: "<GIT_URL>");
 				gitBranch = application.giteaBranch || "main";
+				break;
+			case "local":
+				localPath = application.localPath || null;
+				gitBranch = "main";
 				break;
 			default:
 				gitUrl = "<GIT_URL>";
@@ -1843,6 +1849,7 @@ export const resolveScanGitRepositoryContext = async (
 		gitTag,
 		enableSubmodules,
 		postCheckoutScript,
+		localPath,
 	};
 };
 
@@ -1857,6 +1864,7 @@ const resolveCheckoutContext = async (
 		gitTag,
 		enableSubmodules,
 		postCheckoutScript,
+		localPath,
 	} =
 		await resolveScanGitRepositoryContext(input);
 
@@ -1869,6 +1877,7 @@ const resolveCheckoutContext = async (
 		enableSubmodules,
 		postCheckoutScript,
 		dockerfileTemplate,
+		localPath,
 	};
 };
 
@@ -1944,7 +1953,23 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 			await resolveCodexAcpForkPatchPath(),
 			tempCodexAcpForkPatchPath,
 		);
-		await fs.writeFile(dockerfilePath, task.dockerfileTemplate, "utf-8");
+		let dockerfileContent = task.dockerfileTemplate;
+		if (task.localPath) {
+			// For local source: build image with empty /workspace/repo, then
+			// populate via docker run (host daemon can bind-mount host paths).
+			dockerfileContent = dockerfileContent.replace(
+				/FROM ubuntu:24\.04 AS repository-source[\s\S]*?(?=FROM tools AS final)/,
+				"FROM ubuntu:24.04 AS repository-source\nWORKDIR /workspace\nRUN mkdir -p /workspace/repo\n\n",
+			);
+			const latest = checkoutTasks.get(task.checkoutId);
+			if (latest) {
+				latest.stderr = appendLog(
+					latest.stderr,
+					`[checkout] local mode: will populate /workspace/repo from ${task.localPath} after image build\n`,
+				);
+			}
+		}
+		await fs.writeFile(dockerfilePath, dockerfileContent, "utf-8");
 		await new Promise<void>((resolve, reject) => {
 			const child = spawn("docker", args, {
 				stdio: ["ignore", "pipe", "pipe"],
@@ -1971,6 +1996,41 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 				reject(new Error(`docker build failed with code ${code}`));
 			});
 		});
+
+		if (task.localPath) {
+			// Populate /workspace/repo from host path via docker run.
+			// The host Docker daemon can bind-mount host paths directly.
+			const tempName = `vulseek-local-${task.checkoutId.replace(/[^a-z0-9]/g, "-").slice(0, 40)}`;
+			const appendToTask = (text: string) => {
+				const t = checkoutTasks.get(task.checkoutId);
+				if (t) t.stderr = appendLog(t.stderr, text);
+			};
+			appendToTask("[checkout] copying local repo into image via docker run...\n");
+			try {
+				await execAsyncStream(
+					`docker run --name ${tempName} -v ${task.localPath}:/tmp/localrepo:ro ${task.imageTag} bash -c "` +
+						`cp -a /tmp/localrepo/. /workspace/repo/ && ` +
+						`cd /workspace/repo && ` +
+						`git config --global --add safe.directory /workspace/repo && ` +
+						`if [ ! -d .git ]; then ` +
+						`  git init && ` +
+						`  git config user.email 'local@vulseek' && ` +
+						`  git config user.name 'Local Source' && ` +
+						`  git add -A && ` +
+						`  git commit -m 'local source snapshot' --allow-empty; ` +
+						`fi && ` +
+						`echo '[checkout] local copy complete'"`,
+					appendToTask,
+				);
+				appendToTask("[checkout] committing image...\n");
+				await execAsyncStream(
+					`docker commit ${tempName} ${task.imageTag}`,
+					appendToTask,
+				);
+			} finally {
+				await execAsync(`docker rm -f ${tempName}`).catch(() => {});
+			}
+		}
 
 		const latest = checkoutTasks.get(task.checkoutId);
 		if (latest) {
@@ -2005,6 +2065,7 @@ export const startCheckoutScanEnvironment = async (
 		enableSubmodules: context.enableSubmodules,
 		postCheckoutScript: context.postCheckoutScript,
 		dockerfileTemplate: context.dockerfileTemplate,
+		localPath: context.localPath || undefined,
 		stdout: "",
 		stderr: "",
 		startedAt: new Date().toISOString(),

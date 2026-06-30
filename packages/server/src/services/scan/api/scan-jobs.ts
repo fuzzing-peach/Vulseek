@@ -1,5 +1,9 @@
+import { db } from "@dokploy/server/db";
+import { tasks } from "@dokploy/server/db/schema";
 import type { apiCreateScanJob } from "@dokploy/server/db/schema";
+import { eq } from "drizzle-orm";
 import { DEFAULT_DELTA_COMMIT_WINDOW } from "../constants";
+import { computeTaskCost } from "../cost";
 import {
 	createScanJobRepo,
 	findScanJobByIdRepo,
@@ -22,12 +26,31 @@ export const createScanJob = async (input: typeof apiCreateScanJob._type) =>
 	});
 
 export const findScanJobById = async (scanJobId: string) => {
-	const scanJob = await findScanJobByIdRepo(scanJobId);
-	const claudeCachedReadTokens =
-		await sumClaudeCodeCachedReadTokensByScanJobIdRepo(scanJobId);
+	const [scanJob, claudeCachedReadTokens, taskRows] = await Promise.all([
+		findScanJobByIdRepo(scanJobId),
+		sumClaudeCodeCachedReadTokensByScanJobIdRepo(scanJobId),
+		db
+			.select({
+				inputTokens: tasks.inputTokens,
+				outputTokens: tasks.outputTokens,
+				agentProfile: tasks.agentProfile,
+			})
+			.from(tasks)
+			.where(eq(tasks.scanJobId, scanJobId)),
+	]);
+
+	let estimatedCost: number | null = null;
+	for (const row of taskRows) {
+		const cost = computeTaskCost(row.inputTokens, row.outputTokens, row.agentProfile);
+		if (cost != null) {
+			estimatedCost = (estimatedCost ?? 0) + cost;
+		}
+	}
+
 	return {
 		...scanJob,
 		inputTokens: scanJob.inputTokens + claudeCachedReadTokens,
+		estimatedCost,
 	};
 };
 

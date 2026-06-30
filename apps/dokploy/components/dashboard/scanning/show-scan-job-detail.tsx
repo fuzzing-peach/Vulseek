@@ -2790,6 +2790,16 @@ export const ShowScanJobDetail = ({
 														{formatTokenUsage(t, scanJob.thoughtTokens)}
 													</div>
 												</div>
+												{typeof scanJob.estimatedCost === "number" && scanJob.estimatedCost > 0 ? (
+													<div>
+														<div className="text-sm text-muted-foreground">
+															{scanT(t, "scan.field.estimatedCost", "Estimated Cost")}
+														</div>
+														<div className="font-medium">
+															${scanJob.estimatedCost.toFixed(4)}
+														</div>
+													</div>
+												) : null}
 											</div>
 										</div>
 										{scanJob.scanType === "delta" ? (

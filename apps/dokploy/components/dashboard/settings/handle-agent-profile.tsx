@@ -45,6 +45,7 @@ const Schema = z
 		baseUrl: z.string().url({ message: "Please enter a valid URL" }),
 		apiKey: z.string(),
 		model: z.string().min(1, { message: "Model is required" }),
+		pricingProvider: z.string().nullable().optional(),
 		thinkingLevel: z
 			.string()
 			.min(1, { message: "Thinking level is required" }),
@@ -130,6 +131,7 @@ export const HandleAgentProfile = ({
 			baseUrl: "https://api.openai.com/v1",
 			apiKey: "",
 			model: "gpt-5.4",
+			pricingProvider: "openai",
 			thinkingLevel: "medium",
 			thinkingLevelEnabled: true,
 			envs: "",
@@ -171,6 +173,7 @@ export const HandleAgentProfile = ({
 			baseUrl: source?.baseUrl ?? "https://api.openai.com/v1",
 			apiKey: source?.apiKey ?? "",
 			model: source?.model ?? "gpt-5.4",
+			pricingProvider: source?.pricingProvider ?? null,
 			thinkingLevel: source?.thinkingLevel ?? "medium",
 			thinkingLevelEnabled: source?.thinkingLevelEnabled ?? true,
 			envs: source?.envs ?? "",
@@ -182,12 +185,14 @@ export const HandleAgentProfile = ({
 		if (provider === "claude_code" && !agentProfileId && !data?.baseUrl) {
 			form.setValue("baseUrl", "https://api.anthropic.com");
 			form.setValue("model", "claude-sonnet-4-5");
+			if (!data?.pricingProvider) form.setValue("pricingProvider", "anthropic");
 		}
 		if (provider === "codex" && !agentProfileId && !data?.baseUrl) {
 			form.setValue("baseUrl", "https://api.openai.com/v1");
 			form.setValue("model", "gpt-5.4");
+			if (!data?.pricingProvider) form.setValue("pricingProvider", "openai");
 		}
-	}, [agentProfileId, data?.baseUrl, form, provider]);
+	}, [agentProfileId, data?.baseUrl, data?.pricingProvider, form, provider]);
 
 	useEffect(() => {
 		const textarea = envTextareaRef.current;
@@ -422,6 +427,42 @@ export const HandleAgentProfile = ({
 									</FormControl>
 									<FormDescription>
 										The model name used by the selected agent runtime
+									</FormDescription>
+									<FormMessage />
+								</FormItem>
+							)}
+						/>
+
+						<FormField
+							control={form.control}
+							name="pricingProvider"
+							render={({ field }) => (
+								<FormItem>
+									<FormLabel>Pricing Provider</FormLabel>
+									<Select
+										onValueChange={(v) => field.onChange(v === "__none__" ? null : v)}
+										value={field.value ?? "__none__"}
+									>
+										<FormControl>
+											<SelectTrigger>
+												<SelectValue placeholder="Select pricing provider" />
+											</SelectTrigger>
+										</FormControl>
+										<SelectContent>
+											<SelectItem value="__none__">Not specified</SelectItem>
+											<SelectItem value="anthropic">Anthropic</SelectItem>
+											<SelectItem value="openai">OpenAI</SelectItem>
+											<SelectItem value="google">Google</SelectItem>
+											<SelectItem value="x_ai">xAI</SelectItem>
+											<SelectItem value="groq">Groq</SelectItem>
+											<SelectItem value="cerebras">Cerebras</SelectItem>
+											<SelectItem value="cohere">Cohere</SelectItem>
+											<SelectItem value="fireworks">Fireworks</SelectItem>
+											<SelectItem value="deepseek">DeepSeek</SelectItem>
+										</SelectContent>
+									</Select>
+									<FormDescription>
+										Used to estimate API cost based on token usage
 									</FormDescription>
 									<FormMessage />
 								</FormItem>

@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm";
-import { boolean, pgEnum, pgTable, text } from "drizzle-orm/pg-core";
+import { boolean, pgEnum, pgTable, text, doublePrecision } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { nanoid } from "nanoid";
 import { z } from "zod";
@@ -48,6 +48,7 @@ export const agentProfiles = pgTable("agent_profiles", {
 	baseUrl: text("baseUrl").notNull(),
 	apiKey: text("apiKey").notNull(),
 	model: text("model").notNull(),
+	pricingProvider: text("pricing_provider"),
 	thinkingLevel: text("thinkingLevel").notNull().default("medium"),
 	thinkingLevelEnabled: boolean("thinkingLevelEnabled").notNull().default(true),
 	envs: text("envs").notNull().default(""),
@@ -100,6 +101,7 @@ const createAgentProfileSchema = createInsertSchema(agentProfiles, {
 	baseUrl: z.string().url({ message: "Please enter a valid URL" }),
 	apiKey: z.string(),
 	model: z.string().min(1, { message: "Model is required" }),
+	pricingProvider: z.string().nullable().optional(),
 	thinkingLevel: z.string().min(1, { message: "Thinking level is required" }),
 	thinkingLevelEnabled: z.boolean().default(true),
 	envs: z.string().optional().default(""),
@@ -115,6 +117,7 @@ export const apiCreateAgentProfile = createAgentProfileSchema
 		baseUrl: true,
 		apiKey: true,
 		model: true,
+		pricingProvider: true,
 		thinkingLevel: true,
 		thinkingLevelEnabled: true,
 		envs: true,

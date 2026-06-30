@@ -61,6 +61,7 @@ export type ScanJob = typeof scanJobs.$inferSelect & {
 	totalTokens: number;
 	cachedReadTokens: number;
 	cachedWriteTokens: number;
+	estimatedCost?: number | null;
 	repositoryTaskId: string | null;
 	repositoryTaskStatus: typeof tasks.$inferSelect.status;
 };
@@ -169,6 +170,7 @@ export type AgentProfileLike = {
 	baseUrl: string;
 	apiKey: string;
 	model: string;
+	pricingProvider?: string | null;
 	thinkingLevel: string;
 	thinkingLevelEnabled: boolean;
 	envs: string;

@@ -15,29 +15,40 @@ import {
 	updateTaskStatusRepo,
 } from "../persistence/task.repo";
 import type { Task } from "../types";
+import { computeTaskCost } from "../cost";
 import {
 	normalizeTaskApiTokenUsage,
 	normalizeTasksApiTokenUsage,
 } from "./token-usage";
+import type { TaskAgentProfileSnapshot } from "@dokploy/server/db/schema";
+
+const withEstimatedCost = <T extends Task>(task: T) => ({
+	...task,
+	estimatedCost: computeTaskCost(
+		task.inputTokens,
+		task.outputTokens,
+		task.agentProfile as TaskAgentProfileSnapshot | null,
+	),
+});
 
 export const createTask = async (input: Parameters<typeof createTaskRepo>[0]) =>
 	await createTaskRepo(input);
 
 export const findTaskById = async (taskId: string) =>
-	normalizeTaskApiTokenUsage(await findTaskByIdRepo(taskId));
+	withEstimatedCost(normalizeTaskApiTokenUsage(await findTaskByIdRepo(taskId)));
 
 export const findTasksByScanJobId = async (scanJobId: string) =>
-	normalizeTasksApiTokenUsage(await listTasksByScanJobIdRepo(scanJobId));
+	normalizeTasksApiTokenUsage(await listTasksByScanJobIdRepo(scanJobId)).map(withEstimatedCost);
 
 export const findChildTasksByParentTaskId = async (parentTaskId: string) =>
 	normalizeTasksApiTokenUsage(
 		await listChildTasksByParentTaskIdRepo(parentTaskId),
-	);
+	).map(withEstimatedCost);
 
 export const findTasksByScanJobAndStage = async (input: {
 	scanJobId: string;
 	stageName: string;
-}) => normalizeTasksApiTokenUsage(await listTasksByScanJobAndStageRepo(input));
+}) => normalizeTasksApiTokenUsage(await listTasksByScanJobAndStageRepo(input)).map(withEstimatedCost);
 
 export const updateTask = async (taskId: string, patch: Partial<Task>) =>
 	await updateTaskRepo(taskId, patch);
