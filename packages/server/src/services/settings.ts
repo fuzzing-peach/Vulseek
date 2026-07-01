@@ -5,6 +5,7 @@ import {
 	execAsync,
 	execAsyncRemote,
 } from "@dokploy/server/utils/process/execAsync";
+import { type Dispatcher, ProxyAgent, fetch as undiciFetch } from "undici";
 import {
 	initializeStandaloneTraefik,
 	initializeTraefikService,
@@ -30,6 +31,36 @@ export const getDokployImageTag = () => {
 
 export const getDokployImage = () => {
 	return `dokploy/dokploy:${getDokployImageTag()}`;
+};
+
+let proxyAgentCache: { proxyUrl: string; agent: Dispatcher } | null = null;
+
+const getProxyUrl = () =>
+	process.env.HTTPS_PROXY ||
+	process.env.https_proxy ||
+	process.env.HTTP_PROXY ||
+	process.env.http_proxy ||
+	process.env.ALL_PROXY ||
+	process.env.all_proxy;
+
+const fetchDockerHub = (url: string) => {
+	const proxyUrl = getProxyUrl();
+	if (!proxyUrl) {
+		return fetch(url, {
+			method: "GET",
+			headers: { "Content-Type": "application/json" },
+		});
+	}
+
+	if (proxyAgentCache?.proxyUrl !== proxyUrl) {
+		proxyAgentCache = { proxyUrl, agent: new ProxyAgent(proxyUrl) };
+	}
+
+	return undiciFetch(url, {
+		method: "GET",
+		headers: { "Content-Type": "application/json" },
+		dispatcher: proxyAgentCache.agent,
+	});
 };
 
 export const pullLatestRelease = async () => {
@@ -72,10 +103,7 @@ export const getUpdateData = async (): Promise<IUpdateData> => {
 	let url: string | null = `${baseUrl}?page_size=100`;
 	let allResults: { digest: string; name: string }[] = [];
 	while (url) {
-		const response = await fetch(url, {
-			method: "GET",
-			headers: { "Content-Type": "application/json" },
-		});
+		const response = await fetchDockerHub(url);
 
 		const data = (await response.json()) as {
 			next: string | null;
@@ -266,7 +294,10 @@ export const resolveDockerResourceName = async (
 };
 
 export const getTraefikResourceName = async (serverId?: string) =>
-	await resolveDockerResourceName(["dokploy-traefik", "dokploy-traefik-dev"], serverId);
+	await resolveDockerResourceName(
+		["dokploy-traefik", "dokploy-traefik-dev"],
+		serverId,
+	);
 
 export const getDockerResourceType = async (
 	resourceName: string,

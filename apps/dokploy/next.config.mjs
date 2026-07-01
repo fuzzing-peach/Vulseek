@@ -6,9 +6,6 @@
 /** @type {import("next").NextConfig} */
 const nextConfig = {
 	reactStrictMode: true,
-	eslint: {
-		ignoreDuringBuilds: true,
-	},
 	typescript: {
 		ignoreBuildErrors: true,
 	},
@@ -22,7 +19,7 @@ const nextConfig = {
 		locales: ["en"],
 		defaultLocale: "en",
 	},
-	allowedDevOrigins: ["211.65.193.214"],
+	allowedDevOrigins: ["211.65.193.214", "100.89.7.38"],
 };
 
 export default nextConfig;
