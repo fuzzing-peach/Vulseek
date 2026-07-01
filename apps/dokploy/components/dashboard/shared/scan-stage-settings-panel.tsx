@@ -15,6 +15,7 @@ import {
 	CardHeader,
 	CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
 	Dialog,
 	DialogContent,
@@ -26,7 +27,6 @@ import {
 import {
 	Form,
 	FormControl,
-	FormDescription,
 	FormField,
 	FormItem,
 	FormLabel,
@@ -263,6 +263,12 @@ const StageSettingsFormSchema = z.object({
 
 type StageSettingsForm = z.infer<typeof StageSettingsFormSchema>;
 
+const BatchEditFormSchema = z.object({
+	agentProfileId: z.string().min(1),
+});
+
+type BatchEditForm = z.infer<typeof BatchEditFormSchema>;
+
 const getStageAgentProfileId = (
 	target: ScanStageSettingsTarget,
 	stage: StageDefinition,
@@ -291,6 +297,10 @@ export const ScanStageSettingsPanel = ({
 	const [selectedStageName, setSelectedStageName] = useState<string | null>(
 		null,
 	);
+	const [checkedStageNames, setCheckedStageNames] = useState<Set<string>>(
+		new Set(),
+	);
+	const [isBatchEditOpen, setIsBatchEditOpen] = useState(false);
 	const [isSaving, setIsSaving] = useState(false);
 	const enabledProfiles = useMemo(
 		() => agentProfiles?.filter((profile) => profile.isEnabled) ?? [],
@@ -305,6 +315,31 @@ export const ScanStageSettingsPanel = ({
 		},
 		resolver: zodResolver(StageSettingsFormSchema),
 	});
+
+	const batchForm = useForm<BatchEditForm>({
+		defaultValues: { agentProfileId: "" },
+		resolver: zodResolver(BatchEditFormSchema),
+	});
+
+	const allChecked =
+		checkedStageNames.size === STAGES.length && STAGES.length > 0;
+	const someChecked =
+		checkedStageNames.size > 0 && checkedStageNames.size < STAGES.length;
+
+	const toggleAll = (checked: boolean) => {
+		setCheckedStageNames(
+			checked ? new Set(STAGES.map((s) => s.stageName)) : new Set(),
+		);
+	};
+
+	const toggleStage = (stageName: string, checked: boolean) => {
+		setCheckedStageNames((prev) => {
+			const next = new Set(prev);
+			if (checked) next.add(stageName);
+			else next.delete(stageName);
+			return next;
+		});
+	};
 
 	const rows = useMemo(
 		() =>
@@ -378,9 +413,34 @@ export const ScanStageSettingsPanel = ({
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
+				{checkedStageNames.size > 0 && (
+					<div className="flex items-center justify-between mb-3 px-1">
+						<span className="text-sm text-muted-foreground">
+							{checkedStageNames.size} stage
+							{checkedStageNames.size > 1 ? "s" : ""} selected
+						</span>
+						<Button
+							type="button"
+							size="sm"
+							onClick={() => {
+								batchForm.reset({ agentProfileId: enabledProfiles[0]?.agentProfileId ?? "" });
+								setIsBatchEditOpen(true);
+							}}
+						>
+							Edit Selected ({checkedStageNames.size})
+						</Button>
+					</div>
+				)}
 				<Table>
 					<TableHeader>
 						<TableRow>
+							<TableHead className="w-10">
+								<Checkbox
+									checked={allChecked || (someChecked ? "indeterminate" : false)}
+									onCheckedChange={(v) => toggleAll(Boolean(v))}
+									aria-label="Select all stages"
+								/>
+							</TableHead>
 							<TableHead>Stage</TableHead>
 							<TableHead>Agent Profile</TableHead>
 							<TableHead>Concurrency</TableHead>
@@ -390,6 +450,15 @@ export const ScanStageSettingsPanel = ({
 					<TableBody>
 						{rows.map((stage) => (
 							<TableRow key={stage.stageName}>
+								<TableCell>
+									<Checkbox
+										checked={checkedStageNames.has(stage.stageName)}
+										onCheckedChange={(v) =>
+											toggleStage(stage.stageName, Boolean(v))
+										}
+										aria-label={`Select ${stage.label}`}
+									/>
+								</TableCell>
 								<TableCell>
 									<div className="font-medium">{stage.label}</div>
 									<div className="text-xs text-muted-foreground">
@@ -533,6 +602,104 @@ export const ScanStageSettingsPanel = ({
 								isLoading={isSaving}
 							>
 								Save
+							</Button>
+						</DialogFooter>
+					</DialogContent>
+				</Dialog>
+
+				<Dialog
+					open={isBatchEditOpen}
+					onOpenChange={(open) => {
+						if (!open) setIsBatchEditOpen(false);
+					}}
+				>
+					<DialogContent>
+						<DialogHeader>
+							<DialogTitle>
+								Edit {checkedStageNames.size} Stage
+								{checkedStageNames.size > 1 ? "s" : ""}
+							</DialogTitle>
+							<DialogDescription>
+								The selected agent profile will be applied to all selected
+								stages. Each stage keeps its existing concurrency setting.
+							</DialogDescription>
+						</DialogHeader>
+						<Form {...batchForm}>
+							<form
+								id="batch-stage-settings-form"
+								onSubmit={batchForm.handleSubmit(async (values) => {
+									if (!target) return;
+									setIsSaving(true);
+									try {
+										const nextScanStageSettings = {
+											...(target.scanStageSettings ?? {}),
+										};
+										for (const stageName of checkedStageNames) {
+											nextScanStageSettings[stageName] = {
+												...nextScanStageSettings[stageName],
+												agentProfileId: values.agentProfileId,
+											};
+										}
+										await onSave({ scanStageSettings: nextScanStageSettings });
+										toast.success(
+											`Agent profile applied to ${checkedStageNames.size} stage${checkedStageNames.size > 1 ? "s" : ""}`,
+										);
+										setIsBatchEditOpen(false);
+										setCheckedStageNames(new Set());
+									} catch {
+										toast.error("Failed to update stage settings");
+									} finally {
+										setIsSaving(false);
+									}
+								})}
+							>
+								<FormField
+									control={batchForm.control}
+									name="agentProfileId"
+									render={({ field }) => (
+										<FormItem>
+											<FormLabel>Agent Profile</FormLabel>
+											<Select
+												onValueChange={field.onChange}
+												value={field.value}
+											>
+												<FormControl>
+													<SelectTrigger>
+														<SelectValue placeholder="Select an agent profile" />
+													</SelectTrigger>
+												</FormControl>
+												<SelectContent>
+													{enabledProfiles.map((profile) => (
+														<SelectItem
+															key={profile.agentProfileId}
+															value={profile.agentProfileId}
+														>
+															{profile.name}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+											<FormMessage />
+										</FormItem>
+									)}
+								/>
+							</form>
+						</Form>
+						<DialogFooter>
+							<Button
+								type="button"
+								variant="secondary"
+								onClick={() => setIsBatchEditOpen(false)}
+							>
+								Cancel
+							</Button>
+							<Button
+								type="submit"
+								form="batch-stage-settings-form"
+								isLoading={isSaving}
+							>
+								Apply to {checkedStageNames.size} Stage
+								{checkedStageNames.size > 1 ? "s" : ""}
 							</Button>
 						</DialogFooter>
 					</DialogContent>

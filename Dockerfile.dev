@@ -78,4 +78,4 @@ EXPOSE 5555
 
 # 使用开发模式启动，支持热重载
 # 注意：需要在 docker-compose.yml 中挂载源代码卷
-CMD ["pnpm", "dokploy:dev:turbopack"]
+CMD ["sh", "-c", "rm -rf /app/apps/dokploy/.next && pnpm dokploy:dev:turbopack"]
