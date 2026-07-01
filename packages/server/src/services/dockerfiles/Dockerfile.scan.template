@@ -142,12 +142,20 @@ RUN --mount=type=cache,id=dokploy-uv-cache,target=/root/.cache/uv,sharing=locked
     && serena init -b LSP \
     && serena setup codex \
     && serena setup claude-code \
-    && sed -i 's#^ls_specific_settings: {}#ls_specific_settings:\n  cpp:\n    ls_path: "/usr/bin/clangd"#' /root/.serena/serena_config.yml \
+    && sed -i 's#^ls_specific_settings: {}#ls_specific_settings:\n  cpp:\n    ls_path: "/usr/local/bin/clangd-wrapper"#' /root/.serena/serena_config.yml \
     && sed -i 's#^ignored_paths: \[\]#ignored_paths:\n- "/scan-context"\n- "/scan-context/**"#' /root/.serena/serena_config.yml \
     && sed -i 's#^project_serena_folder_location:.*#project_serena_folder_location: "/scan-context/.serena"#' /root/.serena/serena_config.yml \
-    && serena --help >/dev/null \
-    && mkdir -p /root/.config/clangd \
-    && printf 'Index:\n  Background: Skip\n' > /root/.config/clangd/config.yaml
+    && serena --help >/dev/null
+
+# clangd wrapper: solidlsp hardcodes --background-index; this wrapper strips it and forces --background-index=0
+RUN echo '#!/bin/bash' > /usr/local/bin/clangd-wrapper \
+    && echo 'args=()' >> /usr/local/bin/clangd-wrapper \
+    && echo 'for arg in "$@"; do' >> /usr/local/bin/clangd-wrapper \
+    && echo '    [ "$arg" = "--background-index" ] && continue' >> /usr/local/bin/clangd-wrapper \
+    && echo '    args+=("$arg")' >> /usr/local/bin/clangd-wrapper \
+    && echo 'done' >> /usr/local/bin/clangd-wrapper \
+    && echo 'exec /usr/bin/clangd --background-index=0 "${args[@]}"' >> /usr/local/bin/clangd-wrapper \
+    && chmod +x /usr/local/bin/clangd-wrapper
 
 # CodeQL CLI
 RUN mkdir -p /opt/codeql \
