@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  dokploy-release:
+    image: dokploy/dokploy:v0.25.8
+    container_name: dokploy-release
+    restart: unless-stopped
+    ports:
+      - "23001:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - dokploy_release_data:/etc/dokploy
+      - docker_release_config:/root/.docker
+      # scan runtime context
+      - ${DOKPLOY_SCAN_CONTEXT_HOST_PATH:-/data/exp/dkzou/dokploy-data}:/scan-context
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://dokploy:dokploy_dev_password@dokploy-postgres-dev:5432/dokploy
+      - REDIS_URL=redis://dokploy-redis-dev:6379
+      - ADVERTISE_ADDR=${ADVERTISE_ADDR:-127.0.0.1}
+      - DOKPLOY_SCAN_CONTEXT_HOST_PATH=${DOKPLOY_SCAN_CONTEXT_HOST_PATH:-/data/exp/dkzou/dokploy-data}
+    privileged: true
+    networks:
+      - dokploy-dev-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  dokploy_release_data:
+  docker_release_config:
+
+networks:
+  dokploy-dev-network:
+    external: true
