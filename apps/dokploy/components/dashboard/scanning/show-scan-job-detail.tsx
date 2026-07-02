@@ -4288,41 +4288,6 @@ export const ShowScanJobDetail = ({
 												</select>
 											</div>
 											<div className="flex flex-wrap items-center gap-2">
-												{selectedFinishedTaskCount > 0 ? (
-													<>
-														<div className="text-muted-foreground">
-															{scanT(
-																t,
-																"scan.tasks.selectedFinished",
-																"{{count}} tasks selected",
-																{ count: selectedFinishedTaskCount },
-															)}
-														</div>
-														<Button
-															type="button"
-															variant="outline"
-															size="sm"
-															onClick={() =>
-																void handleRerunSelectedFinishedTasks()
-															}
-															disabled={
-																rerunTaskMutation.isLoading ||
-																bulkRerunningTaskIds.size > 0
-															}
-														>
-															{bulkRerunningTaskIds.size > 0 ? (
-																<Loader2 className="mr-2 size-4 animate-spin" />
-															) : (
-																<RefreshCw className="mr-2 size-4" />
-															)}
-															{scanT(
-																t,
-																"scan.task.rerunSelected",
-																"Rerun selected",
-															)}
-														</Button>
-													</>
-												) : null}
 												<div className="text-muted-foreground">
 													{scanT(
 														t,
