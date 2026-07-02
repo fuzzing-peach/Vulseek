@@ -233,8 +233,7 @@ Do not embed function objects inside the module artifact.
 Use tools by purpose:
 
 1. Use tree-sitter for concrete function inventory.
-2. Use Serena for symbol-aware lookup and navigation when available.
-3. Use `rg`, `find`, `sed`, `awk`, or `semgrep` only as fallback or lightweight support.
+2. Use `rg`, `find`, `sed`, `awk`, or `semgrep` only as fallback or lightweight support.
 
 Do not turn lookup into global program analysis.
 

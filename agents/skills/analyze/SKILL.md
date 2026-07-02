@@ -275,9 +275,8 @@ Useful tasks:
 
 Lookup priority for this entire analysis:
 
-1. prefer Serena for symbol lookup, function lookup, caller/callee navigation, and related code discovery
-2. use `semgrep` for structural search patterns when Serena is not enough
-3. use `rg`, `grep`, or similar text tools as fallback
+1. use `semgrep` for structural search patterns
+2. use `rg`, `grep`, or similar text tools as fallback
 
 For this step, collect:
 
@@ -310,7 +309,7 @@ If CodeQL is unavailable or broken:
 
 - perform manual path tracing with `grep`, `rg`, call-chain inspection, and source reading
 - continue tracing step by step instead of giving up
-- when doing manual path tracing, still prefer Serena first for symbol-aware navigation before falling back to raw grep
+- when doing manual path tracing, use `semgrep` for structural patterns, then fall back to `rg` / `grep`
 
 For each candidate path, collect:
 

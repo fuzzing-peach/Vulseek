@@ -44,15 +44,7 @@ Always make an explicit candidate decision:
 
 Use tools only to inspect the assigned function and nearby context.
 
-Prefer Serena for:
-
-- function body lookup
-- nearby symbols
-- direct callers or callees
-- sibling functions
-- local helpers
-
-Use `rg`, `sed`, `awk`, `find`, or `semgrep` only as lightweight support.
+Use `rg`, `sed`, `awk`, `find`, or `semgrep` for lookup and lightweight support.
 
 Do not run CodeQL, whole-program static analysis, fuzzing, builds, tests, package managers, or external-network commands unless the stage prompt explicitly allows it.
 

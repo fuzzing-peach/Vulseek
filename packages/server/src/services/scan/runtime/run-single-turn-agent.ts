@@ -50,7 +50,6 @@ const RUNTIME_CUSTOM_SKILLS = [
 	"verify",
 	"search-registries",
 	"tree-sitter",
-	"serena",
 ] as const;
 
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
