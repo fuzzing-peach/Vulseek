@@ -738,7 +738,7 @@ const getTaskStageLabel = (t: ScanTranslation, stage?: string) => {
 };
 
 const RERUNNABLE_CANDIDATE_STATUSES = new Set(["completed", "failed", "exited"]);
-const RERUNNABLE_TASK_STATUSES = new Set(["completed", "failed", "exited"]);
+const RERUNNABLE_TASK_STATUSES = new Set(["completed", "failed", "exited", "canceled"]);
 
 const buildCandidateReanalysisKey = (input: {
 	vulnerabilityCandidateId: string;
