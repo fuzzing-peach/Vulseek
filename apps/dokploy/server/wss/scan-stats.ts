@@ -413,8 +413,8 @@ export const setupScanStatsMonitoringSocketServer = (
 			return;
 		}
 
-		const formatTaskLabel = (taskKind: string, taskId: string) =>
-			`${taskKind.replace(/_/g, " ")} ${taskId.slice(0, 8)}`;
+		const formatTaskLabel = (stageName: string, taskId: string) =>
+			`${stageName.replace(/-/g, " ")} ${taskId.slice(0, 8)}`;
 
 		let isSampling = false;
 		const sampleAndSend = async () => {
@@ -463,7 +463,7 @@ export const setupScanStatsMonitoringSocketServer = (
 					const taskUsages = await Promise.all(
 						allRuntimes.map(async (runtime) => ({
 							taskId: runtime.taskId,
-							label: formatTaskLabel(runtime.taskKind, runtime.taskId),
+							label: formatTaskLabel(runtime.stageName, runtime.taskId),
 							...(await readTaskCurrentTokenUsage(runtime.jsonlPath)),
 						})),
 					);
@@ -516,7 +516,7 @@ export const setupScanStatsMonitoringSocketServer = (
 									{
 										taskId: route.taskId,
 										label: runtime
-											? formatTaskLabel(runtime.taskKind, runtime.taskId)
+											? formatTaskLabel(runtime.stageName, runtime.taskId)
 											: route.taskId.slice(0, 8),
 										...taskUsage,
 									},
@@ -544,7 +544,7 @@ export const setupScanStatsMonitoringSocketServer = (
 					const taskUsages = await Promise.all(
 						runtimes.map(async (runtime) => ({
 							taskId: runtime.taskId,
-							label: formatTaskLabel(runtime.taskKind, runtime.taskId),
+							label: formatTaskLabel(runtime.stageName, runtime.taskId),
 							...(await readTaskCurrentTokenUsage(runtime.jsonlPath)),
 						})),
 					);

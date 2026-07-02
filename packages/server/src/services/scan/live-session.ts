@@ -211,6 +211,7 @@ export type SandboxAgentLiveSession = {
 export type SandboxAgentTaskRuntime = {
 	taskId: string;
 	scanJobId: string;
+	stageName: string;
 	taskKind:
 		| "delta_scoping"
 		| "repository_scanning"
@@ -402,6 +403,7 @@ const buildSandboxAgentTaskRuntime = async (
 	return {
 		taskId: task.taskId,
 		scanJobId: task.scanJobId,
+		stageName: task.stageName,
 		taskKind,
 		status: task.status,
 		containerName: task.containerName,
