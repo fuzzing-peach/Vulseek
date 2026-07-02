@@ -14,7 +14,6 @@ Target commit: {{targetCommit}}.
 Repository state JSON: {{repositoryStatePath}}.
 Use the scan-repository skill for module selection principles and output expectations.
 Do not pull external CVE, PR, issue, registry, GitHub, or web intelligence in this stage.
-Do not use Serena in this stage.
 Use shell inspection commands such as git ls-tree, find, rg, sed, and awk. Inspect enough repository structure and source content to justify module boundaries.
 Apply the scan-repository skill's runtime/security surface splitting rules before writing module artifacts.
 Write the repository object to /task/repository.json.

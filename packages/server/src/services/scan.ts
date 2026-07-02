@@ -257,7 +257,6 @@ const RUNTIME_CUSTOM_SKILLS = [
 	"verify",
 	"search-registries",
 	"tree-sitter",
-	"serena",
 ] as const;
 
 type JsonRpcMessage = {
