@@ -1120,7 +1120,7 @@ export const buildStructuredOutputPromptSuffix = (
 };
 
 const resolveStageContainerRuntime = async (input: StageContainerInput) => {
-	const { imageTag, projectName, serviceName } =
+	const { imageTag, projectName, serviceName, target } =
 		await resolveScanExecutionContext(input.scanJob);
 	const agentsDir = await resolveAgentsDirectory();
 	const hostProfileDir = await resolveProjectProfileHostPath({
@@ -1167,6 +1167,13 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		usageFileName: runtimeFileNames.usage,
 	});
 
+	const memoryArgs = [
+		target.memoryLimit ? `--memory ${target.memoryLimit}` : null,
+		target.memoryReservation ? `--memory-reservation ${target.memoryReservation}` : null,
+	]
+		.filter(Boolean)
+		.join(" ");
+
 	return {
 		imageTag,
 		agentsDir,
@@ -1182,6 +1189,7 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		},
 		containerNetworkArg,
 		containerEnvArgs,
+		memoryArgs,
 		jsonlPath,
 		textPath,
 		stderrPath,
@@ -1265,7 +1273,7 @@ export const startContainer = async (input: StageContainerInput) => {
 				containerName: input.containerName,
 				taskId: input.taskId,
 				logPath,
-				command: `docker run -d --init --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.agentHomeHostMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
+				command: `docker run -d --init --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.memoryArgs} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.agentHomeHostMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
 			}),
 	);
 
