@@ -1441,6 +1441,7 @@ const RERUNNABLE_TASK_STATUSES = new Set<Task["status"]>([
 	"completed",
 	"failed",
 	"exited",
+	"canceled",
 ]);
 
 const RERUNNABLE_TASK_STAGE_NAMES = new Set<Task["stageName"]>([
@@ -1572,7 +1573,7 @@ export const rerunScanTask = async (taskId: string) => {
 	if (!RERUNNABLE_TASK_STATUSES.has(originalTask.status)) {
 		throw new TRPCError({
 			code: "CONFLICT",
-			message: "Only completed, failed, or exited tasks can be rerun",
+			message: "Only completed, failed, exited, or canceled tasks can be rerun",
 		});
 	}
 	if (!RERUNNABLE_TASK_STAGE_NAMES.has(originalTask.stageName)) {
