@@ -1460,6 +1460,106 @@ const RERUNNABLE_TASK_STAGE_NAMES = new Set<Task["stageName"]>([
 	SCAN_STAGE_IDS.triage,
 ]);
 
+const getTaskHostDir = (input: {
+	projectProfileHostContextRoot: string;
+	task: Task;
+}) =>
+	path.join(
+		input.projectProfileHostContextRoot,
+		"jobs",
+		input.task.scanJobId,
+		resolveTaskRootSegment(
+			input.task.stageName,
+			input.task.name,
+			input.task.taskId,
+		),
+	);
+
+const taskHasInputsDir = async (taskDir: string) => {
+	const stat = await fs.stat(path.join(taskDir, "inputs")).catch(() => null);
+	return stat?.isDirectory() ?? false;
+};
+
+const getRerunBaseTaskName = (name: string) =>
+	name.replace(/(?: \(rerun\))+$/, "");
+
+const findRerunSourceTaskWithInputs = async (input: {
+	projectProfileHostContextRoot: string;
+	originalTask: Task;
+}) => {
+	const originalTaskDir = getTaskHostDir({
+		projectProfileHostContextRoot: input.projectProfileHostContextRoot,
+		task: input.originalTask,
+	});
+	if (await taskHasInputsDir(originalTaskDir)) {
+		return input.originalTask;
+	}
+
+	const baseName = getRerunBaseTaskName(input.originalTask.name);
+	const tasks = await listTasksByScanJobIdRepo(input.originalTask.scanJobId);
+	for (const task of tasks) {
+		if (task.taskId === input.originalTask.taskId) {
+			continue;
+		}
+		if (task.stageName !== input.originalTask.stageName) {
+			continue;
+		}
+		if (task.parentTaskId !== input.originalTask.parentTaskId) {
+			continue;
+		}
+		if (getRerunBaseTaskName(task.name) !== baseName) {
+			continue;
+		}
+		if (task.createdAt > input.originalTask.createdAt) {
+			continue;
+		}
+
+		const taskDir = getTaskHostDir({
+			projectProfileHostContextRoot: input.projectProfileHostContextRoot,
+			task,
+		});
+		if (await taskHasInputsDir(taskDir)) {
+			return task;
+		}
+	}
+
+	return null;
+};
+
+const copyTaskInputsForRerun = async (input: {
+	scanJob: Awaited<ReturnType<typeof findScanJobByIdRepo>>;
+	originalTask: Task;
+	rerunTask: Task;
+}) => {
+	const projectProfileHostContextRoot =
+		await resolveRequiredProjectProfileHostContextRootByScanJob(input.scanJob);
+	const sourceTask = await findRerunSourceTaskWithInputs({
+		projectProfileHostContextRoot,
+		originalTask: input.originalTask,
+	});
+	if (!sourceTask) {
+		return;
+	}
+
+	const sourceTaskDir = getTaskHostDir({
+		projectProfileHostContextRoot,
+		task: sourceTask,
+	});
+	const rerunTaskDir = getTaskHostDir({
+		projectProfileHostContextRoot,
+		task: input.rerunTask,
+	});
+	const sourceInputsDir = path.join(sourceTaskDir, "inputs");
+	const rerunInputsDir = path.join(rerunTaskDir, "inputs");
+
+	await fs.rm(rerunInputsDir, { recursive: true, force: true }).catch(() => {});
+	await fs.mkdir(rerunTaskDir, { recursive: true });
+	await fs.cp(sourceInputsDir, rerunInputsDir, {
+		recursive: true,
+		force: true,
+	});
+};
+
 export const rerunScanTask = async (taskId: string) => {
 	const originalTask = await findTaskByIdRepo(taskId);
 	const scanJob = await findScanJobByIdRepo(originalTask.scanJobId);
@@ -1467,12 +1567,6 @@ export const rerunScanTask = async (taskId: string) => {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
 			message: "Task rerun is only supported for full or rule scan jobs",
-		});
-	}
-	if (scanJob.status === "canceled") {
-		throw new TRPCError({
-			code: "BAD_REQUEST",
-			message: "Canceled scan jobs cannot rerun tasks",
 		});
 	}
 	if (!RERUNNABLE_TASK_STATUSES.has(originalTask.status)) {
@@ -1501,8 +1595,9 @@ export const rerunScanTask = async (taskId: string) => {
 		forkedFromThreadId: originalTask.forkedFromThreadId,
 	});
 
+	await copyTaskInputsForRerun({ scanJob, originalTask, rerunTask: task });
 	await enqueueRetriedTask(task.scanJobId, task);
-	if (scanJob.status === "finished") {
+	if (scanJob.status === "finished" || scanJob.status === "canceled") {
 		await resetScanJobForRetryRepo(scanJob.scanJobId, {
 			status: "pending",
 			errorMessage: null,

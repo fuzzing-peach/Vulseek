@@ -1343,6 +1343,9 @@ export const ShowScanJobDetail = ({
 	const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(
 		() => new Set(),
 	);
+	const [selectedFinishedTaskIds, setSelectedFinishedTaskIds] = useState<
+		Set<string>
+	>(() => new Set());
 	const [isCandidateExportDialogOpen, setIsCandidateExportDialogOpen] =
 		useState(false);
 	const [isEvaluateDialogOpen, setIsEvaluateDialogOpen] = useState(false);
@@ -1480,6 +1483,9 @@ export const ShowScanJobDetail = ({
 		string | null
 	>(null);
 	const [rerunningTaskId, setRerunningTaskId] = useState<string | null>(null);
+	const [bulkRerunningTaskIds, setBulkRerunningTaskIds] = useState<Set<string>>(
+		() => new Set(),
+	);
 	const rootDirectoryQuery = api.scan.listDirectory.useQuery(
 		{ scanJobId },
 		{
@@ -1765,6 +1771,30 @@ export const ShowScanJobDetail = ({
 			items,
 		};
 	}, [finishedTaskPage, finishedTaskPageSize, terminalTasks]);
+	const currentPageRerunnableFinishedTaskIds = useMemo(
+		() =>
+			finishedTaskPagination.items
+				.filter((task) => RERUNNABLE_TASK_STATUSES.has(task.status))
+				.map((task) => task.taskId),
+		[finishedTaskPagination.items],
+	);
+	const selectedCurrentPageFinishedTasks = useMemo(
+		() =>
+			finishedTaskPagination.items.filter((task) =>
+				selectedFinishedTaskIds.has(task.taskId),
+			),
+		[finishedTaskPagination.items, selectedFinishedTaskIds],
+	);
+	const selectedFinishedTaskCount = selectedCurrentPageFinishedTasks.length;
+	const hasCurrentPageRerunnableFinishedTasks =
+		currentPageRerunnableFinishedTaskIds.length > 0;
+	const areAllCurrentPageFinishedTasksSelected =
+		hasCurrentPageRerunnableFinishedTasks &&
+		currentPageRerunnableFinishedTaskIds.every((taskId) =>
+			selectedFinishedTaskIds.has(taskId),
+		);
+	const areSomeCurrentPageFinishedTasksSelected =
+		selectedFinishedTaskCount > 0 && !areAllCurrentPageFinishedTasksSelected;
 
 	useEffect(() => {
 		if (runningTaskPage !== runningTaskPagination.page) {
@@ -1777,6 +1807,22 @@ export const ShowScanJobDetail = ({
 			setFinishedTaskPage(finishedTaskPagination.page);
 		}
 	}, [finishedTaskPage, finishedTaskPagination.page]);
+
+	useEffect(() => {
+		const currentPageIds = new Set(currentPageRerunnableFinishedTaskIds);
+		setSelectedFinishedTaskIds((current) => {
+			let changed = false;
+			const next = new Set<string>();
+			for (const taskId of current) {
+				if (currentPageIds.has(taskId)) {
+					next.add(taskId);
+				} else {
+					changed = true;
+				}
+			}
+			return changed ? next : current;
+		});
+	}, [currentPageRerunnableFinishedTaskIds]);
 
 	useEffect(() => {
 		if (
@@ -1906,6 +1952,89 @@ export const ShowScanJobDetail = ({
 			);
 		} finally {
 			setRerunningTaskId((current) => (current === taskId ? null : current));
+		}
+	};
+
+	const toggleFinishedTaskSelection = (taskId: string) => {
+		setSelectedFinishedTaskIds((current) => {
+			const next = new Set(current);
+			if (next.has(taskId)) {
+				next.delete(taskId);
+			} else {
+				next.add(taskId);
+			}
+			return next;
+		});
+	};
+
+	const toggleCurrentPageFinishedTaskSelection = () => {
+		setSelectedFinishedTaskIds((current) => {
+			if (areAllCurrentPageFinishedTasksSelected) {
+				return new Set();
+			}
+			return new Set([...current, ...currentPageRerunnableFinishedTaskIds]);
+		});
+	};
+
+	const handleRerunSelectedFinishedTasks = async () => {
+		const taskIds = selectedCurrentPageFinishedTasks
+			.filter((task) => RERUNNABLE_TASK_STATUSES.has(task.status))
+			.map((task) => task.taskId);
+		if (taskIds.length === 0) {
+			return;
+		}
+
+		setBulkRerunningTaskIds(new Set(taskIds));
+		let createdCount = 0;
+		let failedCount = 0;
+		let firstError: string | null = null;
+		try {
+			for (const taskId of taskIds) {
+				try {
+					await rerunTaskMutation.mutateAsync({ taskId });
+					createdCount += 1;
+				} catch (error) {
+					failedCount += 1;
+					firstError ??=
+						error instanceof Error
+							? error.message
+							: scanT(t, "scan.task.rerunError", "Failed to rerun task");
+				}
+			}
+
+			if (createdCount > 0) {
+				setSelectedFinishedTaskIds(new Set());
+			}
+			if (failedCount > 0) {
+				toast.error(
+					scanT(
+						t,
+						"scan.task.bulkRerunPartialError",
+						"Created {{created}} rerun tasks; {{failed}} failed. {{error}}",
+						{
+							created: createdCount,
+							failed: failedCount,
+							error: firstError || "",
+						},
+					),
+				);
+			} else {
+				toast.success(
+					scanT(
+						t,
+						"scan.task.bulkRerunCreated",
+						"Created rerun tasks for {{count}} selected tasks",
+						{ count: createdCount },
+					),
+				);
+			}
+			await Promise.all([
+				utils.scan.one.invalidate({ scanJobId }),
+				utils.scan.statusView.invalidate({ scanJobId }),
+				utils.scan.terminalTasks.invalidate(),
+			]);
+		} finally {
+			setBulkRerunningTaskIds(new Set());
 		}
 	};
 	const candidatePagination = useMemo(() => {
@@ -4159,6 +4288,41 @@ export const ShowScanJobDetail = ({
 												</select>
 											</div>
 											<div className="flex flex-wrap items-center gap-2">
+												{selectedFinishedTaskCount > 0 ? (
+													<>
+														<div className="text-muted-foreground">
+															{scanT(
+																t,
+																"scan.tasks.selectedFinished",
+																"{{count}} tasks selected",
+																{ count: selectedFinishedTaskCount },
+															)}
+														</div>
+														<Button
+															type="button"
+															variant="outline"
+															size="sm"
+															onClick={() =>
+																void handleRerunSelectedFinishedTasks()
+															}
+															disabled={
+																rerunTaskMutation.isLoading ||
+																bulkRerunningTaskIds.size > 0
+															}
+														>
+															{bulkRerunningTaskIds.size > 0 ? (
+																<Loader2 className="mr-2 size-4 animate-spin" />
+															) : (
+																<RefreshCw className="mr-2 size-4" />
+															)}
+															{scanT(
+																t,
+																"scan.task.rerunSelected",
+																"Rerun selected",
+															)}
+														</Button>
+													</>
+												) : null}
 												<div className="text-muted-foreground">
 													{scanT(
 														t,
@@ -4520,7 +4684,28 @@ export const ShowScanJobDetail = ({
 											<table className="w-full text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
-														<th className="w-[22%] px-4 py-3 font-medium">
+														<th className="w-12 px-4 py-3 font-medium">
+															<Checkbox
+																aria-label={scanT(
+																	t,
+																	"scan.tasks.selectAllFinishedAria",
+																	"Select rerunnable tasks on this page",
+																)}
+																checked={
+																	areAllCurrentPageFinishedTasksSelected
+																		? true
+																		: areSomeCurrentPageFinishedTasksSelected
+																			? "indeterminate"
+																			: false
+																}
+																disabled={!hasCurrentPageRerunnableFinishedTasks}
+																onClick={(event) => event.stopPropagation()}
+																onCheckedChange={
+																	toggleCurrentPageFinishedTaskSelection
+																}
+															/>
+														</th>
+														<th className="w-[21%] px-4 py-3 font-medium">
 															{scanT(t, "scan.monitoring.task", "阶段任务")}
 														</th>
 														<th className="w-[9%] px-4 py-3 font-medium">
@@ -4535,7 +4720,7 @@ export const ShowScanJobDetail = ({
 														<th className="w-[11%] px-4 py-3 font-medium">
 															{scanT(t, "scan.field.completed", "完成时间")}
 														</th>
-														<th className="w-[30%] px-4 py-3 font-medium">
+														<th className="w-[29%] px-4 py-3 font-medium">
 															{scanT(t, "scan.task.tabs.details", "详情")}
 														</th>
 														<th className="w-[8%] px-4 py-3 font-medium">
@@ -4549,7 +4734,10 @@ export const ShowScanJobDetail = ({
 															task.status,
 														);
 														const isRerunningTask =
-															rerunningTaskId === task.taskId;
+															rerunningTaskId === task.taskId ||
+															bulkRerunningTaskIds.has(task.taskId);
+														const isSelectedFinishedTask =
+															selectedFinishedTaskIds.has(task.taskId);
 														const displayTask = getTaskListDisplay(t, task);
 														return (
 															<tr
@@ -4572,7 +4760,26 @@ export const ShowScanJobDetail = ({
 																}
 																className="cursor-pointer border-b transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none last:border-b-0"
 															>
-																<td className="w-[22%] px-4 py-3 align-top">
+																<td className="w-12 px-4 py-3 align-top">
+																	<Checkbox
+																		aria-label={scanT(
+																			t,
+																			"scan.tasks.selectFinishedAria",
+																			"Select task {{title}}",
+																			{ title: displayTask.title },
+																		)}
+																		checked={isSelectedFinishedTask}
+																		disabled={
+																			!canRerunTask ||
+																			bulkRerunningTaskIds.size > 0
+																		}
+																		onClick={(event) => event.stopPropagation()}
+																		onCheckedChange={() =>
+																			toggleFinishedTaskSelection(task.taskId)
+																		}
+																	/>
+																</td>
+																<td className="w-[21%] px-4 py-3 align-top">
 																	<div className="line-clamp-2 font-medium">
 																		{displayTask.title}
 																	</div>
@@ -4607,7 +4814,7 @@ export const ShowScanJobDetail = ({
 																		"-"
 																	)}
 																</td>
-																<td className="w-[30%] px-4 py-3 align-top text-xs text-muted-foreground">
+																<td className="w-[29%] px-4 py-3 align-top text-xs text-muted-foreground">
 																	<div className="line-clamp-3 break-words">
 																		{task.errorMessage || "-"}
 																	</div>
