@@ -63,6 +63,7 @@ export const compose = pgTable("compose", {
 	autoDeploy: boolean("autoDeploy").$defaultFn(() => true),
 	autoDeltaScan: boolean("autoDeltaScan").$defaultFn(() => false),
 	fuzzingBudgetSeconds: integer("fuzzingBudgetSeconds").notNull().default(600),
+	injectionPrompt: text("injectionPrompt").notNull().default(""),
 	// Gitlab
 	gitlabProjectId: integer("gitlabProjectId"),
 	gitlabRepository: text("gitlabRepository"),
@@ -168,6 +169,7 @@ const createSchema = createInsertSchema(compose, {
 	description: z.string(),
 	autoDeltaScan: z.boolean().default(false),
 	fuzzingBudgetSeconds: z.number().int().min(1).max(86400).default(600),
+	injectionPrompt: z.string().max(50000).default(""),
 	scanStageSettings: ScanStageSettingsSchema.default(
 		buildDefaultScanStageSettings(),
 	),

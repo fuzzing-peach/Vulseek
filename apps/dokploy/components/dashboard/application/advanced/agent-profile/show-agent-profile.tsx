@@ -44,6 +44,9 @@ export const ShowAgentProfile = ({ applicationId }: Props) => {
 	const [isSavingEvaluateConfig, setIsSavingEvaluateConfig] = useState(false);
 	const [isSavingAnalysisReportTemplate, setIsSavingAnalysisReportTemplate] =
 		useState(false);
+	const [injectionPrompt, setInjectionPrompt] = useState("");
+	const [isSavingInjectionPrompt, setIsSavingInjectionPrompt] =
+		useState(false);
 	const enabledAgentProfiles =
 		agentProfiles?.filter((profile) => profile.isEnabled) ?? [];
 
@@ -59,6 +62,10 @@ export const ShowAgentProfile = ({ applicationId }: Props) => {
 	useEffect(() => {
 		setAnalysisReportTemplate(data?.analysisReportTemplate ?? "");
 	}, [data?.analysisReportTemplate]);
+
+	useEffect(() => {
+		setInjectionPrompt(data?.injectionPrompt ?? "");
+	}, [data?.injectionPrompt]);
 
 	return (
 		<div className="grid gap-4">
@@ -163,6 +170,56 @@ export const ShowAgentProfile = ({ applicationId }: Props) => {
 										);
 									} finally {
 										setIsSavingAnalysisReportTemplate(false);
+									}
+								}}
+							>
+								Save
+							</Button>
+						</div>
+					</div>
+				</CardContent>
+			</Card>
+			<Card className="bg-background">
+				<CardHeader>
+					<CardTitle className="text-xl flex items-center gap-2">
+						<ClipboardCheck className="size-5 text-muted-foreground" />
+						Injection Prompt
+					</CardTitle>
+					<CardDescription>
+						Additional instructions appended to every AI stage prompt during
+						scanning. Use this to inject custom context or constraints.
+					</CardDescription>
+				</CardHeader>
+				<CardContent>
+					<div className="grid gap-3">
+						<Textarea
+							value={injectionPrompt}
+							onChange={(event) =>
+								setInjectionPrompt(event.currentTarget.value)
+							}
+							placeholder={
+								"Focus on authentication bypass and privilege escalation vulnerabilities."
+							}
+							className="min-h-40 font-mono text-sm"
+							spellCheck={false}
+						/>
+						<div className="flex justify-end">
+							<Button
+								type="button"
+								disabled={isSavingInjectionPrompt}
+								onClick={async () => {
+									setIsSavingInjectionPrompt(true);
+									try {
+										await mutateAsync({
+											applicationId,
+											injectionPrompt,
+										});
+										await utils.application.one.invalidate({ applicationId });
+										toast.success("Injection prompt updated");
+									} catch {
+										toast.error("Failed to update injection prompt");
+									} finally {
+										setIsSavingInjectionPrompt(false);
 									}
 								}}
 							>

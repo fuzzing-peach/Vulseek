@@ -134,6 +134,7 @@ export const applications = pgTable("application", {
 	analysisReportTemplate: text("analysisReportTemplate")
 		.notNull()
 		.default(""),
+	injectionPrompt: text("injectionPrompt").notNull().default(""),
 	// Gitlab
 	gitlabProjectId: integer("gitlabProjectId"),
 	gitlabRepository: text("gitlabRepository"),
@@ -282,6 +283,7 @@ const createSchema = createInsertSchema(applications, {
 	fuzzingBudgetSeconds: z.number().int().min(1).max(86400).default(600),
 	postCheckoutScript: z.string().max(20000).default(""),
 	analysisReportTemplate: z.string().max(100000).default(""),
+	injectionPrompt: z.string().max(50000).default(""),
 	scanStageSettings: ScanStageSettingsSchema.default(
 		buildDefaultScanStageSettings(),
 	),

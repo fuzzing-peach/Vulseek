@@ -3701,9 +3701,18 @@ export const runSingleTurnAgentInContainer = async (
 			? input.prompt
 			: await input.prompt(input.containerName);
 	promptResolveElapsedMs = Date.now() - promptResolveStartedAt;
+	const injectionTarget = input.scanJob.applicationId
+		? await findApplicationById(input.scanJob.applicationId)
+		: input.scanJob.composeId
+			? await findComposeById(input.scanJob.composeId)
+			: null;
+	const injectionPromptText = injectionTarget?.injectionPrompt?.trim() || "";
+	const resolvedPromptFinal = injectionPromptText
+		? `${resolvedPrompt.trimEnd()}\n\n${injectionPromptText}`
+		: resolvedPrompt;
 	const promptWithOutputSchema =
 		input.outputSchema || input.routeOutputSchemas?.length
-			? `${resolvedPrompt.trimEnd()}\n${buildStructuredOutputPromptSuffix(
+			? `${resolvedPromptFinal.trimEnd()}\n${buildStructuredOutputPromptSuffix(
 					input.outputSchema || input.routeOutputSchemas![0]!.schema,
 					structuredOutputSchemaAgentPathInContainer,
 					structuredOutputResultAgentPathInContainer,
@@ -3715,7 +3724,7 @@ export const runSingleTurnAgentInContainer = async (
 						nullableOutput: input.nullableOutput,
 					},
 				)}`
-			: resolvedPrompt;
+			: resolvedPromptFinal;
 	const runtimeFileNames = {
 		...SANDBOX_AGENT_RUNTIME_FILE_NAMES,
 		...(input.runtimeFileNames || {}),
