@@ -98,7 +98,7 @@ pnpm run dokploy:build
 
 ## Docker
 
-Release images are built by GitHub Actions and published to GitHub Container Registry as `ghcr.io/fuzzing-peach/vulseek:latest`. The workflow uses the built-in `GITHUB_TOKEN` with `packages: write` permission, so no Docker Hub credentials are required.
+Release images are built by GitHub Actions and published to GitHub Container Registry as `ghcr.io/fuzzing-peach/vulseek:latest`. The workflow runs only for `v*` tag pushes and uses the built-in `GITHUB_TOKEN` with `packages: write` permission, so no Docker Hub credentials are required.
 
 For local development, keep using the development workflow:
 
