@@ -2,10 +2,6 @@ name: Release Docker image
 
 on:
   push:
-    branches:
-      - main
-      - canary
-      - web-vuln
     tags:
       - "v*"
   workflow_dispatch:

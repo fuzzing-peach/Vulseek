@@ -45,6 +45,11 @@ export const getDokployServiceName = () => {
 
 let proxyAgentCache: { proxyUrl: string; agent: Dispatcher } | null = null;
 
+type RegistryRequestInit = {
+	method?: string;
+	headers?: HeadersInit;
+};
+
 const getProxyUrl = () =>
 	process.env.HTTPS_PROXY ||
 	process.env.https_proxy ||
@@ -53,7 +58,7 @@ const getProxyUrl = () =>
 	process.env.ALL_PROXY ||
 	process.env.all_proxy;
 
-const fetchRegistry = (url: string, init?: RequestInit) => {
+const fetchRegistry = (url: string, init?: RegistryRequestInit) => {
 	const proxyUrl = getProxyUrl();
 	const requestInit = {
 		method: "GET",
@@ -100,7 +105,10 @@ const parseBearerChallenge = (challenge: string | null) => {
 	};
 };
 
-const fetchRegistryWithBearerAuth = async (url: string, init?: RequestInit) => {
+const fetchRegistryWithBearerAuth = async (
+	url: string,
+	init?: RegistryRequestInit,
+) => {
 	const response = await fetchRegistry(url, init);
 	if (response.status !== 401) {
 		return response;

@@ -563,6 +563,22 @@ const resolveMountedProjectProfilePath = (input: {
 		sanitizeContextPathPart(input.profileName),
 	);
 
+const getTargetMemoryArgs = (target: unknown) => {
+	if (!target || typeof target !== "object") {
+		return { memoryLimit: null, memoryReservation: null };
+	}
+
+	const resourceTarget = target as {
+		memoryLimit?: string | null;
+		memoryReservation?: string | null;
+	};
+
+	return {
+		memoryLimit: resourceTarget.memoryLimit || null,
+		memoryReservation: resourceTarget.memoryReservation || null,
+	};
+};
+
 const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 	const isApplicationJob = Boolean(scanJob.applicationId);
 	const target = isApplicationJob
@@ -1166,9 +1182,10 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		usageFileName: runtimeFileNames.usage,
 	});
 
+	const { memoryLimit, memoryReservation } = getTargetMemoryArgs(target);
 	const memoryArgs = [
-		target.memoryLimit ? `--memory ${target.memoryLimit}` : null,
-		target.memoryReservation ? `--memory-reservation ${target.memoryReservation}` : null,
+		memoryLimit ? `--memory ${memoryLimit}` : null,
+		memoryReservation ? `--memory-reservation ${memoryReservation}` : null,
 	]
 		.filter(Boolean)
 		.join(" ");
