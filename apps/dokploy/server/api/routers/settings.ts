@@ -11,6 +11,7 @@ import {
 	findServerById,
 	findUserById,
 	getDokployImage,
+	getDokployServiceName,
 	getDokployImageTag,
 	getContainerEnvironmentSetting,
 	getLogCleanupStatus,
@@ -406,7 +407,7 @@ export const settingsRouter = createTRPCRouter({
 			"--force",
 			"--image",
 			getDokployImage(),
-			"dokploy",
+			getDokployServiceName(),
 		]);
 
 		return true;

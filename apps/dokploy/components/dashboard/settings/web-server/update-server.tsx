@@ -223,7 +223,7 @@ export const UpdateServer = ({
 								<h3 className="text-lg font-medium">Checking for updates...</h3>
 								<p className="text text-muted-foreground">
 									Please wait while we pull the latest version information from
-									Docker Hub.
+									GitHub Container Registry.
 								</p>
 							</div>
 						</div>

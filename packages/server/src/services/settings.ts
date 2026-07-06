@@ -24,13 +24,23 @@ export const DEFAULT_UPDATE_DATA: IUpdateData = {
 	updateAvailable: false,
 };
 
+const DEFAULT_DOKPLOY_IMAGE_REPOSITORY = "ghcr.io/fuzzing-peach/vulseek";
+
 /** Returns current Dokploy docker image tag or `latest` by default. */
 export const getDokployImageTag = () => {
 	return process.env.RELEASE_TAG || "latest";
 };
 
+export const getDokployImageRepository = () => {
+	return process.env.DOKPLOY_IMAGE_REPOSITORY || DEFAULT_DOKPLOY_IMAGE_REPOSITORY;
+};
+
 export const getDokployImage = () => {
-	return `dokploy/dokploy:${getDokployImageTag()}`;
+	return `${getDokployImageRepository()}:${getDokployImageTag()}`;
+};
+
+export const getDokployServiceName = () => {
+	return process.env.DOKPLOY_SERVICE_NAME || "dokploy";
 };
 
 let proxyAgentCache: { proxyUrl: string; agent: Dispatcher } | null = null;
@@ -43,13 +53,16 @@ const getProxyUrl = () =>
 	process.env.ALL_PROXY ||
 	process.env.all_proxy;
 
-const fetchDockerHub = (url: string) => {
+const fetchRegistry = (url: string, init?: RequestInit) => {
 	const proxyUrl = getProxyUrl();
+	const requestInit = {
+		method: "GET",
+		headers: { "Content-Type": "application/json" },
+		...init,
+	};
+
 	if (!proxyUrl) {
-		return fetch(url, {
-			method: "GET",
-			headers: { "Content-Type": "application/json" },
-		});
+		return fetch(url, requestInit);
 	}
 
 	if (proxyAgentCache?.proxyUrl !== proxyUrl) {
@@ -57,10 +70,103 @@ const fetchDockerHub = (url: string) => {
 	}
 
 	return undiciFetch(url, {
-		method: "GET",
-		headers: { "Content-Type": "application/json" },
+		...requestInit,
 		dispatcher: proxyAgentCache.agent,
 	});
+};
+
+const parseBearerChallenge = (challenge: string | null) => {
+	if (!challenge?.startsWith("Bearer ")) {
+		return null;
+	}
+
+	const values = new Map<string, string>();
+	for (const part of challenge.slice("Bearer ".length).split(",")) {
+		const [key, rawValue] = part.trim().split("=");
+		if (key && rawValue) {
+			values.set(key, rawValue.replace(/^"|"$/g, ""));
+		}
+	}
+
+	const realm = values.get("realm");
+	if (!realm) {
+		return null;
+	}
+
+	return {
+		realm,
+		scope: values.get("scope"),
+		service: values.get("service"),
+	};
+};
+
+const fetchRegistryWithBearerAuth = async (url: string, init?: RequestInit) => {
+	const response = await fetchRegistry(url, init);
+	if (response.status !== 401) {
+		return response;
+	}
+
+	const challenge = parseBearerChallenge(response.headers.get("www-authenticate"));
+	if (!challenge) {
+		return response;
+	}
+
+	const tokenUrl = new URL(challenge.realm);
+	if (challenge.service) {
+		tokenUrl.searchParams.set("service", challenge.service);
+	}
+	if (challenge.scope) {
+		tokenUrl.searchParams.set("scope", challenge.scope);
+	}
+
+	const tokenResponse = await fetchRegistry(tokenUrl.toString());
+	if (!tokenResponse.ok) {
+		return response;
+	}
+
+	const tokenData = (await tokenResponse.json()) as {
+		token?: string;
+		access_token?: string;
+	};
+	const token = tokenData.token || tokenData.access_token;
+	if (!token) {
+		return response;
+	}
+
+	const headers = new Headers(init?.headers);
+	headers.set("Authorization", `Bearer ${token}`);
+
+	return fetchRegistry(url, {
+		...init,
+		headers,
+	});
+};
+
+const getRegistryRepositoryPath = () => {
+	const repository = getDokployImageRepository();
+	return repository.replace(/^ghcr\.io\//, "");
+};
+
+const getRemoteImageDigest = async (tag: string) => {
+	const repositoryPath = getRegistryRepositoryPath();
+	const manifestUrl = `https://ghcr.io/v2/${repositoryPath}/manifests/${tag}`;
+	const response = await fetchRegistryWithBearerAuth(manifestUrl, {
+		method: "HEAD",
+		headers: {
+			Accept: [
+				"application/vnd.docker.distribution.manifest.v2+json",
+				"application/vnd.docker.distribution.manifest.list.v2+json",
+				"application/vnd.oci.image.manifest.v1+json",
+				"application/vnd.oci.image.index.v1+json",
+			].join(", "),
+		},
+	});
+
+	if (!response.ok) {
+		return null;
+	}
+
+	return response.headers.get("docker-content-digest");
 };
 
 export const pullLatestRelease = async () => {
@@ -75,7 +181,7 @@ export const pullLatestRelease = async () => {
 /** Returns Dokploy docker service image digest */
 export const getServiceImageDigest = async () => {
 	const { stdout } = await execAsync(
-		"docker service inspect dokploy --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}'",
+		`docker service inspect ${getDokployServiceName()} --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}'`,
 	);
 
 	const currentDigest = stdout.trim().split("@")[1];
@@ -87,7 +193,7 @@ export const getServiceImageDigest = async () => {
 	return currentDigest;
 };
 
-/** Returns latest version number and information whether server update is available by comparing current image's digest against digest for provided image tag via Docker hub API. */
+/** Returns latest version number and information whether server update is available by comparing current image's digest against the GHCR manifest digest. */
 export const getUpdateData = async (): Promise<IUpdateData> => {
 	let currentDigest: string;
 	try {
@@ -99,43 +205,13 @@ export const getUpdateData = async (): Promise<IUpdateData> => {
 		return DEFAULT_UPDATE_DATA;
 	}
 
-	const baseUrl = "https://hub.docker.com/v2/repositories/dokploy/dokploy/tags";
-	let url: string | null = `${baseUrl}?page_size=100`;
-	let allResults: { digest: string; name: string }[] = [];
-	while (url) {
-		const response = await fetchDockerHub(url);
-
-		const data = (await response.json()) as {
-			next: string | null;
-			results: { digest: string; name: string }[];
-		};
-
-		allResults = allResults.concat(data.results);
-		url = data?.next;
-	}
-
 	const imageTag = getDokployImageTag();
-	const searchedDigest = allResults.find((t) => t.name === imageTag)?.digest;
-
-	if (!searchedDigest) {
+	const remoteDigest = await getRemoteImageDigest(imageTag);
+	if (!remoteDigest) {
 		return DEFAULT_UPDATE_DATA;
 	}
 
-	if (imageTag === "latest") {
-		const versionedTag = allResults.find(
-			(t) => t.digest === searchedDigest && t.name.startsWith("v"),
-		);
-
-		if (!versionedTag) {
-			return DEFAULT_UPDATE_DATA;
-		}
-
-		const { name: latestVersion, digest } = versionedTag;
-		const updateAvailable = digest !== currentDigest;
-
-		return { latestVersion, updateAvailable };
-	}
-	const updateAvailable = searchedDigest !== currentDigest;
+	const updateAvailable = remoteDigest !== currentDigest;
 	return { latestVersion: imageTag, updateAvailable };
 };
 

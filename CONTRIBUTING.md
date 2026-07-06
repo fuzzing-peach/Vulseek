@@ -98,16 +98,18 @@ pnpm run dokploy:build
 
 ## Docker
 
-To build the docker image
+Release images are built by GitHub Actions and published to GitHub Container Registry as `ghcr.io/fuzzing-peach/vulseek:latest`. The workflow uses the built-in `GITHUB_TOKEN` with `packages: write` permission, so no Docker Hub credentials are required.
+
+For local development, keep using the development workflow:
 
 ```bash
-pnpm run docker:build
+./dev.sh start
 ```
 
-To push the docker image
+To run the published release image locally without building it:
 
 ```bash
-pnpm run docker:push
+./run.sh start
 ```
 
 ## Password Reset
