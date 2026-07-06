@@ -22,6 +22,7 @@ COPY packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch ./packag
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 
 COPY . .
+RUN mkdir -p agents/mcp
 
 ENV NODE_ENV=production
 RUN pnpm --filter=@dokploy/server build
