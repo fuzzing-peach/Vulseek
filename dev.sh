@@ -22,8 +22,15 @@ ENV_FILE="env.development"
 
 # 当前脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_SCAN_CONTEXT_HOST_PATH="$(cd "${SCRIPT_DIR}/.." && pwd)/vulseek-data"
+CURRENT_DIR="$(pwd -P)"
+DEFAULT_SCAN_CONTEXT_HOST_PATH="${CURRENT_DIR}/vulseek-data"
 SCAN_CONTEXT_HOST_PATH=""
+
+resolve_scan_context_host_path() {
+    local configured_path="${SCAN_CONTEXT_HOST_PATH:-${VULSEEK_SCAN_CONTEXT_HOST_PATH:-$DEFAULT_SCAN_CONTEXT_HOST_PATH}}"
+    mkdir -p "$configured_path"
+    (cd "$configured_path" && pwd -P)
+}
 
 # 显示帮助信息
 show_help() {
@@ -222,7 +229,9 @@ start_redis() {
 # 启动 Vulseek 主服务
 start_vulseek() {
     echo -e "${BLUE}🚀 启动 Vulseek 主应用...${NC}"
-    local effective_scan_context_host_path="${SCAN_CONTEXT_HOST_PATH:-$DEFAULT_SCAN_CONTEXT_HOST_PATH}"
+    local effective_scan_context_host_path
+    effective_scan_context_host_path="$(resolve_scan_context_host_path)"
+    export VULSEEK_SCAN_CONTEXT_HOST_PATH="$effective_scan_context_host_path"
     
     # 检查镜像是否存在
     if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
@@ -238,8 +247,6 @@ start_vulseek() {
     
     # 构建环境变量文件路径
     local env_file_path="${SCRIPT_DIR}/${ENV_FILE}"
-    mkdir -p "${effective_scan_context_host_path}"
-    
     echo -e "${BLUE}📝 使用环境文件: $env_file_path${NC}"
     echo -e "${BLUE}📁 Scan Context Host Path: ${effective_scan_context_host_path}${NC}"
     
@@ -436,7 +443,8 @@ enter_shell() {
 
 # 查看服务状态
 show_status() {
-    local effective_scan_context_host_path="${SCAN_CONTEXT_HOST_PATH:-$DEFAULT_SCAN_CONTEXT_HOST_PATH}"
+    local effective_scan_context_host_path
+    effective_scan_context_host_path="$(resolve_scan_context_host_path)"
     echo -e "${BLUE}📊 服务状态:${NC}"
     echo ""
     docker service ls --filter "name=vulseek"

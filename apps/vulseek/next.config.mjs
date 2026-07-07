@@ -19,7 +19,7 @@ const nextConfig = {
 		locales: ["en"],
 		defaultLocale: "en",
 	},
-	allowedDevOrigins: ["211.65.193.214", "100.89.7.38"],
+	allowedDevOrigins: ["211.65.193.214", "211.65.197.92", "100.89.7.38"],
 };
 
 export default nextConfig;

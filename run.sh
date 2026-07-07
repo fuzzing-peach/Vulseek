@@ -21,8 +21,15 @@ IMAGE_NAME="${IMAGE_REPOSITORY}:${RELEASE_TAG}"
 ENV_FILE="${ENV_FILE:-.env.production}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_SCAN_CONTEXT_HOST_PATH="$(cd "${SCRIPT_DIR}/.." && pwd)/vulseek-data"
+CURRENT_DIR="$(pwd -P)"
+DEFAULT_SCAN_CONTEXT_HOST_PATH="${CURRENT_DIR}/vulseek-data"
 SCAN_CONTEXT_HOST_PATH="${VULSEEK_SCAN_CONTEXT_HOST_PATH:-}"
+
+resolve_scan_context_host_path() {
+    local configured_path="${SCAN_CONTEXT_HOST_PATH:-${VULSEEK_SCAN_CONTEXT_HOST_PATH:-$DEFAULT_SCAN_CONTEXT_HOST_PATH}}"
+    mkdir -p "$configured_path"
+    (cd "$configured_path" && pwd -P)
+}
 
 show_help() {
     echo -e "${BLUE}Vulseek release environment manager (Docker Swarm)${NC}"
@@ -120,8 +127,9 @@ start_redis() {
 start_vulseek() {
     check_env_file
 
-    local effective_scan_context_host_path="${SCAN_CONTEXT_HOST_PATH:-$DEFAULT_SCAN_CONTEXT_HOST_PATH}"
-    mkdir -p "$effective_scan_context_host_path"
+    local effective_scan_context_host_path
+    effective_scan_context_host_path="$(resolve_scan_context_host_path)"
+    export VULSEEK_SCAN_CONTEXT_HOST_PATH="$effective_scan_context_host_path"
 
     pull_image
 
@@ -223,7 +231,8 @@ show_logs() {
 }
 
 show_status() {
-    local effective_scan_context_host_path="${SCAN_CONTEXT_HOST_PATH:-$DEFAULT_SCAN_CONTEXT_HOST_PATH}"
+    local effective_scan_context_host_path
+    effective_scan_context_host_path="$(resolve_scan_context_host_path)"
     echo -e "${BLUE}Release image:${NC} ${IMAGE_NAME}"
     echo -e "${BLUE}Main app:${NC}      http://localhost:23000"
     echo -e "${BLUE}Traefik:${NC}       http://localhost:28080"
