@@ -19,10 +19,10 @@ import { FuzzingStatusPanel } from "@/components/dashboard/scanning/fuzzing-stat
 import { ScanMonitoring } from "@/components/dashboard/scanning/scan-monitoring";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
+import { DashboardPanelShell } from "@/components/shared/dashboard-panel-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-	Card,
 	CardContent,
 	CardDescription,
 	CardHeader,
@@ -700,24 +700,24 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 				</title>
 			</Head>
 
-			<Card className="bg-background">
-				<CardHeader>
-					<div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-						<div className="min-w-0">
-							<CardTitle className="text-xl">{title}</CardTitle>
-							<CardDescription className="mt-2 flex items-center gap-2 break-all">
-								<span>{taskId}</span>
-								{taskId ? (
-									<CopyValueButton
-										value={taskId}
-										label={scanT(t, "scan.field.taskId", "Task ID")}
-										className="size-7 shrink-0"
-									/>
-								) : null}
-							</CardDescription>
-						</div>
-						<div className="flex shrink-0 flex-wrap items-center gap-2">
-							<Button
+			<DashboardPanelShell>
+					<CardHeader>
+						<div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+							<div className="min-w-0">
+								<CardTitle className="text-xl">{title}</CardTitle>
+								<CardDescription className="mt-2 flex items-center gap-2 break-all">
+									<span>{taskId}</span>
+									{taskId ? (
+										<CopyValueButton
+											value={taskId}
+											label={scanT(t, "scan.field.taskId", "Task ID")}
+											className="size-7 shrink-0"
+										/>
+									) : null}
+								</CardDescription>
+							</div>
+							<div className="flex shrink-0 flex-wrap items-center gap-2">
+								<Button
 								type="button"
 								variant="outline"
 								isLoading={rerunTaskMutation.isLoading}
@@ -1010,7 +1010,7 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 						</Tabs>
 					)}
 				</CardContent>
-			</Card>
+			</DashboardPanelShell>
 		</div>
 	);
 };

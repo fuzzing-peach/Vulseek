@@ -285,27 +285,37 @@ export const GlobalScanMonitoring = () => {
 		setError(null);
 		setHasReceivedSample(false);
 
-		const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-		const ws = new WebSocket(
-			`${protocol}//${window.location.host}/dashboard/monitoring/scan-stats`,
-		);
-
-		ws.onmessage = (event) => {
-			const message = JSON.parse(event.data) as ScanMonitoringMessage;
-			if (message.error) setError(message.error);
-			if (!message.data) return;
-			setCurrentData(message.data);
-			setHasReceivedSample(true);
-			setSamples((previous) =>
-				[...previous, message.data as ScanMonitoringSample].slice(-240),
+		let ws: WebSocket | null = null;
+		let disposed = false;
+		const connectTimer = window.setTimeout(() => {
+			if (disposed) return;
+			const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+			ws = new WebSocket(
+				`${protocol}//${window.location.host}/dashboard/monitoring/scan-stats`,
 			);
-		};
 
-		ws.onclose = (event) => {
-			if (event.reason) setError(event.reason);
-		};
+			ws.onmessage = (event) => {
+				const message = JSON.parse(event.data) as ScanMonitoringMessage;
+				if (disposed) return;
+				if (message.error) setError(message.error);
+				if (!message.data) return;
+				setCurrentData(message.data);
+				setHasReceivedSample(true);
+				setSamples((previous) =>
+					[...previous, message.data as ScanMonitoringSample].slice(-240),
+				);
+			};
 
-		return () => ws.close();
+			ws.onclose = (event) => {
+				if (!disposed && event.reason) setError(event.reason);
+			};
+		}, 0);
+
+		return () => {
+			disposed = true;
+			window.clearTimeout(connectTimer);
+			ws?.close();
+		};
 	}, []);
 
 	const prevSnapshotRef = useRef<TokenSnapshot | null>(null);

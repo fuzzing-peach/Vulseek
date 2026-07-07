@@ -32,10 +32,10 @@ import { ComposePaidMonitoring } from "@/components/dashboard/monitoring/paid/co
 import { ShowScanJobs } from "@/components/dashboard/scanning/show-scan-jobs";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
+import { DashboardPanelShell } from "@/components/shared/dashboard-panel-shell";
 import { StatusTooltip } from "@/components/shared/status-tooltip";
 import { Badge } from "@/components/ui/badge";
 import {
-	Card,
 	CardContent,
 	CardDescription,
 	CardHeader,
@@ -125,8 +125,7 @@ const Service = (
 				</title>
 			</Head>
 			<div className="w-full">
-				<Card className="h-full bg-sidebar p-2.5 rounded-xl w-full">
-					<div className="rounded-xl bg-background shadow-md ">
+				<DashboardPanelShell>
 						<div className="flex flex-col gap-4">
 							<CardHeader className="flex flex-row justify-between items-center">
 								<div className="flex flex-col">
@@ -364,8 +363,7 @@ const Service = (
 								</Tabs>
 							)}
 						</CardContent>
-					</div>
-				</Card>
+				</DashboardPanelShell>
 			</div>
 		</div>
 	);

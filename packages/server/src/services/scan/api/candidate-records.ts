@@ -5,6 +5,7 @@ import {
 	findVulnerabilityCandidateByIdAndScanJobIdRepo,
 	findVulnerabilityCandidateByIdRepo,
 	findVulnerabilityCandidatesByScanJobIdRepo,
+	backfillVulnerabilityCandidatesFromTasks,
 	listCandidateTagsRepo,
 	updateVulnerabilityCandidateMetadataRepo,
 } from "../persistence/candidate.repo";
@@ -15,7 +16,7 @@ import {
 	findLatestVerificationResultByCandidateIdRepo,
 	findTaskByIdRepo,
 	listAnalysisResultsByScanJobIdRepo,
-	listCandidateDescendantTasksByFunctionTaskIdRepo,
+	listCandidateDescendantTasksByProducerTaskIdRepo,
 	listTaskRuntimeIntervalsByScanJobIdRepo,
 	listTriageResultsByScanJobIdRepo,
 	listVerificationResultsByScanJobIdRepo,
@@ -336,6 +337,10 @@ export const findVulnerabilityCandidatesByScanJobId = async (
 	scanJobId: string,
 ) => await findVulnerabilityCandidatesByScanJobIdRepo(scanJobId);
 
+export const backfillVulnerabilityCandidates = async (input?: {
+	scanJobId?: string;
+}) => await backfillVulnerabilityCandidatesFromTasks(input);
+
 export const findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId =
 	async (scanJobId: string) => {
 		const [
@@ -343,13 +348,12 @@ export const findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId =
 			analysisResultsList,
 			verificationResultsList,
 			triageResultsList,
-		] =
-			await Promise.all([
-				findVulnerabilityCandidatesByScanJobIdRepo(scanJobId),
-				listAnalysisResultsByScanJobIdRepo(scanJobId),
-				listVerificationResultsByScanJobIdRepo(scanJobId),
-				listTriageResultsByScanJobIdRepo(scanJobId),
-			]);
+		] = await Promise.all([
+			findVulnerabilityCandidatesByScanJobIdRepo(scanJobId),
+			listAnalysisResultsByScanJobIdRepo(scanJobId),
+			listVerificationResultsByScanJobIdRepo(scanJobId),
+			listTriageResultsByScanJobIdRepo(scanJobId),
+		]);
 
 		return buildCandidatesWithLatestResults({
 			candidates,
@@ -360,25 +364,6 @@ export const findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId =
 			buildVerificationArtifactPaths: buildCandidateVerificationArtifactPaths,
 		});
 	};
-
-const isPositiveAnalysisResult = (result: string | null | undefined) =>
-	result === "real_vulnerability" || result === "likely_vulnerability";
-
-const isPositiveVerificationResult = (result: string | null | undefined) =>
-	result === "true" || result === "likely";
-
-const isPositiveTriageResult = (
-	result: string | null | undefined,
-	isSecurityIssue?: boolean | null,
-) => isSecurityIssue === true || result === "security_issue";
-
-const incrementCount = <TKey extends string>(
-	counts: Record<TKey, number>,
-	key: TKey,
-	amount = 1,
-) => {
-	counts[key] += amount;
-};
 
 const ACTIVE_TASK_STATUSES = new Set([
 	"launching",
@@ -742,7 +727,7 @@ export const findVulnerabilityCandidateById = async (
 export const findVulnerabilityCandidateByIdForScanJob = async (input: {
 	vulnerabilityCandidateId: string;
 	scanJobId: string;
-	scanFunctionTaskId?: string;
+	producerTaskId?: string;
 }) => await findVulnerabilityCandidateByIdAndScanJobIdRepo(input);
 
 export const listCandidateTags = async () => await listCandidateTagsRepo();
@@ -758,33 +743,33 @@ export const findVulnerabilityCandidateWithLatestAnalysisResultById =
 	async (input: {
 		vulnerabilityCandidateId: string;
 		scanJobId?: string;
-		scanFunctionTaskId?: string;
+		producerTaskId?: string;
 	}) => {
 		const candidate = input.scanJobId
 			? await findVulnerabilityCandidateByIdAndScanJobIdRepo({
 					vulnerabilityCandidateId: input.vulnerabilityCandidateId,
 					scanJobId: input.scanJobId,
-					scanFunctionTaskId: input.scanFunctionTaskId,
+					producerTaskId: input.producerTaskId,
 				})
-			: await findVulnerabilityCandidateByIdRepo(
+				: await findVulnerabilityCandidateByIdRepo(
 					input.vulnerabilityCandidateId,
 				);
 		const [analysisResult, verificationResult] = await Promise.all([
 			findLatestAnalysisResultByCandidateIdRepo({
 				scanJobId: candidate.scanJobId,
 				vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-				scanFunctionTaskId: candidate.scanFunctionTaskId,
+				producerTaskId: candidate.producerTaskId,
 			}),
 			findLatestVerificationResultByCandidateIdRepo({
 				scanJobId: candidate.scanJobId,
 				vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-				scanFunctionTaskId: candidate.scanFunctionTaskId,
+				producerTaskId: candidate.producerTaskId,
 			}),
 		]);
 		const triageResult = await findLatestTriageResultByCandidateIdRepo({
 			scanJobId: candidate.scanJobId,
 			vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-			scanFunctionTaskId: candidate.scanFunctionTaskId,
+			producerTaskId: candidate.producerTaskId,
 		});
 
 		const [enrichedCandidate] = await enrichCandidateHostPaths(
@@ -824,13 +809,17 @@ const toLineageItem = (
 const resolveUpstreamRelation = (
 	task: Task,
 ): CandidateTaskLineageRelation | null => {
-	if (task.stageName === "repository-scan" || task.stageName === "delta-scope") {
+	if (
+		task.stageName === "repository-profile" ||
+		task.stageName === "repository-scan" ||
+		task.stageName === "delta-scope"
+	) {
 		return "repository";
 	}
-	if (task.stageName === "module-scan") {
+	if (task.stageName === "identify-target" || task.stageName === "module-scan") {
 		return "module";
 	}
-	if (task.stageName === "function-scan") {
+	if (task.stageName === "scan-target" || task.stageName === "function-scan") {
 		return "function";
 	}
 	return null;
@@ -839,21 +828,21 @@ const resolveUpstreamRelation = (
 export const findCandidateTaskLineage = async (input: {
 	vulnerabilityCandidateId: string;
 	scanJobId?: string;
-	scanFunctionTaskId?: string;
+	producerTaskId?: string;
 }) => {
 	const candidate = input.scanJobId
 		? await findVulnerabilityCandidateByIdAndScanJobIdRepo({
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
 				scanJobId: input.scanJobId,
-				scanFunctionTaskId: input.scanFunctionTaskId,
+				producerTaskId: input.producerTaskId,
 			})
 		: await findVulnerabilityCandidateByIdRepo(input.vulnerabilityCandidateId);
 	const upstreamTasks: CandidateTaskLineageItem[] = [];
 	const seenTaskIds = new Set<string>();
 	const visitedUpstreamTaskIds = new Set<string>();
 
-	let currentTask = candidate.scanFunctionTaskId
-		? await findTaskByIdRepo(candidate.scanFunctionTaskId).catch(() => null)
+	let currentTask = candidate.producerTaskId
+		? await findTaskByIdRepo(candidate.producerTaskId).catch(() => null)
 		: null;
 	while (currentTask) {
 		if (visitedUpstreamTaskIds.has(currentTask.taskId)) {
@@ -875,9 +864,9 @@ export const findCandidateTaskLineage = async (input: {
 	upstreamTasks.reverse();
 
 	const downstreamTasks: CandidateTaskLineageItem[] = [];
-	const candidateTasks = candidate.scanFunctionTaskId
-		? await listCandidateDescendantTasksByFunctionTaskIdRepo({
-				scanFunctionTaskId: candidate.scanFunctionTaskId,
+	const candidateTasks = candidate.producerTaskId
+		? await listCandidateDescendantTasksByProducerTaskIdRepo({
+				producerTaskId: candidate.producerTaskId,
 				vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
 			})
 		: [];

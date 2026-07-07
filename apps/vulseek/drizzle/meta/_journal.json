@@ -1345,6 +1345,48 @@
       "when": 1782000000000,
       "tag": "0195_local_source_type",
       "breakpoints": true
+    },
+    {
+      "idx": 192,
+      "version": "7",
+      "when": 1782000100000,
+      "tag": "0196_token_columns_bigint",
+      "breakpoints": true
+    },
+    {
+      "idx": 193,
+      "version": "7",
+      "when": 1782000200000,
+      "tag": "0197_pricing_provider_estimated_cost",
+      "breakpoints": true
+    },
+    {
+      "idx": 194,
+      "version": "7",
+      "when": 1782000300000,
+      "tag": "0198_drop_estimated_cost",
+      "breakpoints": true
+    },
+    {
+      "idx": 195,
+      "version": "7",
+      "when": 1782000400000,
+      "tag": "0199_injection_prompt",
+      "breakpoints": true
+    },
+    {
+      "idx": 196,
+      "version": "7",
+      "when": 1783428000000,
+      "tag": "0200_vulnerability_candidates",
+      "breakpoints": true
+    },
+    {
+      "idx": 197,
+      "version": "7",
+      "when": 1783434000000,
+      "tag": "0201_subject_security_policy",
+      "breakpoints": true
     }
   ]
 }

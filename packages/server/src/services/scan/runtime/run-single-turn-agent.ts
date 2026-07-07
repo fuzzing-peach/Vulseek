@@ -27,6 +27,7 @@ import {
 import { resolveStageTaskName } from "../stage-task-name";
 import { getArtifactSchemaAnnotations } from "../artifacts/artifact-schema-annotations";
 import { SCAN_STAGE_IDS } from "../stage-metadata";
+import { writeScanJobSecurityPolicyArtifact } from "../security-policy-artifact";
 
 const RUNTIME_CUSTOM_SKILLS = [
 	"codeql",
@@ -355,7 +356,7 @@ const buildClaudeEnvPairs = (
 	`ANTHROPIC_DEFAULT_SONNET_MODEL=${agentProfile.model}`,
 	`ANTHROPIC_DEFAULT_OPUS_MODEL=${agentProfile.model}`,
 	`ANTHROPIC_DEFAULT_HAIKU_MODEL=${agentProfile.model}`,
-	`CLAUDE_CODE_ENTRYPOINT=vulseek`,
+	"CLAUDE_CODE_ENTRYPOINT=vulseek",
 	...parseAgentProfileEnvPairs(agentProfile),
 ];
 
@@ -3723,8 +3724,28 @@ export const runSingleTurnAgentInContainer = async (
 			? await findComposeById(input.scanJob.composeId)
 			: null;
 	const injectionPromptText = injectionTarget?.injectionPrompt?.trim() || "";
-	const resolvedPromptFinal = injectionPromptText
-		? `${resolvedPrompt.trimEnd()}\n\n${injectionPromptText}`
+	const securityPolicyText = injectionTarget?.securityPolicy?.trim() || "";
+	const securityPolicyArtifact =
+		injectionTarget && securityPolicyText
+		? await writeScanJobSecurityPolicyArtifact({
+				securityPolicy: securityPolicyText,
+				profileHostPath: await resolveProjectProfileHostPath({
+					projectName: injectionTarget.environment.project.name,
+					profileName: injectionTarget.name || injectionTarget.appName,
+				}),
+				profileContainerPath: resolveMountedProjectProfilePath({
+					projectName: injectionTarget.environment.project.name,
+					profileName: injectionTarget.name || injectionTarget.appName,
+				}),
+				scanJobId: input.scanJob.scanJobId,
+			})
+		: null;
+	const promptAdditions = [
+		securityPolicyArtifact?.instruction,
+		injectionPromptText || null,
+	].filter(Boolean);
+	const resolvedPromptFinal = promptAdditions.length
+		? `${resolvedPrompt.trimEnd()}\n\n${promptAdditions.join("\n\n")}`
 		: resolvedPrompt;
 	const promptWithOutputSchema =
 		input.outputSchema || input.routeOutputSchemas?.length

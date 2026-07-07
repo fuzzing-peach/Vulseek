@@ -34,10 +34,10 @@ import { ContainerPaidMonitoring } from "@/components/dashboard/monitoring/paid/
 import { ShowScanJobs } from "@/components/dashboard/scanning/show-scan-jobs";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
+import { DashboardPanelShell } from "@/components/shared/dashboard-panel-shell";
 import { StatusTooltip } from "@/components/shared/status-tooltip";
 import { Badge } from "@/components/ui/badge";
 import {
-	Card,
 	CardContent,
 	CardDescription,
 	CardHeader,
@@ -113,7 +113,7 @@ const Service = (
 			<UseKeyboardNav forPage="application" />
 			<BreadcrumbSidebar
 				list={[
-					{ name: commonT("dashboard.projects"), href: "/dashboard/projects" },
+					{ name: scanT(t, "scan.breadcrumb.projects", "Projects"), href: "/dashboard/projects" },
 					{
 						name: data?.environment.project.name || "",
 					},
@@ -133,8 +133,7 @@ const Service = (
 				</title>
 			</Head>
 			<div className="w-full">
-				<Card className="h-full bg-sidebar p-2.5 rounded-xl w-full">
-					<div className="rounded-xl bg-background shadow-md ">
+				<DashboardPanelShell>
 						<CardHeader className="flex flex-row justify-between items-center">
 							<div className="flex flex-col">
 								<CardTitle className="text-xl flex flex-row gap-2">
@@ -363,8 +362,7 @@ const Service = (
 								</Tabs>
 							)}
 						</CardContent>
-					</div>
-				</Card>
+				</DashboardPanelShell>
 			</div>
 		</div>
 	);

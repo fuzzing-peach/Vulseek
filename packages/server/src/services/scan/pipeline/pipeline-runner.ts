@@ -5,6 +5,10 @@ import { execAsync } from "../../../utils/process/execAsync";
 import { findScanJobByIdRepo } from "../persistence/scan-job.repo";
 import { stopSandboxAgentServerInContainer } from "../../sandbox-agent/runtime";
 import {
+	CANDIDATE_PRODUCER_STAGE_NAMES,
+	syncVulnerabilityCandidatesFromProducerTask,
+} from "../persistence/candidate.repo";
+import {
 	bindStageLaneRuntimeRepo,
 	claimIdleStageLaneRuntimeRepo,
 	claimSpecificStageLaneRuntimeRepo,
@@ -173,9 +177,7 @@ const readLastJsonRpcErrorMessageFromJsonl = async (jsonlPath: string) => {
 			if (message) {
 				return message;
 			}
-		} catch {
-			continue;
-		}
+		} catch {}
 	}
 	return null;
 };
@@ -203,7 +205,6 @@ const logPipelineEvent = (event: string, details: Record<string, unknown>) => {
 };
 
 const SCAN_JOB_CANCELLED_ERROR_NAME = "ScanJobCancelledError";
-const STALE_RUNNING_TASK_GRACE_MS = 2 * 60 * 1000;
 const STALE_RUNNING_STDOUT_WINDOW_MS = 10 * 60 * 1000;
 const RUNNING_OUTPUT_WITHOUT_END_TURN_LOG_INTERVAL_MS = 5 * 60 * 1000;
 const LOOP_TICK_LOG_INTERVAL_MS = 60 * 1000;
@@ -1732,6 +1733,9 @@ type StageLifecycleSuccess<TOutput, TStageContext extends StageContext> = {
 	rawOutput: string;
 };
 
+const isCandidateProducerStage = (stageId: string) =>
+	(CANDIDATE_PRODUCER_STAGE_NAMES as readonly string[]).includes(stageId);
+
 const prepareStageSuccess = async <
 	TPipelineContext extends PipelineContext,
 	TInput,
@@ -1739,7 +1743,7 @@ const prepareStageSuccess = async <
 	TStageContext extends StageContext,
 >(
 	stage: StageDefinition<TPipelineContext, TInput, TOutput, TStageContext>,
-	ctx: TPipelineContext,
+	_ctx: TPipelineContext,
 	stageCtx: TStageContext,
 	input: TInput,
 	rawOutput: string,
@@ -1769,6 +1773,9 @@ const prepareStageSuccess = async <
 			: await stage.validateOutput(stageCtx, input, rawOutput)
 		: await defaultValidateOutput<TOutput>(stage.id, rawOutput);
 	await updateTaskDefault(stageCtx.taskId, { output });
+	if (isCandidateProducerStage(stage.id)) {
+		await syncVulnerabilityCandidatesFromProducerTask(stageCtx.taskId);
+	}
 	await stage.onSuccess?.(stageCtx, input, output);
 	return output;
 };
@@ -1780,7 +1787,7 @@ const persistTerminalSuccess = async <
 	TStageContext extends StageContext,
 >(
 	stage: StageDefinition<TPipelineContext, TInput, TOutput, TStageContext>,
-	ctx: TPipelineContext,
+	_ctx: TPipelineContext,
 	stageCtx: TStageContext,
 	rawOutput: string,
 	options?: {
@@ -2571,11 +2578,12 @@ const launchStageExecution = async <
 			}
 			logLaunchTiming("ensure_runtime_and_validate", stepStartedAt);
 
-			if (stageState.stage.launch) {
-				void (async () => {
-					const asyncLaunchStartedAt = Date.now();
-					try {
-						await stageState.stage.launch!(stageCtx, execution.input);
+				const launchStage = stageState.stage.launch;
+				if (launchStage) {
+					void (async () => {
+						const asyncLaunchStartedAt = Date.now();
+						try {
+							await launchStage(stageCtx, execution.input);
 						logLaunchTiming("stage_launch", asyncLaunchStartedAt, {
 							laneIndex: laneRuntime?.laneIndex ?? null,
 							containerIndex,

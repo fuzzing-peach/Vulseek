@@ -114,7 +114,14 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 								key={job.scanJobId}
 								href={`/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${type}/${id}/jobs/${job.scanJobId}`}
 							>
-								<div className="flex items-center justify-between rounded-lg border p-4 gap-2 group relative cursor-pointer bg-transparent transition-colors hover:bg-border">
+								<div
+									className={cn(
+										"flex items-center justify-between rounded-lg border p-4 gap-2 group relative cursor-pointer transition-colors",
+										job.status === "running"
+											? "border-yellow-500/35 bg-yellow-500/5 shadow-[0_0_24px_rgba(234,179,8,0.08)] hover:bg-yellow-500/10"
+											: "bg-transparent hover:bg-border",
+									)}
+								>
 									<div className="flex flex-col gap-1">
 										<span className="flex items-center gap-2 font-medium text-foreground">
 											{formatJobTitle(job)}
@@ -141,12 +148,19 @@ export const ShowScanJobs = ({ id, type }: Props) => {
 									</div>
 									<div className="flex flex-col items-end gap-2">
 										<span className="flex items-center gap-2 text-sm capitalize">
-											<span
-												className={cn(
-													"size-2.5 rounded-full",
-													statusColorMap[job.status],
-												)}
-											/>
+											{job.status === "running" ? (
+												<span className="relative flex size-2.5">
+													<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-yellow-400 opacity-75" />
+													<span className="relative inline-flex size-2.5 rounded-full bg-yellow-500" />
+												</span>
+											) : (
+												<span
+													className={cn(
+														"size-2.5 rounded-full",
+														statusColorMap[job.status],
+													)}
+												/>
+											)}
 											{formatScanJobStatusLabel(t, job.status)}
 										</span>
 										<DateTooltip date={job.createdAt} />

@@ -28,11 +28,11 @@ import { useSandboxAgentText } from "@/components/dashboard/scanning/live-task-a
 import { useSandboxAgentSession } from "@/components/dashboard/scanning/use-sandbox-agent-session";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
+import { DashboardPanelShell } from "@/components/shared/dashboard-panel-shell";
 import { DateTooltip } from "@/components/shared/date-tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-	Card,
 	CardContent,
 	CardDescription,
 	CardHeader,
@@ -204,7 +204,7 @@ const CandidateTaskLineagePanel = ({
 	routeSegment,
 	serviceId,
 	scanJobId,
-	scanFunctionTaskId,
+	producerTaskId,
 	enabled,
 }: {
 	candidateId: string;
@@ -214,7 +214,7 @@ const CandidateTaskLineagePanel = ({
 	routeSegment: "profiles" | "services";
 	serviceId: string;
 	scanJobId: string;
-	scanFunctionTaskId?: string;
+	producerTaskId?: string;
 	enabled: boolean;
 }) => {
 	const { t } = useTranslation("scan");
@@ -226,7 +226,7 @@ const CandidateTaskLineagePanel = ({
 	const textAutoScrollRef = useRef(true);
 	const { data, isLoading, isError, error } =
 		api.scan.candidateTaskLineage.useQuery(
-			{ vulnerabilityCandidateId: candidateId, scanJobId, scanFunctionTaskId },
+			{ vulnerabilityCandidateId: candidateId, scanJobId, producerTaskId },
 			{
 				enabled: enabled && !!candidateId && !!scanJobId,
 				refetchInterval: enabled ? 4000 : false,
@@ -260,7 +260,6 @@ const CandidateTaskLineagePanel = ({
 		);
 	}, [tasks]);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: keep text output pinned to the bottom as new chunks append.
 	useEffect(() => {
 		if (taskOutputView !== "text") {
 			textAutoScrollRef.current = true;
@@ -572,9 +571,9 @@ export const ShowScanCandidateDetail = ({
 		typeof router.query.candidateId === "string"
 			? router.query.candidateId
 			: "";
-	const scanFunctionTaskId =
-		typeof router.query.scanFunctionTaskId === "string"
-			? router.query.scanFunctionTaskId
+	const producerTaskId =
+		typeof router.query.producerTaskId === "string"
+			? router.query.producerTaskId
 			: "";
 	const candidateListQueryState = useMemo(
 		() => parseCandidateListQueryState(router.query),
@@ -613,7 +612,7 @@ export const ShowScanCandidateDetail = ({
 			{
 				vulnerabilityCandidateId: candidateId,
 				scanJobId: scanJobId || undefined,
-				scanFunctionTaskId: scanFunctionTaskId || undefined,
+				producerTaskId: producerTaskId || undefined,
 			},
 			{ enabled: !!candidateId && !!scanJobId, refetchInterval: 2000 },
 		);
@@ -674,7 +673,7 @@ export const ShowScanCandidateDetail = ({
 		setNoteDraft(candidate.note || "");
 		setSelectedTags(candidate.tags || []);
 		setTagInput("");
-	}, [candidate?.note, candidate?.tags, candidate?.vulnerabilityCandidateId]);
+	}, [candidate]);
 
 	useEffect(() => {
 		if (!fileTree?.length) {
@@ -761,7 +760,7 @@ export const ShowScanCandidateDetail = ({
 		await updateCandidateMetadataMutation.mutateAsync({
 			vulnerabilityCandidateId: candidateId,
 			scanJobId,
-			scanFunctionTaskId: scanFunctionTaskId || undefined,
+			producerTaskId: producerTaskId || undefined,
 			note: noteDraft,
 			tags: selectedTags,
 		});
@@ -772,7 +771,7 @@ export const ShowScanCandidateDetail = ({
 			utils.scan.candidate.invalidate({
 				vulnerabilityCandidateId: candidateId,
 				scanJobId,
-				scanFunctionTaskId: scanFunctionTaskId || undefined,
+				producerTaskId: producerTaskId || undefined,
 			}),
 			utils.scan.candidates.invalidate({ scanJobId }),
 			utils.scan.candidateTags.invalidate(),
@@ -786,8 +785,7 @@ export const ShowScanCandidateDetail = ({
 			const result = await analyzeCandidateMutation.mutateAsync({
 				vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
 				scanJobId,
-				scanFunctionTaskId:
-					scanFunctionTaskId || candidate.scanFunctionTaskId || undefined,
+				producerTaskId: producerTaskId || candidate.producerTaskId || undefined,
 			});
 			toast.success(
 				scanT(t, "scan.candidates.analysisRequeued", "Analysis requeued"),
@@ -796,7 +794,7 @@ export const ShowScanCandidateDetail = ({
 				utils.scan.candidate.invalidate({
 					vulnerabilityCandidateId: candidateId,
 					scanJobId,
-					scanFunctionTaskId: scanFunctionTaskId || undefined,
+					producerTaskId: producerTaskId || undefined,
 				}),
 				utils.scan.candidates.invalidate({ scanJobId }),
 				utils.scan.one.invalidate({ scanJobId }),
@@ -804,7 +802,7 @@ export const ShowScanCandidateDetail = ({
 				utils.scan.candidateTaskLineage.invalidate({
 					vulnerabilityCandidateId: candidateId,
 					scanJobId,
-					scanFunctionTaskId: scanFunctionTaskId || undefined,
+					producerTaskId: producerTaskId || undefined,
 				}),
 			]);
 			await router.push(
@@ -939,37 +937,37 @@ export const ShowScanCandidateDetail = ({
 				</DialogContent>
 			</Dialog>
 
-			<Card className="bg-background">
-				<CardHeader>
-					<div className="flex items-start justify-between gap-4">
-						<div className="min-w-0">
-							<CardTitle className="text-xl">
-								{candidate?.title || `Candidate ${candidateId.slice(0, 6)}`}
-							</CardTitle>
-							<CardDescription className="mt-2 flex items-center gap-2 break-all">
-								<span>{candidateId}</span>
-								<CopyValueButton
-									value={candidateId}
-									label={scanT(t, "scan.field.candidateId", "Candidate ID")}
-									className="size-7 shrink-0"
-								/>
-							</CardDescription>
-						</div>
-						<div className="flex shrink-0 flex-wrap justify-end gap-2">
-							<Button
-								type="button"
-								variant="outline"
-								title={rerunAnalysisTitle}
-								aria-label={rerunAnalysisTitle}
-								isLoading={analyzeCandidateMutation.isLoading}
-								disabled={
-									!canRerunAnalysis || analyzeCandidateMutation.isLoading
-								}
-								onClick={rerunCandidateAnalysis}
-							>
-								<RefreshCw className="mr-2 size-4" />
-								{scanT(t, "scan.candidates.rerunAnalysis", "Re-run analysis")}
-							</Button>
+			<DashboardPanelShell>
+					<CardHeader>
+						<div className="flex items-start justify-between gap-4">
+							<div className="min-w-0">
+								<CardTitle className="text-xl">
+									{candidate?.title || `Candidate ${candidateId.slice(0, 6)}`}
+								</CardTitle>
+								<CardDescription className="mt-2 flex items-center gap-2 break-all">
+									<span>{candidateId}</span>
+									<CopyValueButton
+										value={candidateId}
+										label={scanT(t, "scan.field.candidateId", "Candidate ID")}
+										className="size-7 shrink-0"
+									/>
+								</CardDescription>
+							</div>
+							<div className="flex shrink-0 flex-wrap justify-end gap-2">
+								<Button
+									type="button"
+									variant="outline"
+									title={rerunAnalysisTitle}
+									aria-label={rerunAnalysisTitle}
+									isLoading={analyzeCandidateMutation.isLoading}
+									disabled={
+										!canRerunAnalysis || analyzeCandidateMutation.isLoading
+									}
+									onClick={rerunCandidateAnalysis}
+								>
+									<RefreshCw className="mr-2 size-4" />
+									{scanT(t, "scan.candidates.rerunAnalysis", "Re-run analysis")}
+								</Button>
 							{canVerify ? (
 								<Button
 									type="button"
@@ -1552,7 +1550,7 @@ export const ShowScanCandidateDetail = ({
 								routeSegment={routeSegment}
 								serviceId={serviceId}
 								scanJobId={scanJobId}
-								scanFunctionTaskId={scanFunctionTaskId || undefined}
+								producerTaskId={producerTaskId || undefined}
 								enabled={activeTab === "task-lineage"}
 							/>
 						</TabsContent>
@@ -1655,7 +1653,7 @@ export const ShowScanCandidateDetail = ({
 						</Link>
 					</div>
 				</CardContent>
-			</Card>
+			</DashboardPanelShell>
 		</div>
 	);
 };

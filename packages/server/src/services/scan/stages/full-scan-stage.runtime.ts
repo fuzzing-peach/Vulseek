@@ -379,9 +379,9 @@ export const resolveTaskRuntimeDirForTask = async (input: {
 	taskName: string;
 	taskId: string;
 }) => {
-	await resolveScanContextMount(input);
+	const mount = await resolveScanContextMount(input);
 	const taskDirPath = path.join(
-		resolveMountedProfileDir(input),
+		mount.mountSource,
 		"jobs",
 		input.scanJobId,
 		resolveTaskRootSegment(input.stageName, input.taskName, input.taskId),

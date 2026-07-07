@@ -1,5 +1,10 @@
 import { db } from "@vulseek/server/db";
-import { scanJobs, type taskStatusEnum, tasks } from "@vulseek/server/db/schema";
+import {
+	scanJobs,
+	type taskStatusEnum,
+	tasks,
+	vulnerabilityCandidates,
+} from "@vulseek/server/db/schema";
 import { TRPCError } from "@trpc/server";
 import { and, asc, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import {
@@ -10,6 +15,32 @@ import {
 import { createShortTaskId } from "../task-id";
 import type { AnalysisResult, TriageResult, VerificationResult } from "../types";
 import { readCandidateIdFromTaskInputArtifact } from "./task-artifact-resolver";
+
+const CANDIDATE_PRODUCER_STAGE_NAMES = new Set([
+	"scan-target",
+	"function-scan",
+	"sink-pre-analyze",
+]);
+
+const findProducerTaskIdForCandidateDescendantTask = async (
+	task: typeof tasks.$inferSelect,
+) => {
+	let currentTask: typeof tasks.$inferSelect | null = task;
+	const seenTaskIds = new Set<string>();
+	while (currentTask) {
+		if (seenTaskIds.has(currentTask.taskId)) {
+			return null;
+		}
+		seenTaskIds.add(currentTask.taskId);
+		if (CANDIDATE_PRODUCER_STAGE_NAMES.has(currentTask.stageName)) {
+			return currentTask.taskId;
+		}
+		currentTask = currentTask.parentTaskId
+			? await findTaskByIdRepo(currentTask.parentTaskId).catch(() => null)
+			: null;
+	}
+	return null;
+};
 
 const tokenUsageKeys = [
 	"inputTokens",
@@ -83,11 +114,16 @@ const buildAnalysisTaskResultView = async (
 	if (!vulnerabilityCandidateId) {
 		return null;
 	}
+	const producerTaskId = await findProducerTaskIdForCandidateDescendantTask(task);
+	if (!producerTaskId) {
+		return null;
+	}
 
 	return {
 		taskId: task.taskId,
 		scanJobId: task.scanJobId,
 		vulnerabilityCandidateId,
+		producerTaskId,
 		result: parsedOutput.data.result,
 		confidence: parsedOutput.data.confidence,
 		score: parsedOutput.data.score,
@@ -114,11 +150,16 @@ const buildVerificationTaskResultView = async (
 	if (!vulnerabilityCandidateId) {
 		return null;
 	}
+	const producerTaskId = await findProducerTaskIdForCandidateDescendantTask(task);
+	if (!producerTaskId) {
+		return null;
+	}
 
 	return {
 		taskId: task.taskId,
 		scanJobId: task.scanJobId,
 		vulnerabilityCandidateId,
+		producerTaskId,
 		result: parsedOutput.data.result,
 		confidence: parsedOutput.data.confidence,
 		score: parsedOutput.data.score,
@@ -145,11 +186,16 @@ const buildTriageTaskResultView = async (
 	if (!vulnerabilityCandidateId) {
 		return null;
 	}
+	const producerTaskId = await findProducerTaskIdForCandidateDescendantTask(task);
+	if (!producerTaskId) {
+		return null;
+	}
 
 	return {
 		taskId: task.taskId,
 		scanJobId: task.scanJobId,
 		vulnerabilityCandidateId,
+		producerTaskId,
 		result: parsedOutput.data.result,
 		disqualifier: parsedOutput.data.disqualifier,
 		disqualifierReason: parsedOutput.data.disqualifierReason,
@@ -433,12 +479,12 @@ export const listChildTasksByParentTaskIdRepo = async (parentTaskId: string) =>
 		.where(eq(tasks.parentTaskId, parentTaskId))
 		.orderBy(desc(tasks.createdAt));
 
-export const listCandidateDescendantTasksByFunctionTaskIdRepo = async (input: {
-	scanFunctionTaskId: string;
+export const listCandidateDescendantTasksByProducerTaskIdRepo = async (input: {
+	producerTaskId: string;
 	vulnerabilityCandidateId: string;
 }) => {
 	const directChildren = await listChildTasksByParentTaskIdRepo(
-		input.scanFunctionTaskId,
+		input.producerTaskId,
 	);
 	const candidateRoots: Array<typeof tasks.$inferSelect> = [];
 	for (const task of directChildren) {
@@ -751,18 +797,21 @@ export const resetFailedTaskForRetryRepo = async (taskId: string) => {
 				cachedWriteTokens: null,
 				attempt: sql`${tasks.attempt} + 1`,
 				updatedAt: new Date().toISOString(),
-			})
-			.where(eq(tasks.taskId, taskId))
-			.returning();
-		const updatedTask = rows[0] || null;
-		if (!updatedTask) {
-			return null;
-		}
+				})
+				.where(eq(tasks.taskId, taskId))
+				.returning();
+			const updatedTask = rows[0] || null;
+			if (!updatedTask) {
+				return null;
+			}
 		await applyScanJobTokenUsageDelta(
 			tx,
 			updatedTask.scanJobId,
 			tokenUsageDelta(previous, updatedTask),
 		);
+		await tx
+			.delete(vulnerabilityCandidates)
+			.where(eq(vulnerabilityCandidates.producerTaskId, taskId));
 		return updatedTask;
 	});
 
@@ -879,12 +928,12 @@ export const listTriageResultsByScanJobIdRepo = async (
 export const findLatestAnalysisResultByCandidateIdRepo = async (input: {
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
-	scanFunctionTaskId?: string | null;
+	producerTaskId?: string | null;
 }): Promise<AnalysisResult | null> => {
-	if (input.scanFunctionTaskId) {
+	if (input.producerTaskId) {
 		const candidateTasks =
-			await listCandidateDescendantTasksByFunctionTaskIdRepo({
-				scanFunctionTaskId: input.scanFunctionTaskId,
+			await listCandidateDescendantTasksByProducerTaskIdRepo({
+				producerTaskId: input.producerTaskId,
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
 			});
 		for (const task of candidateTasks) {
@@ -910,12 +959,12 @@ export const findLatestAnalysisResultByCandidateIdRepo = async (input: {
 export const findLatestVerificationResultByCandidateIdRepo = async (input: {
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
-	scanFunctionTaskId?: string | null;
+	producerTaskId?: string | null;
 }): Promise<VerificationResult | null> => {
-	if (input.scanFunctionTaskId) {
+	if (input.producerTaskId) {
 		const candidateTasks =
-			await listCandidateDescendantTasksByFunctionTaskIdRepo({
-				scanFunctionTaskId: input.scanFunctionTaskId,
+			await listCandidateDescendantTasksByProducerTaskIdRepo({
+				producerTaskId: input.producerTaskId,
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
 			});
 		for (const task of candidateTasks) {
@@ -941,12 +990,12 @@ export const findLatestVerificationResultByCandidateIdRepo = async (input: {
 export const findLatestTriageResultByCandidateIdRepo = async (input: {
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
-	scanFunctionTaskId?: string | null;
+	producerTaskId?: string | null;
 }): Promise<TriageResult | null> => {
-	if (input.scanFunctionTaskId) {
+	if (input.producerTaskId) {
 		const candidateTasks =
-			await listCandidateDescendantTasksByFunctionTaskIdRepo({
-				scanFunctionTaskId: input.scanFunctionTaskId,
+			await listCandidateDescendantTasksByProducerTaskIdRepo({
+				producerTaskId: input.producerTaskId,
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
 			});
 		for (const task of candidateTasks) {

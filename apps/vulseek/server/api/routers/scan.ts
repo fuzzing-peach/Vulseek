@@ -23,6 +23,7 @@ import {
 	findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId,
 	findVulnerabilityCandidateWithLatestAnalysisResultById,
 	getAgentProfileById,
+	getScanHomeOverview,
 	listScanEvaluationResults,
 	listCandidateTags,
 	listScanJobDirectory,
@@ -96,7 +97,7 @@ const parseCsvFilter = (value: string) =>
 const apiUpdateCandidateMetadata = z.object({
 	vulnerabilityCandidateId: z.string().min(1),
 	scanJobId: z.string().min(1),
-	scanFunctionTaskId: z.string().min(1).optional(),
+	producerTaskId: z.string().min(1).optional(),
 	note: z.string().max(10000).default(""),
 	tags: z.array(z.string().min(1).max(64)).max(50).default([]),
 });
@@ -142,6 +143,27 @@ const apiStartCandidateReviewContainer = z.object({
 });
 
 export const scanRouter = createTRPCRouter({
+	homeOverview: protectedProcedure
+		.input(
+			z
+				.object({
+					days: z.number().int().min(1).max(366).optional(),
+				})
+				.optional(),
+		)
+		.query(async ({ input, ctx }) => {
+			if (!ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "No active organization selected",
+				});
+			}
+			return await getScanHomeOverview({
+				organizationId: ctx.session.activeOrganizationId,
+				days: input?.days,
+			});
+		}),
+
 	checkout: protectedProcedure
 		.input(apiCheckoutScanEnvironment)
 		.mutation(async ({ input, ctx }) => {
@@ -1072,7 +1094,7 @@ export const scanRouter = createTRPCRouter({
 			z.object({
 				vulnerabilityCandidateId: z.string().min(1),
 				scanJobId: z.string().min(1).optional(),
-				scanFunctionTaskId: z.string().min(1).optional(),
+				producerTaskId: z.string().min(1).optional(),
 			}),
 		)
 		.query(async ({ input, ctx }) => {
@@ -1108,7 +1130,7 @@ export const scanRouter = createTRPCRouter({
 				await findVulnerabilityCandidateWithLatestAnalysisResultById({
 					vulnerabilityCandidateId: input.vulnerabilityCandidateId,
 					scanJobId: candidateScanJobId,
-					scanFunctionTaskId: input.scanFunctionTaskId,
+					producerTaskId: input.producerTaskId,
 				});
 			if (!enrichedCandidate) {
 				throw new TRPCError({
@@ -1151,23 +1173,23 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 
-			await findVulnerabilityCandidateWithLatestAnalysisResultById({
-				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
-				scanJobId: input.scanJobId,
-				scanFunctionTaskId: input.scanFunctionTaskId,
-			});
+				await findVulnerabilityCandidateWithLatestAnalysisResultById({
+					vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+					scanJobId: input.scanJobId,
+					producerTaskId: input.producerTaskId,
+				});
 
 			return await updateVulnerabilityCandidateMetadata(input);
 		}),
 
-	candidateTaskLineage: protectedProcedure
-		.input(
-			z.object({
-				vulnerabilityCandidateId: z.string().min(1),
-				scanJobId: z.string().min(1).optional(),
-				scanFunctionTaskId: z.string().min(1).optional(),
-			}),
-		)
+		candidateTaskLineage: protectedProcedure
+			.input(
+				z.object({
+					vulnerabilityCandidateId: z.string().min(1),
+					scanJobId: z.string().min(1).optional(),
+					producerTaskId: z.string().min(1).optional(),
+				}),
+			)
 		.query(async ({ input, ctx }) => {
 			const candidate = input.scanJobId
 				? null
@@ -1197,22 +1219,22 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 
-			return await findCandidateTaskLineage({
-				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
-				scanJobId: candidateScanJobId,
-				scanFunctionTaskId: input.scanFunctionTaskId,
-			});
-		}),
-
-	analyzeCandidate: protectedProcedure
-		.input(
-			z.object({
-				vulnerabilityCandidateId: z.string().min(1),
-				scanJobId: z.string().min(1),
-				scanFunctionTaskId: z.string().min(1).optional(),
+				return await findCandidateTaskLineage({
+					vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+					scanJobId: candidateScanJobId,
+					producerTaskId: input.producerTaskId,
+				});
 			}),
-		)
-		.mutation(async ({ input, ctx }) => {
+
+		analyzeCandidate: protectedProcedure
+			.input(
+				z.object({
+					vulnerabilityCandidateId: z.string().min(1),
+					scanJobId: z.string().min(1),
+					producerTaskId: z.string().min(1).optional(),
+				}),
+			)
+			.mutation(async ({ input, ctx }) => {
 			const scanJob = await findScanJobById(input.scanJobId);
 			let organizationId: string | undefined;
 			if (scanJob.applicationId) {

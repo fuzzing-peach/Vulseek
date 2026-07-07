@@ -50,6 +50,7 @@ import { ScanStageGraph } from "@/components/dashboard/scanning/scan-stage-graph
 import { useSandboxAgentActivities } from "@/components/dashboard/scanning/use-sandbox-agent-activity";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
+import { DashboardPanelShell } from "@/components/shared/dashboard-panel-shell";
 import { DateTooltip } from "@/components/shared/date-tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -146,7 +147,7 @@ const formatResultLabel = (value: string) =>
 const CANDIDATE_EXPORT_FIELDS = [
 	{ key: "vulnerabilityCandidateId", label: "Candidate ID" },
 	{ key: "scanJobId", label: "Scan Job ID" },
-	{ key: "scanFunctionTaskId", label: "Function Task ID" },
+	{ key: "producerTaskId", label: "Producer Task ID" },
 	{ key: "title", label: "Title" },
 	{ key: "description", label: "Description" },
 	{ key: "fileHostPath", label: "Source File Host Path" },
@@ -742,8 +743,8 @@ const RERUNNABLE_TASK_STATUSES = new Set(["completed", "failed", "exited", "canc
 
 const buildCandidateReanalysisKey = (input: {
 	vulnerabilityCandidateId: string;
-	scanFunctionTaskId?: string | null;
-}) => `${input.scanFunctionTaskId || "default"}:${input.vulnerabilityCandidateId}`;
+	producerTaskId?: string | null;
+}) => `${input.producerTaskId || "default"}:${input.vulnerabilityCandidateId}`;
 
 const getTaskStatusLabel = (t: ScanTranslation, status?: string) => {
 	if (!status) {
@@ -988,8 +989,11 @@ const SankeyFlowDiagram = ({
 	);
 
 	const renderedLinks = activeLinks.map((link) => {
-		const src = layoutById.get(link.source)!;
-		const tgt = layoutById.get(link.target)!;
+		const src = layoutById.get(link.source);
+		const tgt = layoutById.get(link.target);
+		if (!src || !tgt) {
+			return null;
+		}
 		const srcH =
 			src.node.count > 0 ? (src.h * link.count) / src.node.count : 0;
 		const tgtH =
@@ -1014,7 +1018,7 @@ const SankeyFlowDiagram = ({
 		].join(" ");
 		const colors = nodeColors[link.target] ?? defaultNodeColors;
 		return { key: `${link.source}-${link.target}`, d, colors };
-	});
+	}).filter((link): link is NonNullable<typeof link> => Boolean(link));
 
 	const renderNodes = (
 		colLayout: ReturnType<typeof layoutColumn>,
@@ -1256,11 +1260,7 @@ const ResultFlowChart = ({
 }) => {
 	const nodes = summary?.flow.nodes ?? [];
 	const links = summary?.flow.links ?? [];
-	const maxLinkCount = Math.max(1, ...links.map((link) => link.count));
 	const nodeById = new Map(nodes.map((node) => [node.id, node]));
-	const analysisNodes = nodes.filter(n => n.stage === "analysis");
-	const verifyNodes = nodes.filter(n => n.stage === "verify");
-	const triageNodes = nodes.filter(n => n.stage === "triage");
 
 	if (!summary || nodes.length === 0) {
 		return (
@@ -1950,7 +1950,7 @@ export const ShowScanJobDetail = ({
 	const handleAnalyzeCandidate = async (candidate: {
 		vulnerabilityCandidateId: string;
 		scanJobId: string;
-		scanFunctionTaskId?: string | null;
+		producerTaskId?: string | null;
 	}) => {
 		const reanalysisKey = buildCandidateReanalysisKey(candidate);
 		setReanalyzingCandidateId(reanalysisKey);
@@ -1958,7 +1958,7 @@ export const ShowScanJobDetail = ({
 			const result = await analyzeCandidateMutation.mutateAsync({
 				vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
 				scanJobId: candidate.scanJobId,
-				scanFunctionTaskId: candidate.scanFunctionTaskId || undefined,
+				producerTaskId: candidate.producerTaskId || undefined,
 			});
 			toast.success(
 				scanT(t, "scan.candidates.analysisRequeued", "Analysis requeued"),
@@ -2350,7 +2350,7 @@ export const ShowScanJobDetail = ({
 		const exportableFields: Record<CandidateExportField, unknown> = {
 			vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
 			scanJobId: candidate.scanJobId,
-			scanFunctionTaskId: candidate.scanFunctionTaskId,
+			producerTaskId: candidate.producerTaskId,
 			title: candidate.title,
 			description: candidate.description,
 			fileHostPath: candidateWithHostPaths.fileHostPath,
@@ -2505,7 +2505,7 @@ export const ShowScanJobDetail = ({
 	const buildCandidateDetailHref = (
 		candidate: Pick<
 			CandidateListItem,
-			"vulnerabilityCandidateId" | "scanFunctionTaskId"
+			"vulnerabilityCandidateId" | "producerTaskId"
 		>,
 	) => {
 		const href = buildCandidateListStateHref(
@@ -2515,12 +2515,12 @@ export const ShowScanJobDetail = ({
 			currentCandidateListState,
 			"candidates",
 		);
-		if (!candidate.scanFunctionTaskId) {
+		if (!candidate.producerTaskId) {
 			return href;
 		}
 		const separator = href.includes("?") ? "&" : "?";
-		return `${href}${separator}scanFunctionTaskId=${encodeURIComponent(
-			candidate.scanFunctionTaskId,
+		return `${href}${separator}producerTaskId=${encodeURIComponent(
+			candidate.producerTaskId,
 		)}`;
 	};
 	const buildTaskDetailHref = (taskId: string) =>
@@ -2683,30 +2683,30 @@ export const ShowScanJobDetail = ({
 				</title>
 			</Head>
 
-			<Card className="bg-background">
-				<CardHeader>
-					<CardTitle className="text-xl">
-						{scanT(t, "scan.job.title", "Scan Job {{id}}", {
-							id: scanJobId.slice(0, 6),
-						})}
-					</CardTitle>
-					<CardDescription className="flex items-center gap-2 break-all">
-						<span>{scanJobId}</span>
-						<CopyValueButton
-							value={scanJobId}
-							label={scanT(t, "scan.field.jobId", "Job ID")}
-							className="size-7 shrink-0"
-						/>
-					</CardDescription>
-				</CardHeader>
-				<CardContent>
-					<Tabs
-						value={activeTab}
-						onValueChange={(value) => {
-							setActiveTab(value as ScanJobTab);
-						}}
-						className="w-full"
-					>
+			<DashboardPanelShell>
+					<CardHeader>
+						<CardTitle className="text-xl">
+							{scanT(t, "scan.job.title", "Scan Job {{id}}", {
+								id: scanJobId.slice(0, 6),
+							})}
+						</CardTitle>
+						<CardDescription className="flex items-center gap-2 break-all">
+							<span>{scanJobId}</span>
+							<CopyValueButton
+								value={scanJobId}
+								label={scanT(t, "scan.field.jobId", "Job ID")}
+								className="size-7 shrink-0"
+							/>
+						</CardDescription>
+					</CardHeader>
+					<CardContent>
+						<Tabs
+							value={activeTab}
+							onValueChange={(value) => {
+								setActiveTab(value as ScanJobTab);
+							}}
+							className="w-full"
+						>
 						<TabsList className="flex h-auto min-h-10 w-full justify-start gap-1 overflow-x-auto p-1 sm:gap-2">
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="overview">
 								{scanT(t, "scan.job.tabs.overview", "Overview")}
@@ -3392,7 +3392,7 @@ export const ShowScanJobDetail = ({
 												</div>
 												<div className="space-y-2">
 													{ANALYSIS_RESULT_OPTIONS.map((value) => (
-														<label
+														<div
 															key={value}
 															className="flex items-center gap-2 text-sm"
 														>
@@ -3401,9 +3401,9 @@ export const ShowScanJobDetail = ({
 																onCheckedChange={() =>
 																	toggleAnalysisFilter(value)
 																}
-															/>
-															<span>{formatAnalysisResultLabel(t, value)}</span>
-														</label>
+																/>
+																<span>{formatAnalysisResultLabel(t, value)}</span>
+															</div>
 													))}
 												</div>
 											</PopoverContent>
@@ -3437,7 +3437,7 @@ export const ShowScanJobDetail = ({
 												</div>
 												<div className="space-y-2">
 													{VERIFY_RESULT_OPTIONS.map((value) => (
-														<label
+														<div
 															key={value}
 															className="flex items-center gap-2 text-sm"
 														>
@@ -3446,9 +3446,9 @@ export const ShowScanJobDetail = ({
 																onCheckedChange={() =>
 																	toggleVerifyFilter(value)
 																}
-															/>
-															<span>{formatTruthResultLabel(t, value)}</span>
-														</label>
+																/>
+																<span>{formatTruthResultLabel(t, value)}</span>
+															</div>
 													))}
 												</div>
 											</PopoverContent>
@@ -3482,7 +3482,7 @@ export const ShowScanJobDetail = ({
 												</div>
 												<div className="space-y-2">
 													{TRIAGE_RESULT_OPTIONS.map((value) => (
-														<label
+														<div
 															key={value}
 															className="flex items-center gap-2 text-sm"
 														>
@@ -3497,9 +3497,9 @@ export const ShowScanJobDetail = ({
 																	t,
 																	`scan.triageResult.${value}`,
 																	formatResultLabel(value),
-																)}
-															</span>
-														</label>
+																	)}
+																</span>
+															</div>
 													))}
 												</div>
 											</PopoverContent>
@@ -3576,10 +3576,14 @@ export const ShowScanJobDetail = ({
 															<Download className="mr-2 size-4" />
 															{scanT(t, "scan.candidates.export", "Export")}
 														</Button>
-														<label className="text-muted-foreground">
+														<label
+															className="text-muted-foreground"
+															htmlFor="scan-candidate-page-size"
+														>
 															{scanT(t, "scan.pagination.pageSize", "Page size")}
 														</label>
 														<select
+															id="scan-candidate-page-size"
 															value={candidatePageSize}
 															onChange={(event) => {
 																setCandidatePage(1);
@@ -4082,7 +4086,7 @@ export const ShowScanJobDetail = ({
 														</div>
 														<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
 															{CANDIDATE_EXPORT_FIELDS.map((field) => (
-																<label
+																<div
 																	key={field.key}
 																	className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
 																>
@@ -4094,10 +4098,10 @@ export const ShowScanJobDetail = ({
 																			toggleCandidateExportField(field.key)
 																		}
 																	/>
-																	<span>
-																		{getCandidateExportFieldLabel(t, field)}
-																	</span>
-																</label>
+																		<span>
+																			{getCandidateExportFieldLabel(t, field)}
+																		</span>
+																</div>
 															))}
 														</div>
 														{!hasSelectedExportFields ? (
@@ -4821,11 +4825,12 @@ export const ShowScanJobDetail = ({
 														const isRerunningTask =
 															rerunningTaskId === task.taskId ||
 															bulkRerunningTaskIds.has(task.taskId);
-														const isSelectedFinishedTask =
-															selectedFinishedTaskIds.has(task.taskId);
-														const displayTask = getTaskListDisplay(t, task);
-														return (
-															<tr
+															const isSelectedFinishedTask =
+																selectedFinishedTaskIds.has(task.taskId);
+															const displayTask = getTaskListDisplay(t, task);
+															return (
+																// biome-ignore lint/a11y/useSemanticElements: the whole table row is an existing navigation target with nested row actions.
+																<tr
 																key={task.id}
 																role="link"
 																tabIndex={0}
@@ -5117,8 +5122,8 @@ export const ShowScanJobDetail = ({
 							{scanT(t, "scan.job.backToJobs", "Back to Jobs")}
 						</Link>
 					</div>
-				</CardContent>
-			</Card>
+					</CardContent>
+			</DashboardPanelShell>
 		</div>
 	);
 };

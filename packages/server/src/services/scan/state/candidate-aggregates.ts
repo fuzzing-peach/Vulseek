@@ -2,12 +2,14 @@ export const buildCandidatesWithLatestResults = <
 	Candidate extends {
 		scanJobId: string;
 		vulnerabilityCandidateId: string;
+		producerTaskId: string;
 		confidence?: number | null;
 		score?: number | null;
 	},
 	AnalysisResult extends {
 		taskId: string;
 		vulnerabilityCandidateId: string;
+		producerTaskId: string;
 		result: string;
 		reportPath?: string | null;
 		confidence?: number | null;
@@ -21,6 +23,7 @@ export const buildCandidatesWithLatestResults = <
 	VerificationResult extends {
 		taskId: string;
 		vulnerabilityCandidateId: string;
+		producerTaskId: string;
 		result: string;
 		reportPath?: string | null;
 		confidence?: number | null;
@@ -34,6 +37,7 @@ export const buildCandidatesWithLatestResults = <
 	TriageResult extends {
 		taskId: string;
 		vulnerabilityCandidateId: string;
+		producerTaskId: string;
 		result: string;
 		disqualifier?: string | null;
 		disqualifierReason?: string | null;
@@ -72,61 +76,43 @@ export const buildCandidatesWithLatestResults = <
 		reportPath: string | null;
 	};
 }) => {
-	const latestAnalysisResultByCandidateId = new Map<string, AnalysisResult>();
+	const resultKey = (value: {
+		producerTaskId: string;
+		vulnerabilityCandidateId: string;
+	}) => `${value.producerTaskId}\n${value.vulnerabilityCandidateId}`;
+	const latestAnalysisResultByCandidateKey = new Map<string, AnalysisResult>();
 	for (const analysisResult of input.analysisResults) {
-		if (
-			!latestAnalysisResultByCandidateId.has(
-				analysisResult.vulnerabilityCandidateId,
-			)
-		) {
-			latestAnalysisResultByCandidateId.set(
-				analysisResult.vulnerabilityCandidateId,
-				analysisResult,
-			);
+		const key = resultKey(analysisResult);
+		if (!latestAnalysisResultByCandidateKey.has(key)) {
+			latestAnalysisResultByCandidateKey.set(key, analysisResult);
 		}
 	}
 
-	const latestTriageResultByCandidateId = new Map<string, TriageResult>();
+	const latestTriageResultByCandidateKey = new Map<string, TriageResult>();
 	for (const triageResult of input.triageResults || []) {
-		if (
-			!latestTriageResultByCandidateId.has(
-				triageResult.vulnerabilityCandidateId,
-			)
-		) {
-			latestTriageResultByCandidateId.set(
-				triageResult.vulnerabilityCandidateId,
-				triageResult,
-			);
+		const key = resultKey(triageResult);
+		if (!latestTriageResultByCandidateKey.has(key)) {
+			latestTriageResultByCandidateKey.set(key, triageResult);
 		}
 	}
 
-	const latestVerificationResultByCandidateId = new Map<
+	const latestVerificationResultByCandidateKey = new Map<
 		string,
 		VerificationResult
 	>();
 	for (const verificationResult of input.verificationResults) {
-		if (
-			!latestVerificationResultByCandidateId.has(
-				verificationResult.vulnerabilityCandidateId,
-			)
-		) {
-			latestVerificationResultByCandidateId.set(
-				verificationResult.vulnerabilityCandidateId,
-				verificationResult,
-			);
+		const key = resultKey(verificationResult);
+		if (!latestVerificationResultByCandidateKey.has(key)) {
+			latestVerificationResultByCandidateKey.set(key, verificationResult);
 		}
 	}
 
 	return input.candidates.map((candidate) => {
-		const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
-			candidate.vulnerabilityCandidateId,
-		);
-		const latestVerificationResult = latestVerificationResultByCandidateId.get(
-			candidate.vulnerabilityCandidateId,
-		);
-		const latestTriageResult = latestTriageResultByCandidateId.get(
-			candidate.vulnerabilityCandidateId,
-		);
+		const key = resultKey(candidate);
+		const latestAnalysisResult = latestAnalysisResultByCandidateKey.get(key);
+		const latestVerificationResult =
+			latestVerificationResultByCandidateKey.get(key);
+		const latestTriageResult = latestTriageResultByCandidateKey.get(key);
 		const analysisReportPath =
 			latestAnalysisResult?.reportPath ||
 			input.buildAnalysisReportPath(

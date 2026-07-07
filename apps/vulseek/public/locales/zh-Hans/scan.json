@@ -375,7 +375,7 @@
   "scan.candidate.latestTriage": "最新分级",
   "scan.exportField.vulnerabilityCandidateId": "候选点位 ID",
   "scan.exportField.scanJobId": "扫描任务 ID",
-  "scan.exportField.scanFunctionTaskId": "函数阶段任务 ID",
+  "scan.exportField.producerTaskId": "生产任务 ID",
   "scan.exportField.title": "标题",
   "scan.exportField.description": "描述",
   "scan.exportField.fileHostPath": "源码文件宿主路径",

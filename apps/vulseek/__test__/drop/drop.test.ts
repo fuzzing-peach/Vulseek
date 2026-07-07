@@ -47,6 +47,7 @@ const baseApp: ApplicationNested = {
 	fuzzingBudgetSeconds: 600,
 		postCheckoutScript: "",
 		injectionPrompt: "",
+		securityPolicy: "",
 		localPath: null,
 		analysisReportTemplate: "",
 	scanStageSettings: {},

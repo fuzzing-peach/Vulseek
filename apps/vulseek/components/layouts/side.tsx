@@ -139,6 +139,12 @@ const MENU: Menu = {
 	home: [
 		{
 			isSingle: true,
+			title: "Overview",
+			url: "/dashboard",
+			icon: Activity,
+		},
+		{
+			isSingle: true,
 			title: "Projects",
 			url: "/dashboard/projects",
 			icon: Folder,
@@ -437,6 +443,7 @@ function isActiveRoute(opts: {
 	if (!normalizedPathname) return false;
 
 	if (normalizedPathname === normalizedItemUrl) return true;
+	if (normalizedItemUrl === "/dashboard") return false;
 
 	if (normalizedPathname.startsWith(normalizedItemUrl)) {
 		const nextChar = normalizedPathname.charAt(normalizedItemUrl.length);

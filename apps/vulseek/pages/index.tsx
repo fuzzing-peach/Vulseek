@@ -95,7 +95,7 @@ export default function Home({ IS_CLOUD }: Props) {
 			}
 
 			toast.success("Logged in successfully");
-			router.push("/dashboard/projects");
+			router.push("/dashboard");
 		} catch {
 			toast.error("An error occurred while logging in");
 		} finally {
@@ -123,7 +123,7 @@ export default function Home({ IS_CLOUD }: Props) {
 			}
 
 			toast.success("Logged in successfully");
-			router.push("/dashboard/projects");
+			router.push("/dashboard");
 		} catch {
 			toast.error("An error occurred while verifying 2FA code");
 		} finally {
@@ -153,7 +153,7 @@ export default function Home({ IS_CLOUD }: Props) {
 			}
 
 			toast.success("Logged in successfully");
-			router.push("/dashboard/projects");
+			router.push("/dashboard");
 		} catch {
 			toast.error("An error occurred while verifying backup code");
 		} finally {
@@ -475,7 +475,7 @@ export async function getServerSideProps(context: GetServerSidePropsContext) {
 				return {
 					redirect: {
 						permanent: true,
-						destination: "/dashboard/projects",
+						destination: "/dashboard",
 					},
 				};
 			}
@@ -504,7 +504,7 @@ export async function getServerSideProps(context: GetServerSidePropsContext) {
 		return {
 			redirect: {
 				permanent: true,
-				destination: "/dashboard/projects",
+				destination: "/dashboard",
 			},
 		};
 	}

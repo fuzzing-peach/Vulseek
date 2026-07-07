@@ -1,13 +1,15 @@
 import { relations } from "drizzle-orm";
 import {
-	AnyPgColumn,
+	type AnyPgColumn,
 	bigint,
+	boolean,
 	index,
 	integer,
 	jsonb,
 	primaryKey,
 	pgEnum,
 	pgTable,
+	real,
 	text,
 } from "drizzle-orm/pg-core";
 import { randomUUID } from "node:crypto";
@@ -356,6 +358,71 @@ export const candidateMetadata = pgTable(
 	}),
 );
 
+export const vulnerabilityCandidates = pgTable(
+	"vulnerability_candidates",
+	{
+		vulnerabilityCandidateId: text("vulnerabilityCandidateId").notNull(),
+		scanJobId: text("scanJobId")
+			.notNull()
+			.references(() => scanJobs.scanJobId, {
+				onDelete: "cascade",
+			}),
+		producerTaskId: text("producerTaskId")
+			.notNull()
+			.references(() => tasks.taskId, {
+				onDelete: "cascade",
+			}),
+		producerStageName: text("producerStageName").notNull(),
+		functionId: text("functionId"),
+		title: text("title").notNull(),
+		description: text("description"),
+		filePath: text("filePath"),
+		line: integer("line"),
+		vulnerabilityType: text("vulnerabilityType"),
+		status: taskStatusEnum("status").notNull().default("pending"),
+		currentStage: text("currentStage")
+			.$type<"analyzing" | "fuzzing" | "verifying">()
+			.notNull()
+			.default("analyzing"),
+		confidence: real("confidence"),
+		score: real("score"),
+		targetId: text("targetId"),
+		targetKind: text("targetKind"),
+		claim: text("claim").notNull(),
+		rootCauseKey: text("rootCauseKey"),
+		evidence: jsonb("evidence").$type<unknown[]>().notNull().default([]),
+		attackerControl: text("attackerControl"),
+		affectedSink: text("affectedSink"),
+		preconditions: jsonb("preconditions").$type<string[]>().notNull().default([]),
+		quickDisproofAttempt: text("quickDisproofAttempt"),
+		needsFuzzing: boolean("needsFuzzing").notNull().default(false),
+		needsManualAnalysis: boolean("needsManualAnalysis").notNull().default(false),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		pk: primaryKey({
+			columns: [table.scanJobId, table.vulnerabilityCandidateId],
+		}),
+		scanJobIdx: index("vulnerability_candidates_scan_job_idx").on(
+			table.scanJobId,
+		),
+		producerTaskIdx: index("vulnerability_candidates_producer_task_idx").on(
+			table.producerTaskId,
+		),
+		producerStageIdx: index("vulnerability_candidates_producer_stage_idx").on(
+			table.producerStageName,
+		),
+		createdAtIdx: index("vulnerability_candidates_created_at_idx").on(
+			table.createdAt,
+		),
+	}),
+);
+
 export const scanEvaluateResults = pgTable(
 	"scan_evaluate_results",
 	{
@@ -425,6 +492,7 @@ export const scanJobsRelations = relations(scanJobs, ({ one, many }) => ({
 	}),
 	tasks: many(tasks),
 	candidateMetadata: many(candidateMetadata),
+	vulnerabilityCandidates: many(vulnerabilityCandidates),
 	evaluateResults: many(scanEvaluateResults),
 }));
 
@@ -449,6 +517,20 @@ export const candidateMetadataRelations = relations(
 		scanJob: one(scanJobs, {
 			fields: [candidateMetadata.scanJobId],
 			references: [scanJobs.scanJobId],
+		}),
+	}),
+);
+
+export const vulnerabilityCandidatesRelations = relations(
+	vulnerabilityCandidates,
+	({ one }) => ({
+		scanJob: one(scanJobs, {
+			fields: [vulnerabilityCandidates.scanJobId],
+			references: [scanJobs.scanJobId],
+		}),
+		producerTask: one(tasks, {
+			fields: [vulnerabilityCandidates.producerTaskId],
+			references: [tasks.taskId],
 		}),
 	}),
 );

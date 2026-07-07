@@ -1,6 +1,7 @@
 "use client";
 
 import { ScanStageSettingsPanel } from "@/components/dashboard/shared/scan-stage-settings-panel";
+import { SecurityPolicyCard } from "@/components/dashboard/shared/security-policy-card";
 import { Button } from "@/components/ui/button";
 import {
 	Card,
@@ -76,6 +77,16 @@ export const ShowAgentProfile = ({ applicationId }: Props) => {
 					await mutateAsync({
 						applicationId,
 						...payload,
+					});
+					await utils.application.one.invalidate({ applicationId });
+				}}
+			/>
+			<SecurityPolicyCard
+				value={data?.securityPolicy}
+				onSave={async (securityPolicy) => {
+					await mutateAsync({
+						applicationId,
+						securityPolicy,
 					});
 					await utils.application.one.invalidate({ applicationId });
 				}}

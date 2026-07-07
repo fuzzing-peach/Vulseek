@@ -375,7 +375,7 @@
   "scan.candidate.latestTriage": "Latest Triage",
   "scan.exportField.vulnerabilityCandidateId": "Candidate ID",
   "scan.exportField.scanJobId": "Scan Job ID",
-  "scan.exportField.scanFunctionTaskId": "Function Task ID",
+  "scan.exportField.producerTaskId": "Producer Task ID",
   "scan.exportField.title": "Title",
   "scan.exportField.description": "Description",
   "scan.exportField.fileHostPath": "Source File Host Path",

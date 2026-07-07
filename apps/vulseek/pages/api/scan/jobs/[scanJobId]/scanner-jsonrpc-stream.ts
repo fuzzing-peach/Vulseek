@@ -117,7 +117,7 @@ export default async function handler(
 
 	let filePath = await getScanJobAppServerJsonlPath(scanJobId);
 	let scanModuleTaskId: string | null = null;
-	let scanFunctionTaskId: string | null = null;
+	let producerTaskId: string | null = null;
 	let moduleId: string | null = null;
 	let functionId: string | null = null;
 
@@ -151,15 +151,15 @@ export default async function handler(
 	}
 
 	if (requestedStage === "function_scanning") {
-		scanFunctionTaskId =
-			typeof req.query.scanFunctionTaskId === "string"
-				? req.query.scanFunctionTaskId
+		producerTaskId =
+			typeof req.query.producerTaskId === "string"
+				? req.query.producerTaskId
 				: null;
-		if (!scanFunctionTaskId) {
-			res.status(400).json({ message: "Missing scanFunctionTaskId" });
+		if (!producerTaskId) {
+			res.status(400).json({ message: "Missing producerTaskId" });
 			return;
 		}
-		const functionTask = await findTaskById(scanFunctionTaskId).catch(() => null);
+		const functionTask = await findTaskById(producerTaskId).catch(() => null);
 		if (
 			!functionTask ||
 			functionTask.scanJobId !== scanJobId ||
@@ -283,14 +283,14 @@ export default async function handler(
 				return;
 			}
 
-			if (requestedStage === "function_scanning" && scanFunctionTaskId) {
-				const latestTask = await findTaskById(scanFunctionTaskId).catch(() => null);
+			if (requestedStage === "function_scanning" && producerTaskId) {
+				const latestTask = await findTaskById(producerTaskId).catch(() => null);
 				if (!latestTask || latestTask.status !== "running") {
 					sendEvent(res, "done", {
 						status: latestTask?.status || "completed",
 						stage: requestedStage,
 						scanModuleTaskId,
-						scanFunctionTaskId,
+						producerTaskId,
 						moduleId,
 						functionId,
 					});

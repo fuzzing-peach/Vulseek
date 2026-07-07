@@ -1,24 +1,7 @@
-import { scanJobs, tasks } from "@vulseek/server/db/schema";
+import type { scanJobs, tasks } from "@vulseek/server/db/schema";
 import type {
 	Analysis,
-	BuildFuzzerRequest,
-	Candidate,
-	CriticResponse,
-	DeltaScopeManifest,
 	Evidence,
-	FinalAnalysis,
-	Function,
-	FunctionScanManifest,
-	FuzzBuildResult,
-	FuzzRunResult,
-	Module,
-	ModuleScanManifest,
-	Repository,
-	RepositoryModule,
-	RepositoryScanManifest,
-	ScanTargetManifest,
-	Target,
-	IdentifyTargetManifest,
 	Triage,
 	Verification,
 } from "./artifacts/contracts/domain-object.contract";
@@ -69,7 +52,9 @@ export type Task = typeof tasks.$inferSelect;
 export type VulnerabilityCandidate = {
 	vulnerabilityCandidateId: string;
 	scanJobId: string;
-	scanFunctionTaskId: string | null;
+	producerTaskId: string;
+	producerStageName: string;
+	functionId: string | null;
 	title: string;
 	description: string | null;
 	filePath: string | null;
@@ -88,6 +73,17 @@ export type VulnerabilityCandidate = {
 	currentStage: "analyzing" | "fuzzing" | "verifying";
 	confidence: number | null;
 	score: number | null;
+	targetId: string | null;
+	targetKind: string | null;
+	claim: string;
+	rootCauseKey: string | null;
+	evidence: Evidence[];
+	attackerControl: string | null;
+	affectedSink: string | null;
+	preconditions: string[];
+	quickDisproofAttempt: string | null;
+	needsFuzzing: boolean;
+	needsManualAnalysis: boolean;
 	note: string;
 	tags: string[];
 	createdAt: string;
@@ -97,6 +93,7 @@ export type AnalysisResult = {
 	taskId: string;
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
+	producerTaskId: string;
 	result: Analysis["result"];
 	confidence: number | null;
 	score: number | null;
@@ -112,6 +109,7 @@ export type VerificationResult = {
 	taskId: string;
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
+	producerTaskId: string;
 	result: Verification["result"];
 	confidence: number | null;
 	score: number | null;
@@ -128,6 +126,7 @@ export type TriageResult = {
 	taskId: string;
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
+	producerTaskId: string;
 	result: Triage["result"];
 	disqualifier: Triage["disqualifier"];
 	disqualifierReason: string | null;

@@ -1,5 +1,6 @@
 export * from "./auth/random-password";
 export * from "./constants/index";
+export { closeDbConnection } from "./db";
 export * from "./db/validations/domain";
 export * from "./db/validations/index";
 export * from "./lib/auth";
@@ -41,6 +42,7 @@ export * from "./services/scan/api/scan-jobs";
 export * from "./services/scan/api/candidate-records";
 export * from "./services/scan/api/evaluations";
 export * from "./services/scan/api/tasks";
+export * from "./services/scan/home-overview";
 export * from "./services/scan/live-session";
 export type {
 	ScanCandidateQueueJob,
