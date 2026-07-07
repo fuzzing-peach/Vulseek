@@ -1,4 +1,4 @@
-import { Folder, GitBranch, Loader2, UploadCloud } from "lucide-react";
+import { FolderOpen, GitBranch, Loader2, UploadCloud } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -207,13 +207,13 @@ export const ShowProviderForm = ({ applicationId }: Props) => {
 								<UploadCloud className="size-5 text-current" />
 								Drop
 							</TabsTrigger>
-								<TabsTrigger
-									value="local"
-									className="shrink-0 rounded-none border-b-2 gap-2 border-b-transparent px-2 sm:px-3 data-[state=active]:border-b-2 data-[state=active]:border-b-border"
-								>
-									<Folder className="size-5 text-current" />
-									Local
-								</TabsTrigger>
+							<TabsTrigger
+								value="local"
+								className="shrink-0 rounded-none border-b-2 gap-2 border-b-transparent px-2 sm:px-3 data-[state=active]:border-b-2 data-[state=active]:border-b-border"
+							>
+								<FolderOpen className="size-5 text-current" />
+								Local
+							</TabsTrigger>
 						</TabsList>
 					</div>
 
@@ -307,9 +307,9 @@ export const ShowProviderForm = ({ applicationId }: Props) => {
 					<TabsContent value="drop" className="w-full p-2">
 						<SaveDragNDrop applicationId={applicationId} />
 					</TabsContent>
-						<TabsContent value="local" className="w-full p-2">
-							<SaveLocalProvider applicationId={applicationId} />
-						</TabsContent>
+					<TabsContent value="local" className="w-full p-2">
+						<SaveLocalProvider applicationId={applicationId} />
+					</TabsContent>
 				</Tabs>
 			</CardContent>
 		</Card>

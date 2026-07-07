@@ -1721,7 +1721,7 @@ type CheckoutTask = {
 	enableSubmodules: boolean;
 	postCheckoutScript: string;
 	dockerfileTemplate: string;
-	localPath?: string;
+	localPath?: string | null;
 	stdout: string;
 	stderr: string;
 	errorMessage?: string;
@@ -1863,7 +1863,8 @@ export const resolveScanGitRepositoryContext = async (
 				break;
 			case "local":
 				localPath = application.localPath || null;
-				gitBranch = "main";
+				gitUrl = "";
+				gitBranch = "";
 				break;
 			default:
 				gitUrl = "<GIT_URL>";
@@ -1967,8 +1968,8 @@ const resolveCheckoutContext = async (
 		gitTag,
 		enableSubmodules,
 		postCheckoutScript,
-		dockerfileTemplate,
 		localPath,
+		dockerfileTemplate,
 	};
 };
 
@@ -1986,6 +1987,7 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 		tempDir,
 		"codex-acp-fork-0.14.0.patch",
 	);
+	const isLocalPath = !!task.localPath;
 	const args = [
 		"build",
 		"--progress=plain",
@@ -1993,16 +1995,18 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 		dockerfilePath,
 		"-t",
 		task.imageTag,
-		"--build-arg",
-		`GIT_URL=${task.gitUrl}`,
-		"--build-arg",
-		`GIT_BRANCH=${task.gitBranch}`,
-		"--build-arg",
-		`GIT_TAG=${task.gitTag}`,
-		"--build-arg",
-		`ENABLE_SUBMODULES=${task.enableSubmodules ? "true" : "false"}`,
-		"--build-arg",
-		`POST_CHECKOUT_SCRIPT=${task.postCheckoutScript}`,
+		...(isLocalPath
+			? ["--build-arg", `POST_CHECKOUT_SCRIPT=${task.postCheckoutScript}`]
+			: [
+					"--build-arg",
+					`GIT_URL=${task.gitUrl}`,
+					"--build-arg",
+					`GIT_BRANCH=${task.gitBranch}`,
+					"--build-arg",
+					`ENABLE_SUBMODULES=${task.enableSubmodules ? "true" : "false"}`,
+					"--build-arg",
+					`POST_CHECKOUT_SCRIPT=${task.postCheckoutScript}`,
+				]),
 	];
 	const containerBuildArgs = getGlobalContainerEnvironmentPairs();
 	for (const pair of containerBuildArgs) {
@@ -2044,21 +2048,34 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 			await resolveCodexAcpForkPatchPath(),
 			tempCodexAcpForkPatchPath,
 		);
+
 		let dockerfileContent = task.dockerfileTemplate;
-		if (task.localPath) {
-			// For local source: build image with empty /workspace/repo, then
-			// populate via docker run (host daemon can bind-mount host paths).
+		if (isLocalPath && task.localPath) {
+			// Pre-copy the local directory into tempDir/repo so it's in the build context
+			const repoDir = path.join(tempDir, "repo");
+			await fs.cp(task.localPath, repoDir, { recursive: true });
+
+			// Replace the repository-source stage to use COPY instead of git clone
+			const localRepositorySourceStage = `FROM ubuntu:24.04 AS repository-source
+
+ARG POST_CHECKOUT_SCRIPT=""
+
+WORKDIR /workspace
+
+COPY repo /workspace/repo
+
+RUN if [ -n "\${POST_CHECKOUT_SCRIPT}" ]; then \\
+      cd /workspace/repo; \\
+      printf '%s\\n' "\${POST_CHECKOUT_SCRIPT}" > /tmp/vulseek-post-checkout.sh; \\
+      bash /tmp/vulseek-post-checkout.sh; \\
+      rm -f /tmp/vulseek-post-checkout.sh; \\
+    fi`;
+
+			// Replace everything from "FROM ubuntu:24.04 AS repository-source" up to the next "FROM"
 			dockerfileContent = dockerfileContent.replace(
-				/FROM ubuntu:24\.04 AS repository-source[\s\S]*?(?=FROM tools AS final)/,
-				"FROM ubuntu:24.04 AS repository-source\nWORKDIR /workspace\nRUN mkdir -p /workspace/repo\n\n",
+				/FROM ubuntu:24\.04 AS repository-source[\s\S]*?(?=FROM )/,
+				`${localRepositorySourceStage}\n\n`,
 			);
-			const latest = checkoutTasks.get(task.checkoutId);
-			if (latest) {
-				latest.stderr = appendLog(
-					latest.stderr,
-					`[checkout] local mode: will populate /workspace/repo from ${task.localPath} after image build\n`,
-				);
-			}
 		}
 		await fs.writeFile(dockerfilePath, dockerfileContent, "utf-8");
 		await new Promise<void>((resolve, reject) => {
@@ -2155,8 +2172,8 @@ export const startCheckoutScanEnvironment = async (
 		gitTag: context.gitTag,
 		enableSubmodules: context.enableSubmodules,
 		postCheckoutScript: context.postCheckoutScript,
+		localPath: context.localPath,
 		dockerfileTemplate: context.dockerfileTemplate,
-		localPath: context.localPath || undefined,
 		stdout: "",
 		stderr: "",
 		startedAt: new Date().toISOString(),

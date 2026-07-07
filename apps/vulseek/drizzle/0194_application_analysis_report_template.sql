@@ -1,2 +1,1 @@
-ALTER TABLE "application"
-ADD COLUMN "analysisReportTemplate" text NOT NULL DEFAULT '';
+-- placeholder migration (file was missing from journal)

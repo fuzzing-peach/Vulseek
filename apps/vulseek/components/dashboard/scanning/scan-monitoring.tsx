@@ -69,8 +69,6 @@ type TokenThroughputTaskRate = {
 	label: string;
 	tokensPerSecond: number;
 	latestTokens: number;
-	timestampMs: number;
-	updatedAtMs: number;
 };
 
 type TokenThroughputSample = {
@@ -107,7 +105,12 @@ const emptySample: ScanMonitoringSample = {
 		rxBytes: 0,
 		txBytes: 0,
 	},
-	tokenSnapshot: { timestampMs: 0, totalTokens: 0, cachedReadTokens: 0, tasks: [] },
+	tokenSnapshot: {
+		timestampMs: 0,
+		totalTokens: 0,
+		cachedReadTokens: 0,
+		tasks: [],
+	},
 	activeJobCount: 0,
 };
 
@@ -410,8 +413,6 @@ export const ScanMonitoring = ({
 				label: task.label,
 				tokensPerSecond: Math.max(0, taskRate),
 				latestTokens: task.totalTokens,
-				timestampMs: snap.timestampMs,
-				updatedAtMs: Date.now(),
 			};
 		});
 		setAggregateTokensPerSecond(Math.max(0, aggRate));
@@ -435,8 +436,20 @@ export const ScanMonitoring = ({
 		prevSnapshotRef.current = snap;
 	}, [currentData.tokenSnapshot]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset token state when monitoring target changes
+	useEffect(() => {
+		prevSnapshotRef.current = null;
+		setTokenSamples([]);
+		setTokenRates([]);
+		setAggregateTokensPerSecond(0);
+		setLatestTokens(0);
+	}, [mode, scanJobId, taskId]);
+
 	const chartData = useMemo(() => buildChartData(samples), [samples]);
-	const tokenChartData = useMemo(() => buildTokenChartData(tokenSamples), [tokenSamples]);
+	const tokenChartData = useMemo(
+		() => buildTokenChartData(tokenSamples),
+		[tokenSamples],
+	);
 	const maxTaskTokensPerSecond = Math.max(
 		1,
 		...tokenRates.map((rate) => rate.tokensPerSecond),
@@ -519,9 +532,7 @@ export const ScanMonitoring = ({
 								<span>
 									{scanT(t, "scan.monitoring.current", "Current:")}{" "}
 									<span className="font-medium text-foreground">
-										{formatTokensPerSecond(
-											aggregateTokensPerSecond,
-										)}
+										{formatTokensPerSecond(aggregateTokensPerSecond)}
 									</span>
 								</span>
 								<span>

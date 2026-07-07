@@ -299,9 +299,22 @@ const buildDerivedCandidatesFromTasks = async (input: {
 		}
 	}
 
-	return candidates.sort((left, right) =>
+	const sorted = candidates.sort((left, right) =>
 		right.createdAt.localeCompare(left.createdAt),
 	);
+
+	// Deduplicate by vulnerabilityCandidateId: keep the entry with the most
+	// recent createdAt (first after sorting above). The same candidate id can
+	// appear in multiple function-task outputs when a task is retried.
+	const seen = new Set<string>();
+	const deduped: DerivedCandidateRecord[] = [];
+	for (const candidate of sorted) {
+		if (!seen.has(candidate.vulnerabilityCandidateId)) {
+			seen.add(candidate.vulnerabilityCandidateId);
+			deduped.push(candidate);
+		}
+	}
+	return deduped;
 };
 
 const listDerivedCandidatesByScanJobId = async (

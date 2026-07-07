@@ -814,15 +814,7 @@ const buildSideCorridorEdgePoints = (input: {
 	return [start, { x: midX, y: start.y }, { x: midX, y: end.y }, end];
 };
 
-const buildUpperCorridorEdgePoints = (source: Point, target: Point) => {
-	const start = getNodeAnchor(source, "top");
-	const end = getNodeAnchor(target, "top");
-	const routeY =
-		Math.min(source.y, target.y) - NODE_HEIGHT - FORWARD_LONG_EDGE_OFFSET_Y;
-	return [start, { x: start.x, y: routeY }, { x: end.x, y: routeY }, end];
-};
-
-const buildLowerCorridorEdgePoints = (source: Point, target: Point) => {
+	const buildLowerCorridorEdgePoints = (source: Point, target: Point) => {
 	const start = getNodeAnchor(source, "bottom");
 	const end = getNodeAnchor(target, "bottom");
 	const routeY =
@@ -860,16 +852,16 @@ const buildEdgePoints = (input: {
 	if (sourceStageName === SINK_PRE_ANALYZE_STAGE_NAME) {
 		return buildSinkPreAnalyzeOutgoingEdgePoints(source, target);
 	}
-	if (
-		sourceStageName === "analyze" &&
-		(targetStageName === "build-fuzzer" || targetStageName === "criticize")
-	) {
+	if (sourceStageName === "analyze" && targetStageName === "build-fuzzer") {
 		return buildSideCorridorEdgePoints({
 			source,
 			sourceSide: "right",
 			target,
 			targetSide: "left",
 		});
+	}
+	if (sourceStageName === "analyze" && targetStageName === "criticize") {
+		return buildLowerCorridorEdgePoints(source, target);
 	}
 	if (
 		sourceStageName === "build-fuzzer" &&
@@ -885,19 +877,11 @@ const buildEdgePoints = (input: {
 	if (sourceStageName === "criticize" && targetStageName === "analyze") {
 		return buildLowerCorridorEdgePoints(source, target);
 	}
-	if (
-		(sourceStageName === "analyze" && targetStageName === "verify") ||
-		(sourceStageName === "run-fuzzer" && targetStageName === "analyze")
-	) {
-		return buildUpperCorridorEdgePoints(source, target);
-	}
 	if (sourceStageName === "criticize" && targetStageName === "verify") {
-		return buildSideCorridorEdgePoints({
-			source,
-			sourceSide: "right",
-			target,
-			targetSide: "left",
-		});
+		const start = { x: source.x + NODE_WIDTH, y: source.y + NODE_HEIGHT / 2 };
+		const end = { x: target.x, y: target.y + NODE_HEIGHT / 2 };
+		const routeBottomY = Math.max(source.y, target.y) + NODE_HEIGHT + FORWARD_LONG_EDGE_OFFSET_Y;
+		return [start, { x: start.x, y: routeBottomY }, { x: end.x, y: routeBottomY }, end];
 	}
 	if (
 		isScanRuleOrPatternStage(sourceStageName) ||
