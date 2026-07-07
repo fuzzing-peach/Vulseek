@@ -79,7 +79,7 @@ const isWithinHostRoot = (filePath: string, rootPath: string) => {
 };
 
 const resolveConfiguredScanContextHostPath = () =>
-	process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH?.trim() || "";
+	process.env.VULSEEK_SCAN_CONTEXT_HOST_PATH?.trim() || "";
 
 const resolveScanJobTargetIdentity = async (scanJob: {
 	applicationId: string | null;

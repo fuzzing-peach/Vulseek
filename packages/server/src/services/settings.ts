@@ -1,10 +1,10 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { docker } from "@dokploy/server/constants";
+import { docker } from "@vulseek/server/constants";
 import {
 	execAsync,
 	execAsyncRemote,
-} from "@dokploy/server/utils/process/execAsync";
+} from "@vulseek/server/utils/process/execAsync";
 import { type Dispatcher, ProxyAgent, fetch as undiciFetch } from "undici";
 import {
 	initializeStandaloneTraefik,
@@ -24,23 +24,23 @@ export const DEFAULT_UPDATE_DATA: IUpdateData = {
 	updateAvailable: false,
 };
 
-const DEFAULT_DOKPLOY_IMAGE_REPOSITORY = "ghcr.io/fuzzing-peach/vulseek";
+const DEFAULT_VULSEEK_IMAGE_REPOSITORY = "ghcr.io/fuzzing-peach/vulseek";
 
-/** Returns current Dokploy docker image tag or `latest` by default. */
-export const getDokployImageTag = () => {
+/** Returns current Vulseek docker image tag or `latest` by default. */
+export const getVulseekImageTag = () => {
 	return process.env.RELEASE_TAG || "latest";
 };
 
-export const getDokployImageRepository = () => {
-	return process.env.DOKPLOY_IMAGE_REPOSITORY || DEFAULT_DOKPLOY_IMAGE_REPOSITORY;
+export const getVulseekImageRepository = () => {
+	return process.env.VULSEEK_IMAGE_REPOSITORY || DEFAULT_VULSEEK_IMAGE_REPOSITORY;
 };
 
-export const getDokployImage = () => {
-	return `${getDokployImageRepository()}:${getDokployImageTag()}`;
+export const getVulseekImage = () => {
+	return `${getVulseekImageRepository()}:${getVulseekImageTag()}`;
 };
 
-export const getDokployServiceName = () => {
-	return process.env.DOKPLOY_SERVICE_NAME || "dokploy";
+export const getVulseekServiceName = () => {
+	return process.env.VULSEEK_SERVICE_NAME || "vulseek";
 };
 
 let proxyAgentCache: { proxyUrl: string; agent: Dispatcher } | null = null;
@@ -151,7 +151,7 @@ const fetchRegistryWithBearerAuth = async (
 };
 
 const getRegistryRepositoryPath = () => {
-	const repository = getDokployImageRepository();
+	const repository = getVulseekImageRepository();
 	return repository.replace(/^ghcr\.io\//, "");
 };
 
@@ -178,7 +178,7 @@ const getRemoteImageDigest = async (tag: string) => {
 };
 
 export const pullLatestRelease = async () => {
-	const stream = await docker.pull(getDokployImage());
+	const stream = await docker.pull(getVulseekImage());
 	await new Promise((resolve, reject) => {
 		docker.modem.followProgress(stream, (err, res) =>
 			err ? reject(err) : resolve(res),
@@ -186,10 +186,10 @@ export const pullLatestRelease = async () => {
 	});
 };
 
-/** Returns Dokploy docker service image digest */
+/** Returns Vulseek docker service image digest */
 export const getServiceImageDigest = async () => {
 	const { stdout } = await execAsync(
-		`docker service inspect ${getDokployServiceName()} --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}'`,
+		`docker service inspect ${getVulseekServiceName()} --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}'`,
 	);
 
 	const currentDigest = stdout.trim().split("@")[1];
@@ -209,11 +209,11 @@ export const getUpdateData = async (): Promise<IUpdateData> => {
 	} catch {
 		// Docker service might not exist locally
 		// You can run the # Installation command for docker service create mentioned in the below docs to test it locally:
-		// https://docs.dokploy.com/docs/core/manual-installation
+		// https://docs.vulseek.com/docs/core/manual-installation
 		return DEFAULT_UPDATE_DATA;
 	}
 
-	const imageTag = getDokployImageTag();
+	const imageTag = getVulseekImageTag();
 	const remoteDigest = await getRemoteImageDigest(imageTag);
 	if (!remoteDigest) {
 		return DEFAULT_UPDATE_DATA;
@@ -379,7 +379,7 @@ export const resolveDockerResourceName = async (
 
 export const getTraefikResourceName = async (serverId?: string) =>
 	await resolveDockerResourceName(
-		["dokploy-traefik", "dokploy-traefik-dev"],
+		["vulseek-traefik", "vulseek-traefik-dev"],
 		serverId,
 	);
 
@@ -435,13 +435,13 @@ export const updateContainerEnvironmentSetting = async (
 	await updateUser(admin.user.id, {
 		containerEnvironment,
 	});
-	process.env.DOKPLOY_CONTAINER_ENV = containerEnvironment;
+	process.env.VULSEEK_CONTAINER_ENV = containerEnvironment;
 	return true;
 };
 
 export const syncContainerEnvironmentSettingToProcess = async () => {
 	const value = await getContainerEnvironmentSetting();
-	process.env.DOKPLOY_CONTAINER_ENV = value;
+	process.env.VULSEEK_CONTAINER_ENV = value;
 	return value;
 };
 

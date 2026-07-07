@@ -1,5 +1,6 @@
 {
-	"name": "@dokploy/schedules",
+	"name": "@vulseek/schedules",
+	"license": "Apache-2.0",
 	"type": "module",
 	"scripts": {
 		"dev": "PORT=4001 tsx watch src/index.ts",
@@ -8,7 +9,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@dokploy/server": "workspace:*",
+		"@vulseek/server": "workspace:*",
 		"@hono/node-server": "^1.14.3",
 		"@hono/zod-validator": "0.3.0",
 		"bullmq": "5.4.2",

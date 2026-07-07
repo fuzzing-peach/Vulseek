@@ -1,6 +1,6 @@
-import { db } from "@dokploy/server/db";
-import { scanJobs, tasks } from "@dokploy/server/db/schema";
-import type { ScanRuntimeSettings } from "@dokploy/server/db/schema";
+import { db } from "@vulseek/server/db";
+import { scanJobs, tasks } from "@vulseek/server/db/schema";
+import type { ScanRuntimeSettings } from "@vulseek/server/db/schema";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, or, sql } from "drizzle-orm";
 import { normalizeScanRuntimeSettings } from "../runtime-settings";

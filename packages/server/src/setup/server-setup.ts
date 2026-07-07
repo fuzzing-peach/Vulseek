@@ -1,10 +1,10 @@
 import path from "node:path";
-import { paths } from "@dokploy/server/constants";
+import { paths } from "@vulseek/server/constants";
 import {
 	createServerDeployment,
 	updateDeploymentStatus,
-} from "@dokploy/server/services/deployment";
-import { findServerById } from "@dokploy/server/services/server";
+} from "@vulseek/server/services/deployment";
+import { findServerById } from "@vulseek/server/services/server";
 import {
 	getDefaultMiddlewares,
 	getDefaultServerTraefikConfig,
@@ -12,7 +12,7 @@ import {
 	TRAEFIK_PORT,
 	TRAEFIK_SSL_PORT,
 	TRAEFIK_VERSION,
-} from "@dokploy/server/setup/traefik-setup";
+} from "@vulseek/server/setup/traefik-setup";
 import slug from "slugify";
 import { Client } from "ssh2";
 import { recreateDirectory } from "../utils/filesystem/directory";
@@ -255,15 +255,15 @@ const setupDirectories = () => {
 };
 
 const setupMainDirectory = () => `
-	# Check if the /etc/dokploy directory exists
-	if [ -d /etc/dokploy ]; then
-		echo "/etc/dokploy already exists ✅"
+	# Check if the /etc/vulseek directory exists
+	if [ -d /etc/vulseek ]; then
+		echo "/etc/vulseek already exists ✅"
 	else
-		# Create the /etc/dokploy directory
-		mkdir -p /etc/dokploy
-		chmod 777 /etc/dokploy
+		# Create the /etc/vulseek directory
+		mkdir -p /etc/vulseek
+		chmod 777 /etc/vulseek
 
-		echo "Directory /etc/dokploy created ✅"
+		echo "Directory /etc/vulseek created ✅"
 	fi
 `;
 
@@ -325,15 +325,15 @@ export const setupSwarm = () => `
 	`;
 
 const setupNetwork = () => `
-	# Check if the dokploy-network already exists
-	if docker network ls | grep -q 'dokploy-network'; then
-		echo "Network dokploy-network already exists ✅"
+	# Check if the vulseek-network already exists
+	if docker network ls | grep -q 'vulseek-network'; then
+		echo "Network vulseek-network already exists ✅"
 	else
-		# Create the dokploy-network if it doesn't exist
-		if docker network create --driver overlay --attachable dokploy-network; then
+		# Create the vulseek-network if it doesn't exist
+		if docker network create --driver overlay --attachable vulseek-network; then
 			echo "Network created ✅"
 		else
-			echo "Failed to create dokploy-network ❌" >&2
+			echo "Failed to create vulseek-network ❌" >&2
 			exit 1
 		fi
 	fi
@@ -397,7 +397,7 @@ if [ -x "$(command -v snap)" ]; then
     SNAP_DOCKER_INSTALLED=$(snap list docker >/dev/null 2>&1 && echo "true" || echo "false")
     if [ "$SNAP_DOCKER_INSTALLED" = "true" ]; then
         echo " - Docker is installed via snap."
-        echo "   Please note that Dokploy does not support Docker installed via snap."
+        echo "   Please note that Vulseek does not support Docker installed via snap."
         echo "   Please remove Docker with snap (snap remove docker) and reexecute this script."
         exit 1
     fi
@@ -526,13 +526,13 @@ const createTraefikConfig = () => {
 	const config = getDefaultServerTraefikConfig();
 
 	const command = `
-	if [ -f "/etc/dokploy/traefik/dynamic/acme.json" ]; then
-		chmod 600 "/etc/dokploy/traefik/dynamic/acme.json"
+	if [ -f "/etc/vulseek/traefik/dynamic/acme.json" ]; then
+		chmod 600 "/etc/vulseek/traefik/dynamic/acme.json"
 	fi
-	if [ -f "/etc/dokploy/traefik/traefik.yml" ]; then
+	if [ -f "/etc/vulseek/traefik/traefik.yml" ]; then
 		echo "Traefik config already exists ✅"
 	else
-		echo "${config}" > /etc/dokploy/traefik/traefik.yml
+		echo "${config}" > /etc/vulseek/traefik/traefik.yml
 	fi
 	`;
 
@@ -542,10 +542,10 @@ const createTraefikConfig = () => {
 const createDefaultMiddlewares = () => {
 	const config = getDefaultMiddlewares();
 	const command = `
-	if [ -f "/etc/dokploy/traefik/dynamic/middlewares.yml" ]; then
+	if [ -f "/etc/vulseek/traefik/dynamic/middlewares.yml" ]; then
 		echo "Middlewares config already exists ✅"
 	else
-		echo "${config}" > /etc/dokploy/traefik/dynamic/middlewares.yml
+		echo "${config}" > /etc/vulseek/traefik/dynamic/middlewares.yml
 	fi
 	`;
 	return command;
@@ -564,30 +564,30 @@ export const installRClone = () => `
 export const createTraefikInstance = () => {
 	const command = `
 	    # Check if dokpyloy-traefik exists
-		if docker service inspect dokploy-traefik > /dev/null 2>&1; then
+		if docker service inspect vulseek-traefik > /dev/null 2>&1; then
 			echo "Migrating Traefik to Standalone..."
-			docker service rm dokploy-traefik
+			docker service rm vulseek-traefik
 			sleep 8
 			echo "Traefik migrated to Standalone ✅"
 		fi
 
-		if docker inspect dokploy-traefik > /dev/null 2>&1; then
+		if docker inspect vulseek-traefik > /dev/null 2>&1; then
 			echo "Traefik already exists ✅"
 		else
-			# Create the dokploy-traefik container
+			# Create the vulseek-traefik container
 			TRAEFIK_VERSION=${TRAEFIK_VERSION}
 			docker run -d \
-				--name dokploy-traefik \
+				--name vulseek-traefik \
 				--restart always \
-				-v /etc/dokploy/traefik/traefik.yml:/etc/traefik/traefik.yml \
-				-v /etc/dokploy/traefik/dynamic:/etc/dokploy/traefik/dynamic \
+				-v /etc/vulseek/traefik/traefik.yml:/etc/traefik/traefik.yml \
+				-v /etc/vulseek/traefik/dynamic:/etc/vulseek/traefik/dynamic \
 				-v /var/run/docker.sock:/var/run/docker.sock \
 				-p ${TRAEFIK_SSL_PORT}:${TRAEFIK_SSL_PORT} \
 				-p ${TRAEFIK_PORT}:${TRAEFIK_PORT} \
 				-p ${TRAEFIK_HTTP3_PORT}:${TRAEFIK_HTTP3_PORT}/udp \
 				traefik:v$TRAEFIK_VERSION
 
-			docker network connect dokploy-network dokploy-traefik;
+			docker network connect vulseek-network vulseek-traefik;
 			echo "Traefik version $TRAEFIK_VERSION installed ✅"
 		fi
 	`;

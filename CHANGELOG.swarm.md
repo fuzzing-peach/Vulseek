@@ -40,8 +40,8 @@ services:
 
 # 变更后 (Docker Swarm)
 docker service create \
-  --name dokploy-postgres-dev \
-  --network dokploy-dev-network \
+  --name vulseek-postgres-dev \
+  --network vulseek-dev-network \
   --publish published=25432,target=5432,mode=host \
   postgres:16
 ```
@@ -57,31 +57,31 @@ services:
 
 # 变更后 (Docker Swarm)
 docker service create \
-  --name dokploy-redis-dev \
-  --network dokploy-dev-network \
+  --name vulseek-redis-dev \
+  --network vulseek-dev-network \
   --publish published=26379,target=6379,mode=host \
   redis:7
 ```
 
-#### Dokploy 主应用
+#### Vulseek 主应用
 ```bash
 # 变更前 (docker-compose)
 services:
-  dokploy-dev:
+  vulseek-dev:
     build:
       context: .
       dockerfile: Dockerfile.dev
 
 # 变更后 (Docker Swarm)
 # 1. 先构建镜像
-docker build -f Dockerfile.dev -t dokploy-dev:latest .
+docker build -f Dockerfile.dev -t vulseek-dev:latest .
 
 # 2. 创建服务
 docker service create \
-  --name dokploy-dev \
-  --network dokploy-dev-network \
+  --name vulseek-dev \
+  --network vulseek-dev-network \
   --publish published=23000,target=3000,mode=host \
-  dokploy-dev:latest
+  vulseek-dev:latest
 ```
 
 #### Traefik 服务
@@ -95,8 +95,8 @@ services:
 
 # 变更后 (Docker Swarm)
 docker service create \
-  --name dokploy-traefik-dev \
-  --network dokploy-dev-network \
+  --name vulseek-traefik-dev \
+  --network vulseek-dev-network \
   --publish published=20080,target=80,mode=host \
   --publish published=28080,target=8080,mode=host \
   traefik:v3.5.0 \
@@ -109,11 +109,11 @@ docker service create \
 ```bash
 # 变更前 (docker-compose)
 networks:
-  dokploy-dev-network:
+  vulseek-dev-network:
     driver: bridge
 
 # 变更后 (Docker Swarm)
-docker network create --driver overlay --attachable dokploy-dev-network
+docker network create --driver overlay --attachable vulseek-dev-network
 ```
 
 ### 4. 卷管理
@@ -155,14 +155,14 @@ docker-compose -f docker-compose.dev.yml up -d
 docker-compose -f docker-compose.dev.yml logs -f
 
 # 变更后
-./dev.sh logs dokploy  # 需要指定服务名
+./dev.sh logs vulseek  # 需要指定服务名
 ```
 
 ### 进入容器
 
 ```bash
 # 变更前
-docker-compose -f docker-compose.dev.yml exec dokploy-dev bash
+docker-compose -f docker-compose.dev.yml exec vulseek-dev bash
 
 # 变更后
 ./dev.sh shell  # 脚本自动获取容器 ID
@@ -175,10 +175,10 @@ docker-compose -f docker-compose.dev.yml exec dokploy-dev bash
 docker-compose -f docker-compose.dev.yml restart
 
 # 变更后（推荐）
-./dev.sh update dokploy
+./dev.sh update vulseek
 
 # 或者
-./dev.sh restart dokploy
+./dev.sh restart vulseek
 ```
 
 ### 停止服务
@@ -235,11 +235,11 @@ Swarm 不支持在服务定义中使用 `build`，必须先构建镜像：
 
 ```bash
 # 修改代码后
-./dev.sh update dokploy
+./dev.sh update vulseek
 
 # 或重新构建+更新
 ./dev.sh build
-./dev.sh update dokploy
+./dev.sh update vulseek
 ```
 
 ### 4. 日志和 Shell 访问方式改变
@@ -248,7 +248,7 @@ Swarm 不支持在服务定义中使用 `build`，必须先构建镜像：
 
 ```bash
 # 获取容器 ID
-TASK_ID=$(docker service ps dokploy-dev -q | head -n1)
+TASK_ID=$(docker service ps vulseek-dev -q | head -n1)
 CONTAINER_ID=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' $TASK_ID)
 
 # 使用容器 ID

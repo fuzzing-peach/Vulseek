@@ -1,13 +1,13 @@
-import { db } from "@dokploy/server/db";
+import { db } from "@vulseek/server/db";
 import {
 	type apiCreateRedis,
 	buildAppName,
 	redis,
-} from "@dokploy/server/db/schema";
-import { generatePassword } from "@dokploy/server/templates";
-import { buildRedis } from "@dokploy/server/utils/databases/redis";
-import { pullImage } from "@dokploy/server/utils/docker/utils";
-import { execAsyncRemote } from "@dokploy/server/utils/process/execAsync";
+} from "@vulseek/server/db/schema";
+import { generatePassword } from "@vulseek/server/templates";
+import { buildRedis } from "@vulseek/server/utils/databases/redis";
+import { pullImage } from "@vulseek/server/utils/docker/utils";
+import { execAsyncRemote } from "@vulseek/server/utils/process/execAsync";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { validUniqueServerAppName } from "./project";

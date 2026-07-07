@@ -1,5 +1,5 @@
-import { db } from "@dokploy/server/db";
-import { type apiCreateBackup, backups } from "@dokploy/server/db/schema";
+import { db } from "@vulseek/server/db";
+import { type apiCreateBackup, backups } from "@vulseek/server/db/schema";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 

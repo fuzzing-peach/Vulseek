@@ -1,6 +1,6 @@
 <div align="center">
-  <a href="https://dokploy.com">
-    <img src=".github/sponsors/logo.png" alt="Dokploy - Open Source Alternative to Vercel, Heroku and Netlify." width="100%"  />
+  <a href="https://vulseek.com">
+    <img src=".github/sponsors/logo.png" alt="Vulseek - Open Source Alternative to Vercel, Heroku and Netlify." width="100%"  />
   </a>
   </br>
   </br>
@@ -17,22 +17,22 @@
    <sup>Special thanks to:</sup>
    <br>
    <br>
-   <a href="https://tuple.app/dokploy">
+   <a href="https://tuple.app/vulseek">
      <img src=".github/sponsors/tuple.png" alt="Tuple's sponsorship image" width="400"/>
    </a>
 
-### [Tuple, the premier screen sharing app for developers](https://tuple.app/dokploy)
-[Available for MacOS & Windows](https://tuple.app/dokploy)<br>
+### [Tuple, the premier screen sharing app for developers](https://tuple.app/vulseek)
+[Available for MacOS & Windows](https://tuple.app/vulseek)<br>
 
 </div>
 
 
-Dokploy is a free, self-hostable Platform as a Service (PaaS) that simplifies the deployment and management of applications and databases.
+Vulseek is a free, self-hostable Platform as a Service (PaaS) that simplifies the deployment and management of applications and databases.
 
 
 ## ✨ Features
 
-Dokploy includes multiple features to make your life easier.
+Vulseek includes multiple features to make your life easier.
 
 - **Applications**: Deploy any type of application (Node.js, PHP, Python, Go, Ruby, etc.).
 - **Databases**: Create and manage databases with support for MySQL, PostgreSQL, MongoDB, MariaDB, and Redis.
@@ -46,25 +46,25 @@ Dokploy includes multiple features to make your life easier.
 - **CLI/API**: Manage your applications and databases using the command line or through the API.
 - **Notifications**: Get notified when your deployments succeed or fail (via Slack, Discord, Telegram, Email, etc.).
 - **Multi Server**: Deploy and manage your applications remotely to external servers.
-- **Self-Hosted**: Self-host Dokploy on your VPS.
+- **Self-Hosted**: Self-host Vulseek on your VPS.
 
 ## 🚀 Getting Started
 
 To get started, run the following command on a VPS:
 
-Want to skip the installation process? [Try the Dokploy Cloud](https://app.dokploy.com).
+Want to skip the installation process? [Try the Vulseek Cloud](https://app.vulseek.com).
 
 ```bash
-curl -sSL https://dokploy.com/install.sh | sh
+curl -sSL https://vulseek.com/install.sh | sh
 ```
 
-For detailed documentation, visit [docs.dokploy.com](https://docs.dokploy.com).
+For detailed documentation, visit [docs.vulseek.com](https://docs.vulseek.com).
 
 ## ♥️ Sponsors
 
-🙏 We're deeply grateful to all our sponsors who make Dokploy possible! Your support helps cover the costs of hosting, testing, and developing new features.
+🙏 We're deeply grateful to all our sponsors who make Vulseek possible! Your support helps cover the costs of hosting, testing, and developing new features.
 
-[Dokploy Open Collective](https://opencollective.com/dokploy)
+[Vulseek Open Collective](https://opencollective.com/vulseek)
 
 [Github Sponsors](https://github.com/sponsors/Siumauricio)
 
@@ -75,9 +75,9 @@ For detailed documentation, visit [docs.dokploy.com](https://docs.dokploy.com).
 ### Hero Sponsors 🎖
 
 <div>
-  <a href="https://www.hostinger.com/vps-hosting?ref=dokploy"><img src=".github/sponsors/hostinger.jpg" alt="Hostinger" width="300"/></a>
-  <a href="https://www.lxaer.com/?ref=dokploy"><img src=".github/sponsors/lxaer.png" alt="LX Aer" width="100"/></a>
-        <a href="https://www.lambdatest.com/?utm_source=dokploy&utm_medium=sponsor" target="_blank">
+  <a href="https://www.hostinger.com/vps-hosting?ref=vulseek"><img src=".github/sponsors/hostinger.jpg" alt="Hostinger" width="300"/></a>
+  <a href="https://www.lxaer.com/?ref=vulseek"><img src=".github/sponsors/lxaer.png" alt="LX Aer" width="100"/></a>
+        <a href="https://www.lambdatest.com/?utm_source=vulseek&utm_medium=sponsor" target="_blank">
             <img src="https://www.lambdatest.com/blue-logo.png"  width="450" height="100" />
         </a>
 
@@ -90,8 +90,8 @@ For detailed documentation, visit [docs.dokploy.com](https://docs.dokploy.com).
 ### Premium Supporters 🥇
 
 <div>
-  <a href="https://supafort.com/?ref=dokploy"><img src="https://supafort.com/build/q-4Ht4rBZR.webp" alt="Supafort.com" width="300"/></a>
-  <a href="https://agentdock.ai/?ref=dokploy"><img src=".github/sponsors/agentdock.png" alt="agentdock.ai" width="100"/></a>
+  <a href="https://supafort.com/?ref=vulseek"><img src="https://supafort.com/build/q-4Ht4rBZR.webp" alt="Supafort.com" width="300"/></a>
+  <a href="https://agentdock.ai/?ref=vulseek"><img src=".github/sponsors/agentdock.png" alt="agentdock.ai" width="100"/></a>
 </div>
 
 <!-- Elite Contributors 🥈 -->
@@ -101,41 +101,45 @@ For detailed documentation, visit [docs.dokploy.com](https://docs.dokploy.com).
 ### Elite Contributors 🥈
 
 <div>
-  <a href="https://americancloud.com/?ref=dokploy"><img src=".github/sponsors/american-cloud.png" alt="AmericanCloud" width="300"/></a>
-  <a href="https://tolgee.io/?utm_source=github_dokploy&utm_medium=banner&utm_campaign=dokploy"><img src="https://dokploy.com/tolgee-logo.png" alt="Tolgee" width="100"/></a>
+  <a href="https://americancloud.com/?ref=vulseek"><img src=".github/sponsors/american-cloud.png" alt="AmericanCloud" width="300"/></a>
+  <a href="https://tolgee.io/?utm_source=github_vulseek&utm_medium=banner&utm_campaign=vulseek"><img src="https://vulseek.com/tolgee-logo.png" alt="Tolgee" width="100"/></a>
 </div>
 
 ### Supporting Members 🥉
 
 <div>
 
-  <a href="https://cloudblast.io/?ref=dokploy"><img src="https://cloudblast.io/img/logo-icon.193cf13e.svg" width="250px" alt="Cloudblast.io"/></a>
+  <a href="https://cloudblast.io/?ref=vulseek"><img src="https://cloudblast.io/img/logo-icon.193cf13e.svg" width="250px" alt="Cloudblast.io"/></a>
 
-  <a href="https://synexa.ai/?ref=dokploy"><img src=".github/sponsors/synexa.png" width="65px" alt="Synexa"/></a>
+  <a href="https://synexa.ai/?ref=vulseek"><img src=".github/sponsors/synexa.png" width="65px" alt="Synexa"/></a>
 </div>
 
 ### Community Backers 🤝
 
 #### Organizations:
 
-[Sponsors on Open Collective](https://opencollective.com/dokploy)
+[Sponsors on Open Collective](https://opencollective.com/vulseek)
 
 #### Individuals:
 
-[![Individual Contributors on Open Collective](https://opencollective.com/dokploy/individuals.svg?width=890)](https://opencollective.com/dokploy)
+[![Individual Contributors on Open Collective](https://opencollective.com/vulseek/individuals.svg?width=890)](https://opencollective.com/vulseek)
 
 ### Contributors 🤝
 
-<a href="https://github.com/dokploy/dokploy/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=dokploy/dokploy" alt="Contributors" />
+<a href="https://github.com/fuzzing-peach/Vulseek/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=fuzzing-peach/Vulseek" alt="Contributors" />
 </a>
 
 ## 📺 Video Tutorial
 
 <a href="https://youtu.be/mznYKPvhcfw">
-  <img src="https://dokploy.com/banner.png" alt="Watch the video" width="400"/>
+  <img src="https://vulseek.com/banner.png" alt="Watch the video" width="400"/>
 </a>
 
 ## 🤝 Contributing
 
 Check out the [Contributing Guide](CONTRIBUTING.md) for more information.
+
+## License
+
+Vulseek is distributed under the terms described in [LICENSE](LICENSE). Upstream notices and third-party license files are retained where required.

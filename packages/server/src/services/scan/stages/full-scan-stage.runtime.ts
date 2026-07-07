@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { db } from "@dokploy/server/db";
-import { applications, compose, scanJobs } from "@dokploy/server/db/schema";
+import { db } from "@vulseek/server/db";
+import { applications, compose, scanJobs } from "@vulseek/server/db/schema";
 import { eq } from "drizzle-orm";
 import type { ZodTypeAny } from "zod";
 import { getAgentProfileById } from "../../ai";
@@ -11,7 +11,7 @@ import type { AgentProfileLike, ScanJob } from "../types";
 import type {
 	ScanRuntimeSettings,
 	ScanStageSettings,
-} from "@dokploy/server/db/schema";
+} from "@vulseek/server/db/schema";
 import {
 	FULL_SCAN_STAGE_IDS,
 	getRuntimeStageSetting,
@@ -149,10 +149,10 @@ const resolveScanContextMount = async (
 	input: Pick<PipelineContext, "projectName" | "serviceName">,
 ) => {
 	const configuredHostRoot =
-		process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH?.trim() || "";
+		process.env.VULSEEK_SCAN_CONTEXT_HOST_PATH?.trim() || "";
 	if (!configuredHostRoot) {
 		throw new Error(
-			"Scan context host path is not configured in process env DOKPLOY_SCAN_CONTEXT_HOST_PATH",
+			"Scan context host path is not configured in process env VULSEEK_SCAN_CONTEXT_HOST_PATH",
 		);
 	}
 

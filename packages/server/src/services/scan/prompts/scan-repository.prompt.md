@@ -27,4 +27,4 @@ Choose the number of modules from the repository's actual scale, complexity, and
 Do not merge unrelated security surfaces just to keep the module count small.
 Do not invent a complete architecture model.
 Before returning, validate the structured JSON against the runtime-provided output.schema.json.
-Set output.json exit to true so Dokploy can discard this Scan Repository lane after end_turn.
+Set output.json exit to true so Vulseek can discard this Scan Repository lane after end_turn.

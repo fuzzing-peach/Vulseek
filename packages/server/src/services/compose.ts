@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import { paths } from "@dokploy/server/constants";
-import { db } from "@dokploy/server/db";
+import { paths } from "@vulseek/server/constants";
+import { db } from "@vulseek/server/db";
 import {
 	type apiCreateCompose,
 	buildAppName,
@@ -8,53 +8,53 @@ import {
 	cleanAppName,
 	compose,
 	renameAppNameBase,
-} from "@dokploy/server/db/schema";
+} from "@vulseek/server/db/schema";
 import {
 	buildCompose,
 	getBuildComposeCommand,
-} from "@dokploy/server/utils/builders/compose";
-import { randomizeSpecificationFile } from "@dokploy/server/utils/docker/compose";
+} from "@vulseek/server/utils/builders/compose";
+import { randomizeSpecificationFile } from "@vulseek/server/utils/docker/compose";
 import {
 	cloneCompose,
 	cloneComposeRemote,
 	loadDockerCompose,
 	loadDockerComposeRemote,
-} from "@dokploy/server/utils/docker/domain";
-import type { ComposeSpecification } from "@dokploy/server/utils/docker/types";
-import { sendBuildErrorNotifications } from "@dokploy/server/utils/notifications/build-error";
-import { sendBuildSuccessNotifications } from "@dokploy/server/utils/notifications/build-success";
+} from "@vulseek/server/utils/docker/domain";
+import type { ComposeSpecification } from "@vulseek/server/utils/docker/types";
+import { sendBuildErrorNotifications } from "@vulseek/server/utils/notifications/build-error";
+import { sendBuildSuccessNotifications } from "@vulseek/server/utils/notifications/build-success";
 import {
 	execAsync,
 	execAsyncRemote,
-} from "@dokploy/server/utils/process/execAsync";
+} from "@vulseek/server/utils/process/execAsync";
 import {
 	cloneBitbucketRepository,
 	getBitbucketCloneCommand,
-} from "@dokploy/server/utils/providers/bitbucket";
+} from "@vulseek/server/utils/providers/bitbucket";
 import {
 	cloneGitRepository,
 	getCustomGitCloneCommand,
-} from "@dokploy/server/utils/providers/git";
+} from "@vulseek/server/utils/providers/git";
 import {
 	cloneGiteaRepository,
 	getGiteaCloneCommand,
-} from "@dokploy/server/utils/providers/gitea";
+} from "@vulseek/server/utils/providers/gitea";
 import {
 	cloneGithubRepository,
 	getGithubCloneCommand,
-} from "@dokploy/server/utils/providers/github";
+} from "@vulseek/server/utils/providers/github";
 import {
 	cloneGitlabRepository,
 	getGitlabCloneCommand,
-} from "@dokploy/server/utils/providers/gitlab";
+} from "@vulseek/server/utils/providers/gitlab";
 import {
 	createComposeFile,
 	getCreateComposeFileCommand,
-} from "@dokploy/server/utils/providers/raw";
+} from "@vulseek/server/utils/providers/raw";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { encodeBase64 } from "../utils/docker/utils";
-import { getDokployUrl } from "./admin";
+import { getVulseekUrl } from "./admin";
 import { getAgentProfilesByOrganizationId } from "./ai";
 import { createDeploymentCompose, updateDeploymentStatus } from "./deployment";
 import { findEnvironmentById } from "./environment";
@@ -270,7 +270,7 @@ export const deployCompose = async ({
 }) => {
 	const compose = await findComposeById(composeId);
 
-	const buildLink = `${await getDokployUrl()}/dashboard/project/${
+	const buildLink = `${await getVulseekUrl()}/dashboard/project/${
 		compose.environment.projectId
 	}/environment/${compose.environmentId}/profiles/compose/${compose.composeId}?tab=deployments`;
 	const deployment = await createDeploymentCompose({
@@ -378,7 +378,7 @@ export const deployRemoteCompose = async ({
 }) => {
 	const compose = await findComposeById(composeId);
 
-	const buildLink = `${await getDokployUrl()}/dashboard/project/${
+	const buildLink = `${await getVulseekUrl()}/dashboard/project/${
 		compose.environment.projectId
 	}/environment/${compose.environmentId}/profiles/compose/${compose.composeId}?tab=deployments`;
 	const deployment = await createDeploymentCompose({
@@ -532,7 +532,7 @@ export const removeCompose = async (
 
 		if (compose.composeType === "stack") {
 			const command = `
-			docker network disconnect ${compose.appName} dokploy-traefik;
+			docker network disconnect ${compose.appName} vulseek-traefik;
 			cd ${projectPath} && docker stack rm ${compose.appName} && rm -rf ${projectPath}`;
 
 			if (compose.serverId) {
@@ -545,7 +545,7 @@ export const removeCompose = async (
 			});
 		} else {
 			const command = `
-			 docker network disconnect ${compose.appName} dokploy-traefik;
+			 docker network disconnect ${compose.appName} vulseek-traefik;
 			cd ${projectPath} && docker compose -p ${compose.appName} down ${
 				deleteVolumes ? "--volumes" : ""
 			} && rm -rf ${projectPath}`;

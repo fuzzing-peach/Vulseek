@@ -1,10 +1,10 @@
-import { db } from "@dokploy/server/db";
+import { db } from "@vulseek/server/db";
 import {
 	invitation,
 	member,
 	organization,
 	users_temp,
-} from "@dokploy/server/db/schema";
+} from "@vulseek/server/db/schema";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { IS_CLOUD } from "../constants";
@@ -103,9 +103,9 @@ export const removeUserById = async (userId: string) => {
 		.then((res) => res[0]);
 };
 
-export const getDokployUrl = async () => {
+export const getVulseekUrl = async () => {
 	if (IS_CLOUD) {
-		return "https://app.dokploy.com";
+		return "https://app.vulseek.com";
 	}
 	const admin = await findAdmin();
 

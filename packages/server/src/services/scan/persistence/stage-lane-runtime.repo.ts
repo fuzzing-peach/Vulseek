@@ -1,10 +1,10 @@
 import { and, asc, eq, isNull, or } from "drizzle-orm";
-import { db } from "@dokploy/server/db";
+import { db } from "@vulseek/server/db";
 import {
 	scanStageGroupInstances,
 	scanStageGroupLaneMemberships,
 	scanStageLaneRuntimes,
-} from "@dokploy/server/db/schema";
+} from "@vulseek/server/db/schema";
 
 export type StageLaneRuntime = typeof scanStageLaneRuntimes.$inferSelect;
 export type StageGroupInstance = typeof scanStageGroupInstances.$inferSelect;

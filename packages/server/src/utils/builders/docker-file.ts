@@ -2,7 +2,7 @@ import type { WriteStream } from "node:fs";
 import {
 	getEnviromentVariablesObject,
 	prepareEnvironmentVariables,
-} from "@dokploy/server/utils/docker/utils";
+} from "@vulseek/server/utils/docker/utils";
 import {
 	getBuildAppDirectory,
 	getDockerContextPath,

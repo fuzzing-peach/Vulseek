@@ -23,4 +23,4 @@ Do not write or return a module artifact. Delta Scope output schema has only `re
 Return a schema-valid path manifest: repository is /task/repository.json, and functions is the list of function JSON file paths.
 If no affected functions exist, still write /task/repository.json and return exactly `{ "repository": "/task/repository.json", "functions": [] }`.
 Before returning, validate the structured JSON against the runtime-provided output.schema.json.
-Set output.json exit to true so Dokploy can discard this Delta Scope lane after end_turn.
+Set output.json exit to true so Vulseek can discard this Delta Scope lane after end_turn.

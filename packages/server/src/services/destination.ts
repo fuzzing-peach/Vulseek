@@ -1,8 +1,8 @@
-import { db } from "@dokploy/server/db";
+import { db } from "@vulseek/server/db";
 import {
 	type apiCreateDestination,
 	destinations,
-} from "@dokploy/server/db/schema";
+} from "@vulseek/server/db/schema";
 import { TRPCError } from "@trpc/server";
 import { and, eq } from "drizzle-orm";
 

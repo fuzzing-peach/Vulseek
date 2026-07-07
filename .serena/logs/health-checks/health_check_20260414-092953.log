@@ -1,48 +1,48 @@
-INFO  2026-04-14 09:29:53,521 serena.cli:health_check:888 - Starting health check for project: /data/exp/dkzou/dokploy
+INFO  2026-04-14 09:29:53,521 serena.cli:health_check:888 - Starting health check for project:
 INFO  2026-04-14 09:29:53,521 serena.cli:health_check:892 - Creating SerenaAgent with disabled dashboard...
-INFO  2026-04-14 09:29:53,525 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: /data/exp/dkzou/dokploy/.serena/.gitignore
-INFO  2026-04-14 09:29:53,526 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: /data/exp/dkzou/dokploy/apps/api/.gitignore
-INFO  2026-04-14 09:29:53,528 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: /data/exp/dkzou/dokploy/apps/dokploy/.gitignore
+INFO  2026-04-14 09:29:53,525 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: .serena/.gitignore
+INFO  2026-04-14 09:29:53,526 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: apps/api/.gitignore
+INFO  2026-04-14 09:29:53,528 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: apps/vulseek/.gitignore
 INFO  2026-04-14 09:29:53,534 serena.agent:__init__:337 - Will record tool usage statistics with token count estimator: CHAR_COUNT.
-INFO  2026-04-14 09:29:53,534 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: /data/exp/dkzou/dokploy/apps/monitoring/.gitignore
-INFO  2026-04-14 09:29:53,535 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: /data/exp/dkzou/dokploy/apps/schedules/.gitignore
+INFO  2026-04-14 09:29:53,534 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: apps/monitoring/.gitignore
+INFO  2026-04-14 09:29:53,535 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: apps/schedules/.gitignore
 INFO  2026-04-14 09:29:53,537 serena.agent:__init__:341 - Starting Serena server (version=1.1.1, process id=58043, parent process id=57927; language backend=LSP); Python version=3.11.15, platform=Linux-4.19.0-14-amd64-x86_64-with-glibc2.28
 INFO  2026-04-14 09:29:53,537 serena.agent:__init__:345 - Configuration file: /home/dkzou/.serena/serena_config.yml
-INFO  2026-04-14 09:29:53,537 serena.agent:__init__:346 - Available projects: dokploy
+INFO  2026-04-14 09:29:53,537 serena.agent:__init__:346 - Available projects: vulseek
 INFO  2026-04-14 09:29:53,538 serena.agent:__init__:347 - Loaded tools (44): read_file, create_text_file, list_dir, find_file, replace_content, delete_lines, replace_lines, insert_at_line, search_for_pattern, restart_language_server, get_symbols_overview, find_symbol, find_referencing_symbols, replace_symbol_body, insert_after_symbol, insert_before_symbol, rename_symbol, safe_delete_symbol, write_memory, read_memory, list_memories, delete_memory, rename_memory, edit_memory, execute_shell_command, open_dashboard, activate_project, remove_project, get_current_config, check_onboarding_performed, onboarding, initial_instructions, jet_brains_find_symbol, jet_brains_move, jet_brains_safe_delete, jet_brains_inline_symbol, jet_brains_find_referencing_symbols, jet_brains_get_symbols_overview, jet_brains_type_hierarchy, jet_brains_find_declaration, jet_brains_find_implementations, jet_brains_rename, list_queryable_projects, query_project
 INFO  2026-04-14 09:29:53,538 serena.agent:__init__:359 - Using language backend from global configuration: LSP
-INFO  2026-04-14 09:29:53,551 serena.config.serena_config:start:329 - Loading project instance for RegisteredProject[project_root=/data/exp/dkzou/dokploy, project_config=ProjectConfig[project_name=dokploy]] starting ...
-INFO  2026-04-14 09:29:53,552 serena.project:__init__:278 - Serena project data folder: /data/exp/dkzou/dokploy/.serena
-INFO  2026-04-14 09:29:53,552 serena.project:start:329 - Gathering ignore spec for project dokploy starting ...
+INFO  2026-04-14 09:29:53,551 serena.config.serena_config:start:329 - Loading project instance for RegisteredProject[project_root=, project_config=ProjectConfig[project_name=vulseek]] starting ...
+INFO  2026-04-14 09:29:53,552 serena.project:__init__:278 - Serena project data folder: .serena
+INFO  2026-04-14 09:29:53,552 serena.project:start:329 - Gathering ignore spec for project vulseek starting ...
 INFO  2026-04-14 09:29:53,552 serena.util.file_system:start:329 - Loading of .gitignore files starting ...
-INFO  2026-04-14 09:29:53,552 serena.config.serena_config:stop:336 - Loading project instance for RegisteredProject[project_root=/data/exp/dkzou/dokploy, project_config=ProjectConfig[project_name=dokploy]] completed in 0.001 seconds
-INFO  2026-04-14 09:29:53,553 serena.agent:activate_project_from_path_or_name:870 - Found registered project 'dokploy' at path /data/exp/dkzou/dokploy
-INFO  2026-04-14 09:29:53,553 serena.agent:_activate_project:817 - Activating dokploy at /data/exp/dkzou/dokploy
+INFO  2026-04-14 09:29:53,552 serena.config.serena_config:stop:336 - Loading project instance for RegisteredProject[project_root=, project_config=ProjectConfig[project_name=vulseek]] completed in 0.001 seconds
+INFO  2026-04-14 09:29:53,553 serena.agent:activate_project_from_path_or_name:870 - Found registered project 'vulseek' at path
+INFO  2026-04-14 09:29:53,553 serena.agent:_activate_project:817 - Activating vulseek at
 INFO  2026-04-14 09:29:53,553 serena.task_executor:issue_task:192 - Scheduling Task-1:init_language_server_manager
-INFO  2026-04-14 09:29:53,553 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: /data/exp/dkzou/dokploy/.gitignore
+INFO  2026-04-14 09:29:53,553 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: .gitignore
 INFO  2026-04-14 09:29:53,557 serena.agent:_create_base_toolset:499 - Number of exposed tools: 26
 INFO  2026-04-14 09:29:53,558 serena.agent:__init__:386 - Number of exposed tools: 26. Exposed tools: ['activate_project', 'check_onboarding_performed', 'create_text_file', 'delete_memory', 'edit_memory', 'execute_shell_command', 'find_file', 'find_referencing_symbols', 'find_symbol', 'get_current_config', 'get_symbols_overview', 'initial_instructions', 'insert_after_symbol', 'insert_before_symbol', 'list_dir', 'list_memories', 'onboarding', 'read_file', 'read_memory', 'rename_memory', 'rename_symbol', 'replace_content', 'replace_symbol_body', 'safe_delete_symbol', 'search_for_pattern', 'write_memory']
 INFO  2026-04-14 09:29:53,559 serena.agent:get_mode_names:228 - Active modes: ['editing', 'interactive']
-INFO  2026-04-14 09:29:53,560 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: /data/exp/dkzou/dokploy/.serena/.gitignore
+INFO  2026-04-14 09:29:53,560 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: .serena/.gitignore
 INFO  2026-04-14 09:29:53,563 serena.agent:_update_active_tools:764 - Active tools (26): activate_project, check_onboarding_performed, create_text_file, delete_memory, edit_memory, execute_shell_command, find_file, find_referencing_symbols, find_symbol, get_current_config, get_symbols_overview, initial_instructions, insert_after_symbol, insert_before_symbol, list_dir, list_memories, onboarding, read_file, read_memory, rename_memory, rename_symbol, replace_content, replace_symbol_body, safe_delete_symbol, search_for_pattern, write_memory
-INFO  2026-04-14 09:29:53,564 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: /data/exp/dkzou/dokploy/apps/api/.gitignore
-INFO  2026-04-14 09:29:53,567 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: /data/exp/dkzou/dokploy/apps/dokploy/.gitignore
-INFO  2026-04-14 09:29:53,569 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: /data/exp/dkzou/dokploy/apps/monitoring/.gitignore
-INFO  2026-04-14 09:29:53,570 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: /data/exp/dkzou/dokploy/apps/schedules/.gitignore
-INFO  2026-04-14 09:29:53,577 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: /data/exp/dkzou/dokploy/packages/server/src/emails/.gitignore
-INFO  2026-04-14 09:29:53,595 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: /data/exp/dkzou/dokploy/packages/server/src/emails/.gitignore
+INFO  2026-04-14 09:29:53,564 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: apps/api/.gitignore
+INFO  2026-04-14 09:29:53,567 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: apps/vulseek/.gitignore
+INFO  2026-04-14 09:29:53,569 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: apps/monitoring/.gitignore
+INFO  2026-04-14 09:29:53,570 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: apps/schedules/.gitignore
+INFO  2026-04-14 09:29:53,577 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: packages/server/src/emails/.gitignore
+INFO  2026-04-14 09:29:53,595 serena.util.file_system:_load_gitignore_files:152 - Processing .gitignore file: packages/server/src/emails/.gitignore
 INFO  2026-04-14 09:29:53,637 serena.util.file_system:stop:336 - Loading of .gitignore files completed in 0.116 seconds
-INFO  2026-04-14 09:29:53,639 serena.project:stop:336 - Gathering ignore spec for project dokploy completed in 0.118 seconds
+INFO  2026-04-14 09:29:53,639 serena.project:stop:336 - Gathering ignore spec for project vulseek completed in 0.118 seconds
 INFO  2026-04-14 09:29:53,639 serena.task_executor:_process_task_queue:123 - Starting execution of Task-1:init_language_server_manager
 INFO  2026-04-14 09:29:53,640 serena.task_executor:start:329 - Task-1:init_language_server_manager starting ...
 INFO  2026-04-14 09:29:53,640 serena.agent:start:329 - Language server initialization starting ...
-INFO  2026-04-14 09:29:53,640 serena.project:create_language_server_manager:637 - Creating language server manager for /data/exp/dkzou/dokploy
+INFO  2026-04-14 09:29:53,640 serena.project:create_language_server_manager:637 - Creating language server manager for
 INFO  2026-04-14 09:29:53,640 serena.project:_ignored_patterns:409 - Waiting for ignored patterns to become available ...
 INFO  2026-04-14 09:29:53,649 serena.util.file_system:stop:336 - Loading of .gitignore files completed in 0.096 seconds
-INFO  2026-04-14 09:29:53,650 serena.project:stop:336 - Gathering ignore spec for project dokploy completed in 0.098 seconds
+INFO  2026-04-14 09:29:53,650 serena.project:stop:336 - Gathering ignore spec for project vulseek completed in 0.098 seconds
 INFO  2026-04-14 09:29:53,650 serena.project:_ignored_patterns:411 - Ignore patterns are now available for project; proceeding
 INFO  2026-04-14 09:29:53,650 sensai.util.logging:start:329 - Language server startup (language=typescript) starting ...
-INFO  2026-04-14 09:29:53,650 serena.ls_manager:create_language_server:48 - Creating language server instance for /data/exp/dkzou/dokploy, language=typescript.
+INFO  2026-04-14 09:29:53,650 serena.ls_manager:create_language_server:48 - Creating language server instance for , language=typescript.
 INFO  2026-04-14 09:29:53,669 solidlsp.language_servers.typescript_language_server:_get_or_install_core_dependency:187 - Typescript Language Server executable not found at /home/dkzou/.serena/language_servers/static/TypeScriptLanguageServer/ts-lsp/node_modules/.bin/typescript-language-server.
 INFO  2026-04-14 09:29:53,669 solidlsp.language_servers.typescript_language_server:_get_or_install_core_dependency:203 - Installing TypeScript Language Server dependencies...
 INFO  2026-04-14 09:29:53,669 solidlsp.language_servers.typescript_language_server:start:329 - Installation of TypeScript language server dependencies starting ...
@@ -57,7 +57,7 @@ INFO  2026-04-14 09:29:57,779 solidlsp.language_servers.common:_run_command:115 
 INFO  2026-04-14 09:30:00,820 solidlsp.language_servers.common:_run_command:131 - Command completed successfully
 INFO  2026-04-14 09:30:00,821 solidlsp.language_servers.typescript_language_server:stop:336 - Installation of TypeScript language server dependencies completed in 7.151 seconds
 INFO  2026-04-14 09:30:00,821 solidlsp.language_servers.typescript_language_server:_get_or_install_core_dependency:209 - TypeScript language server dependencies installed successfully
-INFO  2026-04-14 09:30:00,823 solidlsp.ls:start:2572 - Starting language server with language typescript for /data/exp/dkzou/dokploy
+INFO  2026-04-14 09:30:00,823 solidlsp.ls:start:2572 - Starting language server with language typescript for
 INFO  2026-04-14 09:30:00,823 solidlsp.language_servers.typescript_language_server:_start_server:358 - Starting TypeScript server process
 INFO  2026-04-14 09:30:00,824 solidlsp.ls_process:start:192 - Starting language server process via command: ['/home/dkzou/.serena/language_servers/static/TypeScriptLanguageServer/ts-lsp/node_modules/.bin/typescript-language-server', '--stdio']
 INFO  2026-04-14 09:30:00,825 solidlsp.language_servers.typescript_language_server:_start_server:362 - Sending initialize request from LSP client to LSP server and awaiting response
@@ -83,7 +83,7 @@ INFO  2026-04-14 09:30:01,705 serena.task_executor:stop:336 - Task-3:<lambda> co
 INFO  2026-04-14 09:30:01,705 serena.cli:health_check:958 - FindSymbolTool found 0 matches for symbol app.get("/health") callback
 INFO  2026-04-14 09:30:01,705 serena.cli:health_check:961 - Testing FindReferencingSymbolsTool for symbol: app.get("/health") callback
 INFO  2026-04-14 09:30:01,705 serena.task_executor:issue_task:192 - Scheduling Task-4:<lambda>
-INFO  2026-04-14 09:30:01,710 solidlsp.language_servers.typescript_language_server:progress_handler:344 - TypeScript LSP progress [c12c7064-751f-4fcd-8185-64586bd86761]: ended - 
+INFO  2026-04-14 09:30:01,710 solidlsp.language_servers.typescript_language_server:progress_handler:344 - TypeScript LSP progress [c12c7064-751f-4fcd-8185-64586bd86761]: ended -
 INFO  2026-04-14 09:30:01,805 serena.task_executor:_process_task_queue:123 - Starting execution of Task-4:<lambda>
 INFO  2026-04-14 09:30:01,805 serena.task_executor:start:329 - Task-4:<lambda> starting ...
 ERROR 2026-04-14 09:30:01,806 serena.task_executor:__exit__:342 - Task-4:<lambda> failed after 0.001 seconds

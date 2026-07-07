@@ -20,7 +20,7 @@ export const resolveSandboxAgentTraefikBaseOrigin = () => {
 };
 
 const TRAEFIK_DYNAMIC_DIR =
-	process.env.DOKPLOY_DEV_TRAEFIK_DYNAMIC_DIR?.trim() ||
+	process.env.VULSEEK_DEV_TRAEFIK_DYNAMIC_DIR?.trim() ||
 	"/etc/traefik/dynamic";
 
 const writeTraefikDynamicConfig = async (fileName: string, content: string) => {
@@ -28,28 +28,28 @@ const writeTraefikDynamicConfig = async (fileName: string, content: string) => {
 	await writeFile(path.join(TRAEFIK_DYNAMIC_DIR, fileName), content, "utf8");
 };
 
-export const ensureDokployDevTraefikRootRoute = async () => {
+export const ensureVulseekDevTraefikRootRoute = async () => {
 	const config = {
 		http: {
 			routers: {
-				"dokploy-dev-root": {
+				"vulseek-dev-root": {
 					rule: "PathPrefix(`/`)",
-					service: "dokploy-dev-root-service",
+					service: "vulseek-dev-root-service",
 					entryPoints: ["web"],
 					priority: 1,
 				},
 			},
 			services: {
-				"dokploy-dev-root-service": {
+				"vulseek-dev-root-service": {
 					loadBalancer: {
-						servers: [{ url: "http://dokploy-dev:3000" }],
+						servers: [{ url: "http://vulseek-dev:3000" }],
 						passHostHeader: true,
 					},
 				},
 			},
 		},
 	};
-	await writeTraefikDynamicConfig("dokploy-dev-root.yml", stringify(config));
+	await writeTraefikDynamicConfig("vulseek-dev-root.yml", stringify(config));
 };
 
 export const configureSandboxAgentTraefikProxy = async (input: {

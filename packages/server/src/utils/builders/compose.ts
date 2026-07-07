@@ -5,8 +5,8 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { paths } from "@dokploy/server/constants";
-import type { InferResultType } from "@dokploy/server/types/with";
+import { paths } from "@vulseek/server/constants";
+import type { InferResultType } from "@vulseek/server/types/with";
 import boxen from "boxen";
 import {
 	writeDomainsToCompose,
@@ -83,7 +83,7 @@ export const buildCompose = async (compose: ComposeNested, logPath: string) => {
 
 		if (compose.isolatedDeployment) {
 			await execAsync(
-				`docker network connect ${compose.appName} $(docker ps --filter "name=dokploy-traefik" -q) >/dev/null 2>&1`,
+				`docker network connect ${compose.appName} $(docker ps --filter "name=vulseek-traefik" -q) >/dev/null 2>&1`,
 			).catch(() => {});
 		}
 
@@ -144,7 +144,7 @@ Compose Type: ${composeType} ✅`;
         ${exportEnvCommand}
 		${compose.isolatedDeployment ? `docker network inspect ${compose.appName} >/dev/null 2>&1 || docker network create --attachable ${compose.appName}` : ""}
 		docker ${command.split(" ").join(" ")} >> "${logPath}" 2>&1 || { echo "Error: ❌ Docker command failed" >> "${logPath}"; exit 1; }
-		${compose.isolatedDeployment ? `docker network connect ${compose.appName} $(docker ps --filter "name=dokploy-traefik" -q) >/dev/null 2>&1` : ""}
+		${compose.isolatedDeployment ? `docker network connect ${compose.appName} $(docker ps --filter "name=vulseek-traefik" -q) >/dev/null 2>&1` : ""}
 	
 		echo "Docker Compose Deployed: ✅" >> "${logPath}"
 	} || {

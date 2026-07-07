@@ -1,11 +1,11 @@
-import type { BackupSchedule } from "@dokploy/server/services/backup";
+import type { BackupSchedule } from "@vulseek/server/services/backup";
 import {
 	createDeploymentBackup,
 	updateDeploymentStatus,
-} from "@dokploy/server/services/deployment";
-import type { Postgres } from "@dokploy/server/services/postgres";
-import { findEnvironmentById } from "@dokploy/server/services/environment";
-import { findProjectById } from "@dokploy/server/services/project";
+} from "@vulseek/server/services/deployment";
+import type { Postgres } from "@vulseek/server/services/postgres";
+import { findEnvironmentById } from "@vulseek/server/services/environment";
+import { findProjectById } from "@vulseek/server/services/project";
 import { sendDatabaseBackupNotifications } from "../notifications/database-backup";
 import { execAsync, execAsyncRemote } from "../process/execAsync";
 import { getBackupCommand, getS3Credentials, normalizeS3Path } from "./utils";

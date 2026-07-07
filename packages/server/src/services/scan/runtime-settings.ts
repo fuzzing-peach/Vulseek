@@ -1,7 +1,7 @@
 import {
 	type ScanRuntimeSettings,
 	ScanRuntimeSettingsSchema,
-} from "@dokploy/server/db/schema";
+} from "@vulseek/server/db/schema";
 import { SCAN_STAGE_IDS, SCAN_STAGE_METADATA } from "./stage-metadata";
 
 export const FULL_SCAN_STAGE_IDS = [

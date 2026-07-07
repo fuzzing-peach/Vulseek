@@ -198,7 +198,7 @@ Put the longer reasoning in the module report.
 
 ## Output Contract To The Main Agent
 
-You are returning results to the main agent, not to Dokploy directly.
+You are returning results to the main agent, not to Vulseek directly.
 
 Your output should contain:
 

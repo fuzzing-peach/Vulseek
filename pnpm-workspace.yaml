@@ -1,5 +1,6 @@
 packages:
   - "apps/api"
-  - "apps/dokploy"
+  - "apps/vulseek"
   - "apps/schedules"
   - "packages/server"
+  - "packages/trpc-openapi"

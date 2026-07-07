@@ -10,10 +10,10 @@ WORKDIR /usr/src/app
 
 RUN apt-get update && apt-get install -y python3 make g++ git python3-pip pkg-config libsecret-1-dev && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p apps/api apps/dokploy apps/schedules packages/server packages/server/src/services/dockerfiles
+RUN mkdir -p apps/api apps/vulseek apps/schedules packages/server packages/server/src/services/dockerfiles
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json ./apps/api/package.json
-COPY apps/dokploy/package.json ./apps/dokploy/package.json
+COPY apps/vulseek/package.json ./apps/vulseek/package.json
 COPY apps/schedules/package.json ./apps/schedules/package.json
 COPY packages/server/package.json ./packages/server/package.json
 COPY packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch ./packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch
@@ -25,15 +25,15 @@ COPY . .
 RUN mkdir -p agents/mcp
 
 ENV NODE_ENV=production
-RUN pnpm --filter=@dokploy/server build
-RUN pnpm --filter=./apps/dokploy run build
+RUN pnpm --filter=@vulseek/server build
+RUN pnpm --filter=./apps/vulseek run build
 
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm --filter=./apps/dokploy --prod deploy /prod/dokploy
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm --filter=./apps/vulseek --prod deploy /prod/vulseek
 
-RUN cp -R /usr/src/app/apps/dokploy/.next /prod/dokploy/.next
-RUN cp -R /usr/src/app/apps/dokploy/dist /prod/dokploy/dist
+RUN cp -R /usr/src/app/apps/vulseek/.next /prod/vulseek/.next
+RUN cp -R /usr/src/app/apps/vulseek/dist /prod/vulseek/dist
 
-FROM base AS dokploy
+FROM base AS vulseek
 WORKDIR /app
 
 # Set production
@@ -62,15 +62,15 @@ COPY --from=buildpacksio/pack:0.35.0 /usr/local/bin/pack /usr/local/bin/pack
 
 # Copy only the necessary files after installing runtime tools so app edits reuse
 # the expensive tool-install layers.
-COPY --from=build /prod/dokploy/.next ./.next
-COPY --from=build /prod/dokploy/dist ./dist
-COPY --from=build /prod/dokploy/next.config.mjs ./next.config.mjs
-COPY --from=build /prod/dokploy/public ./public
-COPY --from=build /prod/dokploy/package.json ./package.json
-COPY --from=build /prod/dokploy/drizzle ./drizzle
+COPY --from=build /prod/vulseek/.next ./.next
+COPY --from=build /prod/vulseek/dist ./dist
+COPY --from=build /prod/vulseek/next.config.mjs ./next.config.mjs
+COPY --from=build /prod/vulseek/public ./public
+COPY --from=build /prod/vulseek/package.json ./package.json
+COPY --from=build /prod/vulseek/drizzle ./drizzle
 COPY .env.production ./.env
-COPY --from=build /prod/dokploy/components.json ./components.json
-COPY --from=build /prod/dokploy/node_modules ./node_modules
+COPY --from=build /prod/vulseek/components.json ./components.json
+COPY --from=build /prod/vulseek/node_modules ./node_modules
 COPY --from=build /usr/src/app/agents/skills ./agents/skills
 COPY --from=build /usr/src/app/agents/cache-schema ./agents/cache-schema
 COPY --from=build /usr/src/app/agents/mcp ./agents/mcp

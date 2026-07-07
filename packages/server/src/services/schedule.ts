@@ -22,7 +22,7 @@ export const createSchedule = async (
 
 	if (
 		newSchedule &&
-		(newSchedule.scheduleType === "dokploy-server" ||
+		(newSchedule.scheduleType === "vulseek-server" ||
 			newSchedule.scheduleType === "server")
 	) {
 		await handleScript(newSchedule);
@@ -132,7 +132,7 @@ export const updateSchedule = async (
 	}
 
 	if (
-		updatedSchedule?.scheduleType === "dokploy-server" ||
+		updatedSchedule?.scheduleType === "vulseek-server" ||
 		updatedSchedule?.scheduleType === "server"
 	) {
 		await handleScript(updatedSchedule);
@@ -158,7 +158,7 @@ ${schedule?.script || ""}`;
 		 echo "${encodedContent}" | base64 -d > ${fullPath}/script.sh
 	`;
 
-	if (schedule?.scheduleType === "dokploy-server") {
+	if (schedule?.scheduleType === "vulseek-server") {
 		await execAsync(script);
 	} else if (schedule?.scheduleType === "server") {
 		await execAsyncRemote(schedule?.serverId || "", script);

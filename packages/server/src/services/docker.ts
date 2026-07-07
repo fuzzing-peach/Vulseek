@@ -1,7 +1,7 @@
 import {
 	execAsync,
 	execAsyncRemote,
-} from "@dokploy/server/utils/process/execAsync";
+} from "@vulseek/server/utils/process/execAsync";
 
 export const getContainers = async (serverId?: string | null) => {
 	try {
@@ -60,8 +60,8 @@ export const getContainers = async (serverId?: string | null) => {
 			})
 			.filter(
 				(container) =>
-					!container.name.includes("dokploy") ||
-					container.name.includes("dokploy-monitoring"),
+					!container.name.includes("vulseek") ||
+					container.name.includes("vulseek-monitoring"),
 			);
 
 		return containers;
@@ -434,7 +434,7 @@ export const getNodeApplications = async (serverId?: string) => {
 			.trim()
 			.split("\n")
 			.map((line) => JSON.parse(line))
-			.filter((service) => !service.Name.startsWith("dokploy-"));
+			.filter((service) => !service.Name.startsWith("vulseek-"));
 
 		return appArray;
 	} catch {}

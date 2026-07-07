@@ -4,20 +4,20 @@ services:
   # PostgreSQL 数据库（与生产环境一致）
   postgres:
     image: postgres:16
-    container_name: dokploy-postgres-dev
+    container_name: vulseek-postgres-dev
     restart: unless-stopped
     ports:
       - "25432:5432"
     environment:
-      - POSTGRES_USER=dokploy
-      - POSTGRES_PASSWORD=dokploy_dev_password
-      - POSTGRES_DB=dokploy
+      - POSTGRES_USER=vulseek
+      - POSTGRES_PASSWORD=vulseek_dev_password
+      - POSTGRES_DB=vulseek
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
-      - dokploy-dev-network
+      - vulseek-dev-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U dokploy"]
+      test: ["CMD-SHELL", "pg_isready -U vulseek"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -25,22 +25,22 @@ services:
   # Redis 缓存服务（与生产环境一致）
   redis:
     image: redis:7
-    container_name: dokploy-redis-dev
+    container_name: vulseek-redis-dev
     restart: unless-stopped
     ports:
       - "26379:6379"
     volumes:
       - redis_data:/data
     networks:
-      - dokploy-dev-network
+      - vulseek-dev-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Dokploy 主应用（开发模式）
-  dokploy-dev:
+  # Vulseek 主应用（开发模式）
+  vulseek-dev:
     build:
       context: .
       dockerfile: Dockerfile.dev
@@ -49,7 +49,7 @@ services:
         HTTPS_PROXY: http://172.17.0.1:9870
         http_proxy: http://172.17.0.1:9870
         https_proxy: http://172.17.0.1:9870
-    container_name: dokploy-dev
+    container_name: vulseek-dev
     restart: unless-stopped
     depends_on:
       postgres:
@@ -72,17 +72,17 @@ services:
       
       # 挂载 node_modules 为命名卷，避免与宿主机冲突
       - node_modules:/app/node_modules
-      - dokploy_node_modules:/app/apps/dokploy/node_modules
+      - vulseek_node_modules:/app/apps/vulseek/node_modules
       - server_node_modules:/app/packages/server/node_modules
       
       # 挂载 Docker socket，允许容器内管理 Docker
       - /var/run/docker.sock:/var/run/docker.sock
 
       # 挂载 scan runtime 上下文；容器内服务也会把这个宿主机路径传给 task 容器
-      - ${DOKPLOY_SCAN_CONTEXT_HOST_PATH:-/data/exp/dkzou/dokploy-data}:/scan-context
+      - ${VULSEEK_SCAN_CONTEXT_HOST_PATH:-./vulseek-data}:/scan-context
       
       # 持久化配置和数据目录
-      - dokploy_data:/etc/dokploy
+      - vulseek_data:/etc/vulseek
       - docker_config:/root/.docker
     environment:
       # 开发环境配置
@@ -92,24 +92,24 @@ services:
       - WATCHPACK_POLLING=true
       
       # 数据库配置
-      - DATABASE_URL=postgresql://dokploy:dokploy_dev_password@dokploy-postgres-dev:5432/dokploy
+      - DATABASE_URL=postgresql://vulseek:vulseek_dev_password@vulseek-postgres-dev:5432/vulseek
       
       # Redis 配置
-      - REDIS_URL=redis://dokploy-redis-dev:6379
+      - REDIS_URL=redis://vulseek-redis-dev:6379
       
-      # Dokploy 配置（参考生产环境）
+      # Vulseek 配置（参考生产环境）
       - ADVERTISE_ADDR=${ADVERTISE_ADDR:-127.0.0.1}
-      - DOKPLOY_SCAN_CONTEXT_HOST_PATH=${DOKPLOY_SCAN_CONTEXT_HOST_PATH:-/data/exp/dkzou/dokploy-data}
+      - VULSEEK_SCAN_CONTEXT_HOST_PATH=${VULSEEK_SCAN_CONTEXT_HOST_PATH:-./vulseek-data}
     privileged: true  # 需要访问 Docker socket
     networks:
-      - dokploy-dev-network
+      - vulseek-dev-network
     stdin_open: true
     tty: true
 
   # Traefik 反向代理（可选，用于测试域名和 SSL）
   traefik:
     image: traefik:v3.5.0
-    container_name: dokploy-traefik-dev
+    container_name: vulseek-traefik-dev
     restart: unless-stopped
     ports:
       - "20080:80"      # HTTP
@@ -122,7 +122,7 @@ services:
       - traefik_data:/etc/traefik
       # 如果有自定义配置，可以挂载
       # - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      # - ./traefik/dynamic:/etc/dokploy/traefik/dynamic:ro
+      # - ./traefik/dynamic:/etc/vulseek/traefik/dynamic:ro
     command:
       # 启用 API 和 Dashboard
       - "--api.insecure=true"
@@ -131,7 +131,7 @@ services:
       # Docker provider
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
-      - "--providers.docker.network=dokploy-dev-network"
+      - "--providers.docker.network=vulseek-dev-network"
       
       # 入口点
       - "--entrypoints.web.address=:80"
@@ -141,7 +141,7 @@ services:
       - "--log.level=DEBUG"
       - "--accesslog=true"
     networks:
-      - dokploy-dev-network
+      - vulseek-dev-network
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.traefik.rule=Host(`traefik.localhost`)"
@@ -149,9 +149,9 @@ services:
 
 volumes:
   node_modules:
-  dokploy_node_modules:
+  vulseek_node_modules:
   server_node_modules:
-  dokploy_data:
+  vulseek_data:
   docker_config:
   postgres_data:
     external: true
@@ -159,6 +159,6 @@ volumes:
   traefik_data:
 
 networks:
-  dokploy-dev-network:
+  vulseek-dev-network:
     external: true
-    name: dokploy-dev-network
+    name: vulseek-dev-network

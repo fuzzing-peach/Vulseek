@@ -1,6 +1,6 @@
-import { db } from "@dokploy/server/db";
-import { agentProfiles, ai } from "@dokploy/server/db/schema";
-import { selectAIProvider } from "@dokploy/server/utils/ai/select-ai-provider";
+import { db } from "@vulseek/server/db";
+import { agentProfiles, ai } from "@vulseek/server/db/schema";
+import { selectAIProvider } from "@vulseek/server/utils/ai/select-ai-provider";
 import { TRPCError } from "@trpc/server";
 import { generateObject } from "ai";
 import { asc, desc, eq } from "drizzle-orm";

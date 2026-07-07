@@ -1,4 +1,4 @@
-import { db } from "@dokploy/server/db";
+import { db } from "@vulseek/server/db";
 import {
 	type apiCreateProject,
 	applications,
@@ -9,8 +9,8 @@ import {
 	postgres,
 	projects,
 	redis,
-} from "@dokploy/server/db/schema";
-import { execAsync } from "@dokploy/server/utils/process/execAsync";
+} from "@vulseek/server/db/schema";
+import { execAsync } from "@vulseek/server/utils/process/execAsync";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { createProductionEnvironment } from "./environment";

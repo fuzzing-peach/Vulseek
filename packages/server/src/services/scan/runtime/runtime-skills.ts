@@ -45,7 +45,7 @@ export const installRuntimeSkillsInContainer = async (input: {
     return [] as string[];
   }
 
-  const hostTempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dokploy-runtime-skills-"));
+  const hostTempDir = await fs.mkdtemp(path.join(os.tmpdir(), "vulseek-runtime-skills-"));
   const hostRepoRoot = path.join(hostTempDir, "repo");
   const hostSkillsRoot = path.join(hostRepoRoot, "skills");
   const copiedSkills: string[] = [];
@@ -86,7 +86,7 @@ export const installRuntimeSkillsInContainer = async (input: {
     }
     await log(`prepare_done copied_skills=${JSON.stringify(copiedSkills)}`);
 
-    const containerRepoRoot = "/tmp/dokploy-runtime-skills";
+    const containerRepoRoot = "/tmp/vulseek-runtime-skills";
     await timed("container_prepare", () =>
       execAsync(
         `docker exec ${input.containerName} bash -lc "rm -rf '${containerRepoRoot}' && mkdir -p '${containerRepoRoot}'"`,

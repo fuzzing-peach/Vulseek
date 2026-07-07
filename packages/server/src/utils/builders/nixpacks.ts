@@ -3,7 +3,7 @@ import path from "node:path";
 import {
 	buildStatic,
 	getStaticCommand,
-} from "@dokploy/server/utils/builders/static";
+} from "@vulseek/server/utils/builders/static";
 import { nanoid } from "nanoid";
 import { prepareEnvironmentVariables } from "../docker/utils";
 import { getBuildAppDirectory } from "../filesystem/directory";

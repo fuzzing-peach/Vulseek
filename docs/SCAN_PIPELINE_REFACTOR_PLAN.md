@@ -16,7 +16,7 @@ The target is not to change scan behavior first. The target is to make the syste
 
 ## Current Execution Model
 
-The current implementation is centered in [packages/server/src/services/scan.ts](/data/exp/dkzou/dokploy/packages/server/src/services/scan.ts).
+The current implementation is centered in [packages/server/src/services/scan.ts](packages/server/src/services/scan.ts).
 
 ### Main entrypoints
 
@@ -30,15 +30,15 @@ The current implementation is centered in [packages/server/src/services/scan.ts]
 
 ### Queue entry
 
-The queue worker starts the scan from [apps/dokploy/server/queues/scans-queue.ts](/data/exp/dkzou/dokploy/apps/dokploy/server/queues/scans-queue.ts).
+The queue worker starts the scan from [apps/vulseek/server/queues/scans-queue.ts](apps/vulseek/server/queues/scans-queue.ts).
 
 ### Runtime integration
 
 Sandbox-agent runtime startup is partly separated into:
 
-- [packages/server/src/services/sandbox-agent/runtime.ts](/data/exp/dkzou/dokploy/packages/server/src/services/sandbox-agent/runtime.ts)
-- [packages/server/src/services/sandbox-agent/persistence.ts](/data/exp/dkzou/dokploy/packages/server/src/services/sandbox-agent/persistence.ts)
-- [packages/server/src/services/sandbox-agent/types.ts](/data/exp/dkzou/dokploy/packages/server/src/services/sandbox-agent/types.ts)
+- [packages/server/src/services/sandbox-agent/runtime.ts](packages/server/src/services/sandbox-agent/runtime.ts)
+- [packages/server/src/services/sandbox-agent/persistence.ts](packages/server/src/services/sandbox-agent/persistence.ts)
+- [packages/server/src/services/sandbox-agent/types.ts](packages/server/src/services/sandbox-agent/types.ts)
 
 ## Current Full Scan Flow
 
@@ -76,7 +76,7 @@ The effective flow today is:
 
 ### 1. One oversized service file
 
-[packages/server/src/services/scan.ts](/data/exp/dkzou/dokploy/packages/server/src/services/scan.ts) currently mixes:
+[packages/server/src/services/scan.ts](packages/server/src/services/scan.ts) currently mixes:
 
 - database service logic
 - prompt construction
@@ -464,7 +464,7 @@ The refactor should be incremental.
 
 ### Phase 1: Extract runtime concerns without changing behavior
 
-Move code out of [scan.ts](/data/exp/dkzou/dokploy/packages/server/src/services/scan.ts):
+Move code out of [scan.ts](packages/server/src/services/scan.ts):
 
 - `runSingleTurnAgentInContainer()` helpers into `runtime/`
 - `installRuntimeSkillsInContainer()` into `runtime/runtime-skills.ts`

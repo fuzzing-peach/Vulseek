@@ -21,4 +21,4 @@ Run the scan-module skill's required noise-exclusion pass, and record extracted/
 Return a schema-valid path manifest: module is /task/module.json, and functions is the list of function JSON file paths.
 Use the module JSON file's files field as the starting file set, while respecting overlapping security modules.
 Before returning, validate the structured JSON against the runtime-provided output.schema.json.
-Set output.json exit to true so Dokploy can discard this Scan Module lane after end_turn.
+Set output.json exit to true so Vulseek can discard this Scan Module lane after end_turn.

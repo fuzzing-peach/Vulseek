@@ -1,5 +1,5 @@
-import { db } from "@dokploy/server/db";
-import { scanJobs, type taskStatusEnum, tasks } from "@dokploy/server/db/schema";
+import { db } from "@vulseek/server/db";
+import { scanJobs, type taskStatusEnum, tasks } from "@vulseek/server/db/schema";
 import { TRPCError } from "@trpc/server";
 import { and, asc, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import {

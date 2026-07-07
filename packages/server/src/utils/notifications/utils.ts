@@ -6,7 +6,7 @@ import type {
 	ntfy,
 	slack,
 	telegram,
-} from "@dokploy/server/db/schema";
+} from "@vulseek/server/db/schema";
 import nodemailer from "nodemailer";
 
 export const sendEmailNotification = async (

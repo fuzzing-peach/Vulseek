@@ -1,6 +1,6 @@
-import { db } from "@dokploy/server/db";
-import { tasks } from "@dokploy/server/db/schema";
-import type { apiCreateScanJob } from "@dokploy/server/db/schema";
+import { db } from "@vulseek/server/db";
+import { tasks } from "@vulseek/server/db/schema";
+import type { apiCreateScanJob } from "@vulseek/server/db/schema";
 import { eq } from "drizzle-orm";
 import { DEFAULT_DELTA_COMMIT_WINDOW } from "../constants";
 import { computeTaskCost } from "../cost";

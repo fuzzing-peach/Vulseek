@@ -45,7 +45,7 @@ runtime contract.
 
 The runtime injects the complete structured-output contract into each task
 prompt and writes the complete schema envelope to `output.schema.json`. Agents
-must write exactly one JSON envelope to `output.json`, then end the turn. Dokploy
+must write exactly one JSON envelope to `output.json`, then end the turn. Vulseek
 uses the end-turn event as the completion signal and reads `output.json` after
 that signal.
 

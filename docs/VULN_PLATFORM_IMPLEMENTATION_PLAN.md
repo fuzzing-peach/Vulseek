@@ -9,7 +9,7 @@
 - MCP 控制通道
 - 容器化执行与上下文目录复用
 
-本方案**不包含旧部署功能（Dokploy 原语义）的测试**。
+本方案**不包含旧部署功能（Vulseek 原语义）的测试**。
 
 ## 1.1 实施约束（必须遵守）
 
@@ -112,11 +112,11 @@
 
 ### 目标
 
-实现 Agent 调 Dokploy 的标准控制通道（MCP），用于 spawn subagent 与状态上报。
+实现 Agent 调 Vulseek 的标准控制通道（MCP），用于 spawn subagent 与状态上报。
 
 ### 交付组件
 
-1. `dokploy-control` MCP Server
+1. `vulseek-control` MCP Server
 - `spawn_subagent`
 - `update_candidate_status`
 - `append_artifact`

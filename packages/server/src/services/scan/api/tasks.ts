@@ -20,7 +20,7 @@ import {
 	normalizeTaskApiTokenUsage,
 	normalizeTasksApiTokenUsage,
 } from "./token-usage";
-import type { TaskAgentProfileSnapshot } from "@dokploy/server/db/schema";
+import type { TaskAgentProfileSnapshot } from "@vulseek/server/db/schema";
 
 const withEstimatedCost = <T extends Task>(task: T) => ({
 	...task,

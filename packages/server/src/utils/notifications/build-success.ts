@@ -1,7 +1,7 @@
-import { db } from "@dokploy/server/db";
-import { notifications } from "@dokploy/server/db/schema";
-import BuildSuccessEmail from "@dokploy/server/emails/emails/build-success";
-import type { Domain } from "@dokploy/server/services/domain";
+import { db } from "@vulseek/server/db";
+import { notifications } from "@vulseek/server/db/schema";
+import BuildSuccessEmail from "@vulseek/server/emails/emails/build-success";
+import type { Domain } from "@vulseek/server/services/domain";
 import { renderAsync } from "@react-email/components";
 import { format } from "date-fns";
 import { and, eq } from "drizzle-orm";
@@ -64,7 +64,7 @@ export const sendBuildSuccessNotifications = async ({
 					date: date.toLocaleString(),
 				}),
 			).catch();
-			await sendEmailNotification(email, "Build success for dokploy", template);
+			await sendEmailNotification(email, "Build success for vulseek", template);
 		}
 
 		if (discord) {
@@ -112,7 +112,7 @@ export const sendBuildSuccessNotifications = async ({
 				],
 				timestamp: date.toISOString(),
 				footer: {
-					text: "Dokploy Build Notification",
+					text: "Vulseek Build Notification",
 				},
 			});
 		}

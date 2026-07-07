@@ -1,10 +1,10 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { db } from "@dokploy/server/db";
+import { db } from "@vulseek/server/db";
 import {
 	EvaluateConfigSchema,
 	scanEvaluateResults,
-} from "@dokploy/server/db/schema";
+} from "@vulseek/server/db/schema";
 import { TRPCError } from "@trpc/server";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -110,10 +110,10 @@ const resolveProjectProfileHostContextRoot = async (scanJob: ScanJob) => {
 	} catch {}
 
 	const configuredHostRoot =
-		process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH?.trim() || "";
+		process.env.VULSEEK_SCAN_CONTEXT_HOST_PATH?.trim() || "";
 	if (!configuredHostRoot) {
 		throw new Error(
-			"Scan context host path is not configured in process env DOKPLOY_SCAN_CONTEXT_HOST_PATH",
+			"Scan context host path is not configured in process env VULSEEK_SCAN_CONTEXT_HOST_PATH",
 		);
 	}
 
@@ -340,7 +340,7 @@ export const runScanEvaluation = async (evaluateResultId: string) => {
 		const agentProfile = await resolveEvaluationAgentProfile(
 			config.agentProfileId,
 		);
-		const containerName = `dokploy-evaluate-${sanitizeContextPathPart(
+		const containerName = `vulseek-evaluate-${sanitizeContextPathPart(
 			scanJob.scanJobId,
 		).slice(0, 24)}-${sanitizeContextPathPart(evaluateResultId).slice(0, 12)}`;
 

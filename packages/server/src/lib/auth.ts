@@ -19,7 +19,7 @@ const { handler, api } = betterAuth({
 		provider: "pg",
 		schema: schema,
 	}),
-	appName: "Dokploy",
+	appName: "Vulseek",
 	socialProviders: {
 		github: {
 			clientId: process.env.GITHUB_CLIENT_ID as string,
@@ -98,10 +98,10 @@ const { handler, api } = betterAuth({
 			create: {
 				before: async (_user, context) => {
 					if (!IS_CLOUD) {
-						const xDokployToken =
-							context?.request?.headers?.get("x-dokploy-token");
-						if (xDokployToken) {
-							const user = await getUserByToken(xDokployToken);
+						const xVulseekToken =
+							context?.request?.headers?.get("x-vulseek-token");
+						if (xVulseekToken) {
+							const user = await getUserByToken(xVulseekToken);
 							if (!user) {
 								throw new APIError("BAD_REQUEST", {
 									message: "User not found",
@@ -236,14 +236,14 @@ const { handler, api } = betterAuth({
 					const host =
 						process.env.NODE_ENV === "development"
 							? "http://localhost:3000"
-							: "https://app.dokploy.com";
+							: "https://app.vulseek.com";
 					const inviteLink = `${host}/invitation?token=${data.id}`;
 
 					await sendEmail({
 						email: data.email,
 						subject: "Invitation to join organization",
 						text: `
-					<p>You are invited to join ${data.organization.name} on Dokploy. Click the link to accept the invitation: <a href="${inviteLink}">Accept Invitation</a></p>
+					<p>You are invited to join ${data.organization.name} on Vulseek. Click the link to accept the invitation: <a href="${inviteLink}">Accept Invitation</a></p>
 					`,
 					});
 				}
@@ -267,7 +267,7 @@ export const auth = {
 export const validateRequest = async (request: IncomingMessage) => {
 	if (
 		process.env.NODE_ENV === "development" &&
-		process.env.DOKPLOY_DEV_AUTH_BYPASS === "1"
+		process.env.VULSEEK_DEV_AUTH_BYPASS === "1"
 	) {
 		const member = await db.query.member.findFirst({
 			where: eq(schema.member.role, "owner"),

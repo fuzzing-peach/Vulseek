@@ -8,7 +8,7 @@ Refactor full-scan from:
 
 to:
 
-- Dokploy-programmed multi-stage orchestration with independent containers and agent processes
+- Vulseek-programmed multi-stage orchestration with independent containers and agent processes
 
 The new full-scan pipeline uses three explicit agent roles:
 
@@ -22,7 +22,7 @@ The first two layers write scan result files that become shared context for the 
 
 ## Design Principles
 
-1. Dokploy, not the LLM, owns task decomposition and scheduling.
+1. Vulseek, not the LLM, owns task decomposition and scheduling.
 2. Every task runs in its own fresh container and process.
 3. Each layer writes durable artifacts into the project/profile context directory.
 4. Higher-level scan results become structured context for lower-level scanners.
@@ -34,7 +34,7 @@ The first two layers write scan result files that become shared context for the 
 
 ### Stage 1: Repository Scan
 
-Dokploy starts one `repository-scanner`.
+Vulseek starts one `repository-scanner`.
 
 Responsibilities:
 
@@ -53,7 +53,7 @@ Outputs:
 
 ### Stage 2: Module Scan
 
-Dokploy reads `module_plan.json` and starts one `module-scanner` per module.
+Vulseek reads `module_plan.json` and starts one `module-scanner` per module.
 
 Responsibilities:
 
@@ -71,7 +71,7 @@ Outputs per module:
 
 ### Stage 3: Function Scan
 
-Dokploy reads every `function_plan.json` and starts one `function-scanner` per function task.
+Vulseek reads every `function_plan.json` and starts one `function-scanner` per function task.
 
 Responsibilities:
 
@@ -229,7 +229,7 @@ Possible future internal event types if needed:
 
 - `module_plan`
 
-But phase 1 can rely only on output files and Dokploy file reading.
+But phase 1 can rely only on output files and Vulseek file reading.
 
 ### Module Layer
 
@@ -239,7 +239,7 @@ Possible future internal event types if needed:
 
 - `function_plan`
 
-But phase 1 can rely only on output files and Dokploy file reading.
+But phase 1 can rely only on output files and Vulseek file reading.
 
 ### Function Layer
 
@@ -257,7 +257,7 @@ Candidate payload should continue using the existing schema:
 - `confidence`
 - `reportPath`
 
-Dokploy should enrich the stored candidate record with:
+Vulseek should enrich the stored candidate record with:
 
 - `scanJobId`
 - `moduleName`
@@ -292,7 +292,7 @@ Output:
 
 - candidate events
 
-Dokploy should keep per-queue concurrency caps as constants first, then move to config later.
+Vulseek should keep per-queue concurrency caps as constants first, then move to config later.
 
 Recommended initial constants:
 
@@ -349,7 +349,7 @@ Container naming should remain deterministic and include the task identity.
 
 ## Why This Refactor Is Better
 
-Compared with LLM-managed subagent spawning, this design gives Dokploy:
+Compared with LLM-managed subagent spawning, this design gives Vulseek:
 
 1. deterministic queue control
 2. deterministic concurrency control
@@ -543,5 +543,5 @@ Implement phase 1 first:
 
 1. add `repository-scanner` skill
 2. add `module-scanner` skill
-3. replace LLM internal full-scan subagent spawning with Dokploy-driven repository/module task orchestration
+3. replace LLM internal full-scan subagent spawning with Vulseek-driven repository/module task orchestration
 4. make `function_plan.json` the boundary between phase 1 and phase 2

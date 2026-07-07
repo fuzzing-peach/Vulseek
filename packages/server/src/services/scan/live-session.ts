@@ -1,13 +1,13 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { db } from "@dokploy/server/db";
+import { db } from "@vulseek/server/db";
 import {
 	applications,
 	compose,
 	environments,
 	projects,
 	scanJobs,
-} from "@dokploy/server/db/schema";
+} from "@vulseek/server/db/schema";
 import { and, eq, or } from "drizzle-orm";
 import { findApplicationById } from "../application";
 import { findComposeById } from "../compose";
@@ -55,7 +55,7 @@ const resolveScanStageTaskRuntimeDir = (
 const resolveScanContextRoot = async () => {
 	const candidates = [
 		"/scan-context",
-		process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH?.trim() || "",
+		process.env.VULSEEK_SCAN_CONTEXT_HOST_PATH?.trim() || "",
 	].filter(Boolean);
 	for (const candidate of candidates) {
 		try {

@@ -1,8 +1,8 @@
-# Dokploy 开发环境配置总结 📝
+# Vulseek 开发环境配置总结 📝
 
 ## 🎉 已完成的工作
 
-本次修改为 Dokploy 项目创建了一套完整的 Docker 开发环境，让你可以方便地进行代码修改、调试和开发。
+本次修改为 Vulseek 项目创建了一套完整的 Docker 开发环境，让你可以方便地进行代码修改、调试和开发。
 
 ## 📦 新增文件
 
@@ -21,12 +21,12 @@
 #### 服务列表：
 - **postgres** - PostgreSQL 16 数据库
   - 宿主机端口：25432 → 容器端口：5432
-  - 用户：dokploy / dokploy_dev_password
+  - 用户：vulseek / vulseek_dev_password
   
 - **redis** - Redis 7 缓存服务
   - 宿主机端口：26379 → 容器端口：6379
   
-- **dokploy-dev** - 主应用（开发模式）
+- **vulseek-dev** - 主应用（开发模式）
   - 宿主机端口：23000 → 容器端口：3000（主应用）
   - 宿主机端口：29229 → 容器端口：9229（调试）
   - 宿主机端口：25555 → 容器端口：5555（数据库管理）
@@ -40,7 +40,7 @@
 #### 特性：
 - ✅ 源代码卷挂载（支持热重载）
 - ✅ 健康检查（数据库和缓存）
-- ✅ 依赖管理（dokploy-dev 依赖于数据库服务）
+- ✅ 依赖管理（vulseek-dev 依赖于数据库服务）
 - ✅ 数据持久化（使用 Docker 卷）
 - ✅ 与生产环境架构一致
 
@@ -59,7 +59,7 @@
 #### 日志与调试：
 ```bash
 ./dev.sh logs           # 查看所有服务日志
-./dev.sh logs dokploy-dev  # 查看特定服务日志
+./dev.sh logs vulseek-dev  # 查看特定服务日志
 ./dev.sh shell          # 进入主容器
 ./dev.sh shell postgres # 进入数据库容器
 ./dev.sh status         # 查看服务状态和访问地址
@@ -159,7 +159,7 @@ chmod +x dev.sh
 
 ```bash
 # 修改代码（在宿主机）
-vim apps/dokploy/src/index.ts
+vim apps/vulseek/src/index.ts
 
 # 查看日志（自动重载）
 ./dev.sh logs
@@ -184,9 +184,9 @@ vim apps/dokploy/src/index.ts
 ./dev.sh db
 
 # 在 psql 中执行命令
-dokploy=# \dt          -- 列出所有表
-dokploy=# \d users     -- 查看 users 表结构
-dokploy=# SELECT * FROM users LIMIT 10;
+vulseek=# \dt          -- 列出所有表
+vulseek=# \d users     -- 查看 users 表结构
+vulseek=# SELECT * FROM users LIMIT 10;
 ```
 
 ## 🔧 配置说明
@@ -195,7 +195,7 @@ dokploy=# SELECT * FROM users LIMIT 10;
 
 | 宿主机端口 | 容器端口 | 服务 |
 |----------|---------|------|
-| 23000 | 3000 | Dokploy 主应用 |
+| 23000 | 3000 | Vulseek 主应用 |
 | 29229 | 9229 | Node.js 调试 |
 | 25555 | 5555 | 数据库管理工具 |
 | 25432 | 5432 | PostgreSQL |
@@ -212,7 +212,7 @@ dokploy=# SELECT * FROM users LIMIT 10;
 NODE_ENV=development
 
 # 数据库
-DATABASE_URL=postgresql://dokploy:dokploy_dev_password@postgres:5432/dokploy
+DATABASE_URL=postgresql://vulseek:vulseek_dev_password@postgres:5432/vulseek
 
 # Redis
 REDIS_URL=redis://redis:6379
@@ -253,7 +253,7 @@ WATCHPACK_POLLING=true
 | 数据库 | 外部服务 | Docker Compose |
 | Redis | 外部服务 | Docker Compose |
 | Traefik | 外部容器 | Docker Compose |
-| 启动方式 | `pnpm start` | `pnpm dokploy:dev` |
+| 启动方式 | `pnpm start` | `pnpm vulseek:dev` |
 
 ## 🐛 常见问题
 

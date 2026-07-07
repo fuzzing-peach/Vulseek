@@ -2,6 +2,7 @@
 
 # Dependencies
 node_modules
+node_modules*
 .pnp
 .pnp.js
 .docker
@@ -28,7 +29,11 @@ coverage
 .next/
 out/
 dist
+dist.root-owned.*
 .scan-runtime
+
+# Local permission-recovery backups
+.node-modules-root-owned-backups/
 
 
 # Debug

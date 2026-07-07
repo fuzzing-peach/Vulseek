@@ -51,4 +51,4 @@ Hard constraints:
 - threatModelPath must be exactly "/task/inputs/module-threat-model.json". Do not create, rewrite, derive, summarize, or reference any other threat model artifact.
 - Return only a schema-valid rule plan through the structured output mechanism.
 - Before returning, validate the structured JSON against /task/output.schema.json.
-- Set output.json exit to true so Dokploy can discard this design-rule lane after end_turn.
+- Set output.json exit to true so Vulseek can discard this design-rule lane after end_turn.

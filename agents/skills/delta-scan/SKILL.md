@@ -343,7 +343,7 @@ Do not:
 - require full exploit confirmation before reporting
 - require fuzzing before reporting
 - require CodeQL before reporting
-- flood Dokploy with duplicates for the same downstream site unless the commits provide materially different reasons
+- flood Vulseek with duplicates for the same downstream site unless the commits provide materially different reasons
 
 ## Priority Rule
 

@@ -39,7 +39,7 @@ export const initializeStandaloneTraefik = async ({
 }: TraefikOptions = {}) => {
 	const { MAIN_TRAEFIK_PATH, DYNAMIC_TRAEFIK_PATH } = paths(!!serverId);
 	const imageName = `traefik:v${TRAEFIK_VERSION}`;
-	const containerName = "dokploy-traefik";
+	const containerName = "vulseek-traefik";
 
 	const exposedPorts: Record<string, {}> = {
 		[`${TRAEFIK_PORT}/tcp`]: {},
@@ -75,7 +75,7 @@ export const initializeStandaloneTraefik = async ({
 		Image: imageName,
 		NetworkingConfig: {
 			EndpointsConfig: {
-				"dokploy-network": {},
+				"vulseek-network": {},
 			},
 		},
 		ExposedPorts: exposedPorts,
@@ -129,7 +129,7 @@ export const initializeTraefikService = async ({
 }: TraefikOptions) => {
 	const { MAIN_TRAEFIK_PATH, DYNAMIC_TRAEFIK_PATH } = paths(!!serverId);
 	const imageName = `traefik:v${TRAEFIK_VERSION}`;
-	const appName = "dokploy-traefik";
+	const appName = "vulseek-traefik";
 
 	const settings: CreateServiceOptions = {
 		Name: appName,
@@ -143,7 +143,7 @@ export const initializeTraefikService = async ({
 					"--providers.swarm=true",
 					"--providers.swarm.endpoint=unix:///var/run/docker.sock",
 					"--providers.swarm.exposedbydefault=false",
-					"--providers.swarm.network=dokploy-network",
+					"--providers.swarm.network=vulseek-network",
 					"--providers.file.directory=/etc/traefik/dynamic",
 					"--providers.file.watch=true",
 					"--entrypoints.web.address=:80",
@@ -169,7 +169,7 @@ export const initializeTraefikService = async ({
 					},
 				],
 			},
-			Networks: [{ Target: "dokploy-network" }],
+			Networks: [{ Target: "vulseek-network" }],
 			Placement: {
 				Constraints: ["node.role==manager"],
 			},
@@ -231,14 +231,14 @@ export const initializeTraefikService = async ({
 
 export const createDefaultServerTraefikConfig = () => {
 	const { DYNAMIC_TRAEFIK_PATH } = paths();
-	const configFilePath = path.join(DYNAMIC_TRAEFIK_PATH, "dokploy.yml");
+	const configFilePath = path.join(DYNAMIC_TRAEFIK_PATH, "vulseek.yml");
 
 	if (existsSync(configFilePath)) {
 		console.log("Default traefik config already exists");
 		return;
 	}
 
-	const appName = "dokploy";
+	const appName = "vulseek";
 	const serviceURLDefault = `http://${appName}:${process.env.PORT || 3000}`;
 	const config: FileConfig = {
 		http: {
@@ -290,11 +290,11 @@ export const getDefaultTraefikConfig = () => {
 						docker: {
 							exposedByDefault: false,
 							watch: true,
-							network: "dokploy-network",
+							network: "vulseek-network",
 						},
 					}),
 			file: {
-				directory: "/etc/dokploy/traefik/dynamic",
+				directory: "/etc/vulseek/traefik/dynamic",
 				watch: true,
 			},
 		},
@@ -324,7 +324,7 @@ export const getDefaultTraefikConfig = () => {
 				letsencrypt: {
 					acme: {
 						email: "test@localhost.com",
-						storage: "/etc/dokploy/traefik/dynamic/acme.json",
+						storage: "/etc/vulseek/traefik/dynamic/acme.json",
 						httpChallenge: {
 							entryPoint: "web",
 						},
@@ -349,10 +349,10 @@ export const getDefaultServerTraefikConfig = () => {
 			docker: {
 				exposedByDefault: false,
 				watch: true,
-				network: "dokploy-network",
+				network: "vulseek-network",
 			},
 			file: {
-				directory: "/etc/dokploy/traefik/dynamic",
+				directory: "/etc/vulseek/traefik/dynamic",
 				watch: true,
 			},
 		},
@@ -379,7 +379,7 @@ export const getDefaultServerTraefikConfig = () => {
 			letsencrypt: {
 				acme: {
 					email: "test@localhost.com",
-					storage: "/etc/dokploy/traefik/dynamic/acme.json",
+					storage: "/etc/vulseek/traefik/dynamic/acme.json",
 					httpChallenge: {
 						entryPoint: "web",
 					},

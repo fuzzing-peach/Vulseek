@@ -232,7 +232,7 @@ subagent 遍历模块中的每个函数，快速判断其是否安全敏感。
 
 也就是说：
 
-- scan subagent 不直接对 Dokploy 发 candidate 入库事件
+- scan subagent 不直接对 Vulseek 发 candidate 入库事件
 - 只有主 agent 做最终 candidate 收敛和事件提交
 
 主 agent 在排序时需要综合考虑以下因素，并按综合优先级降序排列：

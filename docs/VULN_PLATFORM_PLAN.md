@@ -25,7 +25,7 @@
 2. `model`
 3. `thinking-level`
 4. `token_quota`（单任务 token 上限）
-- 改造过程中不以 Dokploy 原部署语义为目标能力。
+- 改造过程中不以 Vulseek 原部署语义为目标能力。
 
 ## 2.1 已确认实现参数（本轮）
 
@@ -178,17 +178,17 @@
 ### 5.6 Agent 与平台控制通道（新增）
 
 - 推荐通道：`MCP`。
-- 设计原则：自主编排 Agent 不直接操作 Docker/队列，仅调用 Dokploy 暴露的控制工具。
-- 建议新增 `dokploy-control MCP server`，对外提供工具：
+- 设计原则：自主编排 Agent 不直接操作 Docker/队列，仅调用 Vulseek 暴露的控制工具。
+- 建议新增 `vulseek-control MCP server`，对外提供工具：
 1. `spawn_subagent`
 2. `update_candidate_status`
 3. `append_artifact`
 4. `list_candidate_tasks`
 5. `cancel_candidate_task`
-- MCP server 在后端转发到 Dokploy 内部控制面（API + Queue + Worker）。
+- MCP server 在后端转发到 Vulseek 内部控制面（API + Queue + Worker）。
 - 推荐链路：
 1. Agent -> MCP tool call
-2. MCP server -> Dokploy 内部 API
+2. MCP server -> Vulseek 内部 API
 3. 内部 API -> 任务队列（BullMQ）
 4. Worker -> 启动/监控/回收容器
 - 安全建议：

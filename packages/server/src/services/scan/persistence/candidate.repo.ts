@@ -1,10 +1,10 @@
-import { db } from "@dokploy/server/db";
+import { db } from "@vulseek/server/db";
 import {
 	candidateMetadata,
 	candidateTags,
 	type taskStatusEnum,
 	tasks,
-} from "@dokploy/server/db/schema";
+} from "@vulseek/server/db/schema";
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray, or } from "drizzle-orm";
 import {

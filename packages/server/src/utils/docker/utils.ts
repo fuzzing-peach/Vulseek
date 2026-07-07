@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Readable } from "node:stream";
-import { docker, paths } from "@dokploy/server/constants";
-import type { Compose } from "@dokploy/server/services/compose";
+import { docker, paths } from "@vulseek/server/constants";
+import type { Compose } from "@vulseek/server/services/compose";
 import type { ContainerInfo, ResourceRequirements } from "dockerode";
 import { parse } from "dotenv";
 import type { ApplicationNested } from "../builders";
@@ -261,7 +261,7 @@ export const prepareEnvironmentVariables = (
 	projectEnv?: string | null,
 	environmentEnv?: string | null,
 ) => {
-	const globalContainerVars = parse(process.env.DOKPLOY_CONTAINER_ENV || "");
+	const globalContainerVars = parse(process.env.VULSEEK_CONTAINER_ENV || "");
 	const projectVars = parse(projectEnv ?? "");
 	const environmentVars = parse(environmentEnv ?? "");
 	const serviceVars = {
@@ -315,7 +315,7 @@ export const prepareEnvironmentVariables = (
 };
 
 export const getGlobalContainerEnvironmentObject = () => {
-	return parse(process.env.DOKPLOY_CONTAINER_ENV || "");
+	return parse(process.env.VULSEEK_CONTAINER_ENV || "");
 };
 
 export const getGlobalContainerEnvironmentPairs = () => {
@@ -473,7 +473,7 @@ export const generateConfigContainer = (
 					Networks: networkSwarm,
 				}
 			: {
-					Networks: [{ Target: "dokploy-network" }],
+					Networks: [{ Target: "vulseek-network" }],
 				}),
 	};
 };

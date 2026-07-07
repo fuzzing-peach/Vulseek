@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Vulseek/Dokploy release environment manager. Pulls the GHCR release image.
+# Vulseek release environment manager. Pulls the GHCR release image.
 
 set -e
 
@@ -10,22 +10,22 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-NETWORK_NAME="dokploy-release-network"
-POSTGRES_SERVICE="dokploy-postgres-release"
-REDIS_SERVICE="dokploy-redis-release"
-DOKPLOY_SERVICE="dokploy-release"
-TRAEFIK_SERVICE="dokploy-traefik-release"
+NETWORK_NAME="vulseek-release-network"
+POSTGRES_SERVICE="vulseek-postgres-release"
+REDIS_SERVICE="vulseek-redis-release"
+VULSEEK_SERVICE="vulseek-release"
+TRAEFIK_SERVICE="vulseek-traefik-release"
 IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-ghcr.io/fuzzing-peach/vulseek}"
 RELEASE_TAG="${RELEASE_TAG:-latest}"
 IMAGE_NAME="${IMAGE_REPOSITORY}:${RELEASE_TAG}"
 ENV_FILE="${ENV_FILE:-.env.production}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_SCAN_CONTEXT_HOST_PATH="$(cd "${SCRIPT_DIR}/.." && pwd)/dokploy-data"
-SCAN_CONTEXT_HOST_PATH="${DOKPLOY_SCAN_CONTEXT_HOST_PATH:-}"
+DEFAULT_SCAN_CONTEXT_HOST_PATH="$(cd "${SCRIPT_DIR}/.." && pwd)/vulseek-data"
+SCAN_CONTEXT_HOST_PATH="${VULSEEK_SCAN_CONTEXT_HOST_PATH:-}"
 
 show_help() {
-    echo -e "${BLUE}Dokploy release environment manager (Docker Swarm)${NC}"
+    echo -e "${BLUE}Vulseek release environment manager (Docker Swarm)${NC}"
     echo ""
     echo "Usage: ./run.sh [command] [options]"
     echo ""
@@ -39,8 +39,8 @@ show_help() {
     echo "  pull        Pull ${IMAGE_NAME}"
     echo "  start       Start the release environment"
     echo "  stop        Stop release services"
-    echo "  restart     Force restart the Dokploy release service"
-    echo "  logs [svc]  Follow logs for dokploy, postgres, redis, or traefik"
+    echo "  restart     Force restart the Vulseek release service"
+    echo "  logs [svc]  Follow logs for vulseek, postgres, redis, or traefik"
     echo "  ps          Show release services"
     echo "  status      Show service status and URLs"
     echo "  clean       Remove services and release volumes"
@@ -64,7 +64,7 @@ init_swarm() {
     fi
 
     docker network create --driver overlay --attachable "$NETWORK_NAME" 2>/dev/null || true
-    docker volume create dokploy_release_data >/dev/null
+    docker volume create vulseek_release_data >/dev/null
     docker volume create docker_release_config >/dev/null
     docker volume create postgres_release_data >/dev/null
     docker volume create redis_release_data >/dev/null
@@ -91,11 +91,11 @@ start_postgres() {
         --name "$POSTGRES_SERVICE" \
         --network "$NETWORK_NAME" \
         --publish published=25432,target=5432,mode=host \
-        --env POSTGRES_USER=dokploy \
-        --env POSTGRES_PASSWORD=dokploy_release_password \
-        --env POSTGRES_DB=dokploy \
+        --env POSTGRES_USER=vulseek \
+        --env POSTGRES_PASSWORD=vulseek_release_password \
+        --env POSTGRES_DB=vulseek \
         --mount type=volume,source=postgres_release_data,target=/var/lib/postgresql/data \
-        --health-cmd "pg_isready -U dokploy" \
+        --health-cmd "pg_isready -U vulseek" \
         --health-interval 10s \
         --health-timeout 5s \
         --health-retries 5 \
@@ -117,7 +117,7 @@ start_redis() {
         redis:7 2>/dev/null || echo -e "${YELLOW}Redis service already exists${NC}"
 }
 
-start_dokploy() {
+start_vulseek() {
     check_env_file
 
     local effective_scan_context_host_path="${SCAN_CONTEXT_HOST_PATH:-$DEFAULT_SCAN_CONTEXT_HOST_PATH}"
@@ -137,24 +137,24 @@ start_dokploy() {
     done < "$env_file_path"
 
     eval docker service create \
-        --name "$DOKPLOY_SERVICE" \
+        --name "$VULSEEK_SERVICE" \
         --network "$NETWORK_NAME" \
         --publish published=23000,target=3000,mode=host \
         --env NODE_ENV=production \
         --env RELEASE_TAG="$RELEASE_TAG" \
-        --env DOKPLOY_IMAGE_REPOSITORY="$IMAGE_REPOSITORY" \
-        --env DOKPLOY_SERVICE_NAME="$DOKPLOY_SERVICE" \
-        --env DATABASE_URL=postgresql://dokploy:dokploy_release_password@"$POSTGRES_SERVICE":5432/dokploy \
+        --env VULSEEK_IMAGE_REPOSITORY="$IMAGE_REPOSITORY" \
+        --env VULSEEK_SERVICE_NAME="$VULSEEK_SERVICE" \
+        --env DATABASE_URL=postgresql://vulseek:vulseek_release_password@"$POSTGRES_SERVICE":5432/vulseek \
         --env REDIS_URL=redis://"$REDIS_SERVICE":6379 \
-        --env DOKPLOY_SCAN_CONTEXT_HOST_PATH="${effective_scan_context_host_path}" \
+        --env VULSEEK_SCAN_CONTEXT_HOST_PATH="${effective_scan_context_host_path}" \
         $env_args \
         --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
         --mount type=bind,source="${effective_scan_context_host_path}",target=/scan-context \
-        --mount type=volume,source=dokploy_release_data,target=/etc/dokploy \
+        --mount type=volume,source=vulseek_release_data,target=/etc/vulseek \
         --mount type=volume,source=traefik_release_data,target=/etc/traefik \
         --mount type=volume,source=docker_release_config,target=/root/.docker \
         --constraint "'node.role==manager'" \
-        "$IMAGE_NAME" 2>/dev/null || echo -e "${YELLOW}Dokploy release service already exists${NC}"
+        "$IMAGE_NAME" 2>/dev/null || echo -e "${YELLOW}Vulseek release service already exists${NC}"
 }
 
 start_traefik() {
@@ -184,27 +184,27 @@ start_all() {
     fi
     start_postgres
     start_redis
-    start_dokploy
+    start_vulseek
     start_traefik
     show_status
 }
 
 stop_all() {
-    docker service rm "$DOKPLOY_SERVICE" 2>/dev/null || true
+    docker service rm "$VULSEEK_SERVICE" 2>/dev/null || true
     docker service rm "$TRAEFIK_SERVICE" 2>/dev/null || true
     docker service rm "$REDIS_SERVICE" 2>/dev/null || true
     docker service rm "$POSTGRES_SERVICE" 2>/dev/null || true
     echo -e "${GREEN}Release environment stopped${NC}"
 }
 
-restart_dokploy() {
-    docker service update --force --image "$IMAGE_NAME" "$DOKPLOY_SERVICE"
+restart_vulseek() {
+    docker service update --force --image "$IMAGE_NAME" "$VULSEEK_SERVICE"
 }
 
 show_logs() {
-    local service_name=${1:-dokploy}
+    local service_name=${1:-vulseek}
     case "$service_name" in
-        dokploy) service_name="$DOKPLOY_SERVICE" ;;
+        vulseek) service_name="$VULSEEK_SERVICE" ;;
         postgres) service_name="$POSTGRES_SERVICE" ;;
         redis) service_name="$REDIS_SERVICE" ;;
         traefik) service_name="$TRAEFIK_SERVICE" ;;
@@ -230,12 +230,12 @@ show_status() {
     echo -e "${BLUE}PostgreSQL:${NC}    localhost:25432"
     echo -e "${BLUE}Redis:${NC}         localhost:26379"
     echo -e "${BLUE}Scan Context:${NC}  ${effective_scan_context_host_path}"
-    docker service ls --filter "name=dokploy-"
+    docker service ls --filter "name=vulseek-"
 }
 
 clean_all() {
     stop_all
-    docker volume rm dokploy_release_data docker_release_config postgres_release_data redis_release_data traefik_release_data 2>/dev/null || true
+    docker volume rm vulseek_release_data docker_release_config postgres_release_data redis_release_data traefik_release_data 2>/dev/null || true
     echo -e "${GREEN}Release volumes removed${NC}"
 }
 
@@ -267,9 +267,9 @@ case "${COMMAND:-help}" in
     pull) pull_image ;;
     start) start_all ;;
     stop) stop_all ;;
-    restart) restart_dokploy ;;
+    restart) restart_vulseek ;;
     logs) show_logs "${ARGS[0]}" ;;
-    ps) docker service ls --filter "name=dokploy-" ;;
+    ps) docker service ls --filter "name=vulseek-" ;;
     status) show_status ;;
     clean) clean_all ;;
     help|--help|-h) show_help ;;

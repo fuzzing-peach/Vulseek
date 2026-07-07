@@ -1,6 +1,6 @@
-# Dokploy 开发环境快速开始 🚀
+# Vulseek 开发环境快速开始 🚀
 
-> 5 分钟内启动完整的 Dokploy 开发环境（基于 Docker Swarm）
+> 5 分钟内启动完整的 Vulseek 开发环境（基于 Docker Swarm）
 
 ## 📋 前置要求
 
@@ -53,7 +53,7 @@ chmod +x dev.sh
 - ✅ 构建开发镜像（首次启动）
 - ✅ 启动 PostgreSQL 16 数据库服务
 - ✅ 启动 Redis 7 缓存服务
-- ✅ 启动 Dokploy 主应用（开发模式，支持热重载）
+- ✅ 启动 Vulseek 主应用（开发模式，支持热重载）
 - ✅ 启动 Traefik 反向代理服务
 
 ### 4. 等待服务启动
@@ -61,7 +61,7 @@ chmod +x dev.sh
 首次启动需要构建镜像，大约需要 2-5 分钟。可以查看日志：
 
 ```bash
-./dev.sh logs dokploy
+./dev.sh logs vulseek
 ```
 
 ### 4. 访问应用
@@ -88,7 +88,7 @@ chmod +x dev.sh
 
 # 查看状态
 ./dev.sh status           # 查看服务状态
-./dev.sh logs dokploy     # 查看主应用日志
+./dev.sh logs vulseek     # 查看主应用日志
 ./dev.sh logs postgres    # 查看数据库日志
 
 # 进入容器
@@ -101,8 +101,8 @@ chmod +x dev.sh
 ./dev.sh redis            # 进入 Redis 命令行
 
 # 更新和重启
-./dev.sh update dokploy   # 更新服务（配置修改后）
-./dev.sh restart dokploy  # 重启服务
+./dev.sh update vulseek   # 更新服务（配置修改后）
+./dev.sh restart vulseek  # 重启服务
 
 # 清理
 ./dev.sh clean            # 完全清理（包括数据）
@@ -163,7 +163,7 @@ lsof -i :26379
 ./dev.sh status
 
 # 查看具体服务日志
-./dev.sh logs dokploy
+./dev.sh logs vulseek
 ./dev.sh logs postgres
 
 # 重新构建并启动
@@ -183,10 +183,10 @@ lsof -i :26379
 
 ```bash
 # 方式1：更新服务（推荐）
-./dev.sh update dokploy
+./dev.sh update vulseek
 
 # 方式2：重启服务
-./dev.sh restart dokploy
+./dev.sh restart vulseek
 
 # 方式3：进入容器查看
 ./dev.sh shell
@@ -205,7 +205,7 @@ lsof -i :26379
 3. **构建镜像**: `./dev.sh build`（首次或代码更新后）
 4. **启动服务**: `./dev.sh start`（自动挂载环境文件）
 5. **运行数据库迁移**: `./dev.sh db:migrate`
-6. **开始开发**: 修改代码，使用 `./dev.sh update dokploy` 重新部署！
+6. **开始开发**: 修改代码，使用 `./dev.sh update vulseek` 重新部署！
 
 ### 环境配置说明
 
@@ -219,7 +219,7 @@ lsof -i :26379
 - 开发环境使用 Docker Swarm 进行服务编排
 - 开发环境数据会持久化在 Docker 卷中
 - 使用 `./dev.sh clean` 可以完全重置环境
-- 代码修改后使用 `./dev.sh update dokploy` 快速重新部署
+- 代码修改后使用 `./dev.sh update vulseek` 快速重新部署
 
 ---
 

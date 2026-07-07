@@ -355,7 +355,7 @@ const buildClaudeEnvPairs = (
 	`ANTHROPIC_DEFAULT_SONNET_MODEL=${agentProfile.model}`,
 	`ANTHROPIC_DEFAULT_OPUS_MODEL=${agentProfile.model}`,
 	`ANTHROPIC_DEFAULT_HAIKU_MODEL=${agentProfile.model}`,
-	`CLAUDE_CODE_ENTRYPOINT=dokploy-vulseek`,
+	`CLAUDE_CODE_ENTRYPOINT=vulseek`,
 	...parseAgentProfileEnvPairs(agentProfile),
 ];
 
@@ -364,7 +364,6 @@ const resolveAgentsDirectory = async () => {
 		path.resolve(process.cwd(), "agents"),
 		path.resolve(process.cwd(), "../../agents"),
 		"/app/agents",
-		"/data/exp/dkzou/dokploy/agents",
 	];
 
 	for (const candidate of candidates) {
@@ -527,7 +526,7 @@ const execDockerRunWithRetry = async (input: {
 };
 
 const resolveConfiguredScanContextHostPath = () =>
-	process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH?.trim() || "";
+	process.env.VULSEEK_SCAN_CONTEXT_HOST_PATH?.trim() || "";
 
 const resolveProjectProfileHostPath = async (input: {
 	projectName: string;
@@ -536,7 +535,7 @@ const resolveProjectProfileHostPath = async (input: {
 	const configuredHostRoot = resolveConfiguredScanContextHostPath();
 	if (!configuredHostRoot) {
 		throw new Error(
-			"Scan context host path is not configured. Restart dokploy-dev from dev.sh so task runtime directories can be created.",
+			"Scan context host path is not configured. Restart vulseek-dev from dev.sh so task runtime directories can be created.",
 		);
 	}
 
@@ -601,7 +600,7 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 	const configuredHostRoot = resolveConfiguredScanContextHostPath();
 	if (!configuredHostRoot) {
 		throw new Error(
-			"Scan context host path is not configured. Restart dokploy-dev from dev.sh so /scan-context is mounted.",
+			"Scan context host path is not configured. Restart vulseek-dev from dev.sh so /scan-context is mounted.",
 		);
 	}
 
@@ -1126,7 +1125,7 @@ export const buildStructuredOutputPromptSuffix = (
 					),
 				]
 			: ["- This stage has no dynamic route; set output.json route to null."]),
-		"- Do not include any runtime markers in your final response. Dokploy will wait for end_turn and then read output.json.",
+		"- Do not include any runtime markers in your final response. Vulseek will wait for end_turn and then read output.json.",
 		"",
 		"```json",
 		JSON.stringify(jsonSchema, null, 2),

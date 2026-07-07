@@ -1,50 +1,50 @@
-import { docker } from "@dokploy/server/constants";
-import { db } from "@dokploy/server/db";
+import { docker } from "@vulseek/server/constants";
+import { db } from "@vulseek/server/db";
 import {
 	type apiCreateApplication,
 	applications,
 	buildAppName,
 	buildDefaultScanStageSettings,
 	renameAppNameBase,
-} from "@dokploy/server/db/schema";
-import { getAdvancedStats } from "@dokploy/server/monitoring/utils";
+} from "@vulseek/server/db/schema";
+import { getAdvancedStats } from "@vulseek/server/monitoring/utils";
 import {
 	buildApplication,
 	getBuildCommand,
 	mechanizeDockerContainer,
-} from "@dokploy/server/utils/builders";
-import { sendBuildErrorNotifications } from "@dokploy/server/utils/notifications/build-error";
-import { sendBuildSuccessNotifications } from "@dokploy/server/utils/notifications/build-success";
-import { execAsyncRemote } from "@dokploy/server/utils/process/execAsync";
+} from "@vulseek/server/utils/builders";
+import { sendBuildErrorNotifications } from "@vulseek/server/utils/notifications/build-error";
+import { sendBuildSuccessNotifications } from "@vulseek/server/utils/notifications/build-success";
+import { execAsyncRemote } from "@vulseek/server/utils/process/execAsync";
 import {
 	cloneBitbucketRepository,
 	getBitbucketCloneCommand,
-} from "@dokploy/server/utils/providers/bitbucket";
+} from "@vulseek/server/utils/providers/bitbucket";
 import {
 	buildDocker,
 	buildRemoteDocker,
-} from "@dokploy/server/utils/providers/docker";
+} from "@vulseek/server/utils/providers/docker";
 import {
 	cloneGitRepository,
 	getCustomGitCloneCommand,
-} from "@dokploy/server/utils/providers/git";
+} from "@vulseek/server/utils/providers/git";
 import {
 	cloneGiteaRepository,
 	getGiteaCloneCommand,
-} from "@dokploy/server/utils/providers/gitea";
+} from "@vulseek/server/utils/providers/gitea";
 import {
 	cloneGithubRepository,
 	getGithubCloneCommand,
-} from "@dokploy/server/utils/providers/github";
+} from "@vulseek/server/utils/providers/github";
 import {
 	cloneGitlabRepository,
 	getGitlabCloneCommand,
-} from "@dokploy/server/utils/providers/gitlab";
-import { createTraefikConfig } from "@dokploy/server/utils/traefik/application";
+} from "@vulseek/server/utils/providers/gitlab";
+import { createTraefikConfig } from "@vulseek/server/utils/traefik/application";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { encodeBase64 } from "../utils/docker/utils";
-import { getDokployUrl } from "./admin";
+import { getVulseekUrl } from "./admin";
 import { getAgentProfilesByOrganizationId } from "./ai";
 import {
 	createDeployment,
@@ -226,7 +226,7 @@ export const deployApplication = async ({
 }) => {
 	const application = await findApplicationById(applicationId);
 
-	const buildLink = `${await getDokployUrl()}/dashboard/project/${application.environment.projectId}/environment/${application.environmentId}/profiles/application/${application.applicationId}?tab=deployments`;
+	const buildLink = `${await getVulseekUrl()}/dashboard/project/${application.environment.projectId}/environment/${application.environmentId}/profiles/application/${application.applicationId}?tab=deployments`;
 	const deployment = await createDeployment({
 		applicationId: applicationId,
 		title: titleLog,
@@ -353,7 +353,7 @@ export const deployRemoteApplication = async ({
 }) => {
 	const application = await findApplicationById(applicationId);
 
-	const buildLink = `${await getDokployUrl()}/dashboard/project/${application.environment.projectId}/environment/${application.environmentId}/profiles/application/${application.applicationId}?tab=deployments`;
+	const buildLink = `${await getVulseekUrl()}/dashboard/project/${application.environment.projectId}/environment/${application.environmentId}/profiles/application/${application.applicationId}?tab=deployments`;
 	const deployment = await createDeployment({
 		applicationId: applicationId,
 		title: titleLog,
@@ -510,12 +510,12 @@ export const deployPreviewApplication = async ({
 		);
 		await updateIssueComment({
 			...issueParams,
-			body: `### Dokploy Preview Deployment\n\n${buildingComment}`,
+			body: `### Vulseek Preview Deployment\n\n${buildingComment}`,
 		});
 		application.appName = previewDeployment.appName;
-		application.env = `${application.previewEnv}\nDOKPLOY_DEPLOY_URL=${previewDeployment?.domain?.host}`;
-		application.buildArgs = `${application.previewBuildArgs}\nDOKPLOY_DEPLOY_URL=${previewDeployment?.domain?.host}`;
-		application.buildSecrets = `${application.previewBuildSecrets}\nDOKPLOY_DEPLOY_URL=${previewDeployment?.domain?.host}`;
+		application.env = `${application.previewEnv}\nVULSEEK_DEPLOY_URL=${previewDeployment?.domain?.host}`;
+		application.buildArgs = `${application.previewBuildArgs}\nVULSEEK_DEPLOY_URL=${previewDeployment?.domain?.host}`;
+		application.buildSecrets = `${application.previewBuildSecrets}\nVULSEEK_DEPLOY_URL=${previewDeployment?.domain?.host}`;
 
 		if (application.sourceType === "github") {
 			await cloneGithubRepository({
@@ -533,7 +533,7 @@ export const deployPreviewApplication = async ({
 		);
 		await updateIssueComment({
 			...issueParams,
-			body: `### Dokploy Preview Deployment\n\n${successComment}`,
+			body: `### Vulseek Preview Deployment\n\n${successComment}`,
 		});
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 		await updatePreviewDeployment(previewDeploymentId, {
@@ -543,7 +543,7 @@ export const deployPreviewApplication = async ({
 		const comment = getIssueComment(application.name, "error", previewDomain);
 		await updateIssueComment({
 			...issueParams,
-			body: `### Dokploy Preview Deployment\n\n${comment}`,
+			body: `### Vulseek Preview Deployment\n\n${comment}`,
 		});
 		await updateDeploymentStatus(deployment.deploymentId, "error");
 		await updatePreviewDeployment(previewDeploymentId, {
@@ -618,12 +618,12 @@ export const deployRemotePreviewApplication = async ({
 		);
 		await updateIssueComment({
 			...issueParams,
-			body: `### Dokploy Preview Deployment\n\n${buildingComment}`,
+			body: `### Vulseek Preview Deployment\n\n${buildingComment}`,
 		});
 		application.appName = previewDeployment.appName;
-		application.env = `${application.previewEnv}\nDOKPLOY_DEPLOY_URL=${previewDeployment?.domain?.host}`;
-		application.buildArgs = `${application.previewBuildArgs}\nDOKPLOY_DEPLOY_URL=${previewDeployment?.domain?.host}`;
-		application.buildSecrets = `${application.previewBuildSecrets}\nDOKPLOY_DEPLOY_URL=${previewDeployment?.domain?.host}`;
+		application.env = `${application.previewEnv}\nVULSEEK_DEPLOY_URL=${previewDeployment?.domain?.host}`;
+		application.buildArgs = `${application.previewBuildArgs}\nVULSEEK_DEPLOY_URL=${previewDeployment?.domain?.host}`;
+		application.buildSecrets = `${application.previewBuildSecrets}\nVULSEEK_DEPLOY_URL=${previewDeployment?.domain?.host}`;
 
 		if (application.serverId) {
 			let command = "set -e;";
@@ -649,7 +649,7 @@ export const deployRemotePreviewApplication = async ({
 		);
 		await updateIssueComment({
 			...issueParams,
-			body: `### Dokploy Preview Deployment\n\n${successComment}`,
+			body: `### Vulseek Preview Deployment\n\n${successComment}`,
 		});
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 		await updatePreviewDeployment(previewDeploymentId, {
@@ -659,7 +659,7 @@ export const deployRemotePreviewApplication = async ({
 		const comment = getIssueComment(application.name, "error", previewDomain);
 		await updateIssueComment({
 			...issueParams,
-			body: `### Dokploy Preview Deployment\n\n${comment}`,
+			body: `### Vulseek Preview Deployment\n\n${comment}`,
 		});
 		await updateDeploymentStatus(deployment.deploymentId, "error");
 		await updatePreviewDeployment(previewDeploymentId, {

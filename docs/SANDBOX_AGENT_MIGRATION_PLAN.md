@@ -2,7 +2,7 @@
 
 ## Goal
 
-Replace Dokploy's current agent runtime layer with `sandbox-agent`, while keeping Dokploy's business orchestration unchanged.
+Replace Vulseek's current agent runtime layer with `sandbox-agent`, while keeping Vulseek's business orchestration unchanged.
 
 This migration is specifically about replacing:
 
@@ -11,7 +11,7 @@ This migration is specifically about replacing:
 - runtime event/session handling
 - streaming collection from running agent processes
 
-This migration does **not** change Dokploy's ownership of:
+This migration does **not** change Vulseek's ownership of:
 
 - scan / analysis / verify queue orchestration
 - database state machines
@@ -21,9 +21,9 @@ This migration does **not** change Dokploy's ownership of:
 
 ## Target Architecture
 
-### Dokploy Responsibilities
+### Vulseek Responsibilities
 
-Dokploy remains the orchestrator and source of business truth.
+Vulseek remains the orchestrator and source of business truth.
 
 It continues to own:
 
@@ -63,20 +63,20 @@ It should provide:
 
 ## Core Principle
 
-Dokploy should stop defining its own bottom-layer runtime protocol.
+Vulseek should stop defining its own bottom-layer runtime protocol.
 
 Instead:
 
 1. use `sandbox-agent` universal events as the runtime transcript format
-2. keep only Dokploy-specific business payloads for scan results
+2. keep only Vulseek-specific business payloads for scan results
 
 That means:
 
-- no new Dokploy JSON-RPC protocol
+- no new Vulseek JSON-RPC protocol
 - no provider-specific frontend protocol
 - no Python driver for Codex app-server
 
-Dokploy still needs a small set of domain payloads, such as:
+Vulseek still needs a small set of domain payloads, such as:
 
 - candidate found
 - analysis result
@@ -90,7 +90,7 @@ These are business results, not runtime transport events.
 
 The current runtime implementation is centered in:
 
-- [scan.ts](/data/exp/dkzou/dokploy/packages/server/src/services/scan.ts)
+- [scan.ts](packages/server/src/services/scan.ts)
 
 The primary replacement targets are:
 
@@ -109,7 +109,7 @@ The current business entrypoints that should remain, but switch to the new runti
 
 ## Runtime Contract After Migration
 
-Dokploy should interact with `sandbox-agent` through a thin internal runtime adapter.
+Vulseek should interact with `sandbox-agent` through a thin internal runtime adapter.
 
 Suggested runtime adapter responsibilities:
 
@@ -117,7 +117,7 @@ Suggested runtime adapter responsibilities:
 - subscribe to runtime event stream
 - persist transcript to artifact files
 - surface process exit / timeout / connection failures
-- support monitoring recovery after Dokploy restart
+- support monitoring recovery after Vulseek restart
 
 Suggested internal methods:
 
@@ -134,7 +134,7 @@ These method names are illustrative; the important part is the separation of run
 
 Runtime events should come directly from `sandbox-agent`.
 
-Dokploy should persist them as raw transcript records, for example:
+Vulseek should persist them as raw transcript records, for example:
 
 - `sandbox-agent-events.jsonl`
 
@@ -146,7 +146,7 @@ The raw event file should be the canonical runtime transcript used for:
 
 ### Business Payloads
 
-Dokploy should continue to parse a thin business payload from agent output.
+Vulseek should continue to parse a thin business payload from agent output.
 
 Recommended approach:
 
@@ -231,7 +231,7 @@ Success criteria:
 - analysis task still writes report and result
 - candidate detail page receives runtime streaming
 - retry still works
-- Dokploy restart can resume monitoring or fail cleanly
+- Vulseek restart can resume monitoring or fail cleanly
 
 ### Phase 3: Migrate Verification Runtime
 
@@ -299,9 +299,9 @@ After all stages run on `sandbox-agent`, delete legacy runtime code:
 
 ## Frontend Streaming Plan
 
-The frontend should continue to connect only to Dokploy, not directly to containers.
+The frontend should continue to connect only to Vulseek, not directly to containers.
 
-Dokploy should:
+Vulseek should:
 
 1. read persisted runtime transcript files
 2. maintain in-memory buffers per transcript file
@@ -362,7 +362,7 @@ These are operational metadata fields, not business-semantic fields.
 
 ## Recovery Model
 
-Dokploy restart should not immediately requeue all running tasks.
+Vulseek restart should not immediately requeue all running tasks.
 
 On startup:
 
@@ -385,14 +385,14 @@ This would be a design mistake.
 
 If the UI starts depending on provider-specific raw event shapes, the migration will fail architecturally.
 
-Only Dokploy should see provider/runtime details.
+Only Vulseek should see provider/runtime details.
 
 ### Risk 3: Mixing Runtime Events With Business Payloads
 
 These must stay separate:
 
 - runtime transcript from `sandbox-agent`
-- business payloads parsed by Dokploy
+- business payloads parsed by Vulseek
 
 ### Risk 4: Regressing Retry/Recovery Semantics
 
@@ -408,7 +408,7 @@ The migration is complete when:
 
 1. scan, analysis, and verify all run through `sandbox-agent`
 2. no legacy detached Codex driver path remains
-3. browser streaming still works through Dokploy SSE
+3. browser streaming still works through Vulseek SSE
 4. restart recovery does not lose task visibility
 5. business outputs remain compatible with existing pages and DB records
 

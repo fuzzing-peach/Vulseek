@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Dokploy 开发环境管理脚本 (使用 Docker Swarm)
+# Vulseek 开发环境管理脚本 (使用 Docker Swarm)
 
 set -e
 
@@ -12,28 +12,28 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 # 配置变量
-NETWORK_NAME="dokploy-dev-network"
-POSTGRES_SERVICE="dokploy-postgres-dev"
-REDIS_SERVICE="dokploy-redis-dev"
-DOKPLOY_SERVICE="dokploy-dev"
-TRAEFIK_SERVICE="dokploy-traefik-dev"
-IMAGE_NAME="dokploy-dev:latest"
+NETWORK_NAME="vulseek-dev-network"
+POSTGRES_SERVICE="vulseek-postgres-dev"
+REDIS_SERVICE="vulseek-redis-dev"
+VULSEEK_SERVICE="vulseek-dev"
+TRAEFIK_SERVICE="vulseek-traefik-dev"
+IMAGE_NAME="vulseek-dev:latest"
 ENV_FILE="env.development"
 
 # 当前脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_SCAN_CONTEXT_HOST_PATH="$(cd "${SCRIPT_DIR}/.." && pwd)/dokploy-data"
+DEFAULT_SCAN_CONTEXT_HOST_PATH="$(cd "${SCRIPT_DIR}/.." && pwd)/vulseek-data"
 SCAN_CONTEXT_HOST_PATH=""
 
 # 显示帮助信息
 show_help() {
-    echo -e "${BLUE}Dokploy 开发环境管理脚本 (Docker Swarm)${NC}"
+    echo -e "${BLUE}Vulseek 开发环境管理脚本 (Docker Swarm)${NC}"
     echo ""
     echo "使用方法: ./dev.sh [命令] [选项]"
     echo ""
     echo "全局选项:"
     echo "  --scan-context-host-path PATH"
-    echo "             指定宿主机 scan context 根目录，并挂载到 dokploy-dev:/scan-context"
+    echo "             指定宿主机 scan context 根目录，并挂载到 vulseek-dev:/scan-context"
     echo "             默认值: ${DEFAULT_SCAN_CONTEXT_HOST_PATH}"
     echo ""
     echo "基础命令:"
@@ -45,8 +45,8 @@ show_help() {
     echo "  clean       - 清理服务和卷"
     echo ""
     echo "日志与调试:"
-    echo "  logs [服务]  - 查看日志（可选服务：dokploy, postgres, redis, traefik）"
-    echo "  shell [服务] - 进入容器 shell（默认：dokploy）"
+    echo "  logs [服务]  - 查看日志（可选服务：vulseek, postgres, redis, traefik）"
+    echo "  shell [服务] - 进入容器 shell（默认：vulseek）"
     echo "  ps          - 查看所有服务状态"
     echo ""
     echo "数据库操作:"
@@ -131,9 +131,9 @@ init_swarm() {
     # 创建卷
     echo -e "${BLUE}💾 创建数据卷...${NC}"
     docker volume create node_modules 2>/dev/null || true
-    docker volume create dokploy_node_modules 2>/dev/null || true
+    docker volume create vulseek_node_modules 2>/dev/null || true
     docker volume create server_node_modules 2>/dev/null || true
-    docker volume create dokploy_data 2>/dev/null || true
+    docker volume create vulseek_data 2>/dev/null || true
     docker volume create docker_config 2>/dev/null || true
     docker volume create postgres_data 2>/dev/null || true
     docker volume create redis_data 2>/dev/null || true
@@ -186,11 +186,11 @@ start_postgres() {
         --name "$POSTGRES_SERVICE" \
         --network "$NETWORK_NAME" \
         --publish published=25432,target=5432,mode=host \
-        --env POSTGRES_USER=dokploy \
-        --env POSTGRES_PASSWORD=dokploy_dev_password \
-        --env POSTGRES_DB=dokploy \
+        --env POSTGRES_USER=vulseek \
+        --env POSTGRES_PASSWORD=vulseek_dev_password \
+        --env POSTGRES_DB=vulseek \
         --mount type=volume,source=postgres_data,target=/var/lib/postgresql/data \
-        --health-cmd "pg_isready -U dokploy" \
+        --health-cmd "pg_isready -U vulseek" \
         --health-interval 10s \
         --health-timeout 5s \
         --health-retries 5 \
@@ -219,9 +219,9 @@ start_redis() {
     }
 }
 
-# 启动 Dokploy 主服务
-start_dokploy() {
-    echo -e "${BLUE}🚀 启动 Dokploy 主应用...${NC}"
+# 启动 Vulseek 主服务
+start_vulseek() {
+    echo -e "${BLUE}🚀 启动 Vulseek 主应用...${NC}"
     local effective_scan_context_host_path="${SCAN_CONTEXT_HOST_PATH:-$DEFAULT_SCAN_CONTEXT_HOST_PATH}"
     
     # 检查镜像是否存在
@@ -260,12 +260,12 @@ start_dokploy() {
     
     # 使用 eval 执行命令以正确处理环境变量
     eval docker service create \
-        --name "$DOKPLOY_SERVICE" \
+        --name "$VULSEEK_SERVICE" \
         --network "$NETWORK_NAME" \
         --publish published=23000,target=3000,mode=host \
         --publish published=29229,target=9229,mode=host \
         --publish published=25555,target=5555,mode=host \
-        --env DOKPLOY_SCAN_CONTEXT_HOST_PATH="${effective_scan_context_host_path}" \
+        --env VULSEEK_SCAN_CONTEXT_HOST_PATH="${effective_scan_context_host_path}" \
         $env_args \
         --mount type=bind,source="${SCRIPT_DIR}/apps",target=/app/apps \
         --mount type=bind,source="${SCRIPT_DIR}/agents",target=/app/agents \
@@ -274,16 +274,16 @@ start_dokploy() {
         --mount type=bind,source="${SCRIPT_DIR}/pnpm-workspace.yaml",target=/app/pnpm-workspace.yaml \
         --mount type=bind,source="${env_file_path}",target=/app/.env \
         --mount type=volume,source=node_modules,target=/app/node_modules \
-        --mount type=volume,source=dokploy_node_modules,target=/app/apps/dokploy/node_modules \
+        --mount type=volume,source=vulseek_node_modules,target=/app/apps/vulseek/node_modules \
         --mount type=volume,source=server_node_modules,target=/app/packages/server/node_modules \
         --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
         --mount type=bind,source="${effective_scan_context_host_path}",target=/scan-context \
-        --mount type=volume,source=dokploy_data,target=/etc/dokploy \
+        --mount type=volume,source=vulseek_data,target=/etc/vulseek \
         --mount type=volume,source=traefik_data,target=/etc/traefik \
         --mount type=volume,source=docker_config,target=/root/.docker \
         --constraint "'node.role==manager'" \
         "$IMAGE_NAME" 2>/dev/null || {
-        echo -e "${YELLOW}⚠️  Dokploy 服务已存在${NC}"
+        echo -e "${YELLOW}⚠️  Vulseek 服务已存在${NC}"
     }
 }
 
@@ -315,7 +315,7 @@ start_traefik() {
 
 # 启动所有服务
 start_all() {
-    echo -e "${GREEN}🚀 启动 Dokploy 开发环境...${NC}"
+    echo -e "${GREEN}🚀 启动 Vulseek 开发环境...${NC}"
     
     # 确保 Swarm 已初始化
     if ! check_swarm; then
@@ -328,7 +328,7 @@ start_all() {
     sleep 2
     start_redis
     sleep 2
-    start_dokploy
+    start_vulseek
     sleep 2
     start_traefik
     
@@ -342,9 +342,9 @@ start_all() {
 
 # 停止所有服务
 stop_all() {
-    echo -e "${YELLOW}⏹️  停止 Dokploy 开发环境...${NC}"
+    echo -e "${YELLOW}⏹️  停止 Vulseek 开发环境...${NC}"
     
-    docker service rm "$DOKPLOY_SERVICE" 2>/dev/null || true
+    docker service rm "$VULSEEK_SERVICE" 2>/dev/null || true
     docker service rm "$TRAEFIK_SERVICE" 2>/dev/null || true
     docker service rm "$REDIS_SERVICE" 2>/dev/null || true
     docker service rm "$POSTGRES_SERVICE" 2>/dev/null || true
@@ -354,7 +354,7 @@ stop_all() {
 
 # 重启服务
 restart_service() {
-    local service=${1:-$DOKPLOY_SERVICE}
+    local service=${1:-$VULSEEK_SERVICE}
     echo -e "${YELLOW}🔄 重启服务: $service${NC}"
     docker service update --force "$service"
     echo -e "${GREEN}✅ 服务已重启${NC}"
@@ -365,8 +365,8 @@ show_logs() {
     local service_name=${1:-}
     
     case "$service_name" in
-        dokploy|"")
-            service_name="$DOKPLOY_SERVICE"
+        vulseek|"")
+            service_name="$VULSEEK_SERVICE"
             ;;
         postgres)
             service_name="$POSTGRES_SERVICE"
@@ -399,11 +399,11 @@ show_logs() {
 
 # 进入容器 shell
 enter_shell() {
-    local service_name=${1:-dokploy}
+    local service_name=${1:-vulseek}
     
     case "$service_name" in
-        dokploy|"")
-            service_name="$DOKPLOY_SERVICE"
+        vulseek|"")
+            service_name="$VULSEEK_SERVICE"
             ;;
         postgres)
             service_name="$POSTGRES_SERVICE"
@@ -439,13 +439,13 @@ show_status() {
     local effective_scan_context_host_path="${SCAN_CONTEXT_HOST_PATH:-$DEFAULT_SCAN_CONTEXT_HOST_PATH}"
     echo -e "${BLUE}📊 服务状态:${NC}"
     echo ""
-    docker service ls --filter "name=dokploy"
+    docker service ls --filter "name=vulseek"
     echo ""
     echo -e "${GREEN}🌐 访问地址:${NC}"
     echo -e "  ${BLUE}主应用:${NC}        http://localhost:23000"
     echo -e "  ${BLUE}调试端口:${NC}      localhost:29229"
     echo -e "  ${BLUE}Traefik 面板:${NC}  http://localhost:28080"
-    echo -e "  ${BLUE}PostgreSQL:${NC}    localhost:25432 (用户: dokploy, 密码: dokploy_dev_password)"
+    echo -e "  ${BLUE}PostgreSQL:${NC}    localhost:25432 (用户: vulseek, 密码: vulseek_dev_password)"
     echo -e "  ${BLUE}Redis:${NC}         localhost:26379"
     echo -e "  ${BLUE}Scan Context:${NC}  ${effective_scan_context_host_path}"
     echo ""
@@ -468,7 +468,7 @@ connect_db() {
     if [ -n "$task_id" ]; then
         container_id=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' "$task_id")
         if [ -n "$container_id" ]; then
-            docker exec -it "$container_id" psql -U dokploy -d dokploy
+            docker exec -it "$container_id" psql -U vulseek -d vulseek
         else
             echo -e "${RED}❌ 无法获取容器 ID${NC}"
         fi
@@ -481,18 +481,18 @@ connect_db() {
 db_migrate() {
     echo -e "${BLUE}🔄 运行数据库迁移...${NC}"
     
-    task_id=$(docker service ps "$DOKPLOY_SERVICE" --filter "desired-state=running" -q | head -n1)
+    task_id=$(docker service ps "$VULSEEK_SERVICE" --filter "desired-state=running" -q | head -n1)
     
     if [ -n "$task_id" ]; then
         container_id=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' "$task_id")
         if [ -n "$container_id" ]; then
-            docker exec "$container_id" sh -c "cd apps/dokploy && pnpm db:push"
+            docker exec "$container_id" sh -c "cd apps/vulseek && pnpm db:push"
             echo -e "${GREEN}✅ 数据库迁移完成${NC}"
         else
             echo -e "${RED}❌ 无法获取容器 ID${NC}"
         fi
     else
-        echo -e "${RED}❌ Dokploy 服务未运行${NC}"
+        echo -e "${RED}❌ Vulseek 服务未运行${NC}"
     fi
 }
 
@@ -500,18 +500,18 @@ db_migrate() {
 db_seed() {
     echo -e "${BLUE}🌱 填充测试数据...${NC}"
     
-    task_id=$(docker service ps "$DOKPLOY_SERVICE" --filter "desired-state=running" -q | head -n1)
+    task_id=$(docker service ps "$VULSEEK_SERVICE" --filter "desired-state=running" -q | head -n1)
     
     if [ -n "$task_id" ]; then
         container_id=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' "$task_id")
         if [ -n "$container_id" ]; then
-            docker exec "$container_id" sh -c "cd apps/dokploy && pnpm db:seed"
+            docker exec "$container_id" sh -c "cd apps/vulseek && pnpm db:seed"
             echo -e "${GREEN}✅ 测试数据填充完成${NC}"
         else
             echo -e "${RED}❌ 无法获取容器 ID${NC}"
         fi
     else
-        echo -e "${RED}❌ Dokploy 服务未运行${NC}"
+        echo -e "${RED}❌ Vulseek 服务未运行${NC}"
     fi
 }
 
@@ -520,17 +520,17 @@ db_studio() {
     echo -e "${BLUE}🎨 启动数据库管理界面...${NC}"
     echo -e "${YELLOW}💡 Drizzle Studio 将在 http://localhost:25555 启动${NC}"
     
-    task_id=$(docker service ps "$DOKPLOY_SERVICE" --filter "desired-state=running" -q | head -n1)
+    task_id=$(docker service ps "$VULSEEK_SERVICE" --filter "desired-state=running" -q | head -n1)
     
     if [ -n "$task_id" ]; then
         container_id=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' "$task_id")
         if [ -n "$container_id" ]; then
-            docker exec -it "$container_id" sh -c "cd apps/dokploy && pnpm db:studio"
+            docker exec -it "$container_id" sh -c "cd apps/vulseek && pnpm db:studio"
         else
             echo -e "${RED}❌ 无法获取容器 ID${NC}"
         fi
     else
-        echo -e "${RED}❌ Dokploy 服务未运行${NC}"
+        echo -e "${RED}❌ Vulseek 服务未运行${NC}"
     fi
 }
 
@@ -556,7 +556,7 @@ enter_redis() {
 install_deps() {
     echo -e "${BLUE}📦 安装依赖...${NC}"
     
-    task_id=$(docker service ps "$DOKPLOY_SERVICE" --filter "desired-state=running" -q | head -n1)
+    task_id=$(docker service ps "$VULSEEK_SERVICE" --filter "desired-state=running" -q | head -n1)
     
     if [ -n "$task_id" ]; then
         container_id=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' "$task_id")
@@ -567,7 +567,7 @@ install_deps() {
             echo -e "${RED}❌ 无法获取容器 ID${NC}"
         fi
     else
-        echo -e "${RED}❌ Dokploy 服务未运行${NC}"
+        echo -e "${RED}❌ Vulseek 服务未运行${NC}"
     fi
 }
 
@@ -575,7 +575,7 @@ install_deps() {
 run_tests() {
     echo -e "${BLUE}🧪 运行测试...${NC}"
     
-    task_id=$(docker service ps "$DOKPLOY_SERVICE" --filter "desired-state=running" -q | head -n1)
+    task_id=$(docker service ps "$VULSEEK_SERVICE" --filter "desired-state=running" -q | head -n1)
     
     if [ -n "$task_id" ]; then
         container_id=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' "$task_id")
@@ -585,7 +585,7 @@ run_tests() {
             echo -e "${RED}❌ 无法获取容器 ID${NC}"
         fi
     else
-        echo -e "${RED}❌ Dokploy 服务未运行${NC}"
+        echo -e "${RED}❌ Vulseek 服务未运行${NC}"
     fi
 }
 
@@ -593,7 +593,7 @@ run_tests() {
 run_lint() {
     echo -e "${BLUE}🔍 代码检查...${NC}"
     
-    task_id=$(docker service ps "$DOKPLOY_SERVICE" --filter "desired-state=running" -q | head -n1)
+    task_id=$(docker service ps "$VULSEEK_SERVICE" --filter "desired-state=running" -q | head -n1)
     
     if [ -n "$task_id" ]; then
         container_id=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' "$task_id")
@@ -603,7 +603,7 @@ run_lint() {
             echo -e "${RED}❌ 无法获取容器 ID${NC}"
         fi
     else
-        echo -e "${RED}❌ Dokploy 服务未运行${NC}"
+        echo -e "${RED}❌ Vulseek 服务未运行${NC}"
     fi
 }
 
@@ -611,7 +611,7 @@ run_lint() {
 run_format() {
     echo -e "${BLUE}✨ 格式化代码...${NC}"
     
-    task_id=$(docker service ps "$DOKPLOY_SERVICE" --filter "desired-state=running" -q | head -n1)
+    task_id=$(docker service ps "$VULSEEK_SERVICE" --filter "desired-state=running" -q | head -n1)
     
     if [ -n "$task_id" ]; then
         container_id=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' "$task_id")
@@ -622,7 +622,7 @@ run_format() {
             echo -e "${RED}❌ 无法获取容器 ID${NC}"
         fi
     else
-        echo -e "${RED}❌ Dokploy 服务未运行${NC}"
+        echo -e "${RED}❌ Vulseek 服务未运行${NC}"
     fi
 }
 
@@ -648,7 +648,7 @@ edit_env() {
     "$editor" "$env_path"
     
     echo -e "${GREEN}✅ 环境文件已保存${NC}"
-    echo -e "${YELLOW}💡 提示: 修改环境文件后需要运行 './dev.sh update dokploy' 使更改生效${NC}"
+    echo -e "${YELLOW}💡 提示: 修改环境文件后需要运行 './dev.sh update vulseek' 使更改生效${NC}"
 }
 
 # 显示环境配置
@@ -689,13 +689,13 @@ show_env() {
 
 # 更新服务
 update_service() {
-    local service=${1:-$DOKPLOY_SERVICE}
+    local service=${1:-$VULSEEK_SERVICE}
     echo -e "${YELLOW}🔄 更新服务: $service${NC}"
     
-    # 如果是 Dokploy 服务，重新构建镜像
-    if [ "$service" = "$DOKPLOY_SERVICE" ] || [ "$service" = "dokploy" ]; then
+    # 如果是 Vulseek 服务，重新构建镜像
+    if [ "$service" = "$VULSEEK_SERVICE" ] || [ "$service" = "vulseek" ]; then
         build_image
-        docker service update --image "$IMAGE_NAME" --force "$DOKPLOY_SERVICE"
+        docker service update --image "$IMAGE_NAME" --force "$VULSEEK_SERVICE"
     else
         docker service update --force "$service"
     fi
@@ -722,9 +722,9 @@ clean_all() {
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             docker volume rm node_modules 2>/dev/null || true
-            docker volume rm dokploy_node_modules 2>/dev/null || true
+            docker volume rm vulseek_node_modules 2>/dev/null || true
             docker volume rm server_node_modules 2>/dev/null || true
-            docker volume rm dokploy_data 2>/dev/null || true
+            docker volume rm vulseek_data 2>/dev/null || true
             docker volume rm docker_config 2>/dev/null || true
             docker volume rm postgres_data 2>/dev/null || true
             docker volume rm redis_data 2>/dev/null || true

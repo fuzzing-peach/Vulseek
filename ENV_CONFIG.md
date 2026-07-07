@@ -1,6 +1,6 @@
 # 环境配置指南
 
-本文档说明如何配置和管理 Dokploy 开发环境的环境变量。
+本文档说明如何配置和管理 Vulseek 开发环境的环境变量。
 
 ## 📁 环境文件
 
@@ -54,7 +54,7 @@ EDITOR=code ./dev.sh env  # VS Code
 ./dev.sh start
 
 # 修改配置后，重新部署服务使更改生效
-./dev.sh update dokploy
+./dev.sh update vulseek
 ```
 
 ## 📝 配置项说明
@@ -73,20 +73,20 @@ PORT=3000
 
 ```bash
 # PostgreSQL 连接字符串
-# 注意：使用服务名 dokploy-postgres-dev，不是 localhost
-DATABASE_URL=postgresql://dokploy:dokploy_dev_password@dokploy-postgres-dev:5432/dokploy
+# 注意：使用服务名 vulseek-postgres-dev，不是 localhost
+DATABASE_URL=postgresql://vulseek:vulseek_dev_password@vulseek-postgres-dev:5432/vulseek
 ```
 
 **重要**: 
-- 容器内访问使用服务名：`dokploy-postgres-dev`
+- 容器内访问使用服务名：`vulseek-postgres-dev`
 - 宿主机访问使用 localhost：`localhost:25432`
 
 ### Redis 配置
 
 ```bash
 # Redis 连接字符串
-# 使用服务名 dokploy-redis-dev
-REDIS_URL=redis://dokploy-redis-dev:6379
+# 使用服务名 vulseek-redis-dev
+REDIS_URL=redis://vulseek-redis-dev:6379
 ```
 
 ### 认证配置
@@ -171,14 +171,14 @@ SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=your-email@gmail.com
 SMTP_PASSWORD=your-password
-SMTP_FROM=noreply@dokploy.dev
+SMTP_FROM=noreply@vulseek.dev
 ```
 
 #### S3 存储
 
 ```bash
 S3_ENDPOINT=https://s3.amazonaws.com
-S3_BUCKET=dokploy-dev
+S3_BUCKET=vulseek-dev
 S3_ACCESS_KEY=your-access-key
 S3_SECRET_KEY=your-secret-key
 S3_REGION=us-east-1
@@ -222,7 +222,7 @@ export LOG_LEVEL=trace
 export VERBOSE_LOGGING=true
 
 # 重启应用
-pnpm dokploy:dev
+pnpm vulseek:dev
 ```
 
 ## 🐛 故障排查
@@ -237,10 +237,10 @@ ls -la env.development
 ./dev.sh env:show
 
 # 3. 重新部署服务
-./dev.sh update dokploy
+./dev.sh update vulseek
 
 # 4. 查看日志确认配置是否加载
-./dev.sh logs dokploy
+./dev.sh logs vulseek
 ```
 
 ### 数据库连接失败
@@ -249,10 +249,10 @@ ls -la env.development
 
 ```bash
 # ❌ 错误：使用 localhost
-DATABASE_URL=postgresql://dokploy:dokploy_dev_password@localhost:5432/dokploy
+DATABASE_URL=postgresql://vulseek:vulseek_dev_password@localhost:5432/vulseek
 
 # ✅ 正确：使用服务名
-DATABASE_URL=postgresql://dokploy:dokploy_dev_password@dokploy-postgres-dev:5432/dokploy
+DATABASE_URL=postgresql://vulseek:vulseek_dev_password@vulseek-postgres-dev:5432/vulseek
 ```
 
 ### 热重载不工作
@@ -267,7 +267,7 @@ WATCHPACK_POLLING=true
 然后重新部署：
 
 ```bash
-./dev.sh update dokploy
+./dev.sh update vulseek
 ```
 
 ## 📚 环境文件管理命令
@@ -276,7 +276,7 @@ WATCHPACK_POLLING=true
 |------|------|
 | `./dev.sh env` | 编辑环境配置文件 |
 | `./dev.sh env:show` | 查看当前配置（隐藏敏感信息） |
-| `./dev.sh update dokploy` | 应用配置更改 |
+| `./dev.sh update vulseek` | 应用配置更改 |
 
 ## 🔒 安全最佳实践
 
@@ -313,7 +313,7 @@ JWT_SECRET=$(openssl rand -hex 32)
 ## 💡 提示
 
 1. **首次使用**: 运行 `./dev.sh env` 自动创建配置文件
-2. **修改配置**: 编辑后运行 `./dev.sh update dokploy` 使更改生效
+2. **修改配置**: 编辑后运行 `./dev.sh update vulseek` 使更改生效
 3. **查看配置**: 使用 `./dev.sh env:show` 安全查看（敏感信息隐藏）
 4. **备份配置**: 定期备份你的 `env.development` 文件
 5. **团队协作**: 通过 `env.development.example` 共享配置模板

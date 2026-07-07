@@ -1,4 +1,4 @@
-import { scanJobs, tasks } from "@dokploy/server/db/schema";
+import { scanJobs, tasks } from "@vulseek/server/db/schema";
 import type {
 	Analysis,
 	BuildFuzzerRequest,

@@ -1,6 +1,6 @@
-# Dokploy 开发环境端口映射
+# Vulseek 开发环境端口映射
 
-本文档说明 Dokploy 开发环境中所有服务的端口映射关系。
+本文档说明 Vulseek 开发环境中所有服务的端口映射关系。
 
 ## 📊 端口映射表
 
@@ -8,9 +8,9 @@
 
 | 服务 | 宿主机端口 | → | 容器端口 | 用途 | 访问地址 |
 |------|-----------|---|---------|------|---------|
-| **dokploy-dev** | 23000 | → | 3000 | 主应用 | http://localhost:23000 |
-| **dokploy-dev** | 29229 | → | 9229 | Node.js 调试 | localhost:29229 |
-| **dokploy-dev** | 25555 | → | 5555 | 数据库管理 (Drizzle Studio) | http://localhost:25555 |
+| **vulseek-dev** | 23000 | → | 3000 | 主应用 | http://localhost:23000 |
+| **vulseek-dev** | 29229 | → | 9229 | Node.js 调试 | localhost:29229 |
+| **vulseek-dev** | 25555 | → | 5555 | 数据库管理 (Drizzle Studio) | http://localhost:25555 |
 | **postgres** | 25432 | → | 5432 | PostgreSQL 数据库 | localhost:25432 |
 | **redis** | 26379 | → | 6379 | Redis 缓存 | localhost:26379 |
 | **traefik** | 20080 | → | 80 | HTTP 反向代理 | http://localhost:20080 |
@@ -19,7 +19,7 @@
 ## 🔍 端口说明
 
 ### 主应用 (23000)
-- **用途**: Dokploy Web 界面和 API
+- **用途**: Vulseek Web 界面和 API
 - **协议**: HTTP
 - **访问**: http://localhost:23000
 - **容器内**: 应用监听 3000 端口
@@ -43,11 +43,11 @@
   ```
   Host: localhost
   Port: 25432
-  Database: dokploy
-  Username: dokploy
-  Password: dokploy_dev_password
+  Database: vulseek
+  Username: vulseek
+  Password: vulseek_dev_password
   ```
-- **连接字符串**: `postgresql://dokploy:dokploy_dev_password@localhost:25432/dokploy`
+- **连接字符串**: `postgresql://vulseek:vulseek_dev_password@localhost:25432/vulseek`
 
 ### Redis (26379)
 - **用途**: Redis 缓存和消息队列
@@ -72,7 +72,7 @@
 
 ```yaml
 services:
-  dokploy-dev:
+  vulseek-dev:
     ports:
       - "23001:3000"  # 改为 23001
       - "29230:9229"  # 改为 29230
@@ -130,8 +130,8 @@ docker ps --format "table {{.Names}}\t{{.Ports}}"
 容器内部通信使用容器端口和服务名：
 
 ```bash
-# 在 dokploy-dev 容器内访问其他服务
-DATABASE_URL=postgresql://dokploy:dokploy_dev_password@postgres:5432/dokploy
+# 在 vulseek-dev 容器内访问其他服务
+DATABASE_URL=postgresql://vulseek:vulseek_dev_password@postgres:5432/vulseek
 REDIS_URL=redis://redis:6379
 ```
 
@@ -145,11 +145,11 @@ REDIS_URL=redis://redis:6379
 
 ```bash
 # 容器内使用
-DATABASE_URL=postgresql://dokploy:dokploy_dev_password@postgres:5432/dokploy
+DATABASE_URL=postgresql://vulseek:vulseek_dev_password@postgres:5432/vulseek
 REDIS_URL=redis://redis:6379
 
 # 从宿主机访问（如果需要）
-# DATABASE_URL=postgresql://dokploy:dokploy_dev_password@localhost:25432/dokploy
+# DATABASE_URL=postgresql://vulseek:vulseek_dev_password@localhost:25432/vulseek
 # REDIS_URL=redis://localhost:26379
 ```
 
@@ -157,7 +157,7 @@ REDIS_URL=redis://redis:6379
 
 ### 开发环境
 - ✅ 仅监听 localhost，不暴露到外网
-- ✅ 使用开发用密码（dokploy_dev_password）
+- ✅ 使用开发用密码（vulseek_dev_password）
 - ✅ 调试端口仅在开发环境启用
 
 ### 生产环境
@@ -177,7 +177,7 @@ open http://localhost:23000
 open http://localhost:28080
 
 # 数据库客户端
-psql postgresql://dokploy:dokploy_dev_password@localhost:25432/dokploy
+psql postgresql://vulseek:vulseek_dev_password@localhost:25432/vulseek
 
 # Redis 命令行
 redis-cli -p 26379

@@ -1,6 +1,6 @@
-import { db } from "@dokploy/server/db";
-import { notifications } from "@dokploy/server/db/schema";
-import BuildFailedEmail from "@dokploy/server/emails/emails/build-failed";
+import { db } from "@vulseek/server/db";
+import { notifications } from "@vulseek/server/db/schema";
+import BuildFailedEmail from "@vulseek/server/emails/emails/build-failed";
 import { renderAsync } from "@react-email/components";
 import { format } from "date-fns";
 import { and, eq } from "drizzle-orm";
@@ -63,7 +63,7 @@ export const sendBuildErrorNotifications = async ({
 					date: date.toLocaleString(),
 				}),
 			).catch();
-			await sendEmailNotification(email, "Build failed for dokploy", template);
+			await sendEmailNotification(email, "Build failed for vulseek", template);
 		}
 
 		if (discord) {
@@ -117,7 +117,7 @@ export const sendBuildErrorNotifications = async ({
 				],
 				timestamp: date.toISOString(),
 				footer: {
-					text: "Dokploy Build Notification",
+					text: "Vulseek Build Notification",
 				},
 			});
 		}

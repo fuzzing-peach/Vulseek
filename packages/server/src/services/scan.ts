@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { apiCheckoutScanEnvironment } from "@dokploy/server/db/schema";
+import type { apiCheckoutScanEnvironment } from "@vulseek/server/db/schema";
 import { TRPCError } from "@trpc/server";
 import { Queue } from "bullmq";
 import { nanoid } from "nanoid";
@@ -477,7 +477,7 @@ const buildAnalysisFingerprint = (value: unknown) =>
 const parseRedisConnection = (url?: string) => {
 	if (!url) {
 		return {
-			host: process.env.REDIS_HOST || "dokploy-redis-dev",
+			host: process.env.REDIS_HOST || "vulseek-redis-dev",
 			port: process.env.REDIS_PORT
 				? Number.parseInt(process.env.REDIS_PORT, 10)
 				: 6379,
@@ -487,7 +487,7 @@ const parseRedisConnection = (url?: string) => {
 	try {
 		const parsed = new URL(url);
 		return {
-			host: parsed.hostname || "dokploy-redis-dev",
+			host: parsed.hostname || "vulseek-redis-dev",
 			port: parsed.port ? Number.parseInt(parsed.port, 10) : 6379,
 		};
 	} catch {
@@ -1660,26 +1660,22 @@ const resolveDockerfileAssetPath = async (fileName: string) => {
 			fileName,
 		),
 		path.join("/app/packages/server/src/services/dockerfiles", fileName),
-		path.join(
-			"/data/exp/dkzou/dokploy/packages/server/src/services/dockerfiles",
+		path.resolve(
+			process.cwd(),
+			"node_modules/@vulseek/server/src/services/dockerfiles",
 			fileName,
 		),
 		path.resolve(
 			process.cwd(),
-			"node_modules/@dokploy/server/src/services/dockerfiles",
-			fileName,
-		),
-		path.resolve(
-			process.cwd(),
-			"node_modules/@dokploy/server/dist/services/dockerfiles",
+			"node_modules/@vulseek/server/dist/services/dockerfiles",
 			fileName,
 		),
 		path.join(
-			"/app/node_modules/@dokploy/server/src/services/dockerfiles",
+			"/app/node_modules/@vulseek/server/src/services/dockerfiles",
 			fileName,
 		),
 		path.join(
-			"/app/node_modules/@dokploy/server/dist/services/dockerfiles",
+			"/app/node_modules/@vulseek/server/dist/services/dockerfiles",
 			fileName,
 		),
 	];
@@ -1746,9 +1742,9 @@ const appendLog = (base: string, chunk: string) => {
 
 const resolveCheckoutDockerBuildResourceOptions = () => {
 	const dockerBuildkit = process.env.DOCKER_BUILDKIT?.trim() || "1";
-	const memory = process.env.DOKPLOY_SCAN_CHECKOUT_BUILD_MEMORY?.trim() || "";
+	const memory = process.env.VULSEEK_SCAN_CHECKOUT_BUILD_MEMORY?.trim() || "";
 	const memorySwap =
-		process.env.DOKPLOY_SCAN_CHECKOUT_BUILD_MEMORY_SWAP?.trim() || "";
+		process.env.VULSEEK_SCAN_CHECKOUT_BUILD_MEMORY_SWAP?.trim() || "";
 	const env = {
 		...process.env,
 		DOCKER_BUILDKIT: dockerBuildkit,
@@ -1978,7 +1974,7 @@ const resolveCheckoutContext = async (
 
 const runDockerBuildInBackground = async (task: CheckoutTask) => {
 	const tempDir = await fs.mkdtemp(
-		path.join(os.tmpdir(), "dokploy-scan-checkout-"),
+		path.join(os.tmpdir(), "vulseek-scan-checkout-"),
 	);
 	const dockerfilePath = path.join(tempDir, "Dockerfile.scan");
 	const tempAgentsPath = path.join(tempDir, "agents");
@@ -2478,7 +2474,7 @@ const buildClaudeEnvPairs = (agentProfile: AgentProfileLike) => {
 		`ANTHROPIC_DEFAULT_SONNET_MODEL=${agentProfile.model}`,
 		`ANTHROPIC_DEFAULT_OPUS_MODEL=${agentProfile.model}`,
 		`ANTHROPIC_DEFAULT_HAIKU_MODEL=${agentProfile.model}`,
-		`CLAUDE_CODE_ENTRYPOINT=dokploy-vulseek`,
+		`CLAUDE_CODE_ENTRYPOINT=vulseek`,
 		...parseAgentProfileEnvPairs(agentProfile),
 	];
 	return envPairs;
@@ -2499,7 +2495,6 @@ const resolveAgentsDirectory = async () => {
 		path.resolve(process.cwd(), "agents"),
 		path.resolve(process.cwd(), "../../agents"),
 		"/app/agents",
-		"/data/exp/dkzou/dokploy/agents",
 	];
 
 	for (const candidate of candidates) {
@@ -2548,7 +2543,7 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 	const configuredHostRoot = resolveConfiguredScanContextHostPath();
 	if (!configuredHostRoot) {
 		throw new Error(
-			"Scan context host path is not configured. Restart dokploy-dev from dev.sh so /scan-context is mounted.",
+			"Scan context host path is not configured. Restart vulseek-dev from dev.sh so /scan-context is mounted.",
 		);
 	}
 
@@ -2769,7 +2764,7 @@ const buildTaskMountPathForReview = (input: {
 	);
 
 const resolveConfiguredScanContextHostPath = () =>
-	process.env.DOKPLOY_SCAN_CONTEXT_HOST_PATH?.trim() || "";
+	process.env.VULSEEK_SCAN_CONTEXT_HOST_PATH?.trim() || "";
 
 const resolveScanContextMount = async (input: {
 	contextVolumeName: string | null | undefined;
@@ -2779,7 +2774,7 @@ const resolveScanContextMount = async (input: {
 	const configuredHostRoot = resolveConfiguredScanContextHostPath();
 	if (!configuredHostRoot) {
 		throw new Error(
-			"Scan context host path is not configured in process env DOKPLOY_SCAN_CONTEXT_HOST_PATH",
+			"Scan context host path is not configured in process env VULSEEK_SCAN_CONTEXT_HOST_PATH",
 		);
 	}
 
@@ -3001,7 +2996,7 @@ const resolveProjectProfileHostContextRootByScanJob = async (
 	const configuredHostRoot = resolveConfiguredScanContextHostPath();
 	if (!configuredHostRoot) {
 		throw new Error(
-			"Scan context host path is not configured in process env DOKPLOY_SCAN_CONTEXT_HOST_PATH",
+			"Scan context host path is not configured in process env VULSEEK_SCAN_CONTEXT_HOST_PATH",
 		);
 	}
 
@@ -3352,7 +3347,7 @@ const installRuntimeSkillsInContainer = async (
 	}
 
 	const hostTempDir = await fs.mkdtemp(
-		path.join(os.tmpdir(), "dokploy-runtime-skills-"),
+		path.join(os.tmpdir(), "vulseek-runtime-skills-"),
 	);
 	const hostRepoRoot = path.join(hostTempDir, "repo");
 	const hostSkillsRoot = path.join(hostRepoRoot, "skills");
@@ -3391,7 +3386,7 @@ const installRuntimeSkillsInContainer = async (
 			return [];
 		}
 
-		const containerRepoRoot = "/tmp/dokploy-runtime-skills";
+		const containerRepoRoot = "/tmp/vulseek-runtime-skills";
 		await execAsync(
 			`docker exec ${containerName} bash -lc "rm -rf '${containerRepoRoot}' && mkdir -p '${containerRepoRoot}'"`,
 		);
@@ -10244,7 +10239,7 @@ export const startCandidateReviewContainer = async (input: {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
 			message:
-				"Scan context host path is not configured. Restart dokploy-dev from dev.sh.",
+				"Scan context host path is not configured. Restart vulseek-dev from dev.sh.",
 		});
 	}
 
@@ -10323,7 +10318,7 @@ export const startCandidateReviewContainer = async (input: {
 	const containerName = `scan-candidate-review-${scanJob.scanJobId.toLowerCase()}-${reviewId}`;
 	const reviewHostDir = path.join(
 		os.tmpdir(),
-		"dokploy-candidate-review",
+		"vulseek-candidate-review",
 		containerName,
 	);
 	const reviewContainerDir = "/workspace/review";

@@ -1,6 +1,6 @@
-# Dokploy 开发环境指南
+# Vulseek 开发环境指南
 
-本文档说明如何使用 Docker Swarm 进行 Dokploy 的开发和调试。
+本文档说明如何使用 Docker Swarm 进行 Vulseek 的开发和调试。
 
 ## 🚀 快速开始
 
@@ -25,13 +25,13 @@ chmod +x dev.sh
 ./dev.sh status
 
 # 查看日志
-./dev.sh logs dokploy
+./dev.sh logs vulseek
 
 # 进入容器
 ./dev.sh shell
 
 # 更新服务（代码修改后）
-./dev.sh update dokploy
+./dev.sh update vulseek
 
 # 停止开发环境
 ./dev.sh stop
@@ -51,8 +51,8 @@ chmod +x dev.sh
 
 **注意**: 
 - 需要先初始化 Docker Swarm: `./dev.sh init`
-- 代码修改后需要重新部署: `./dev.sh update dokploy`
-- 或使用 `./dev.sh restart dokploy` 重启服务
+- 代码修改后需要重新部署: `./dev.sh update vulseek`
+- 或使用 `./dev.sh restart vulseek` 重启服务
 
 ## 📝 开发特性
 
@@ -72,9 +72,9 @@ chmod +x dev.sh
 
 | 服务 | 宿主机端口 | 容器端口 | 用途 |
 |------|----------|---------|------|
-| dokploy-dev | 23000 | 3000 | 主应用（Next.js + API） |
-| dokploy-dev | 29229 | 9229 | Node.js 调试端口 |
-| dokploy-dev | 25555 | 5555 | 数据库管理工具 (Drizzle Studio) |
+| vulseek-dev | 23000 | 3000 | 主应用（Next.js + API） |
+| vulseek-dev | 29229 | 9229 | Node.js 调试端口 |
+| vulseek-dev | 25555 | 5555 | 数据库管理工具 (Drizzle Studio) |
 | postgres | 25432 | 5432 | PostgreSQL 16 数据库 |
 | redis | 26379 | 6379 | Redis 7 缓存服务 |
 | traefik | 20080 | 80 | HTTP 反向代理 |
@@ -84,7 +84,7 @@ chmod +x dev.sh
 
 - **主应用**: http://localhost:23000
 - **Traefik 面板**: http://localhost:28080
-- **PostgreSQL**: `localhost:25432` (用户: `dokploy`, 密码: `dokploy_dev_password`)
+- **PostgreSQL**: `localhost:25432` (用户: `vulseek`, 密码: `vulseek_dev_password`)
 - **Redis**: `localhost:26379`
 
 ## 🐛 调试
@@ -117,7 +117,7 @@ chmod +x dev.sh
 
 ```bash
 # 进入容器
-docker-compose -f docker-compose.dev.yml exec dokploy-dev bash
+docker-compose -f docker-compose.dev.yml exec vulseek-dev bash
 
 # 使用调试模式启动（容器内的端口仍为 9229，映射到宿主机 29229）
 node --inspect=0.0.0.0:9229 dist/index.js
@@ -135,12 +135,12 @@ node --inspect=0.0.0.0:9229 dist/index.js
 # 基础命令
 ./dev.sh start          # 启动开发环境
 ./dev.sh stop           # 停止开发环境
-./dev.sh restart dokploy # 重启特定服务
-./dev.sh update dokploy  # 更新服务（重新部署）
+./dev.sh restart vulseek # 重启特定服务
+./dev.sh update vulseek  # 更新服务（重新部署）
 ./dev.sh clean          # 清理服务和卷
 
 # 日志与调试
-./dev.sh logs dokploy   # 查看主应用日志
+./dev.sh logs vulseek   # 查看主应用日志
 ./dev.sh logs postgres  # 查看数据库日志
 ./dev.sh logs redis     # 查看 Redis 日志
 ./dev.sh shell          # 进入主容器
@@ -168,10 +168,10 @@ node --inspect=0.0.0.0:9229 dist/index.js
 docker service ls
 
 # 查看特定服务详情
-docker service ps dokploy-dev
+docker service ps vulseek-dev
 
 # 查看服务日志（需要先获取容器 ID）
-TASK_ID=$(docker service ps dokploy-dev -q | head -n1)
+TASK_ID=$(docker service ps vulseek-dev -q | head -n1)
 CONTAINER_ID=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' $TASK_ID)
 docker logs -f $CONTAINER_ID
 
@@ -179,13 +179,13 @@ docker logs -f $CONTAINER_ID
 docker exec -it $CONTAINER_ID bash
 
 # 更新服务（重新部署）
-docker service update --force dokploy-dev
+docker service update --force vulseek-dev
 
 # 扩展服务
-docker service scale dokploy-dev=2
+docker service scale vulseek-dev=2
 
 # 删除服务
-docker service rm dokploy-dev
+docker service rm vulseek-dev
 ```
 
 ## 📁 目录结构说明

@@ -1,6 +1,6 @@
-import { paths } from "@dokploy/server/constants";
-import { findAdmin } from "@dokploy/server/services/admin";
-import { updateUser } from "@dokploy/server/services/user";
+import { paths } from "@vulseek/server/constants";
+import { findAdmin } from "@vulseek/server/services/admin";
+import { updateUser } from "@vulseek/server/services/user";
 import { scheduledJobs, scheduleJob } from "node-schedule";
 import { execAsync } from "../process/execAsync";
 
@@ -23,7 +23,7 @@ export const startLogCleanup = async (
 					`tail -n 1000 ${DYNAMIC_TRAEFIK_PATH}/access.log > ${DYNAMIC_TRAEFIK_PATH}/access.log.tmp && mv ${DYNAMIC_TRAEFIK_PATH}/access.log.tmp ${DYNAMIC_TRAEFIK_PATH}/access.log`,
 				);
 
-				await execAsync("docker exec dokploy-traefik kill -USR1 1");
+				await execAsync("docker exec vulseek-traefik kill -USR1 1");
 			} catch (error) {
 				console.error("Error during log cleanup:", error);
 			}

@@ -20,4 +20,4 @@ Write each target object to /task/targets/<target-id>.json.
 Use the target schema exactly. Do not use functionId/functionName fields in target artifacts.
 Return a schema-valid path manifest: repository, module, threatModel, and targets.
 Before returning, validate the structured JSON against the runtime-provided output.schema.json.
-Set output.json exit to true so Dokploy can discard this Identify Target lane after end_turn.
+Set output.json exit to true so Vulseek can discard this Identify Target lane after end_turn.

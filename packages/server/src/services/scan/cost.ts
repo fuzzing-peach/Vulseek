@@ -1,5 +1,5 @@
 import { calcPrice } from "@pydantic/genai-prices";
-import type { TaskAgentProfileSnapshot } from "@dokploy/server/db/schema";
+import type { TaskAgentProfileSnapshot } from "@vulseek/server/db/schema";
 
 export const computeTaskCost = (
 	inputTokens: number | null | undefined,

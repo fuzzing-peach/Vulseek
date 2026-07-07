@@ -14,14 +14,14 @@ import {
 	runMySqlBackup,
 	runPostgresBackup,
 	runVolumeBackup,
-} from "@dokploy/server";
-import { db } from "@dokploy/server/db";
+} from "@vulseek/server";
+import { db } from "@vulseek/server/db";
 import {
 	backups,
 	schedules,
 	server,
 	volumeBackups,
-} from "@dokploy/server/db/schema";
+} from "@vulseek/server/db/schema";
 import { and, eq } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { scheduleJob } from "./queue.js";

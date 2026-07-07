@@ -1,8 +1,8 @@
-import { findServerById } from "@dokploy/server/services/server";
+import { findServerById } from "@vulseek/server/services/server";
 import type { ContainerCreateOptions } from "dockerode";
 import { IS_CLOUD } from "../constants";
 import { findUserById } from "../services/admin";
-import { getDokployImageTag } from "../services/settings";
+import { getVulseekImageTag } from "../services/settings";
 import { pullImage, pullRemoteImage } from "../utils/docker/utils";
 import { execAsync, execAsyncRemote } from "../utils/process/execAsync";
 import { getRemoteDocker } from "../utils/servers/remote-docker";
@@ -10,15 +10,15 @@ import { getRemoteDocker } from "../utils/servers/remote-docker";
 export const setupMonitoring = async (serverId: string) => {
 	const server = await findServerById(serverId);
 
-	const containerName = "dokploy-monitoring";
-	let imageName = "dokploy/monitoring:latest";
+	const containerName = "vulseek-monitoring";
+	let imageName = "vulseek/monitoring:latest";
 
 	if (
-		(getDokployImageTag() !== "latest" ||
+		(getVulseekImageTag() !== "latest" ||
 			process.env.NODE_ENV === "development") &&
 		!IS_CLOUD
 	) {
-		imageName = "dokploy/monitoring:canary";
+		imageName = "vulseek/monitoring:canary";
 	}
 
 	const settings: ContainerCreateOptions = {
@@ -45,7 +45,7 @@ export const setupMonitoring = async (serverId: string) => {
 				"/sys:/host/sys:ro",
 				"/etc/os-release:/etc/os-release:ro",
 				"/proc:/host/proc:ro",
-				"/etc/dokploy/monitoring/monitoring.db:/app/monitoring.db",
+				"/etc/vulseek/monitoring/monitoring.db:/app/monitoring.db",
 			],
 			NetworkMode: "host",
 		},
@@ -57,7 +57,7 @@ export const setupMonitoring = async (serverId: string) => {
 	try {
 		await execAsyncRemote(
 			serverId,
-			"mkdir -p /etc/dokploy/monitoring && touch /etc/dokploy/monitoring/monitoring.db",
+			"mkdir -p /etc/vulseek/monitoring && touch /etc/vulseek/monitoring/monitoring.db",
 		);
 		if (serverId) {
 			await pullRemoteImage(imageName, serverId);
@@ -86,15 +86,15 @@ export const setupMonitoring = async (serverId: string) => {
 export const setupWebMonitoring = async (userId: string) => {
 	const user = await findUserById(userId);
 
-	const containerName = "dokploy-monitoring";
-	let imageName = "dokploy/monitoring:latest";
+	const containerName = "vulseek-monitoring";
+	let imageName = "vulseek/monitoring:latest";
 
 	if (
-		(getDokployImageTag() !== "latest" ||
+		(getVulseekImageTag() !== "latest" ||
 			process.env.NODE_ENV === "development") &&
 		!IS_CLOUD
 	) {
-		imageName = "dokploy/monitoring:canary";
+		imageName = "vulseek/monitoring:canary";
 	}
 
 	const settings: ContainerCreateOptions = {
@@ -121,7 +121,7 @@ export const setupWebMonitoring = async (userId: string) => {
 				"/sys:/host/sys:ro",
 				"/etc/os-release:/etc/os-release:ro",
 				"/proc:/host/proc:ro",
-				"/etc/dokploy/monitoring/monitoring.db:/app/monitoring.db",
+				"/etc/vulseek/monitoring/monitoring.db:/app/monitoring.db",
 			],
 			// NetworkMode: "host",
 		},
@@ -132,7 +132,7 @@ export const setupWebMonitoring = async (userId: string) => {
 	const docker = await getRemoteDocker();
 	try {
 		await execAsync(
-			"mkdir -p /etc/dokploy/monitoring && touch /etc/dokploy/monitoring/monitoring.db",
+			"mkdir -p /etc/vulseek/monitoring && touch /etc/vulseek/monitoring/monitoring.db",
 		);
 		await pullImage(imageName);
 

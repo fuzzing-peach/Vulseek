@@ -6,7 +6,7 @@
 
 ### 优势
 
-1. **与生产环境一致**: Dokploy 生产环境使用 Docker Swarm，开发环境保持一致
+1. **与生产环境一致**: Vulseek 生产环境使用 Docker Swarm，开发环境保持一致
 2. **更好的服务管理**: 内置的服务发现和负载均衡
 3. **滚动更新**: 支持零停机更新
 4. **健康检查**: 自动重启失败的服务
@@ -99,33 +99,33 @@ docker service update --network-add my-network web
 ```bash
 # PostgreSQL
 docker service create \
-  --name dokploy-postgres-dev \
-  --network dokploy-dev-network \
+  --name vulseek-postgres-dev \
+  --network vulseek-dev-network \
   --publish 25432:5432 \
-  --env POSTGRES_USER=dokploy \
+  --env POSTGRES_USER=vulseek \
   --mount type=volume,source=postgres_data,target=/var/lib/postgresql/data \
   postgres:16
 
 # Redis
 docker service create \
-  --name dokploy-redis-dev \
-  --network dokploy-dev-network \
+  --name vulseek-redis-dev \
+  --network vulseek-dev-network \
   --publish 26379:6379 \
   --mount type=volume,source=redis_data,target=/data \
   redis:7
 
-# Dokploy 主应用
+# Vulseek 主应用
 docker service create \
-  --name dokploy-dev \
-  --network dokploy-dev-network \
+  --name vulseek-dev \
+  --network vulseek-dev-network \
   --publish 23000:3000 \
   --mount type=bind,source=$(pwd)/apps,target=/app/apps \
-  dokploy-dev:latest
+  vulseek-dev:latest
 
 # Traefik
 docker service create \
-  --name dokploy-traefik-dev \
-  --network dokploy-dev-network \
+  --name vulseek-traefik-dev \
+  --network vulseek-dev-network \
   --publish 20080:80 \
   --publish 28080:8080 \
   --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
@@ -177,24 +177,24 @@ Swarm 支持两种卷挂载方式：
 
 ```bash
 # 更新服务（重新部署）
-./dev.sh update dokploy
+./dev.sh update vulseek
 
 # 或手动更新
-docker service update --force dokploy-dev
+docker service update --force vulseek-dev
 
 # 更新镜像
-docker service update --image dokploy-dev:latest dokploy-dev
+docker service update --image vulseek-dev:latest vulseek-dev
 ```
 
 ### 查看日志
 
 ```bash
 # 使用脚本
-./dev.sh logs dokploy
+./dev.sh logs vulseek
 
 # 手动查看
 # 1. 获取任务 ID
-TASK_ID=$(docker service ps dokploy-dev -q | head -n1)
+TASK_ID=$(docker service ps vulseek-dev -q | head -n1)
 
 # 2. 获取容器 ID
 CONTAINER_ID=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' $TASK_ID)
@@ -211,7 +211,7 @@ docker logs -f $CONTAINER_ID
 
 # 手动进入
 # 1. 获取容器 ID（同上）
-TASK_ID=$(docker service ps dokploy-dev -q | head -n1)
+TASK_ID=$(docker service ps vulseek-dev -q | head -n1)
 CONTAINER_ID=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' $TASK_ID)
 
 # 2. 进入容器
@@ -222,10 +222,10 @@ docker exec -it $CONTAINER_ID bash
 
 ```bash
 # 扩展到 N 个副本
-docker service scale dokploy-dev=3
+docker service scale vulseek-dev=3
 
 # 查看扩展后的服务
-docker service ps dokploy-dev
+docker service ps vulseek-dev
 ```
 
 ### 停止服务
@@ -235,10 +235,10 @@ docker service ps dokploy-dev
 ./dev.sh stop
 
 # 手动删除服务
-docker service rm dokploy-dev
-docker service rm dokploy-postgres-dev
-docker service rm dokploy-redis-dev
-docker service rm dokploy-traefik-dev
+docker service rm vulseek-dev
+docker service rm vulseek-postgres-dev
+docker service rm vulseek-redis-dev
+docker service rm vulseek-traefik-dev
 ```
 
 ## 🔄 开发工作流
@@ -263,24 +263,24 @@ docker service rm dokploy-traefik-dev
 
 ```bash
 # 修改代码后，更新服务
-./dev.sh update dokploy
+./dev.sh update vulseek
 
 # 或者重新构建镜像后更新
 ./dev.sh build
-./dev.sh update dokploy
+./dev.sh update vulseek
 ```
 
 ### 3. 调试
 
 ```bash
 # 查看日志
-./dev.sh logs dokploy
+./dev.sh logs vulseek
 
 # 进入容器
 ./dev.sh shell
 
 # 在容器内调试
-pnpm dokploy:dev
+pnpm vulseek:dev
 ```
 
 ### 4. 数据库操作
@@ -302,10 +302,10 @@ pnpm dokploy:dev
 
 ```bash
 # 1. 查看服务状态
-docker service ps dokploy-dev
+docker service ps vulseek-dev
 
 # 2. 查看服务日志
-./dev.sh logs dokploy
+./dev.sh logs vulseek
 
 # 3. 检查 Swarm 状态
 docker info | grep Swarm
@@ -323,11 +323,11 @@ docker info | grep Swarm
 docker network ls
 
 # 查看网络详情
-docker network inspect dokploy-dev-network
+docker network inspect vulseek-dev-network
 
 # 重新创建网络
-docker network rm dokploy-dev-network
-docker network create --driver overlay --attachable dokploy-dev-network
+docker network rm vulseek-dev-network
+docker network create --driver overlay --attachable vulseek-dev-network
 ```
 
 ### 卷问题
@@ -347,13 +347,13 @@ docker volume rm postgres_data
 
 ```bash
 # 查看更新状态
-docker service inspect dokploy-dev --pretty
+docker service inspect vulseek-dev --pretty
 
 # 回滚更新
-docker service rollback dokploy-dev
+docker service rollback vulseek-dev
 
 # 强制重启
-docker service update --force dokploy-dev
+docker service update --force vulseek-dev
 ```
 
 ## 📚 高级主题
@@ -409,7 +409,7 @@ docker service update --force dokploy-dev
 
 - [Docker Swarm 官方文档](https://docs.docker.com/engine/swarm/)
 - [Docker Service 命令参考](https://docs.docker.com/engine/reference/commandline/service/)
-- [Dokploy 生产安装脚本](./install.sh)
+- [Vulseek 生产安装脚本](./install.sh)
 
 ## 💡 提示
 

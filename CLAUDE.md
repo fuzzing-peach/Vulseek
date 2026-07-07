@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Vulseek** is a security-focused fork of Dokploy — a self-hostable Platform-as-a-Service (PaaS). Vulseek extends Dokploy with an AI-powered multi-stage vulnerability scanning pipeline that uses LLM agents inside sandbox containers to discover, analyze, and verify security vulnerabilities in source code repositories.
+**Vulseek** is a security-focused fork of Vulseek — a self-hostable Platform-as-a-Service (PaaS). Vulseek extends Vulseek with an AI-powered multi-stage vulnerability scanning pipeline that uses LLM agents inside sandbox containers to discover, analyze, and verify security vulnerabilities in source code repositories.
 
 Core upstream: Next.js frontend + tRPC API backend + PostgreSQL + Redis + Docker.
 
 **Deployment modes** — The system runs in two modes controlled by `IS_CLOUD` env var:
-- **Self-hosted** (`IS_CLOUD !== "true"`): Dokploy manages its own Docker engine. Starts Traefik, networks, cron jobs, BullMQ workers, and auto-delta-scan polling on boot.
+- **Self-hosted** (`IS_CLOUD !== "true"`): Vulseek manages its own Docker engine. Starts Traefik, networks, cron jobs, BullMQ workers, and auto-delta-scan polling on boot.
 - **Cloud** (`IS_CLOUD === "true"`): Managed service mode. Only runs DB migration and env sync — no local Docker management. The `apps/api` service handles deployment via Inngest.
 
 ## Tech Stack
@@ -31,14 +31,14 @@ Core upstream: Next.js frontend + tRPC API backend + PostgreSQL + Redis + Docker
 
 ```bash
 # Development
-pnpm run dokploy:dev          # Start development server (Next.js + API)
-pnpm run dokploy:dev:turbopack # Start with Turbopack
-pnpm run dokploy:setup         # Initial setup (creates .env, runs migrations)
+pnpm run vulseek:dev          # Start development server (Next.js + API)
+pnpm run vulseek:dev:turbopack # Start with Turbopack
+pnpm run vulseek:setup         # Initial setup (creates .env, runs migrations)
 pnpm run server:script         # Switch packages/server to dev mode (src imports)
 
 # Building
-pnpm run dokploy:build         # Build for production (esbuild server + next build)
-pnpm run dokploy:start         # Start production server
+pnpm run vulseek:build         # Build for production (esbuild server + next build)
+pnpm run vulseek:start         # Start production server
 pnpm run docker:build:canary   # Build Docker image
 
 # Code Quality
@@ -47,14 +47,14 @@ pnpm run format-and-lint:fix   # Fix biome issues
 pnpm run typecheck             # TypeScript type checking (all packages)
 
 # Database (run from repo root)
-pnpm --filter=dokploy run migration:generate  # Generate Drizzle migration
-pnpm --filter=dokploy run migration:run        # Run migrations
-pnpm --filter=dokploy run db:studio            # Open Drizzle Studio
-pnpm --filter=dokploy run db:push              # Push schema directly to DB
+pnpm --filter=vulseek run migration:generate  # Generate Drizzle migration
+pnpm --filter=vulseek run migration:run        # Run migrations
+pnpm --filter=vulseek run db:studio            # Open Drizzle Studio
+pnpm --filter=vulseek run db:push              # Push schema directly to DB
 
 # Testing
 pnpm run test                    # Run all tests
-pnpm --filter=dokploy run test   # Run tests in dokploy app only
+pnpm --filter=vulseek run test   # Run tests in vulseek app only
 pnpm vitest run __test__/compose/compose.test.ts  # Run a single test file
 pnpm vitest __test__/compose/                     # Watch mode for a directory
 ```
@@ -65,13 +65,13 @@ pnpm vitest __test__/compose/                     # Watch mode for a directory
 
 ```
 apps/
-├── dokploy/          # Main app (Next.js frontend + tRPC API + BullMQ workers)
+├── vulseek/          # Main app (Next.js frontend + tRPC API + BullMQ workers)
 ├── api/              # Deployment API service (Hono + Inngest, event-driven)
 ├── monitoring/       # Monitoring service (Go + Fiber)
 └── schedules/        # Scheduling service (Hono + BullMQ, cron backups)
 
 packages/
-└── server/           # @dokploy/server — business logic, DB schemas, scan pipeline, builders
+└── server/           # @vulseek/server — business logic, DB schemas, scan pipeline, builders
 
 agents/
 └── skills/           # AI agent skill definitions (Markdown) for each scan stage
@@ -80,20 +80,20 @@ agents/
 ### Microservices Detail
 
 - **`apps/api`** — Hono REST service. Receives deployment requests and dispatches them via Inngest (event-driven, concurrency 1 per serverId, supports cancellation, no retries).
-- **`apps/monitoring`** — **Go** (Fiber HTTP) service. Collects system/container metrics on configurable intervals, stores in embedded DB, sends threshold-violation callbacks to Dokploy.
+- **`apps/monitoring`** — **Go** (Fiber HTTP) service. Collects system/container metrics on configurable intervals, stores in embedded DB, sends threshold-violation callbacks to Vulseek.
 - **`apps/schedules`** — Hono REST service. Manages cron-scheduled backup jobs via BullMQ repeatable jobs (3 workers × 100 concurrency).
 
 ### Server Entrypoints
 
-- **Dev**: `apps/dokploy/server/server.ts` (run via `tsx`)
-- **Prod**: `apps/dokploy/dist/server.mjs` (built via esbuild)
+- **Dev**: `apps/vulseek/server/server.ts` (run via `tsx`)
+- **Prod**: `apps/vulseek/dist/server.mjs` (built via esbuild)
 - Startup sequence: Next.js → WebSocket server → (self-hosted: Traefik config, network, cron, BullMQ workers, auto-delta-scan)
 
 ### API Layer (tRPC)
 
-tRPC routers in `apps/dokploy/server/api/routers/` delegate to services in `packages/server/src/services/`. Routers handle HTTP concerns; services contain business logic.
+tRPC routers in `apps/vulseek/server/api/routers/` delegate to services in `packages/server/src/services/`. Routers handle HTTP concerns; services contain business logic.
 
-**Procedure types** (`apps/dokploy/server/api/trpc.ts`):
+**Procedure types** (`apps/vulseek/server/api/trpc.ts`):
 - `publicProcedure` — unauthenticated
 - `protectedProcedure` — valid session + user required
 - `adminProcedure` / `cliProcedure` — `role === "owner"`
@@ -103,7 +103,7 @@ Context: `session`, `user` (with `role`, `ownerId`), `db`, `req`, `res`.
 
 ### Database
 
-PostgreSQL + Drizzle ORM. Schemas in `packages/server/src/db/schema/`, migrations in `apps/dokploy/drizzle/`. Key Vulseek schema additions: `scan_jobs` (with `status`, `paused`/`failed`/`canceled` support), `tasks` (with `scanStage` metadata), `scanStageSettings`, `agentProfiles`.
+PostgreSQL + Drizzle ORM. Schemas in `packages/server/src/db/schema/`, migrations in `apps/vulseek/drizzle/`. Key Vulseek schema additions: `scan_jobs` (with `status`, `paused`/`failed`/`canceled` support), `tasks` (with `scanStage` metadata), `scanStageSettings`, `agentProfiles`.
 
 ### Authentication & Multi-Tenancy
 
@@ -112,7 +112,7 @@ PostgreSQL + Drizzle ORM. Schemas in `packages/server/src/db/schema/`, migration
 ### Docker Integration & Traefik
 
 - Uses `dockerode` library. Supports local Docker (`/var/run/docker.sock`) and remote servers (SSH via `ssh2`).
-- Traefik handles reverse proxy, SSL (Let's Encrypt ACME), HTTP/3. Two modes: standalone container (single-node) and Swarm Service (cluster). Dynamic YAML config in `/etc/dokploy/traefik/dynamic/`.
+- Traefik handles reverse proxy, SSL (Let's Encrypt ACME), HTTP/3. Two modes: standalone container (single-node) and Swarm Service (cluster). Dynamic YAML config in `/etc/vulseek/traefik/dynamic/`.
 
 ### Application Builders
 
@@ -130,7 +130,7 @@ Scan jobs progress through states: `pending` → `running` → `completed` / `fa
 - **Full scan** — complete repository analysis from scratch
 - **Delta scan** — incremental re-scan of changed modules since the last scan
 
-The `auto-delta-scan` utility (`apps/dokploy/server/utils/auto-delta-scan.ts`) periodically polls for new commits and triggers delta scans.
+The `auto-delta-scan` utility (`apps/vulseek/server/utils/auto-delta-scan.ts`) periodically polls for new commits and triggers delta scans.
 
 ### Full Scan Pipeline — Two Parallel Branches
 
@@ -231,7 +231,7 @@ Stage-level concurrency is further controllable via `resolveStageConcurrencySett
 
 ### WebSocket System
 
-Handlers in `apps/dokploy/server/wss/`:
+Handlers in `apps/vulseek/server/wss/`:
 - `docker-container-terminal.ts` — interactive Docker container terminals (xterm.js)
 - `docker-container-logs.ts` — streaming container logs
 - `docker-stats.ts` — real-time resource stats (self-hosted only)
@@ -260,9 +260,9 @@ Handlers in `apps/dokploy/server/wss/`:
 
 ### i18n
 
-Uses `next-i18next`. Locale files: `apps/dokploy/public/locales/{en,zh-Hans}/`. Scan-related strings in `scan.json`.
+Uses `next-i18next`. Locale files: `apps/vulseek/public/locales/{en,zh-Hans}/`. Scan-related strings in `scan.json`.
 
-### Key Package Exports (`@dokploy/server`)
+### Key Package Exports (`@vulseek/server`)
 
 ```json
 {
@@ -288,21 +288,21 @@ Dev mode (`pnpm run server:script`): imports resolve to `src/`. Production: reso
 pnpm install
 
 # 2. Copy environment file
-cp apps/dokploy/.env.example apps/dokploy/.env
+cp apps/vulseek/.env.example apps/vulseek/.env
 
 # 3. Setup
-pnpm run dokploy:setup
+pnpm run vulseek:setup
 
-# 4. Switch to dev mode (src imports for @dokploy/server)
+# 4. Switch to dev mode (src imports for @vulseek/server)
 pnpm run server:script
 
 # 5. Start development
-pnpm run dokploy:dev
+pnpm run vulseek:dev
 ```
 
 ## Testing
 
-Tests in `apps/dokploy/__test__/`. Uses Vitest with `vite-tsconfig-paths` and `pool: "forks"`. Test config at `apps/dokploy/__test__/vitest.config.ts`. Vulseek has scan-specific contract tests in `packages/server/src/services/scan/` (e.g., `rule-scan.contract.test.ts`, `retry-failed-tasks.test.ts`, `scan-state-machine.test.ts`, `fuzz-run.stage.test.ts`).
+Tests in `apps/vulseek/__test__/`. Uses Vitest with `vite-tsconfig-paths` and `pool: "forks"`. Test config at `apps/vulseek/__test__/vitest.config.ts`. Vulseek has scan-specific contract tests in `packages/server/src/services/scan/` (e.g., `rule-scan.contract.test.ts`, `retry-failed-tasks.test.ts`, `scan-state-machine.test.ts`, `fuzz-run.stage.test.ts`).
 
 ```bash
 pnpm run test

@@ -1,4 +1,4 @@
-import { db } from "@dokploy/server/db";
+import { db } from "@vulseek/server/db";
 import {
 	applications,
 	compose,
@@ -6,7 +6,7 @@ import {
 	projects,
 	scanJobs,
 	tasks,
-} from "@dokploy/server/db/schema";
+} from "@vulseek/server/db/schema";
 import { eq } from "drizzle-orm";
 import { candidateSchema } from "../artifacts/contracts/domain-object.contract";
 import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";

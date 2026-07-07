@@ -3770,7 +3770,7 @@ const dispatchPipelineDownstream = async <
 	const downstreamEdges = getDownstreamEdges(runtime.pipeline, stageName);
 	const routedEdges = downstreamEdges.filter((edge) => edge.route);
 	if (routedEdges.length > 0) {
-		const activeRoutedEdges = [];
+		const activeRoutedEdges: typeof routedEdges = [];
 		for (const edge of routedEdges) {
 			if (await isRuntimeStageActive(runtime, edge.to.id)) {
 				activeRoutedEdges.push(edge);
