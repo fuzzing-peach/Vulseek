@@ -32,6 +32,8 @@ import {
 	type RouteOutputSchema,
 } from "./structured-output-schema";
 
+export { buildStructuredOutputPromptSuffix } from "./structured-output-schema";
+
 const RUNTIME_CUSTOM_SKILLS = [
 	"codeql",
 	"semgrep",
