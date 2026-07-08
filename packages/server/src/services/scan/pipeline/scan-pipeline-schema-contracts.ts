@@ -1,5 +1,3 @@
-import Ajv, { type ErrorObject } from "ajv";
-import addFormats from "ajv-formats";
 import type { ZodTypeAny } from "zod";
 
 export type JsonSchemaObject = Record<string, unknown>;
@@ -20,15 +18,6 @@ export type JsonSchemaContract = {
 export type StructuredOutputSchemaSource = ZodTypeAny | JsonSchemaContract;
 
 const PATH_OF_KEY = "$pathOf";
-
-const createAjv = () => {
-	const ajv = new Ajv({
-		allErrors: true,
-		strict: false,
-	});
-	addFormats(ajv);
-	return ajv;
-};
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
 	Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -78,13 +67,124 @@ const normalizeJsonSchema = (input: {
 	return normalizePathOfSchema(input);
 };
 
-const formatAjvErrors = (errors: ErrorObject[] | null | undefined) =>
-	(errors ?? [])
-		.map((error) => {
-			const path = error.instancePath || "/";
-			return `${path} ${error.message ?? "is invalid"}`;
-		})
-		.join("; ");
+const jsonTypeOf = (value: unknown) => {
+	if (value === null) {
+		return "null";
+	}
+	if (Array.isArray(value)) {
+		return "array";
+	}
+	if (Number.isInteger(value)) {
+		return "integer";
+	}
+	return typeof value === "object" ? "object" : typeof value;
+};
+
+const isJsonType = (value: unknown, type: unknown) => {
+	const types = Array.isArray(type) ? type : [type];
+	const valueType = jsonTypeOf(value);
+	return types.some(
+		(item) =>
+			item === valueType ||
+			(item === "number" &&
+				(valueType === "number" || valueType === "integer")),
+	);
+};
+
+const validateJsonSchemaValue = (
+	schema: unknown,
+	value: unknown,
+	path = "/",
+): string[] => {
+	if (!isObject(schema)) {
+		return [];
+	}
+	if (Array.isArray(schema.allOf)) {
+		return schema.allOf.flatMap((item) =>
+			validateJsonSchemaValue(item, value, path),
+		);
+	}
+	if (Array.isArray(schema.anyOf)) {
+		const failures = schema.anyOf.map((item) =>
+			validateJsonSchemaValue(item, value, path),
+		);
+		return failures.some((errors) => errors.length === 0)
+			? []
+			: [`${path} must match at least one schema`];
+	}
+	if ("const" in schema && value !== schema.const) {
+		return [`${path} must be ${JSON.stringify(schema.const)}`];
+	}
+	if (Array.isArray(schema.enum) && !schema.enum.includes(value)) {
+		return [`${path} must be one of ${schema.enum.map(String).join(", ")}`];
+	}
+	if (schema.type !== undefined && !isJsonType(value, schema.type)) {
+		return [`${path} must be ${Array.isArray(schema.type) ? schema.type.join(" or ") : String(schema.type)}`];
+	}
+
+	const errors: string[] = [];
+	if (typeof value === "number") {
+		if (typeof schema.minimum === "number" && value < schema.minimum) {
+			errors.push(`${path} must be >= ${schema.minimum}`);
+		}
+		if (typeof schema.maximum === "number" && value > schema.maximum) {
+			errors.push(`${path} must be <= ${schema.maximum}`);
+		}
+	}
+	if (typeof value === "string") {
+		if (typeof schema.minLength === "number" && value.length < schema.minLength) {
+			errors.push(`${path} length must be >= ${schema.minLength}`);
+		}
+	}
+	if (Array.isArray(value)) {
+		if (typeof schema.minItems === "number" && value.length < schema.minItems) {
+			errors.push(`${path} must contain at least ${schema.minItems} items`);
+		}
+		if (schema.items !== undefined) {
+			value.forEach((item, index) => {
+				errors.push(
+					...validateJsonSchemaValue(schema.items, item, `${path}/${index}`),
+				);
+			});
+		}
+	}
+	if (isObject(value)) {
+		const required = Array.isArray(schema.required) ? schema.required : [];
+		for (const key of required) {
+			if (typeof key === "string" && !(key in value)) {
+				errors.push(`${path}/${key} is required`);
+			}
+		}
+		const properties = isObject(schema.properties) ? schema.properties : {};
+		for (const [key, propertySchema] of Object.entries(properties)) {
+			if (key in value) {
+				errors.push(
+					...validateJsonSchemaValue(
+						propertySchema,
+						value[key],
+						`${path}/${key}`,
+					),
+				);
+			}
+		}
+		if (schema.additionalProperties === false) {
+			for (const key of Object.keys(value)) {
+				if (!(key in properties)) {
+					errors.push(`${path}/${key} is not allowed`);
+				}
+			}
+		}
+	}
+
+	return errors;
+};
+
+const validateAgainstJsonSchema = (schema: JsonSchemaObject, value: unknown) => {
+	const errors = validateJsonSchemaValue(schema, value);
+	if (errors.length > 0) {
+		throw new Error(`JSON Schema validation failed: ${errors.join("; ")}`);
+	}
+};
 
 const normalizePathOfSchema = (input: {
 	schema: unknown;
@@ -190,20 +290,12 @@ export const createJsonSchemaContract = (input: {
 	if (!isObject(normalized.schema)) {
 		throw new Error("JSON Schema contract must normalize to an object schema");
 	}
-	const ajv = createAjv();
-	const validate = ajv.compile(normalized.schema);
+	const schema = normalized.schema;
 	return {
 		kind: "json-schema",
-		schema: normalized.schema,
+		schema,
 		artifactAnnotations: normalized.artifactAnnotations,
-		validate: (value) => {
-			if (validate(value)) {
-				return;
-			}
-			throw new Error(
-				`JSON Schema validation failed: ${formatAjvErrors(validate.errors)}`,
-			);
-		},
+		validate: (value) => validateAgainstJsonSchema(schema, value),
 	};
 };
 
@@ -254,19 +346,19 @@ export const validateJsonSchemaContractArtifacts = async (
 		if (!Array.isArray(paths)) {
 			throw new Error(`${annotation.path} must be an array of artifact paths`);
 		}
-		const ajv = createAjv();
-		const validate = ajv.compile(annotation.jsonSchema);
 		for (const artifactPath of paths) {
 			if (typeof artifactPath !== "string" || artifactPath.length === 0) {
 				throw new Error(`${annotation.path} must contain artifact path strings`);
 			}
 			const artifactJson = await readArtifactJson(artifactPath);
-			if (validate(artifactJson)) {
+			try {
+				validateAgainstJsonSchema(annotation.jsonSchema, artifactJson);
 				continue;
+			} catch (error) {
+				throw new Error(
+					`${annotation.path} artifact ${artifactPath} ${error instanceof Error ? error.message : String(error)}`,
+				);
 			}
-			throw new Error(
-				`${annotation.path} artifact ${artifactPath} JSON Schema validation failed: ${formatAjvErrors(validate.errors)}`,
-			);
 		}
 	}
 };
