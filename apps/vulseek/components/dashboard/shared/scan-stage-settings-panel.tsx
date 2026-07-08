@@ -42,6 +42,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { api } from "@/utils/api";
 
 type AgentProfileOption = {
 	agentProfileId: string;
@@ -66,104 +67,17 @@ type StageDefinition = {
 	stageName: string;
 	label: string;
 	role: "scan" | "analysis" | "verification";
-	group: "full-scan" | "review";
+	group: string;
 	defaultConcurrency: number;
 	maxConcurrency: number;
+	disableable: boolean;
 	description: string;
 };
 
-const STAGES: StageDefinition[] = [
-	{
-		stageName: "repository-profile",
-		label: "Repository Profile",
-		role: "scan",
-		group: "full-scan",
-		defaultConcurrency: 1,
-		maxConcurrency: 8,
-		description: "Repository-wide runtime and security surface profiling.",
-	},
-	{
-		stageName: "attack-surface-model",
-		label: "Attack Surface Model",
-		role: "scan",
-		group: "full-scan",
-		defaultConcurrency: 4,
-		maxConcurrency: 32,
-		description: "Module-level threat and attack-surface modeling.",
-	},
-	{
-		stageName: "identify-target",
-		label: "Identify Target",
-		role: "scan",
-		group: "full-scan",
-		defaultConcurrency: 4,
-		maxConcurrency: 32,
-		description: "Find route, handler, config, parser, function, and other scan targets.",
-	},
-	{
-		stageName: "scan-target",
-		label: "Scan Target",
-		role: "scan",
-		group: "full-scan",
-		defaultConcurrency: 4,
-		maxConcurrency: 64,
-		description: "Target-level candidate discovery.",
-	},
-	{
-		stageName: "analyze-finding",
-		label: "Analyze Finding",
-		role: "analysis",
-		group: "review",
-		defaultConcurrency: 2,
-		maxConcurrency: 16,
-		description: "Candidate analysis and critic routing.",
-	},
-	{
-		stageName: "critique-finding",
-		label: "Critique Finding",
-		role: "analysis",
-		group: "review",
-		defaultConcurrency: 2,
-		maxConcurrency: 16,
-		description: "Challenges analysis results before verification.",
-	},
-	{
-		stageName: "verify-finding",
-		label: "Verify Finding",
-		role: "verification",
-		group: "review",
-		defaultConcurrency: 1,
-		maxConcurrency: 16,
-		description: "Fact-checks target, paths, and evidence.",
-	},
-	{
-		stageName: "triage-finding",
-		label: "Triage Finding",
-		role: "verification",
-		group: "review",
-		defaultConcurrency: 1,
-		maxConcurrency: 8,
-		description: "Final security classification and severity.",
-	},
-];
-
-const STAGE_GROUPS = [
-	{
-		id: "full-scan",
-		title: "Full Scan Pipeline",
-		description:
-			"Discovery stages that create repository, module, and target context.",
-	},
-	{
-		id: "review",
-		title: "Analysis & Review",
-		description: "Candidate reasoning, critique, verification, and final triage.",
-	},
-] as const satisfies Array<{
-	id: StageDefinition["group"];
-	title: string;
-	description: string;
-}>;
+const titleCase = (value: string) =>
+	value
+		.replace(/[-_]/g, " ")
+		.replace(/\b\w/g, (char) => char.toUpperCase());
 
 const StageSettingsFormSchema = z.object({
 	agentProfileId: z.string().min(1),
@@ -211,12 +125,37 @@ export const ScanStageSettingsPanel = ({
 	);
 	const [isBatchEditOpen, setIsBatchEditOpen] = useState(false);
 	const [isSaving, setIsSaving] = useState(false);
+	const { data: pipelineCatalog, isLoading: isLoadingPipelineCatalog } =
+		api.scan.pipelineCatalog.useQuery();
+	const stages = useMemo<StageDefinition[]>(
+		() =>
+			pipelineCatalog?.stages.map((stage) => ({
+				stageName: stage.id,
+				label: stage.name,
+				role: stage.role,
+				group: stage.group,
+				defaultConcurrency: stage.defaultConcurrency,
+				maxConcurrency: stage.maxConcurrency ?? 128,
+				disableable: stage.disableable,
+				description: stage.description ?? stage.name,
+			})) ?? [],
+		[pipelineCatalog],
+	);
+	const stageGroups = useMemo(
+		() =>
+			Array.from(new Set(stages.map((stage) => stage.group))).map((group) => ({
+				id: group,
+				title: titleCase(group),
+				description: `Stages in the ${titleCase(group)} group from scan-pipelines.yaml.`,
+			})),
+		[stages],
+	);
 	const enabledProfiles = useMemo(
 		() => agentProfiles?.filter((profile) => profile.isEnabled) ?? [],
 		[agentProfiles],
 	);
 	const selectedStage =
-		STAGES.find((stage) => stage.stageName === selectedStageName) ?? null;
+		stages.find((stage) => stage.stageName === selectedStageName) ?? null;
 	const form = useForm<StageSettingsForm>({
 		defaultValues: {
 			agentProfileId: "",
@@ -231,13 +170,13 @@ export const ScanStageSettingsPanel = ({
 	});
 
 	const allChecked =
-		checkedStageNames.size === STAGES.length && STAGES.length > 0;
+		checkedStageNames.size === stages.length && stages.length > 0;
 	const someChecked =
-		checkedStageNames.size > 0 && checkedStageNames.size < STAGES.length;
+		checkedStageNames.size > 0 && checkedStageNames.size < stages.length;
 
 	const toggleAll = (checked: boolean) => {
 		setCheckedStageNames(
-			checked ? new Set(STAGES.map((s) => s.stageName)) : new Set(),
+			checked ? new Set(stages.map((s) => s.stageName)) : new Set(),
 		);
 	};
 
@@ -254,7 +193,7 @@ export const ScanStageSettingsPanel = ({
 		group: StageDefinition["group"],
 		checked: boolean,
 	) => {
-		const groupStageNames = STAGES.filter((stage) => stage.group === group).map(
+		const groupStageNames = stages.filter((stage) => stage.group === group).map(
 			(stage) => stage.stageName,
 		);
 		setCheckedStageNames((prev) => {
@@ -269,7 +208,7 @@ export const ScanStageSettingsPanel = ({
 
 	const rows = useMemo(
 		() =>
-			STAGES.map((stage) => {
+			stages.map((stage) => {
 				const agentProfileId = target
 					? getStageAgentProfileId(target, stage, enabledProfiles)
 					: "";
@@ -285,12 +224,12 @@ export const ScanStageSettingsPanel = ({
 						: stage.defaultConcurrency,
 				};
 			}),
-		[target, enabledProfiles],
+		[target, enabledProfiles, stages],
 	);
 
 	const groupedRows = useMemo(
 		() =>
-			STAGE_GROUPS.map((group) => {
+			stageGroups.map((group) => {
 				const groupRows = rows.filter((stage) => stage.group === group.id);
 				const checkedCount = groupRows.filter((stage) =>
 					checkedStageNames.has(stage.stageName),
@@ -303,7 +242,7 @@ export const ScanStageSettingsPanel = ({
 					someChecked: checkedCount > 0 && checkedCount < groupRows.length,
 				};
 			}),
-		[checkedStageNames, rows],
+		[checkedStageNames, rows, stageGroups],
 	);
 
 	useEffect(() => {
@@ -319,6 +258,22 @@ export const ScanStageSettingsPanel = ({
 			concurrency: getStageConcurrency(target, selectedStage),
 		});
 	}, [selectedStage, target, enabledProfiles, form]);
+
+	if (isLoadingPipelineCatalog) {
+		return (
+			<Card className="bg-background">
+				<CardHeader>
+					<CardTitle className="text-xl flex items-center gap-2">
+						<BotIcon className="size-5 text-muted-foreground" />
+						Stage Agent Settings
+					</CardTitle>
+					<CardDescription>
+						Loading scan stage catalog from scan-pipelines.yaml.
+					</CardDescription>
+				</CardHeader>
+			</Card>
+		);
+	}
 
 	if (enabledProfiles.length === 0) {
 		return (
@@ -397,7 +352,7 @@ export const ScanStageSettingsPanel = ({
 							</div>
 						</div>
 					</div>
-					<Badge variant="secondary">{STAGES.length}</Badge>
+					<Badge variant="secondary">{stages.length}</Badge>
 				</div>
 
 				<div className="grid gap-5">
@@ -455,6 +410,11 @@ export const ScanStageSettingsPanel = ({
 													<div className="truncate text-sm font-semibold">
 														{stage.label}
 													</div>
+													{!stage.disableable ? (
+														<Badge variant="secondary" className="mt-1">
+															Required
+														</Badge>
+													) : null}
 													<div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
 														{stage.description}
 													</div>

@@ -13,6 +13,7 @@
 - 后端从 YAML 派生 `SCAN_STAGE_IDS`、display name helpers、full/delta stage ids、root stage、disableable 状态和默认 concurrency。
 - Pipeline runtime 使用 YAML 拓扑 + TypeScript registry：stage id 绑定现有 `StageDefinition`，edge name 绑定现有 `transformOutput/createTasks/outputSchema` 实现。
 - Graph API 和 scan stage settings UI 不再维护硬编码 stage/edge/group 列表，改为消费 YAML 解析后的 catalog。
+- 前端提供一个只读 YAML 查看组件，用于展示当前生效的 `scan-pipelines.yaml` 原文，方便用户核对 stage、edge、group、route 和默认并发配置。
 - `repository-profile` 和 `delta-scope` 默认 `disableable: false`；其他 stage 默认可禁用。
 
 ## Implementation Notes
@@ -21,6 +22,7 @@
 - 不回退或丢弃当前工作树中的旧 stage 清理改动。
 - 不在 v1 中把 prompts、input/output schemas、executor 函数或 task creation logic 写进 YAML。
 - 不做 codegen；前端通过服务端解析后的 catalog 获取配置。
+- YAML 查看组件通过服务端 API 获取原始 YAML 字符串，不允许在浏览器端直接读取仓库文件；组件只读展示，不提供编辑或保存。
 
 ## Test Plan
 
@@ -28,6 +30,7 @@
 - Runtime settings 单测覆盖未知 stage 过滤、`disableable=false` stage 不能被禁用、用户 concurrency 覆盖 YAML 默认值。
 - Pipeline 组装测试确认 full/delta stage 顺序、edge route 和当前行为一致。
 - Graph/settings 测试确认 nodes、edges、groups、default/max concurrency、disableable 来自 catalog。
+- YAML viewer 测试确认前端能渲染服务端返回的 YAML 原文，并在加载失败时显示清晰错误状态。
 - 验证命令：
   - `pnpm --filter @vulseek/server typecheck`
   - `pnpm --filter vulseek typecheck`

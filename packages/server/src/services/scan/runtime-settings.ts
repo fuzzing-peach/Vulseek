@@ -1,36 +1,32 @@
 import {
 	type ScanRuntimeSettings,
 	ScanRuntimeSettingsSchema,
-} from "@vulseek/server/db/schema";
+} from "../../db/schema/shared";
+import { SCAN_PIPELINE_CATALOG } from "./pipeline/scan-pipeline-catalog";
 import { SCAN_STAGE_IDS, SCAN_STAGE_METADATA } from "./stage-metadata";
 
-export const FULL_SCAN_STAGE_IDS = [
-	SCAN_STAGE_IDS.repositoryScan,
-	SCAN_STAGE_IDS.attackSurfaceModel,
-	SCAN_STAGE_IDS.moduleScan,
-	SCAN_STAGE_IDS.functionScan,
-	SCAN_STAGE_IDS.analysis,
-	SCAN_STAGE_IDS.analysisCritic,
-	SCAN_STAGE_IDS.verification,
-	SCAN_STAGE_IDS.triage,
-] as const;
+export const FULL_SCAN_STAGE_IDS =
+	SCAN_PIPELINE_CATALOG.pipelines.full.stageIds;
 
-export const DELTA_SCAN_STAGE_IDS = [
-	SCAN_STAGE_IDS.deltaScope,
-	SCAN_STAGE_IDS.functionScan,
-	SCAN_STAGE_IDS.analysis,
-	SCAN_STAGE_IDS.analysisCritic,
-	SCAN_STAGE_IDS.verification,
-	SCAN_STAGE_IDS.triage,
-] as const;
+export const DELTA_SCAN_STAGE_IDS =
+	SCAN_PIPELINE_CATALOG.pipelines.delta.stageIds;
 
 const RUNTIME_STAGE_IDS = [
 	...FULL_SCAN_STAGE_IDS,
 	SCAN_STAGE_IDS.deltaScope,
-] as const;
+];
 
 export const FULL_SCAN_STAGE_ID_SET = new Set<string>(FULL_SCAN_STAGE_IDS);
 export const RUNTIME_STAGE_ID_SET = new Set<string>(RUNTIME_STAGE_IDS);
+const RUNTIME_STAGE_BY_ID = new Map(
+	SCAN_PIPELINE_CATALOG.stages.map((stage) => [stage.id, stage]),
+);
+
+export const isRuntimeStageDisableable = (stageName: string) =>
+	RUNTIME_STAGE_BY_ID.get(stageName)?.disableable ?? true;
+
+export const getRuntimeStageDefaultConcurrency = (stageName: string) =>
+	RUNTIME_STAGE_BY_ID.get(stageName)?.defaultConcurrency ?? 1;
 
 export type ScanRuntimeStageState = {
 	disabled: boolean;
@@ -49,11 +45,9 @@ export const normalizeScanRuntimeSettings = (
 			continue;
 		}
 		stages[stageName] = {
-			disabled:
-				stageName === SCAN_STAGE_IDS.repositoryScan ||
-				stageName === SCAN_STAGE_IDS.deltaScope
-					? false
-					: setting.disabled === true,
+			disabled: isRuntimeStageDisableable(stageName)
+				? setting.disabled === true
+				: false,
 			concurrency:
 				typeof setting.concurrency === "number" ? setting.concurrency : null,
 			agentProfileId: setting.agentProfileId || null,
@@ -81,8 +75,11 @@ export const buildEffectiveDisabledStageSet = (input: {
 			.filter(([, setting]) => setting.disabled === true)
 			.map(([stageName]) => stageName),
 	);
-	explicitDisabled.delete(SCAN_STAGE_IDS.repositoryScan);
-	explicitDisabled.delete(SCAN_STAGE_IDS.deltaScope);
+	for (const stageName of Array.from(explicitDisabled)) {
+		if (!isRuntimeStageDisableable(stageName)) {
+			explicitDisabled.delete(stageName);
+		}
+	}
 
 	const bySource = new Map<string, string[]>();
 	for (const edge of input.edges) {

@@ -12,6 +12,8 @@ import {
 	findRunningCheckoutTask,
 	findScanJobById,
 	findFullScanStageGraph,
+	getScanPipelineCatalog,
+	getScanPipelineYaml,
 	findScanJobSandboxAgentSession,
 	findScanJobStageGraph,
 	findScanJobStatusView,
@@ -143,6 +145,12 @@ const apiStartCandidateReviewContainer = z.object({
 });
 
 export const scanRouter = createTRPCRouter({
+	pipelineCatalog: protectedProcedure.query(async () => getScanPipelineCatalog()),
+
+	pipelineYaml: protectedProcedure.query(async () => ({
+		yaml: getScanPipelineYaml(),
+	})),
+
 	homeOverview: protectedProcedure
 		.input(
 			z

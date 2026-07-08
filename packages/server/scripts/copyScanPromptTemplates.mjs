@@ -38,5 +38,10 @@ const copyPromptTemplates = async (sourceDir) => {
 };
 
 await copyPromptTemplates(sourceRoot);
+await mkdir(path.join(outputRoot, "pipeline"), { recursive: true });
+await cp(
+	path.join(sourceRoot, "pipeline", "scan-pipelines.yaml"),
+	path.join(outputRoot, "pipeline", "scan-pipelines.yaml"),
+);
 await mkdir(dockerfilesOutputRoot, { recursive: true });
 await cp(dockerfilesSourceRoot, dockerfilesOutputRoot, { recursive: true });

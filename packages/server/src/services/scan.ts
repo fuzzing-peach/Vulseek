@@ -85,6 +85,12 @@ import {
 	createPipelineEdge,
 } from "./scan/pipeline/pipeline-definition";
 import {
+	SCAN_PIPELINE_CATALOG,
+	readScanPipelinesYaml,
+	validatePipelineRegistryCoverage,
+	type ScanPipelineConfig,
+} from "./scan/pipeline/scan-pipeline-catalog";
+import {
 	runPipeline,
 	startPipelineRuntime,
 	stopPipelineRuntimesForScanJob,
@@ -105,6 +111,7 @@ import {
 import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "./scan/runtime/sandbox-agent-shared";
 import {
 	buildEffectiveDisabledStageSet,
+	getRuntimeStageDefaultConcurrency,
 	getRuntimeStageSetting,
 } from "./scan/runtime-settings";
 import { SCAN_STAGE_IDS, SCAN_STAGE_METADATA } from "./scan/stage-metadata";
@@ -4972,120 +4979,9 @@ type ScanStageGraphTargetInput = {
 	scanType?: "delta" | "full" | null;
 };
 
-const FULL_SCAN_STAGE_GRAPH_STAGES = [
-	SCAN_STAGE_METADATA.repositoryScan,
-	SCAN_STAGE_METADATA.attackSurfaceModel,
-	SCAN_STAGE_METADATA.moduleScan,
-	SCAN_STAGE_METADATA.functionScan,
-	SCAN_STAGE_METADATA.analysis,
-	SCAN_STAGE_METADATA.analysisCritic,
-	SCAN_STAGE_METADATA.verification,
-	SCAN_STAGE_METADATA.triage,
-] as const;
+export const getScanPipelineCatalog = () => SCAN_PIPELINE_CATALOG;
 
-const DELTA_SCAN_STAGE_GRAPH_STAGES = [
-	SCAN_STAGE_METADATA.deltaScope,
-	SCAN_STAGE_METADATA.functionScan,
-	SCAN_STAGE_METADATA.analysis,
-	SCAN_STAGE_METADATA.analysisCritic,
-	SCAN_STAGE_METADATA.verification,
-	SCAN_STAGE_METADATA.triage,
-] as const;
-
-const FULL_SCAN_STAGE_GRAPH_EDGES = [
-	{
-		id: "repository-profile-to-attack-surface-model",
-		name: "repository-profile-to-attack-surface-model",
-		source: SCAN_STAGE_IDS.repositoryScan,
-		target: SCAN_STAGE_IDS.attackSurfaceModel,
-		fork: false,
-		routeKey: null,
-		isDefaultRoute: false,
-	},
-	{
-		id: "attack-surface-model-to-identify-target",
-		name: "attack-surface-model-to-identify-target",
-		source: SCAN_STAGE_IDS.attackSurfaceModel,
-		target: SCAN_STAGE_IDS.moduleScan,
-		fork: false,
-		routeKey: null,
-		isDefaultRoute: false,
-	},
-	{
-		id: "identify-target-to-scan-target",
-		name: "identify-target-to-scan-target",
-		source: SCAN_STAGE_IDS.moduleScan,
-		target: SCAN_STAGE_IDS.functionScan,
-		fork: false,
-		routeKey: null,
-		isDefaultRoute: false,
-	},
-	{
-		id: "scan-target-to-analyze-finding",
-		name: "scan-target-to-analyze-finding",
-		source: SCAN_STAGE_IDS.functionScan,
-		target: SCAN_STAGE_IDS.analysis,
-		fork: false,
-		routeKey: null,
-		isDefaultRoute: false,
-	},
-	{
-		id: "analyze-finding-to-critique-finding",
-		name: "analyze-finding-to-critique-finding",
-		source: SCAN_STAGE_IDS.analysis,
-		target: SCAN_STAGE_IDS.analysisCritic,
-		fork: false,
-		routeKey: "critic",
-		isDefaultRoute: true,
-	},
-	{
-		id: "critique-finding-to-analyze-finding",
-		name: "critique-finding-to-analyze-finding",
-		source: SCAN_STAGE_IDS.analysisCritic,
-		target: SCAN_STAGE_IDS.analysis,
-		fork: false,
-		routeKey: null,
-		isDefaultRoute: false,
-	},
-	{
-		id: "analyze-finding-to-verify-finding",
-		name: "analyze-finding-to-verify-finding",
-		source: SCAN_STAGE_IDS.analysis,
-		target: SCAN_STAGE_IDS.verification,
-		fork: false,
-		routeKey: "verification",
-		isDefaultRoute: false,
-	},
-	{
-		id: "verify-finding-to-triage-finding",
-		name: "verify-finding-to-triage-finding",
-		source: SCAN_STAGE_IDS.verification,
-		target: SCAN_STAGE_IDS.triage,
-		fork: false,
-		routeKey: null,
-		isDefaultRoute: false,
-	},
-] as const;
-
-const DELTA_SCAN_STAGE_GRAPH_EDGES = [
-	{
-		id: "delta-scope-to-function",
-		name: "delta-scope-to-function",
-		source: SCAN_STAGE_IDS.deltaScope,
-		target: SCAN_STAGE_IDS.functionScan,
-		fork: false,
-		routeKey: null,
-		isDefaultRoute: false,
-	},
-	...FULL_SCAN_STAGE_GRAPH_EDGES.filter(
-		(edge) =>
-			edge.source !== SCAN_STAGE_IDS.repositoryScan &&
-			edge.source !== SCAN_STAGE_IDS.attackSurfaceModel &&
-			edge.source !== SCAN_STAGE_IDS.moduleScan,
-	),
-] as const;
-
-const FULL_SCAN_STAGE_GRAPH_GROUPS = [] as const;
+export const getScanPipelineYaml = () => readScanPipelinesYaml();
 
 const resolveStaticStageConcurrency = (
 	stageName: string,
@@ -5097,22 +4993,7 @@ const resolveStaticStageConcurrency = (
 	if (stageConcurrency) {
 		return Math.max(1, stageConcurrency);
 	}
-	switch (stageName) {
-		case SCAN_STAGE_IDS.attackSurfaceModel:
-		case SCAN_STAGE_IDS.moduleScan:
-			return DEFAULT_FULL_SCAN_MODULE_CONCURRENCY;
-		case SCAN_STAGE_IDS.functionScan:
-			return DEFAULT_FULL_SCAN_FUNCTION_CONCURRENCY;
-		case SCAN_STAGE_IDS.analysis:
-		case SCAN_STAGE_IDS.analysisCritic:
-			return DEFAULT_ANALYSIS_CONCURRENCY;
-		case SCAN_STAGE_IDS.verification:
-			return DEFAULT_VERIFY_CONCURRENCY;
-		case SCAN_STAGE_IDS.triage:
-			return DEFAULT_TRIAGE_CONCURRENCY;
-		default:
-			return 1;
-	}
+	return getRuntimeStageDefaultConcurrency(stageName);
 };
 
 export const findFullScanStageGraph = async (
@@ -5124,19 +5005,19 @@ export const findFullScanStageGraph = async (
 		target.scanType === "delta"
 			? "delta"
 			: "full";
-	const stages =
+	const pipeline =
 		scanType === "delta"
-			? DELTA_SCAN_STAGE_GRAPH_STAGES
-			: FULL_SCAN_STAGE_GRAPH_STAGES;
-	const edges =
-		scanType === "delta"
-			? DELTA_SCAN_STAGE_GRAPH_EDGES
-			: FULL_SCAN_STAGE_GRAPH_EDGES;
+			? SCAN_PIPELINE_CATALOG.pipelines.delta
+			: SCAN_PIPELINE_CATALOG.pipelines.full;
+	const stages = pipeline.stageIds.map((stageId) => {
+		const stage = SCAN_PIPELINE_CATALOG.stageMetadataById[stageId];
+		if (!stage) {
+			throw new Error(`Unknown scan stage ${stageId} in ${pipeline.name}`);
+		}
+		return stage;
+	});
 	return {
-		pipelineName:
-			scanType === "delta"
-				? "delta-scan-programmatic"
-				: "full-scan-programmatic",
+		pipelineName: pipeline.name,
 		nodes: await Promise.all(
 			stages.map(async (stage, index) => {
 				const agentProfile = await resolveStageAgentProfileFromTarget(
@@ -5166,8 +5047,22 @@ export const findFullScanStageGraph = async (
 				};
 			}),
 		),
-		edges: edges.map((edge) => ({ ...edge })),
-		groups: [],
+		edges: pipeline.edges.map((edge) => ({
+			id: edge.id,
+			name: edge.name,
+			source: edge.from,
+			target: edge.to,
+			fork: edge.fork,
+			routeKey: edge.route?.key ?? null,
+			isDefaultRoute: Boolean(edge.route?.default),
+		})),
+		groups: pipeline.groups.map((group) => ({
+			id: group.id,
+			name: group.name,
+			leaderStageName: group.leader,
+			memberStageNames: group.members,
+			stageNames: [group.leader, ...group.members],
+		})),
 	};
 };
 
@@ -5872,6 +5767,62 @@ type FullScanPipelineEdge = PipelineEdge<
 	FullScanPipelineStage,
 	any
 >;
+
+const buildPipelineStagesFromCatalog = (
+	pipeline: ScanPipelineConfig,
+	stageRegistry: Map<string, FullScanPipelineStage>,
+) =>
+	pipeline.stageIds.map((stageId) => {
+		const stage = stageRegistry.get(stageId);
+		if (!stage) {
+			throw new Error(`missing stage implementation: ${stageId}`);
+		}
+		return stage;
+	});
+
+const buildPipelineEdgesFromCatalog = (
+	pipeline: ScanPipelineConfig,
+	edgeRegistry: Map<string, FullScanPipelineEdge>,
+) =>
+	pipeline.edges.map((edgeConfig) => {
+		const edge = edgeRegistry.get(edgeConfig.name);
+		if (!edge) {
+			throw new Error(`missing edge implementation: ${edgeConfig.name}`);
+		}
+		return {
+			...edge,
+			fork: edgeConfig.fork,
+			route: edgeConfig.route
+				? {
+						key: edgeConfig.route.key,
+						default: edgeConfig.route.default,
+					}
+				: undefined,
+		};
+	});
+
+const buildPipelineGroupsFromCatalog = (
+	pipeline: ScanPipelineConfig,
+	stageRegistry: Map<string, FullScanPipelineStage>,
+) =>
+	pipeline.groups.map((group) => {
+		const leader = stageRegistry.get(group.leader);
+		if (!leader) {
+			throw new Error(`missing group leader implementation: ${group.leader}`);
+		}
+		return {
+			name: group.name,
+			leader,
+			members: group.members.map((stageId) => {
+				const stage = stageRegistry.get(stageId);
+				if (!stage) {
+					throw new Error(`missing group member implementation: ${stageId}`);
+				}
+				return stage;
+			}),
+		};
+	});
+
 type FullScanRepositoryStage = StageDefinition<
 	FullScanPipelineContext,
 	RepositoryScanningStageInput,
@@ -7208,15 +7159,22 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			},
 		}),
 	] as const;
+	const stageRegistry = new Map<string, FullScanPipelineStage>(
+		stages.map((stage) => [stage.id, stage]),
+	);
+	const edgeRegistry = new Map<string, FullScanPipelineEdge>(
+		edges.map((edge) => [edge.name, edge]),
+	);
+	const pipelineConfig = SCAN_PIPELINE_CATALOG.pipelines.full;
 	const pipeline: PipelineDefinition<
 		FullScanPipelineContext,
-		typeof stages,
-		typeof edges
+		FullScanPipelineStage[],
+		FullScanPipelineEdge[]
 	> = createPipelineDefinition({
-		name: "full-scan-programmatic",
-		stages,
-		edges,
-		groups: [],
+		name: pipelineConfig.name,
+		stages: buildPipelineStagesFromCatalog(pipelineConfig, stageRegistry),
+		edges: buildPipelineEdgesFromCatalog(pipelineConfig, edgeRegistry),
+		groups: buildPipelineGroupsFromCatalog(pipelineConfig, stageRegistry),
 	});
 
 	return pipeline;
@@ -7380,15 +7338,6 @@ const buildDeltaScanPipeline = (context: FullScanPipelineContext) => {
 				},
 			}),
 		});
-	const stages: FullScanPipelineStage[] = [
-		deltaScopeStage,
-		...basePipeline.stages.filter(
-			(stage) =>
-				stage.id !== SCAN_STAGE_IDS.repositoryScan &&
-				stage.id !== SCAN_STAGE_IDS.attackSurfaceModel &&
-				stage.id !== SCAN_STAGE_IDS.moduleScan,
-		),
-	];
 	const deltaScopeToFunctionEdge = createPipelineEdge<
 		FullScanPipelineContext,
 		typeof deltaScopeStage,
@@ -7500,24 +7449,28 @@ const buildDeltaScanPipeline = (context: FullScanPipelineContext) => {
 				return taskIds;
 			},
 		});
-	const edges: FullScanPipelineEdge[] = [
-		deltaScopeToFunctionEdge,
-		...basePipeline.edges.filter(
-			(edge) =>
-				edge.from.id !== SCAN_STAGE_IDS.repositoryScan &&
-				edge.from.id !== SCAN_STAGE_IDS.attackSurfaceModel &&
-				edge.from.id !== SCAN_STAGE_IDS.moduleScan,
-		),
-	];
+	const stageRegistry = new Map<string, FullScanPipelineStage>([
+		...basePipeline.stages.map((stage) => [stage.id, stage] as const),
+		[deltaScopeStage.id, deltaScopeStage],
+	]);
+	const edgeRegistry = new Map<string, FullScanPipelineEdge>([
+		...basePipeline.edges.map((edge) => [edge.name, edge] as const),
+		[deltaScopeToFunctionEdge.name, deltaScopeToFunctionEdge],
+	]);
+	validatePipelineRegistryCoverage(SCAN_PIPELINE_CATALOG, {
+		stageIds: new Set(stageRegistry.keys()),
+		edgeNames: new Set(edgeRegistry.keys()),
+	});
+	const pipelineConfig = SCAN_PIPELINE_CATALOG.pipelines.delta;
 	return createPipelineDefinition<
 		FullScanPipelineContext,
 		FullScanPipelineStage[],
 		FullScanPipelineEdge[]
 	>({
-		name: "delta-scan-programmatic",
-		stages,
-		edges,
-		groups: basePipeline.groups,
+		name: pipelineConfig.name,
+		stages: buildPipelineStagesFromCatalog(pipelineConfig, stageRegistry),
+		edges: buildPipelineEdgesFromCatalog(pipelineConfig, edgeRegistry),
+		groups: buildPipelineGroupsFromCatalog(pipelineConfig, stageRegistry),
 	});
 };
 

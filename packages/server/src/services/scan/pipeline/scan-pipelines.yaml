@@ -1,0 +1,183 @@
+stages:
+  delta-scope:
+    key: deltaScope
+    name: Delta Scope
+    role: scan
+    group: delta
+    defaultConcurrency: 1
+    maxConcurrency: 8
+    disableable: false
+    description: Scope changed repository targets for a delta scan.
+  repository-profile:
+    key: repositoryScan
+    name: Repository Profile
+    role: scan
+    group: full-scan
+    defaultConcurrency: 1
+    maxConcurrency: 8
+    disableable: false
+    description: Repository-wide runtime and security surface profiling.
+  attack-surface-model:
+    key: attackSurfaceModel
+    name: Attack Surface Model
+    role: scan
+    group: full-scan
+    defaultConcurrency: 4
+    maxConcurrency: 32
+    disableable: true
+    description: Module-level threat and attack-surface modeling.
+  identify-target:
+    key: moduleScan
+    name: Identify Target
+    role: scan
+    group: full-scan
+    defaultConcurrency: 4
+    maxConcurrency: 32
+    disableable: true
+    description: Identify route, handler, parser, function, and other scan targets.
+  scan-target:
+    key: functionScan
+    name: Scan Target
+    role: scan
+    group: full-scan
+    defaultConcurrency: 4
+    maxConcurrency: 64
+    disableable: true
+    description: Target-level candidate discovery.
+  analyze-finding:
+    key: analysis
+    name: Analyze Finding
+    role: analysis
+    group: review
+    defaultConcurrency: 2
+    maxConcurrency: 16
+    disableable: true
+    description: Candidate analysis and critic routing.
+  critique-finding:
+    key: analysisCritic
+    name: Critique Finding
+    role: analysis
+    group: review
+    defaultConcurrency: 2
+    maxConcurrency: 16
+    disableable: true
+    description: Challenge analysis results before verification.
+  verify-finding:
+    key: verification
+    name: Verify Finding
+    role: verification
+    group: review
+    defaultConcurrency: 1
+    maxConcurrency: 16
+    disableable: true
+    description: Fact-check target, paths, and evidence.
+  triage-finding:
+    key: triage
+    name: Triage Finding
+    role: verification
+    group: review
+    defaultConcurrency: 1
+    maxConcurrency: 8
+    disableable: true
+    description: Final security classification and severity.
+pipelines:
+  full:
+    name: full-scan-programmatic
+    root: repository-profile
+    stages:
+      - repository-profile
+      - attack-surface-model
+      - identify-target
+      - scan-target
+      - analyze-finding
+      - critique-finding
+      - verify-finding
+      - triage-finding
+    edges:
+      - name: repository-profile-to-attack-surface-model
+        from: repository-profile
+        to: attack-surface-model
+        fork: false
+      - name: attack-surface-model-to-identify-target
+        from: attack-surface-model
+        to: identify-target
+        fork: false
+      - name: identify-target-to-scan-target
+        from: identify-target
+        to: scan-target
+        fork: false
+      - name: scan-target-to-analyze-finding
+        from: scan-target
+        to: analyze-finding
+        fork: false
+      - name: analyze-finding-to-critique-finding
+        from: analyze-finding
+        to: critique-finding
+        fork: false
+        route:
+          key: critic
+          default: true
+      - name: critique-finding-to-analyze-finding
+        from: critique-finding
+        to: analyze-finding
+        fork: false
+        route:
+          key: analysis
+          default: true
+      - name: analyze-finding-to-verify-finding
+        from: analyze-finding
+        to: verify-finding
+        fork: false
+        route:
+          key: verification
+          default: false
+      - name: verify-finding-to-triage-finding
+        from: verify-finding
+        to: triage-finding
+        fork: false
+    groups: []
+  delta:
+    name: delta-scan-programmatic
+    root: delta-scope
+    stages:
+      - delta-scope
+      - scan-target
+      - analyze-finding
+      - critique-finding
+      - verify-finding
+      - triage-finding
+    edges:
+      - name: delta-scope-to-function
+        from: delta-scope
+        to: scan-target
+        fork: false
+      - name: scan-target-to-analyze-finding
+        from: scan-target
+        to: analyze-finding
+        fork: false
+      - name: analyze-finding-to-critique-finding
+        from: analyze-finding
+        to: critique-finding
+        fork: false
+        route:
+          key: critic
+          default: true
+      - name: critique-finding-to-analyze-finding
+        from: critique-finding
+        to: analyze-finding
+        fork: false
+        route:
+          key: analysis
+          default: true
+      - name: analyze-finding-to-verify-finding
+        from: analyze-finding
+        to: verify-finding
+        fork: false
+        route:
+          key: verification
+          default: false
+      - name: verify-finding-to-triage-finding
+        from: verify-finding
+        to: triage-finding
+        fork: false
+    groups: []

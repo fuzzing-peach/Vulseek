@@ -1,6 +1,7 @@
 "use client";
 
 import { ScanStageSettingsPanel } from "@/components/dashboard/shared/scan-stage-settings-panel";
+import { ScanPipelineYamlViewer } from "@/components/dashboard/shared/scan-pipeline-yaml-viewer";
 import { SecurityPolicyCard } from "@/components/dashboard/shared/security-policy-card";
 import { Button } from "@/components/ui/button";
 import {
@@ -81,6 +82,7 @@ export const ShowAgentProfile = ({ applicationId }: Props) => {
 					await utils.application.one.invalidate({ applicationId });
 				}}
 			/>
+			<ScanPipelineYamlViewer />
 			<SecurityPolicyCard
 				value={data?.securityPolicy}
 				onSave={async (securityPolicy) => {

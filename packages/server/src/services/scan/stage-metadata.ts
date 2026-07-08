@@ -1,41 +1,33 @@
-export const SCAN_STAGE_METADATA = {
-	deltaScope: {
-		id: "delta-scope",
-		name: "Delta Scope",
-	},
-	repositoryScan: {
-		id: "repository-profile",
-		name: "Repository Profile",
-	},
-	moduleScan: {
-		id: "identify-target",
-		name: "Identify Target",
-	},
-	attackSurfaceModel: {
-		id: "attack-surface-model",
-		name: "Attack Surface Model",
-	},
-	functionScan: {
-		id: "scan-target",
-		name: "Scan Target",
-	},
-	analysis: {
-		id: "analyze-finding",
-		name: "Analyze Finding",
-	},
-	analysisCritic: {
-		id: "critique-finding",
-		name: "Critique Finding",
-	},
-	verification: {
-		id: "verify-finding",
-		name: "Verify Finding",
-	},
-	triage: {
-		id: "triage-finding",
-		name: "Triage Finding",
-	},
-} as const;
+import { SCAN_PIPELINE_CATALOG } from "./pipeline/scan-pipeline-catalog";
+
+const EXPECTED_SCAN_STAGE_KEYS = [
+	"deltaScope",
+	"repositoryScan",
+	"moduleScan",
+	"attackSurfaceModel",
+	"functionScan",
+	"analysis",
+	"analysisCritic",
+	"verification",
+	"triage",
+] as const;
+
+type RequiredScanStageMetadata = Record<
+	(typeof EXPECTED_SCAN_STAGE_KEYS)[number],
+	{ id: string; name: string }
+>;
+
+const requireStageMetadata = (): RequiredScanStageMetadata => {
+	const metadata = SCAN_PIPELINE_CATALOG.stageMetadata;
+	for (const key of EXPECTED_SCAN_STAGE_KEYS) {
+		if (!metadata[key]) {
+			throw new Error(`Missing scan stage metadata for key ${key}`);
+		}
+	}
+	return metadata as RequiredScanStageMetadata;
+};
+
+export const SCAN_STAGE_METADATA = requireStageMetadata();
 
 export type ScanStageKey = keyof typeof SCAN_STAGE_METADATA;
 export type ScanStageId = (typeof SCAN_STAGE_METADATA)[ScanStageKey]["id"];

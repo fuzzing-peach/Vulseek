@@ -52,7 +52,6 @@ type RuntimeStageSetting = {
 export type ScanRuntimeSettingsDraft = {
 	stages?: Record<string, RuntimeStageSetting>;
 };
-type PreviewAgentProfile = NonNullable<StageGraphNode["agentProfile"]>;
 type PreviewAgentProfiles = RouterOutputs["ai"]["getAgentProfiles"] | undefined;
 type PreviewServiceData = Record<string, unknown> | null | undefined;
 type FullScanStageGraphTarget =
@@ -1226,40 +1225,6 @@ const ScanStageGraphPanel = ({
 	);
 };
 
-const createPreviewNode = ({
-	stageName,
-	name,
-	order,
-	groupId = null,
-	concurrencyLimit = 1,
-	agentProfile = null,
-}: {
-	stageName: string;
-	name: string;
-	order: number;
-	groupId?: string | null;
-	concurrencyLimit?: number;
-	agentProfile?: StageGraphNode["agentProfile"];
-}): StageGraphNode => ({
-	id: stageName,
-	stageId: stageName,
-	stageName,
-	name,
-	title: name,
-	queueId: null,
-	queueName: null,
-	status: "pending",
-	counts: emptyStageCounts(),
-	concurrencyLimit,
-	disabled: false,
-	effectiveDisabled: false,
-	configuredConcurrency: null,
-	configuredAgentProfileId: null,
-	agentProfile,
-	groupId,
-	order,
-});
-
 const asRecord = (value: unknown): Record<string, unknown> | null =>
 	value && typeof value === "object" && !Array.isArray(value)
 		? (value as Record<string, unknown>)
@@ -1300,157 +1265,6 @@ const asPreviewAgentProfile = (
 			typeof record.thinkingLevelEnabled === "boolean"
 				? record.thinkingLevelEnabled
 				: false,
-	};
-};
-
-const buildPreviewAgentProfileReference = (
-	agentProfileId: string,
-): PreviewAgentProfile => ({
-	agentProfileId,
-	name: agentProfileId,
-	provider: "codex",
-	authMode: "api_key",
-	homePath: "",
-		baseUrl: "",
-		model: "",
-		pricingProvider: null,
-		thinkingLevel: "",
-	thinkingLevelEnabled: false,
-});
-
-const getKnownPreviewAgentProfiles = (
-	serviceData: PreviewServiceData,
-	agentProfiles: PreviewAgentProfiles,
-) => {
-	const serviceRecord = asRecord(serviceData);
-	const explicitProfiles = (agentProfiles ?? []).map((profile) =>
-		asPreviewAgentProfile(profile),
-	);
-	if (!serviceRecord) {
-		return explicitProfiles.filter((profile): profile is PreviewAgentProfile =>
-			Boolean(profile),
-		);
-	}
-	return explicitProfiles.filter((profile): profile is PreviewAgentProfile =>
-		Boolean(profile),
-	);
-};
-
-const getStageSettingsRecord = (
-	serviceData: PreviewServiceData,
-	stageName: string,
-) => {
-	const serviceRecord = asRecord(serviceData);
-	const scanStageSettings = asRecord(serviceRecord?.scanStageSettings);
-	return asRecord(scanStageSettings?.[stageName]);
-};
-
-const getPreviewAgentProfile = (
-	serviceData: PreviewServiceData,
-	agentProfiles: PreviewAgentProfiles,
-	stageName: string,
-	_kind: "scan" | "analysis" | "verification",
-) => {
-	const serviceRecord = asRecord(serviceData);
-	if (!serviceRecord) {
-		return null;
-	}
-
-	const knownProfiles = getKnownPreviewAgentProfiles(
-		serviceData,
-		agentProfiles,
-	);
-	const stageAgentProfileId = getStageSettingsRecord(
-		serviceData,
-		stageName,
-	)?.agentProfileId;
-	if (typeof stageAgentProfileId === "string" && stageAgentProfileId) {
-		return (
-			knownProfiles.find(
-				(profile) => profile.agentProfileId === stageAgentProfileId,
-			) ?? buildPreviewAgentProfileReference(stageAgentProfileId)
-		);
-	}
-	return null;
-};
-
-const getPreviewConcurrencyLimit = (
-	serviceData: PreviewServiceData,
-	stageName: string,
-	fallback: number,
-) => {
-	const stageConcurrency = getStageSettingsRecord(
-		serviceData,
-		stageName,
-	)?.concurrency;
-	if (
-		typeof stageConcurrency === "number" &&
-		Number.isFinite(stageConcurrency)
-	) {
-		return Math.max(1, stageConcurrency);
-	}
-	return Math.max(1, fallback);
-};
-
-const buildFullScanPreviewGraph = (
-	serviceData: PreviewServiceData,
-	agentProfiles: PreviewAgentProfiles,
-): StageGraph => {
-	const stages = [
-		{ stageName: "repository-profile", name: "Repository Profile", role: "scan", concurrency: 1 },
-		{ stageName: "attack-surface-model", name: "Attack Surface Model", role: "scan", concurrency: 4 },
-		{ stageName: "identify-target", name: "Identify Target", role: "scan", concurrency: 4 },
-		{ stageName: "scan-target", name: "Scan Target", role: "scan", concurrency: 4 },
-		{ stageName: "analyze-finding", name: "Analyze Finding", role: "analysis", concurrency: 2 },
-		{ stageName: "critique-finding", name: "Critique Finding", role: "analysis", concurrency: 2 },
-		{ stageName: "verify-finding", name: "Verify Finding", role: "verification", concurrency: 1 },
-		{ stageName: "triage-finding", name: "Triage Finding", role: "verification", concurrency: 1 },
-	] as const;
-
-	return {
-		pipelineName: "full-scan-programmatic",
-		nodes: stages.map((stage, order) =>
-			createPreviewNode({
-				stageName: stage.stageName,
-				name: stage.name,
-				order,
-				concurrencyLimit: getPreviewConcurrencyLimit(
-					serviceData,
-					stage.stageName,
-					stage.concurrency,
-				),
-				agentProfile: getPreviewAgentProfile(
-					serviceData,
-					agentProfiles,
-					stage.stageName,
-					stage.role,
-				),
-			}),
-		),
-		edges: ([
-			["repository-profile", "attack-surface-model"],
-			["attack-surface-model", "identify-target"],
-			["identify-target", "scan-target"],
-			["scan-target", "analyze-finding"],
-			["analyze-finding", "critique-finding"],
-			["critique-finding", "analyze-finding"],
-			["analyze-finding", "verify-finding"],
-			["verify-finding", "triage-finding"],
-		] as Array<[string, string]>).map(([source, target]) => ({
-			id: `${source}-to-${target}`,
-			name: `${source}-to-${target}`,
-			source,
-			target,
-			fork: false,
-			routeKey:
-				source === "analyze-finding" && target === "critique-finding"
-					? "critic"
-					: source === "analyze-finding" && target === "verify-finding"
-						? "verification"
-						: null,
-			isDefaultRoute: false,
-		})),
-		groups: [],
 	};
 };
 
