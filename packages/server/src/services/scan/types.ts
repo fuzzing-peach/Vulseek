@@ -7,21 +7,14 @@ import type {
 } from "./artifacts/contracts/domain-object.contract";
 export type {
 	Analysis,
-	BuildFuzzerRequest,
 	Candidate,
 	CriticResponse,
 	DeltaScopeManifest,
-	RuleFinding,
-	RulePlan,
-	RulePlanManifest,
-	FindingManifest,
 	Evidence,
 	FinalAnalysis,
 	Function,
 	FunctionScanManifest,
 	IdentifyTargetManifest,
-	FuzzBuildResult,
-	FuzzRunResult,
 	Module,
 	ModuleScanManifest,
 	ModuleThreatModel,
@@ -30,8 +23,6 @@ export type {
 	RepositoryModule,
 	RepositoryScanManifest,
 	ScanTargetManifest,
-	SinkPreAnalyzeManifest,
-	SinkReviewTarget,
 	Target,
 	Triage,
 	Verification,
@@ -70,7 +61,7 @@ export type VulnerabilityCandidate = {
 		| "failed"
 		| "exited"
 		| "canceled";
-	currentStage: "analyzing" | "fuzzing" | "verifying";
+	currentStage: "analyzing" | "verifying";
 	confidence: number | null;
 	score: number | null;
 	targetId: string | null;
@@ -153,7 +144,7 @@ export type TriageResult = {
 	status?: typeof tasks.$inferSelect.status;
 };
 
-export type VulnerabilityCandidateStage = "analyzing" | "fuzzing" | "verifying";
+export type VulnerabilityCandidateStage = "analyzing" | "verifying";
 
 export type ScanCandidateQueueJob = {
 	scanJobId: string;

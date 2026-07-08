@@ -1387,6 +1387,20 @@
       "when": 1783434000000,
       "tag": "0201_subject_security_policy",
       "breakpoints": true
+    },
+    {
+      "idx": 198,
+      "version": "7",
+      "when": 1783435000000,
+      "tag": "0202_remove_rule_scan_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 199,
+      "version": "7",
+      "when": 1783436000000,
+      "tag": "0203_prune_legacy_scan_stage_settings",
+      "breakpoints": true
     }
   ]
 }

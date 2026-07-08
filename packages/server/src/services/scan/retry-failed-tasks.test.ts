@@ -47,7 +47,7 @@ const makeTask = (overrides?: Partial<Task>): Task => ({
 	scanJobId: "scan-job-1",
 	parentTaskId: null,
 	name: "task",
-	stageName: "module-scan",
+	stageName: "identify-target",
 	status: "pending",
 	priority: null,
 	attempt: 0,
@@ -85,20 +85,6 @@ test("retryFailedScanJobTasksWithDeps retries every failed task type in stage or
 			status: "failed",
 			name: "delta-scoping",
 			createdAt: "2026-05-04T00:00:30.000Z",
-		}),
-		makeTask({
-			taskId: "verify-1",
-			stageName: "verify",
-			status: "failed",
-			name: "verify task",
-			createdAt: "2026-05-04T00:05:00.000Z",
-		}),
-		makeTask({
-			taskId: "triage-1",
-			stageName: "triage",
-			status: "failed",
-			name: "triage task",
-			createdAt: "2026-05-04T00:06:00.000Z",
 		}),
 		makeTask({
 			taskId: "repository-profile-1",
@@ -156,34 +142,6 @@ test("retryFailedScanJobTasksWithDeps retries every failed task type in stage or
 			name: "triage finding",
 			createdAt: "2026-05-04T00:08:30.000Z",
 		}),
-		makeTask({
-			taskId: "function-1",
-			stageName: "function-scan",
-			status: "failed",
-			name: "function task",
-			createdAt: "2026-05-04T00:03:00.000Z",
-		}),
-		makeTask({
-			taskId: "repo-1",
-			stageName: "repository-scan",
-			status: "failed",
-			name: "repository-scanning",
-			createdAt: "2026-05-04T00:01:00.000Z",
-		}),
-		makeTask({
-			taskId: "analysis-1",
-			stageName: "analyze",
-			status: "failed",
-			name: "analysis task",
-			createdAt: "2026-05-04T00:04:00.000Z",
-		}),
-		makeTask({
-			taskId: "module-1",
-			stageName: "module-scan",
-			status: "failed",
-			name: "module task",
-			createdAt: "2026-05-04T00:02:00.000Z",
-		}),
 	];
 
 	const removed: string[] = [];
@@ -226,35 +184,18 @@ test("retryFailedScanJobTasksWithDeps retries every failed task type in stage or
 		"critique-finding": 1,
 		"verify-finding": 1,
 		"triage-finding": 1,
-		"repository-scan": 1,
-		"module-scan": 1,
-		"module-threat-model": 0,
-		"design-rule": 0,
-		"scan-rule": 0,
-		"scan-pattern": 0,
-		"sink-pre-analyze": 0,
-		"function-scan": 1,
-		analyze: 1,
-		verify: 1,
-		triage: 1,
 	});
-	assert.equal(result.retriedTaskCount, 15);
+	assert.equal(result.retriedTaskCount, 9);
 	assert.deepEqual(removed, [
 		"delta-scope-1",
-		"repo-1",
 		"repository-profile-1",
-		"module-1",
 		"attack-surface-model-1",
 		"identify-target-1",
 		"scan-target-1",
 		"analyze-finding-1",
 		"critique-finding-1",
 		"verify-finding-1",
-		"function-1",
 		"triage-finding-1",
-		"analysis-1",
-		"verify-1",
-		"triage-1",
 	]);
 	assert.deepEqual(cleared, removed);
 	assert.deepEqual(reset, removed);
@@ -272,13 +213,13 @@ test("retryFailedScanJobTasksWithDeps retries failed tasks without phase bookkee
 		loadScanJob: async () => makeScanJob(),
 		listTasks: async () => [
 			makeTask({
-				taskId: "verify-1",
-				stageName: "verify",
+				taskId: "verify-finding-1",
+				stageName: "verify-finding",
 				status: "failed",
 			}),
 			makeTask({
-				taskId: "function-1",
-				stageName: "function-scan",
+				taskId: "scan-target-1",
+				stageName: "scan-target",
 				status: "failed",
 			}),
 		],
@@ -300,12 +241,12 @@ test("retryFailedScanJobTasksWithDeps rejects when the job still has running tas
 			listTasks: async () => [
 				makeTask({
 					taskId: "failed-1",
-					stageName: "module-scan",
+					stageName: "identify-target",
 					status: "failed",
 				}),
 				makeTask({
 					taskId: "running-1",
-					stageName: "analyze",
+					stageName: "analyze-finding",
 					status: "running",
 				}),
 			],
@@ -330,7 +271,7 @@ test("retryFailedScanJobTasksWithDeps rejects when there are no failed tasks", a
 			listTasks: async () => [
 				makeTask({
 					taskId: "completed-1",
-					stageName: "function-scan",
+					stageName: "scan-target",
 					status: "completed",
 				}),
 			],

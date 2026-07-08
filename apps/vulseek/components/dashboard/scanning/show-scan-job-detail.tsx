@@ -641,98 +641,38 @@ const getTaskStageLabel = (t: ScanTranslation, stage?: string) => {
 		return formatScanStageLabel(t, "delta-scope");
 	}
 	if (
-		stage === "Scan Repository" ||
 		stage === "repository_scanning"
 	) {
 		return formatScanStageLabel(t, "repository-profile");
 	}
-	if (stage === "repository-scan") {
-		return formatScanStageLabel(t, "repository-scan");
-	}
 	if (
-		stage === "Attack Surface Model" ||
 		stage === "attack-surface-model" ||
 		stage === "attack_surface_modeling"
 	) {
 		return formatScanStageLabel(t, "attack-surface-model");
 	}
 	if (
-		stage === "Scan Module" ||
 		stage === "module_scanning"
 	) {
 		return formatScanStageLabel(t, "identify-target");
 	}
-	if (stage === "module-scan") {
-		return formatScanStageLabel(t, "module-scan");
-	}
 	if (
-		stage === "Module Threat Model" ||
-		stage === "module-threat-model" ||
-		stage === "module_threat_modeling"
-	) {
-		return formatScanStageLabel(t, "module-threat-model");
-	}
-	if (
-		stage === "Design Rule" ||
-		stage === "design-rule" ||
-		stage === "rule_designing"
-	) {
-		return formatScanStageLabel(t, "design-rule");
-	}
-	if (
-		stage === "Scan Rule" ||
-		stage === "scan-rule" ||
-		stage === "rule_scanning"
-	) {
-		return formatScanStageLabel(t, "scan-rule");
-	}
-	if (
-		stage === "Scan Pattern" ||
-		stage === "scan-pattern" ||
-		stage === "pattern_scanning"
-	) {
-		return formatScanStageLabel(t, "scan-pattern");
-	}
-	if (
-		stage === "Sink Pre-Analyze" ||
-		stage === "sink-pre-analyze" ||
-		stage === "sink_pre_analyzing"
-	) {
-		return formatScanStageLabel(t, "sink-pre-analyze");
-	}
-	if (
-		stage === "Scan Function" ||
 		stage === "function_scanning"
 	) {
 		return formatScanStageLabel(t, "scan-target");
 	}
-	if (stage === "function-scan") {
-		return formatScanStageLabel(t, "function-scan");
-	}
-	if (stage === "Analyze" || stage === "analyze" || stage === "analyzing") {
+	if (stage === "analyzing") {
 		return formatScanStageLabel(t, "analyze-finding");
 	}
 	if (
-		stage === "Build Fuzzer" ||
-		stage === "build-fuzzer" ||
-		stage === "fuzz_building"
-	) {
-		return formatScanStageLabel(t, "build-fuzzer");
-	}
-	if (stage === "Run Fuzzer" || stage === "run-fuzzer" || stage === "fuzzing") {
-		return formatScanStageLabel(t, "run-fuzzer");
-	}
-	if (
-		stage === "Criticize" ||
-		stage === "criticize" ||
 		stage === "criticizing"
 	) {
 		return formatScanStageLabel(t, "critique-finding");
 	}
-	if (stage === "Verify" || stage === "verify" || stage === "verifying") {
+	if (stage === "verifying") {
 		return formatScanStageLabel(t, "verify-finding");
 	}
-	if (stage === "Triage" || stage === "triage" || stage === "triaging") {
+	if (stage === "triaging") {
 		return formatScanStageLabel(t, "triage-finding");
 	}
 	return formatScanStageLabel(t, stage);
@@ -823,44 +763,23 @@ const RUNNING_TASK_STAGE_ORDER: Record<string, number> = {
 	repository_scanning: 1,
 	attack_surface_modeling: 2,
 	module_scanning: 3,
-	module_threat_modeling: 4,
-	rule_designing: 5,
-	rule_scanning: 6,
-	pattern_scanning: 7,
-	sink_pre_analyzing: 8,
-	function_scanning: 9,
-	analyzing: 10,
-	fuzz_building: 11,
-	fuzzing: 12,
-	criticizing: 13,
-	verifying: 14,
-	triaging: 15,
+	function_scanning: 4,
+	analyzing: 5,
+	criticizing: 6,
+	verifying: 7,
+	triaging: 8,
 };
 
 const TASK_STAGE_OPTION_BY_STAGE_NAME: Record<string, string> = {
 	"delta-scope": "delta_scoping",
 	"repository-profile": "repository_scanning",
-	"repository-scan": "repository_scanning",
 	"attack-surface-model": "attack_surface_modeling",
 	"identify-target": "module_scanning",
-	"module-scan": "module_scanning",
-	"module-threat-model": "module_threat_modeling",
-	"design-rule": "rule_designing",
-	"scan-rule": "rule_scanning",
-	"scan-pattern": "pattern_scanning",
-	"sink-pre-analyze": "sink_pre_analyzing",
 	"scan-target": "function_scanning",
-	"function-scan": "function_scanning",
 	"analyze-finding": "analyzing",
-	analyze: "analyzing",
-	"build-fuzzer": "fuzz_building",
-	"run-fuzzer": "fuzzing",
 	"critique-finding": "criticizing",
-	criticize: "criticizing",
 	"verify-finding": "verifying",
-	verify: "verifying",
 	"triage-finding": "triaging",
-	triage: "triaging",
 };
 
 const normalizeTaskStageOption = (stage?: string | null) => {
@@ -2227,18 +2146,18 @@ export const ShowScanJobDetail = ({
 		for (const item of [
 			{
 				date: candidate.latestAnalysisResult?.updatedAt,
-				stageKey: "scan.stage.analyze",
-				stageLabel: "Analyze",
+				stageKey: "scan.stage.analyze-finding",
+				stageLabel: "Analyze Finding",
 			},
 			{
 				date: candidate.latestVerificationResult?.updatedAt,
-				stageKey: "scan.stage.verify",
-				stageLabel: "Verify",
+				stageKey: "scan.stage.verify-finding",
+				stageLabel: "Verify Finding",
 			},
 			{
 				date: candidate.latestTriageResult?.updatedAt,
-				stageKey: "scan.stage.triage",
-				stageLabel: "Triage",
+				stageKey: "scan.stage.triage-finding",
+				stageLabel: "Triage Finding",
 			},
 		]) {
 			if (!item.date) {
@@ -4472,7 +4391,7 @@ export const ShowScanJobDetail = ({
 															{scanT(t, "scan.field.stage", "阶段")}
 														</th>
 														<th className="w-[10%] px-4 py-3 font-medium">
-															{scanT(t, "scan.fuzzing.runtime", "运行时长")}
+															{scanT(t, "scan.field.runtime", "运行时长")}
 														</th>
 														<th className="w-[48%] px-4 py-3 font-medium">
 															{scanT(t, "scan.tasks.currentActivity", "当前活动")}

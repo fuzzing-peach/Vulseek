@@ -14,11 +14,11 @@ test("backfillVulnerabilityCandidatesFromTasksWithDeps scans all producer stages
 			listProducerTaskIds: async ({ scanJobId, stageNames }) => {
 				observedScanJobId = scanJobId;
 				observedStageNames = stageNames;
-				return ["scan-target-task", "function-scan-task", "sink-task"];
+				return ["scan-target-task", "scan-target-task-with-warning", "sink-task"];
 			},
 			syncProducerTask: async (taskId) => {
 				syncedTaskIds.push(taskId);
-				if (taskId === "function-scan-task") {
+				if (taskId === "scan-target-task-with-warning") {
 					throw new Error("artifact missing");
 				}
 				return { synced: taskId === "scan-target-task" ? 2 : 1 };
@@ -31,7 +31,7 @@ test("backfillVulnerabilityCandidatesFromTasksWithDeps scans all producer stages
 	assert.deepEqual(observedStageNames, CANDIDATE_PRODUCER_STAGE_NAMES);
 	assert.deepEqual(syncedTaskIds, [
 		"scan-target-task",
-		"function-scan-task",
+		"scan-target-task-with-warning",
 		"sink-task",
 	]);
 	assert.deepEqual(result, {
@@ -39,7 +39,7 @@ test("backfillVulnerabilityCandidatesFromTasksWithDeps scans all producer stages
 		synced: 3,
 		warnings: [
 			{
-				taskId: "function-scan-task",
+				taskId: "scan-target-task-with-warning",
 				message: "artifact missing",
 			},
 		],

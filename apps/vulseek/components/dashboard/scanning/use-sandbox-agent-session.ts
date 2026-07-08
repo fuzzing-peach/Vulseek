@@ -10,8 +10,6 @@ type SandboxAgentSessionMetadata = {
 		| "module_scanning"
 		| "function_scanning"
 		| "analyzing"
-		| "fuzz_building"
-		| "fuzzing"
 		| "criticizing"
 		| "verifying"
 		| "triaging";

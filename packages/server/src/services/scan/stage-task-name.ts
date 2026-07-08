@@ -9,8 +9,6 @@ export const resolveStageTaskName = <TInput>(
 			return "delta-scoping";
 		case "repository-profile":
 			return "repository-profiling";
-		case "repository-scan":
-			return "repository-scanning";
 		case "attack-surface-model":
 			return typeof record?.moduleName === "string"
 				? record.moduleName
@@ -19,34 +17,6 @@ export const resolveStageTaskName = <TInput>(
 			return typeof record?.moduleName === "string"
 				? record.moduleName
 				: "identify-target";
-		case "module-scan":
-			return typeof record?.module === "object" &&
-				record.module &&
-				"name" in record.module &&
-				typeof record.module.name === "string"
-				? record.module.name
-				: "module-scanning";
-		case "module-threat-model":
-			return typeof record?.moduleName === "string"
-				? record.moduleName
-				: "module-threat-model";
-		case "design-rule":
-			return typeof record?.moduleName === "string"
-				? record.moduleName
-				: "design-rule";
-		case "scan-rule":
-			return typeof record?.moduleName === "string"
-				? record.moduleName
-				: "scan-rule";
-		case "scan-pattern":
-			return typeof record?.moduleName === "string"
-				? record.moduleName
-				: "scan-pattern";
-		case "sink-pre-analyze":
-			return typeof record?.moduleName === "string"
-				? record.moduleName
-				: "sink-pre-analyze";
-		case "function-scan":
 		case "scan-target":
 			return typeof record?.function === "object" &&
 				record.function &&
@@ -55,14 +25,8 @@ export const resolveStageTaskName = <TInput>(
 				? record.function.functionName
 				: typeof record?.targetName === "string"
 					? record.targetName
-					: stageName === "scan-target"
-						? "scan-target"
-						: "function-scanning";
-		case "analyze":
+					: "scan-target";
 		case "analyze-finding":
-		case "build-fuzzer":
-		case "run-fuzzer":
-		case "criticize":
 		case "critique-finding":
 			return typeof record?.candidate === "object" &&
 				record.candidate &&
@@ -70,7 +34,6 @@ export const resolveStageTaskName = <TInput>(
 				typeof record.candidate.title === "string"
 				? record.candidate.title
 				: "candidate-analysis";
-		case "verify":
 		case "verify-finding":
 			return typeof record?.analysisResult === "object" &&
 				record.analysisResult &&
@@ -81,7 +44,6 @@ export const resolveStageTaskName = <TInput>(
 				typeof record.analysisResult.candidate.title === "string"
 				? record.analysisResult.candidate.title
 				: "candidate-verification";
-		case "triage":
 		case "triage-finding":
 			return typeof record?.candidate === "object" &&
 				record.candidate &&

@@ -218,8 +218,6 @@ export type SandboxAgentTaskRuntime = {
 		| "module_scanning"
 		| "function_scanning"
 		| "analyzing"
-		| "fuzz_building"
-		| "fuzzing"
 		| "criticizing"
 		| "verifying"
 		| "triaging";
@@ -371,31 +369,25 @@ const buildSandboxAgentTaskRuntime = async (
 		case "delta-scope":
 			taskKind = "delta_scoping";
 			break;
-		case "repository-scan":
+		case "repository-profile":
 			taskKind = "repository_scanning";
 			break;
-		case "module-scan":
+		case "identify-target":
 			taskKind = "module_scanning";
 			break;
-		case "function-scan":
+		case "scan-target":
 			taskKind = "function_scanning";
 			break;
-		case "analyze":
+		case "analyze-finding":
 			taskKind = "analyzing";
 			break;
-		case "build-fuzzer":
-			taskKind = "fuzz_building";
-			break;
-		case "run-fuzzer":
-			taskKind = "fuzzing";
-			break;
-		case "criticize":
+		case "critique-finding":
 			taskKind = "criticizing";
 			break;
-		case "verify":
+		case "verify-finding":
 			taskKind = "verifying";
 			break;
-		case "triage":
+		case "triage-finding":
 			taskKind = "triaging";
 			break;
 	}
@@ -492,7 +484,7 @@ export const findCandidateSandboxAgentSession = async (input: {
 }): Promise<SandboxAgentLiveSession | null> => {
 	const candidate = await findVulnerabilityCandidateByIdRepo(input.candidateId);
 	const stageName =
-		input.stage === "verifying" ? "verify" : "analyze";
+		input.stage === "verifying" ? "verify-finding" : "analyze-finding";
 	const task = (
 		await listTasksByScanJobAndStageRepo({
 			scanJobId: candidate.scanJobId,

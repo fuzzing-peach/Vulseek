@@ -34,7 +34,7 @@ test("buildHomeOverviewFromRows fills daily rows and aggregates overview metrics
 			},
 			{
 				scanJobId: "job-2",
-				title: "Jira rule scan",
+				title: "Jira full scan",
 				status: "finished",
 				totalTokens: 50,
 				createdAt: "2026-07-07T02:00:00.000Z",

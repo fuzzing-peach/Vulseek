@@ -17,30 +17,16 @@ export const buildKnownStageQueueJobIds = (input: {
 	switch (input.stageName) {
 		case "delta-scope":
 			return dedupe([currentJobId, `delta-scope:${input.scanJobId}`]);
-		case "repository-scan":
 		case "repository-profile":
 			return dedupe([currentJobId, `repository:${input.scanJobId}`]);
-		case "module-scan":
 		case "identify-target":
 			return dedupe([currentJobId, `module:${input.taskId}`]);
-		case "module-threat-model":
 		case "attack-surface-model":
-			return dedupe([currentJobId, `module-threat-model:${input.taskId}`]);
-		case "design-rule":
-			return dedupe([currentJobId, `design-rule:${input.taskId}`]);
-		case "scan-rule":
-			return dedupe([currentJobId, `scan-rule:${input.taskId}`]);
-		case "scan-pattern":
-			return dedupe([currentJobId, `scan-pattern:${input.taskId}`]);
-		case "sink-pre-analyze":
-			return dedupe([currentJobId, `sink-pre-analyze:${input.taskId}`]);
-		case "function-scan":
+			return dedupe([currentJobId, `attack-surface-model:${input.taskId}`]);
 		case "scan-target":
 			return dedupe([currentJobId, `function:${input.taskId}`]);
-		case "analyze":
 		case "analyze-finding":
 			return dedupe([currentJobId, `analysis:${input.taskId}`]);
-		case "verify":
 		case "verify-finding":
 			return dedupe([currentJobId, `verification:${input.taskId}`]);
 		default:

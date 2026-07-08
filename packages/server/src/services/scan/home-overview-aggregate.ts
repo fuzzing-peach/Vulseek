@@ -6,7 +6,7 @@ export const ACTIVE_TASK_STATUSES = [
 	"running",
 ] as const;
 
-export const TRIAGE_STAGE_NAMES = ["triage", "triage-finding"] as const;
+export const TRIAGE_STAGE_NAMES = ["triage-finding"] as const;
 
 export type HomeOverviewDailyActivity = {
 	date: string;

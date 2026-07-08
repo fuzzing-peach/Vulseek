@@ -26,23 +26,9 @@ const STAGE_DEFAULTS: Record<string, string> = {
 	"critique-finding": "Critique Finding",
 	"verify-finding": "Verify Finding",
 	"triage-finding": "Triage Finding",
-	"repository-scan": "Scan Repository",
 	repository: "Repository",
-	"module-scan": "Scan Module",
 	module: "Module",
-	"module-threat-model": "Module Threat Model",
-	"design-rule": "Design Rule",
-	"scan-rule": "Scan Rule",
-	"scan-pattern": "Scan Pattern",
-	"sink-pre-analyze": "Sink Pre-Analyze",
-	"function-scan": "Scan Function",
 	function: "Function",
-	analyze: "Analyze",
-	criticize: "Criticize",
-	"build-fuzzer": "Build Fuzzer",
-	"run-fuzzer": "Run Fuzzer",
-	verify: "Verify",
-	triage: "Triage",
 };
 
 const STAGE_ALIASES: Record<string, string> = {
@@ -63,31 +49,6 @@ const STAGE_ALIASES: Record<string, string> = {
 	"finding verification": "verify-finding",
 	"triage finding": "triage-finding",
 	"finding triage": "triage-finding",
-	"scan repository": "repository-scan",
-	"repository scanning": "repository-scan",
-	"scan module": "module-scan",
-	"module scanning": "module-scan",
-	"module threat model": "module-threat-model",
-	"module threat modeling": "module-threat-model",
-	"design rule": "design-rule",
-	"rule designing": "design-rule",
-	"scan rule": "scan-rule",
-	"rule scanning": "scan-rule",
-	"scan pattern": "scan-pattern",
-	"pattern scanning": "scan-pattern",
-	"sink pre analyze": "sink-pre-analyze",
-	"sink pre-analyze": "sink-pre-analyze",
-	"sink pre analyzing": "sink-pre-analyze",
-	"scan function": "function-scan",
-	"function scanning": "function-scan",
-	analyzing: "analyze",
-	"build fuzzer": "build-fuzzer",
-	"fuzz building": "build-fuzzer",
-	"run fuzzer": "run-fuzzer",
-	fuzzing: "run-fuzzer",
-	criticizing: "criticize",
-	verifying: "verify",
-	triaging: "triage",
 };
 
 export const formatScanStageLabel = (
@@ -225,9 +186,7 @@ export const formatScanTypeLabel = (
 ) =>
 	scanType === "delta"
 		? scanT(t, "scan.scanType.delta", "Delta Scan")
-		: scanType === "rule"
-			? scanT(t, "scan.scanType.rule", "Rule Scan")
-		: scanT(t, "scan.scanType.full", "Vulnerability Mining");
+		: scanT(t, "scan.scanType.full", "Full Scan");
 
 export const formatResourceTypeLabel = (
 	t: ScanTranslation,

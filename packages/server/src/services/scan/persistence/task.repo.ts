@@ -18,8 +18,6 @@ import { readCandidateIdFromTaskInputArtifact } from "./task-artifact-resolver";
 
 const CANDIDATE_PRODUCER_STAGE_NAMES = new Set([
 	"scan-target",
-	"function-scan",
-	"sink-pre-analyze",
 ]);
 
 const findProducerTaskIdForCandidateDescendantTask = async (
@@ -883,13 +881,10 @@ export const requeueTaskRepo = async (taskId: string) => {
 export const listAnalysisResultsByScanJobIdRepo = async (
 	scanJobId: string,
 ): Promise<AnalysisResult[]> => {
-	const analysisTasks = (
-		await Promise.all(
-			["analyze-finding", "analyze"].map((stageName) =>
-				listTasksByScanJobAndStageRepo({ scanJobId, stageName }),
-			),
-		)
-	).flat();
+	const analysisTasks = await listTasksByScanJobAndStageRepo({
+		scanJobId,
+		stageName: "analyze-finding",
+	});
 	return (
 		await Promise.all(analysisTasks.map(buildAnalysisTaskResultView))
 	).filter((item): item is AnalysisResult => Boolean(item));
@@ -898,13 +893,10 @@ export const listAnalysisResultsByScanJobIdRepo = async (
 export const listVerificationResultsByScanJobIdRepo = async (
 	scanJobId: string,
 ): Promise<VerificationResult[]> => {
-	const verificationTasks = (
-		await Promise.all(
-			["verify-finding", "verify"].map((stageName) =>
-				listTasksByScanJobAndStageRepo({ scanJobId, stageName }),
-			),
-		)
-	).flat();
+	const verificationTasks = await listTasksByScanJobAndStageRepo({
+		scanJobId,
+		stageName: "verify-finding",
+	});
 	return (
 		await Promise.all(verificationTasks.map(buildVerificationTaskResultView))
 	).filter((item): item is VerificationResult => Boolean(item));
@@ -913,13 +905,10 @@ export const listVerificationResultsByScanJobIdRepo = async (
 export const listTriageResultsByScanJobIdRepo = async (
 	scanJobId: string,
 ): Promise<TriageResult[]> => {
-	const triageTasks = (
-		await Promise.all(
-			["triage-finding", "triage"].map((stageName) =>
-				listTasksByScanJobAndStageRepo({ scanJobId, stageName }),
-			),
-		)
-	).flat();
+	const triageTasks = await listTasksByScanJobAndStageRepo({
+		scanJobId,
+		stageName: "triage-finding",
+	});
 	return (
 		await Promise.all(triageTasks.map(buildTriageTaskResultView))
 	).filter((item): item is TriageResult => Boolean(item));
@@ -935,9 +924,9 @@ export const findLatestAnalysisResultByCandidateIdRepo = async (input: {
 			await listCandidateDescendantTasksByProducerTaskIdRepo({
 				producerTaskId: input.producerTaskId,
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
-			});
+		});
 		for (const task of candidateTasks) {
-			if (task.stageName !== "analyze" && task.stageName !== "analyze-finding") {
+			if (task.stageName !== "analyze-finding") {
 				continue;
 			}
 			const result = await buildAnalysisTaskResultView(task);
@@ -966,9 +955,9 @@ export const findLatestVerificationResultByCandidateIdRepo = async (input: {
 			await listCandidateDescendantTasksByProducerTaskIdRepo({
 				producerTaskId: input.producerTaskId,
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
-			});
+		});
 		for (const task of candidateTasks) {
-			if (task.stageName !== "verify" && task.stageName !== "verify-finding") {
+			if (task.stageName !== "verify-finding") {
 				continue;
 			}
 			const result = await buildVerificationTaskResultView(task);
@@ -997,9 +986,9 @@ export const findLatestTriageResultByCandidateIdRepo = async (input: {
 			await listCandidateDescendantTasksByProducerTaskIdRepo({
 				producerTaskId: input.producerTaskId,
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
-			});
+		});
 		for (const task of candidateTasks) {
-			if (task.stageName !== "triage" && task.stageName !== "triage-finding") {
+			if (task.stageName !== "triage-finding") {
 				continue;
 			}
 			const result = await buildTriageTaskResultView(task);

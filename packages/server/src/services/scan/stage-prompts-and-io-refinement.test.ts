@@ -4,11 +4,9 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
-	buildFuzzerRequestSchema,
 	candidateSchema,
 	deltaScopeManifestSchema,
 	functionScanManifestSchema,
-	fuzzRunResultSchema,
 	moduleScanManifestSchema,
 	moduleSchema,
 	repositoryModuleSchema,
@@ -442,7 +440,7 @@ test("structured output prompts include annotated task artifact schemas", () => 
 	assert.match(analysisExitSuffix, /stage prompt explicitly instructs/);
 });
 
-test("analysis prompt removes fuzz routing while legacy fuzz schemas still validate", () => {
+test("analysis prompt removes fuzz routing", () => {
 	const analysisPromptTemplate = readStagePromptTemplate("analyze.prompt.md");
 	assert.match(analysisPromptTemplate, /Analyze Finding/);
 	assert.doesNotMatch(analysisPromptTemplate, /build_fuzzer/);
@@ -452,83 +450,6 @@ test("analysis prompt removes fuzz routing while legacy fuzz schemas still valid
 	const deepAnalysisSkill = readSkillSource("analyze");
 	assert.match(deepAnalysisSkill, /analysis-critic workflow/);
 	assert.match(deepAnalysisSkill, /does not route to fuzzer construction/);
-
-	assert.equal(
-		buildFuzzerRequestSchema.safeParse({
-			id: "request",
-			candidateId: "c1",
-			analysisFingerprint: "fp",
-			fuzzGoal: "exploration",
-			entryToCandidatePath: ["parse_record"],
-			harnessRequirements: "drive parser with generated records",
-			harnessEntry: "parse_record",
-			inputModel: "TLS record bytes",
-			expectedOracle: "sanitizer or parser invariant failure",
-			seedCorpusHints: ["valid empty record"],
-			buildCommandHints: ["cargo build"],
-			sanitizerRuntimeAssumptions: ["ASAN enabled"],
-			expectedTriggerCondition: "unexpected parser state or sanitizer finding",
-			targetFunction: "parse_record",
-			targetFilePath: "src/parser.c",
-			notes: [],
-		}).success,
-		true,
-	);
-
-	const buildPromptTemplate = readStagePromptTemplate("build-fuzzer.prompt.md");
-	assert.match(buildPromptTemplate, /build-fuzzer skill/);
-	assert.match(buildPromptTemplate, /run_fuzzer/);
-	assert.match(buildPromptTemplate, /analysis/);
-	const buildSkill = readSkillSource("build-fuzzer");
-	assert.match(buildSkill, /`evidence`/);
-	assert.match(buildSkill, /`exploration`/);
-
-	const runPromptTemplate = readStagePromptTemplate("run-fuzzer.prompt.md");
-	assert.match(runPromptTemplate, /run-fuzzer skill/);
-	assert.match(runPromptTemplate, /run_mode/);
-	assert.match(runPromptTemplate, /promotionDecision/);
-	assert.match(runPromptTemplate, /route to run_fuzzer/);
-	const runSkill = readSkillSource("run-fuzzer");
-	assert.match(runSkill, /path\/state exploration/);
-	assert.match(runSkill, /newly reached paths or states/);
-	assert.match(runSkill, /Coverage\/Corpus promotion strategy/);
-	assert.match(runSkill, /promotionDecision/);
-
-	assert.equal(
-		fuzzRunResultSchema.safeParse({
-			id: "run-1",
-			buildResultId: "build-1",
-			runtimeSeconds: 90,
-			commandRun: "./fuzzer",
-			exitStatus: "timeout",
-			crashSignal: null,
-			usedLibAflMonitor: true,
-			progressJsonlPath: "/task/fuzz-progress.jsonl",
-			progressJsonlRecords: 3,
-			foundTriggeringInput: false,
-			triggeringInputPath: null,
-			corpusPath: "/task/corpus",
-			crashArtifactsPath: null,
-			logsPath: "/task/logs.txt",
-			observedBehavior: "Corpus grew and parser states advanced.",
-			negativeEvidence: [],
-			coverageProximity: "Reached parse_record before auth gate.",
-			newPathsOrStatesReached: ["parse_record:header"],
-			inputClassesDiscovered: ["valid header with oversized length"],
-			confidenceImpact: "raises confidence in reachability",
-			promotionDecision: {
-				shouldPromote: true,
-				reasons: ["corpus grew", "new parser state reached"],
-				metrics: {
-					corpusSize: 7,
-					objectiveSize: 0,
-					edgeCoverage: 123,
-				},
-			},
-			summary: "Short exploration run made useful path progress.",
-		}).success,
-		true,
-	);
 });
 
 test("verification is a three-value sanity check and triage owns security classification", () => {

@@ -811,15 +811,14 @@ const resolveUpstreamRelation = (
 ): CandidateTaskLineageRelation | null => {
 	if (
 		task.stageName === "repository-profile" ||
-		task.stageName === "repository-scan" ||
 		task.stageName === "delta-scope"
 	) {
 		return "repository";
 	}
-	if (task.stageName === "identify-target" || task.stageName === "module-scan") {
+	if (task.stageName === "identify-target") {
 		return "module";
 	}
-	if (task.stageName === "scan-target" || task.stageName === "function-scan") {
+	if (task.stageName === "scan-target") {
 		return "function";
 	}
 	return null;

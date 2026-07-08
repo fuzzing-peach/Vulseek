@@ -134,7 +134,7 @@ export default async function handler(
 		if (
 			!moduleTask ||
 			moduleTask.scanJobId !== scanJobId ||
-			moduleTask.stageName !== "module-scan"
+			moduleTask.stageName !== "identify-target"
 		) {
 			res.status(404).json({ message: "Module task not found" });
 			return;
@@ -163,7 +163,7 @@ export default async function handler(
 		if (
 			!functionTask ||
 			functionTask.scanJobId !== scanJobId ||
-			functionTask.stageName !== "function-scan"
+			functionTask.stageName !== "scan-target"
 		) {
 			res.status(404).json({ message: "Function task not found" });
 			return;

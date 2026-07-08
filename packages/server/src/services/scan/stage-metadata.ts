@@ -15,26 +15,6 @@ export const SCAN_STAGE_METADATA = {
 		id: "attack-surface-model",
 		name: "Attack Surface Model",
 	},
-	moduleThreatModel: {
-		id: "module-threat-model",
-		name: "Module Threat Model",
-	},
-	ruleDesign: {
-		id: "design-rule",
-		name: "Design Rule",
-	},
-	ruleScan: {
-		id: "scan-rule",
-		name: "Scan Rule",
-	},
-	patternScan: {
-		id: "scan-pattern",
-		name: "Scan Pattern",
-	},
-	sinkPreAnalyze: {
-		id: "sink-pre-analyze",
-		name: "Sink Pre-Analyze",
-	},
 	functionScan: {
 		id: "scan-target",
 		name: "Scan Target",
@@ -42,14 +22,6 @@ export const SCAN_STAGE_METADATA = {
 	analysis: {
 		id: "analyze-finding",
 		name: "Analyze Finding",
-	},
-	fuzzBuild: {
-		id: "build-fuzzer",
-		name: "Build Fuzzer",
-	},
-	fuzzRun: {
-		id: "run-fuzzer",
-		name: "Run Fuzzer",
 	},
 	analysisCritic: {
 		id: "critique-finding",
@@ -81,18 +53,4 @@ export const SCAN_STAGE_ID_TO_DISPLAY_NAME = Object.fromEntries(
 ) as Record<ScanStageId, string>;
 
 export const getScanStageDisplayName = (stageName: string) =>
-	SCAN_STAGE_ID_TO_DISPLAY_NAME[stageName as ScanStageId] ||
-	LEGACY_SCAN_STAGE_DISPLAY_NAMES[stageName] ||
-	stageName;
-
-export const LEGACY_SCAN_STAGE_DISPLAY_NAMES: Record<string, string> = {
-	"repository-scan": "Scan Repository",
-	"module-scan": "Scan Module",
-	"function-scan": "Scan Function",
-	analyze: "Analyze",
-	criticize: "Criticize",
-	verify: "Verify",
-	triage: "Triage",
-	"build-fuzzer": "Build Fuzzer",
-	"run-fuzzer": "Run Fuzzer",
-};
+	SCAN_STAGE_ID_TO_DISPLAY_NAME[stageName as ScanStageId] || stageName;

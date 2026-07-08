@@ -10,17 +10,24 @@ const candidateInput = {
 
 test("resolveStageTaskName uses candidate title for analysis-adjacent stages", () => {
 	for (const stageName of [
-		"analyze",
-		"build-fuzzer",
-		"run-fuzzer",
-		"criticize",
-		"triage",
+		"analyze-finding",
+		"critique-finding",
+		"triage-finding",
 	]) {
 		assert.equal(
 			resolveStageTaskName(stageName, candidateInput),
 			"Potential underflow in DTLS header availability check",
 		);
 	}
+
+	assert.equal(
+		resolveStageTaskName("verify-finding", {
+			analysisResult: {
+				candidate: candidateInput.candidate,
+			},
+		}),
+		"Potential underflow in DTLS header availability check",
+	);
 });
 
 test("resolveStageTaskName uses a stable delta scope root task name", () => {

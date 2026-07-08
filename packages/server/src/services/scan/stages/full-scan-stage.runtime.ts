@@ -55,8 +55,6 @@ const resolveStageAgentKindFromStageName = (
 ): StageAgentKind => {
 	switch (stageName) {
 		case SCAN_STAGE_IDS.analysis:
-		case SCAN_STAGE_IDS.fuzzBuild:
-		case SCAN_STAGE_IDS.fuzzRun:
 		case SCAN_STAGE_IDS.analysisCritic:
 			return "analysis";
 		case SCAN_STAGE_IDS.verification:
@@ -81,10 +79,6 @@ const resolveStageContainerPrefix = (stageName: string) => {
 			return "scan-target";
 		case SCAN_STAGE_IDS.analysis:
 			return "analyze-finding";
-		case SCAN_STAGE_IDS.fuzzBuild:
-			return "fuzz-build";
-		case SCAN_STAGE_IDS.fuzzRun:
-			return "fuzz-run";
 		case SCAN_STAGE_IDS.analysisCritic:
 			return "critique-finding";
 		case SCAN_STAGE_IDS.verification:

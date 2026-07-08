@@ -15,21 +15,6 @@ export const FULL_SCAN_STAGE_IDS = [
 	SCAN_STAGE_IDS.triage,
 ] as const;
 
-export const RULE_SCAN_STAGE_IDS = [
-	SCAN_STAGE_IDS.repositoryScan,
-	SCAN_STAGE_IDS.moduleThreatModel,
-	SCAN_STAGE_IDS.ruleDesign,
-	SCAN_STAGE_IDS.ruleScan,
-	SCAN_STAGE_IDS.patternScan,
-	SCAN_STAGE_IDS.sinkPreAnalyze,
-	SCAN_STAGE_IDS.analysis,
-	SCAN_STAGE_IDS.fuzzBuild,
-	SCAN_STAGE_IDS.fuzzRun,
-	SCAN_STAGE_IDS.analysisCritic,
-	SCAN_STAGE_IDS.verification,
-	SCAN_STAGE_IDS.triage,
-] as const;
-
 export const DELTA_SCAN_STAGE_IDS = [
 	SCAN_STAGE_IDS.deltaScope,
 	SCAN_STAGE_IDS.functionScan,
@@ -41,7 +26,6 @@ export const DELTA_SCAN_STAGE_IDS = [
 
 const RUNTIME_STAGE_IDS = [
 	...FULL_SCAN_STAGE_IDS,
-	...RULE_SCAN_STAGE_IDS,
 	SCAN_STAGE_IDS.deltaScope,
 ] as const;
 

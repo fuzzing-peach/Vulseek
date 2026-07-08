@@ -14,17 +14,6 @@ export const RETRYABLE_TASK_STAGE_NAMES = [
 	"critique-finding",
 	"verify-finding",
 	"triage-finding",
-	"repository-scan",
-	"module-scan",
-	"module-threat-model",
-	"design-rule",
-	"scan-rule",
-	"scan-pattern",
-	"sink-pre-analyze",
-	"function-scan",
-	"analyze",
-	"verify",
-	"triage",
 ] as const;
 
 export type RetryableTaskStageName =
@@ -59,17 +48,6 @@ const RETRY_STAGE_ORDER: Record<RetryableTaskStageName, number> = {
 	"critique-finding": 6,
 	"verify-finding": 7,
 	"triage-finding": 8,
-	"repository-scan": 1,
-	"module-scan": 2,
-	"module-threat-model": 3,
-	"design-rule": 4,
-	"scan-rule": 5,
-	"scan-pattern": 6,
-	"sink-pre-analyze": 7,
-	"function-scan": 8,
-	analyze: 9,
-	verify: 10,
-	triage: 11,
 };
 
 const createEmptyRetryCounts = (): RetryFailedTasksByStage => ({
@@ -82,17 +60,6 @@ const createEmptyRetryCounts = (): RetryFailedTasksByStage => ({
 	"critique-finding": 0,
 	"verify-finding": 0,
 	"triage-finding": 0,
-	"repository-scan": 0,
-	"module-scan": 0,
-	"module-threat-model": 0,
-	"design-rule": 0,
-	"scan-rule": 0,
-	"scan-pattern": 0,
-	"sink-pre-analyze": 0,
-	"function-scan": 0,
-	analyze: 0,
-	verify: 0,
-	triage: 0,
 });
 
 export const isRetryableTaskStageName = (
@@ -116,17 +83,16 @@ export const retryFailedScanJobTasksWithDeps = async (
 	deps: RetryFailedTasksDeps,
 ): Promise<RetryFailedTasksResult> => {
 	const scanJob = await deps.loadScanJob(scanJobId);
-	if (scanJob.scanType !== "full" && scanJob.scanType !== "rule") {
+	if (scanJob.scanType !== "full") {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
-			message:
-				"Retry failed tasks is only supported for full or rule scan jobs",
+			message: "Retry failed tasks is only supported for full scan jobs",
 		});
 	}
 	if (scanJob.status !== "finished") {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
-			message: "Only finished full or rule scan jobs can retry failed tasks",
+			message: "Only finished full scan jobs can retry failed tasks",
 		});
 	}
 

@@ -178,7 +178,7 @@ const HeatmapCell = ({ day }: { day: HomeHeatmapDay }) => {
 					<div>
 						<div className="font-medium">{day.date}</div>
 						<div className="text-xs text-muted-foreground">
-							Daily mining activity
+							Daily full scan activity
 						</div>
 					</div>
 					<div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">

@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
 	Card,
@@ -41,14 +42,6 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
-import {
-	Table,
-	TableBody,
-	TableCell,
-	TableHead,
-	TableHeader,
-	TableRow,
-} from "@/components/ui/table";
 
 type AgentProfileOption = {
 	agentProfileId: string;
@@ -73,6 +66,7 @@ type StageDefinition = {
 	stageName: string;
 	label: string;
 	role: "scan" | "analysis" | "verification";
+	group: "full-scan" | "review";
 	defaultConcurrency: number;
 	maxConcurrency: number;
 	description: string;
@@ -83,6 +77,7 @@ const STAGES: StageDefinition[] = [
 		stageName: "repository-profile",
 		label: "Repository Profile",
 		role: "scan",
+		group: "full-scan",
 		defaultConcurrency: 1,
 		maxConcurrency: 8,
 		description: "Repository-wide runtime and security surface profiling.",
@@ -91,6 +86,7 @@ const STAGES: StageDefinition[] = [
 		stageName: "attack-surface-model",
 		label: "Attack Surface Model",
 		role: "scan",
+		group: "full-scan",
 		defaultConcurrency: 4,
 		maxConcurrency: 32,
 		description: "Module-level threat and attack-surface modeling.",
@@ -99,6 +95,7 @@ const STAGES: StageDefinition[] = [
 		stageName: "identify-target",
 		label: "Identify Target",
 		role: "scan",
+		group: "full-scan",
 		defaultConcurrency: 4,
 		maxConcurrency: 32,
 		description: "Find route, handler, config, parser, function, and other scan targets.",
@@ -107,6 +104,7 @@ const STAGES: StageDefinition[] = [
 		stageName: "scan-target",
 		label: "Scan Target",
 		role: "scan",
+		group: "full-scan",
 		defaultConcurrency: 4,
 		maxConcurrency: 64,
 		description: "Target-level candidate discovery.",
@@ -115,6 +113,7 @@ const STAGES: StageDefinition[] = [
 		stageName: "analyze-finding",
 		label: "Analyze Finding",
 		role: "analysis",
+		group: "review",
 		defaultConcurrency: 2,
 		maxConcurrency: 16,
 		description: "Candidate analysis and critic routing.",
@@ -123,6 +122,7 @@ const STAGES: StageDefinition[] = [
 		stageName: "critique-finding",
 		label: "Critique Finding",
 		role: "analysis",
+		group: "review",
 		defaultConcurrency: 2,
 		maxConcurrency: 16,
 		description: "Challenges analysis results before verification.",
@@ -131,6 +131,7 @@ const STAGES: StageDefinition[] = [
 		stageName: "verify-finding",
 		label: "Verify Finding",
 		role: "verification",
+		group: "review",
 		defaultConcurrency: 1,
 		maxConcurrency: 16,
 		description: "Fact-checks target, paths, and evidence.",
@@ -139,123 +140,30 @@ const STAGES: StageDefinition[] = [
 		stageName: "triage-finding",
 		label: "Triage Finding",
 		role: "verification",
+		group: "review",
 		defaultConcurrency: 1,
 		maxConcurrency: 8,
 		description: "Final security classification and severity.",
 	},
-	{
-		stageName: "repository-scan",
-		label: "Scan Repository (Legacy)",
-		role: "scan",
-		defaultConcurrency: 1,
-		maxConcurrency: 8,
-		description: "Legacy repository planner.",
-	},
-	{
-		stageName: "module-scan",
-		label: "Scan Module (Legacy)",
-		role: "scan",
-		defaultConcurrency: 4,
-		maxConcurrency: 32,
-		description: "Legacy module-level function discovery.",
-	},
-	{
-		stageName: "module-threat-model",
-		label: "Model Threats",
-		role: "scan",
-		defaultConcurrency: 4,
-		maxConcurrency: 32,
-		description: "Rule Scan module threat modeling before rule design.",
-	},
-	{
-		stageName: "design-rule",
-		label: "Design Rule",
-		role: "scan",
-		defaultConcurrency: 4,
-		maxConcurrency: 32,
-		description: "Rule Scan LLM rule and review target design.",
-	},
-	{
-		stageName: "scan-rule",
-		label: "Scan Rule",
-		role: "scan",
-		defaultConcurrency: 4,
-		maxConcurrency: 32,
-		description: "Rule Scan executable rule scans.",
-	},
-	{
-		stageName: "scan-pattern",
-		label: "Scan Pattern",
-		role: "scan",
-		defaultConcurrency: 4,
-		maxConcurrency: 32,
-		description: "Rule Scan abstract pattern emission.",
-	},
-	{
-		stageName: "sink-pre-analyze",
-		label: "Sink Pre-Analyze",
-		role: "scan",
-		defaultConcurrency: 4,
-		maxConcurrency: 32,
-		description: "Rule Scan target normalization and low-value filtering.",
-	},
-	{
-		stageName: "function-scan",
-		label: "Scan Function",
-		role: "scan",
-		defaultConcurrency: 4,
-		maxConcurrency: 64,
-		description: "Function-level candidate discovery.",
-	},
-	{
-		stageName: "analyze",
-		label: "Analyze",
-		role: "analysis",
-		defaultConcurrency: 2,
-		maxConcurrency: 16,
-		description: "Candidate analysis and routing decisions.",
-	},
-	{
-		stageName: "build-fuzzer",
-		label: "Build Fuzzer",
-		role: "analysis",
-		defaultConcurrency: 2,
-		maxConcurrency: 16,
-		description: "Builds per-candidate LibAFL fuzzers.",
-	},
-	{
-		stageName: "run-fuzzer",
-		label: "Run Fuzzer",
-		role: "analysis",
-		defaultConcurrency: 2,
-		maxConcurrency: 16,
-		description: "Runs fuzzing campaigns and reports evidence.",
-	},
-	{
-		stageName: "criticize",
-		label: "Criticize",
-		role: "analysis",
-		defaultConcurrency: 2,
-		maxConcurrency: 16,
-		description: "Challenges analysis results before verification.",
-	},
-	{
-		stageName: "verify",
-		label: "Verify",
-		role: "verification",
-		defaultConcurrency: 1,
-		maxConcurrency: 16,
-		description: "Sanity-checks final analysis facts.",
-	},
-	{
-		stageName: "triage",
-		label: "Triage",
-		role: "verification",
-		defaultConcurrency: 1,
-		maxConcurrency: 16,
-		description: "Classifies security impact after verification.",
-	},
 ];
+
+const STAGE_GROUPS = [
+	{
+		id: "full-scan",
+		title: "Full Scan Pipeline",
+		description:
+			"Discovery stages that create repository, module, and target context.",
+	},
+	{
+		id: "review",
+		title: "Analysis & Review",
+		description: "Candidate reasoning, critique, verification, and final triage.",
+	},
+] as const satisfies Array<{
+	id: StageDefinition["group"];
+	title: string;
+	description: string;
+}>;
 
 const StageSettingsFormSchema = z.object({
 	agentProfileId: z.string().min(1),
@@ -342,6 +250,23 @@ export const ScanStageSettingsPanel = ({
 		});
 	};
 
+	const toggleStageGroup = (
+		group: StageDefinition["group"],
+		checked: boolean,
+	) => {
+		const groupStageNames = STAGES.filter((stage) => stage.group === group).map(
+			(stage) => stage.stageName,
+		);
+		setCheckedStageNames((prev) => {
+			const next = new Set(prev);
+			for (const stageName of groupStageNames) {
+				if (checked) next.add(stageName);
+				else next.delete(stageName);
+			}
+			return next;
+		});
+	};
+
 	const rows = useMemo(
 		() =>
 			STAGES.map((stage) => {
@@ -361,6 +286,24 @@ export const ScanStageSettingsPanel = ({
 				};
 			}),
 		[target, enabledProfiles],
+	);
+
+	const groupedRows = useMemo(
+		() =>
+			STAGE_GROUPS.map((group) => {
+				const groupRows = rows.filter((stage) => stage.group === group.id);
+				const checkedCount = groupRows.filter((stage) =>
+					checkedStageNames.has(stage.stageName),
+				).length;
+				return {
+					...group,
+					rows: groupRows,
+					checkedCount,
+					allChecked: checkedCount === groupRows.length && groupRows.length > 0,
+					someChecked: checkedCount > 0 && checkedCount < groupRows.length,
+				};
+			}),
+		[checkedStageNames, rows],
 	);
 
 	useEffect(() => {
@@ -415,16 +358,24 @@ export const ScanStageSettingsPanel = ({
 			</CardHeader>
 			<CardContent>
 				{checkedStageNames.size > 0 && (
-					<div className="flex items-center justify-between mb-3 px-1">
-						<span className="text-sm text-muted-foreground">
-							{checkedStageNames.size} stage
-							{checkedStageNames.size > 1 ? "s" : ""} selected
-						</span>
+					<div className="mb-5 flex flex-col gap-3 rounded-xl border bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between">
+						<div>
+							<div className="text-sm font-medium">
+								{checkedStageNames.size} stage
+								{checkedStageNames.size > 1 ? "s" : ""} selected
+							</div>
+							<div className="text-xs text-muted-foreground">
+								Apply one agent profile across selected stages; concurrency stays
+								unchanged.
+							</div>
+						</div>
 						<Button
 							type="button"
 							size="sm"
 							onClick={() => {
-								batchForm.reset({ agentProfileId: enabledProfiles[0]?.agentProfileId ?? "" });
+								batchForm.reset({
+									agentProfileId: enabledProfiles[0]?.agentProfileId ?? "",
+								});
 								setIsBatchEditOpen(true);
 							}}
 						>
@@ -432,56 +383,115 @@ export const ScanStageSettingsPanel = ({
 						</Button>
 					</div>
 				)}
-				<Table>
-					<TableHeader>
-						<TableRow>
-							<TableHead className="w-10">
-								<Checkbox
-									checked={allChecked || (someChecked ? "indeterminate" : false)}
-									onCheckedChange={(v) => toggleAll(Boolean(v))}
-									aria-label="Select all stages"
-								/>
-							</TableHead>
-							<TableHead>Stage</TableHead>
-							<TableHead>Agent Profile</TableHead>
-							<TableHead>Concurrency</TableHead>
-							<TableHead className="w-16" />
-						</TableRow>
-					</TableHeader>
-					<TableBody>
-						{rows.map((stage) => (
-							<TableRow key={stage.stageName}>
-								<TableCell>
+				<div className="mb-4 flex items-center justify-between rounded-lg border px-3 py-2">
+					<div className="flex items-center gap-3">
+						<Checkbox
+							checked={allChecked || (someChecked ? "indeterminate" : false)}
+							onCheckedChange={(v) => toggleAll(Boolean(v))}
+							aria-label="Select all stages"
+						/>
+						<div>
+							<div className="text-sm font-medium">All stages</div>
+							<div className="text-xs text-muted-foreground">
+								Select every visible stage for batch profile edits.
+							</div>
+						</div>
+					</div>
+					<Badge variant="secondary">{STAGES.length}</Badge>
+				</div>
+
+				<div className="grid gap-5">
+					{groupedRows.map((group) => (
+						<section key={group.id} className="rounded-2xl border bg-card p-4">
+							<div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+								<div className="flex items-start gap-3">
 									<Checkbox
-										checked={checkedStageNames.has(stage.stageName)}
-										onCheckedChange={(v) =>
-											toggleStage(stage.stageName, Boolean(v))
+										className="mt-1"
+										checked={
+											group.allChecked ||
+											(group.someChecked ? "indeterminate" : false)
 										}
-										aria-label={`Select ${stage.label}`}
+										onCheckedChange={(v) =>
+											toggleStageGroup(group.id, Boolean(v))
+										}
+										aria-label={`Select ${group.title}`}
 									/>
-								</TableCell>
-								<TableCell>
-									<div className="font-medium">{stage.label}</div>
-									<div className="text-xs text-muted-foreground">
-										{stage.description}
+									<div>
+										<div className="flex flex-wrap items-center gap-2">
+											<h3 className="font-semibold">{group.title}</h3>
+											<Badge variant="outline">
+												{group.rows.length} stages
+											</Badge>
+											{group.checkedCount > 0 ? (
+												<Badge variant="secondary">
+													{group.checkedCount} selected
+												</Badge>
+											) : null}
+										</div>
+										<p className="mt-1 text-sm text-muted-foreground">
+											{group.description}
+										</p>
 									</div>
-								</TableCell>
-								<TableCell>{stage.agentProfileName}</TableCell>
-								<TableCell>{stage.concurrency}</TableCell>
-								<TableCell className="text-right">
-									<Button
-										type="button"
-										variant="secondary"
-										size="sm"
-										onClick={() => setSelectedStageName(stage.stageName)}
+								</div>
+							</div>
+
+							<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+								{group.rows.map((stage) => (
+									<div
+										key={stage.stageName}
+										className="rounded-xl border bg-background p-3 transition-colors hover:border-primary/40"
 									>
-										<Pencil className="size-4" />
-									</Button>
-								</TableCell>
-							</TableRow>
-						))}
-					</TableBody>
-				</Table>
+										<div className="flex items-start justify-between gap-3">
+											<div className="flex min-w-0 items-start gap-3">
+												<Checkbox
+													className="mt-1"
+													checked={checkedStageNames.has(stage.stageName)}
+													onCheckedChange={(v) =>
+														toggleStage(stage.stageName, Boolean(v))
+													}
+													aria-label={`Select ${stage.label}`}
+												/>
+												<div className="min-w-0">
+													<div className="truncate text-sm font-semibold">
+														{stage.label}
+													</div>
+													<div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+														{stage.description}
+													</div>
+												</div>
+											</div>
+											<Button
+												type="button"
+												variant="secondary"
+												size="sm"
+												className="shrink-0"
+												onClick={() => setSelectedStageName(stage.stageName)}
+											>
+												<Pencil className="size-4" />
+											</Button>
+										</div>
+										<div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+											<div className="rounded-lg bg-muted/40 px-2 py-2">
+												<div className="text-muted-foreground">Profile</div>
+												<div className="mt-1 truncate font-medium">
+													{stage.agentProfileName}
+												</div>
+											</div>
+											<div className="rounded-lg bg-muted/40 px-2 py-2">
+												<div className="text-muted-foreground">
+													Concurrency
+												</div>
+												<div className="mt-1 font-medium">
+													{stage.concurrency} / {stage.maxConcurrency}
+												</div>
+											</div>
+										</div>
+									</div>
+								))}
+							</div>
+						</section>
+					))}
+				</div>
 
 				<Dialog
 					open={Boolean(selectedStage)}

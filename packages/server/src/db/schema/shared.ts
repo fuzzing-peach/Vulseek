@@ -120,10 +120,6 @@ export const buildDefaultScanStageSettings = (
 		agentProfileId: agentProfileId ?? null,
 		concurrency: 1,
 	},
-	"repository-scan": {
-		agentProfileId: agentProfileId ?? null,
-		concurrency: 1,
-	},
 	"repository-profile": {
 		agentProfileId: agentProfileId ?? null,
 		concurrency: 1,
@@ -153,58 +149,6 @@ export const buildDefaultScanStageSettings = (
 		concurrency: 1,
 	},
 	"triage-finding": {
-		agentProfileId: agentProfileId ?? null,
-		concurrency: 1,
-	},
-	"module-scan": {
-		agentProfileId: agentProfileId ?? null,
-		concurrency: 4,
-	},
-	"module-threat-model": {
-		agentProfileId: agentProfileId ?? null,
-		concurrency: 4,
-	},
-	"design-rule": {
-		agentProfileId: agentProfileId ?? null,
-		concurrency: 4,
-	},
-	"scan-rule": {
-		agentProfileId: agentProfileId ?? null,
-		concurrency: 4,
-	},
-	"scan-pattern": {
-		agentProfileId: agentProfileId ?? null,
-		concurrency: 4,
-	},
-	"sink-pre-analyze": {
-		agentProfileId: agentProfileId ?? null,
-		concurrency: 4,
-	},
-	"function-scan": {
-		agentProfileId: agentProfileId ?? null,
-		concurrency: 4,
-	},
-	analyze: {
-		agentProfileId: agentProfileId ?? null,
-		concurrency: 2,
-	},
-	"build-fuzzer": {
-		agentProfileId: agentProfileId ?? null,
-		concurrency: 2,
-	},
-	"run-fuzzer": {
-		agentProfileId: agentProfileId ?? null,
-		concurrency: 2,
-	},
-	criticize: {
-		agentProfileId: agentProfileId ?? null,
-		concurrency: 2,
-	},
-	verify: {
-		agentProfileId: agentProfileId ?? null,
-		concurrency: 1,
-	},
-	triage: {
 		agentProfileId: agentProfileId ?? null,
 		concurrency: 1,
 	},

@@ -139,33 +139,6 @@ const getTaskStageLabel = (t: ScanTranslation, stage?: string | null) => {
 	if (stage === "delta-scope") {
 		return formatScanStageLabel(t, "delta-scope");
 	}
-	if (stage === "repository-scan") {
-		return formatScanStageLabel(t, "repository");
-	}
-	if (stage === "module-scan") {
-		return formatScanStageLabel(t, "module");
-	}
-	if (stage === "function-scan") {
-		return formatScanStageLabel(t, "function");
-	}
-	if (stage === "analyze") {
-		return formatScanStageLabel(t, "analyze");
-	}
-	if (stage === "criticize") {
-		return formatScanStageLabel(t, "criticize");
-	}
-	if (stage === "build-fuzzer") {
-		return formatScanStageLabel(t, "build-fuzzer");
-	}
-	if (stage === "run-fuzzer") {
-		return formatScanStageLabel(t, "run-fuzzer");
-	}
-	if (stage === "verify") {
-		return formatScanStageLabel(t, "verify");
-	}
-	if (stage === "triage") {
-		return formatScanStageLabel(t, "triage");
-	}
 	return formatScanStageLabel(t, stage);
 };
 

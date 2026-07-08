@@ -37,7 +37,7 @@ export type TaskAgentProfileSnapshot = {
 	thinkingLevelEnabled?: boolean | null;
 };
 
-export const scanTypeEnum = pgEnum("scanType", ["delta", "full", "rule"]);
+export const scanTypeEnum = pgEnum("scanType", ["delta", "full"]);
 export const scanJobStatusEnum = pgEnum("scanJobStatus", [
 	"pending",
 	"running",
@@ -381,7 +381,7 @@ export const vulnerabilityCandidates = pgTable(
 		vulnerabilityType: text("vulnerabilityType"),
 		status: taskStatusEnum("status").notNull().default("pending"),
 		currentStage: text("currentStage")
-			.$type<"analyzing" | "fuzzing" | "verifying">()
+			.$type<"analyzing" | "verifying">()
 			.notNull()
 			.default("analyzing"),
 		confidence: real("confidence"),

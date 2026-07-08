@@ -15,7 +15,6 @@ import { useRouter } from "next/router";
 import { type ReactNode, useEffect, useState } from "react";
 import JsonView from "react18-json-view";
 import { toast } from "sonner";
-import { FuzzingStatusPanel } from "@/components/dashboard/scanning/fuzzing-status-panel";
 import { ScanMonitoring } from "@/components/dashboard/scanning/scan-monitoring";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
@@ -53,7 +52,7 @@ const ACTIVE_TASK_STATUSES = new Set([
 const RERUNNABLE_TASK_STATUSES = new Set(["completed", "failed", "exited"]);
 const ROOT_DIRECTORY_KEY = "__root__";
 
-type ScanTaskTab = "details" | "monitoring" | "fuzzing" | "files";
+type ScanTaskTab = "details" | "monitoring" | "files";
 
 type DirectoryListItem = {
 	id: string;
@@ -76,57 +75,36 @@ const getTaskStageLabel = (t: ScanTranslation, stage?: string | null) => {
 		return formatScanStageLabel(t, "delta-scope");
 	}
 	if (
-		stage === "Scan Repository" ||
-		stage === "repository-scan" ||
 		stage === "repository_scanning"
 	) {
-		return formatScanStageLabel(t, "repository-scan");
+		return formatScanStageLabel(t, "repository-profile");
 	}
 	if (
-		stage === "Scan Module" ||
-		stage === "module-scan" ||
 		stage === "module_scanning"
 	) {
-		return formatScanStageLabel(t, "module-scan");
+		return formatScanStageLabel(t, "identify-target");
 	}
 	if (
-		stage === "Scan Function" ||
-		stage === "function-scan" ||
 		stage === "function_scanning"
 	) {
-		return formatScanStageLabel(t, "function-scan");
+		return formatScanStageLabel(t, "scan-target");
 	}
-	if (stage === "Analyze" || stage === "analyze" || stage === "analyzing") {
-		return formatScanStageLabel(t, "analyze");
-	}
-	if (
-		stage === "Build Fuzzer" ||
-		stage === "build-fuzzer" ||
-		stage === "fuzz_building"
-	) {
-		return formatScanStageLabel(t, "build-fuzzer");
-	}
-	if (stage === "Run Fuzzer" || stage === "run-fuzzer" || stage === "fuzzing") {
-		return formatScanStageLabel(t, "run-fuzzer");
+	if (stage === "analyzing") {
+		return formatScanStageLabel(t, "analyze-finding");
 	}
 	if (
-		stage === "Criticize" ||
-		stage === "criticize" ||
 		stage === "criticizing"
 	) {
-		return formatScanStageLabel(t, "criticize");
+		return formatScanStageLabel(t, "critique-finding");
 	}
-	if (stage === "Verify" || stage === "verify" || stage === "verifying") {
-		return formatScanStageLabel(t, "verify");
+	if (stage === "verifying") {
+		return formatScanStageLabel(t, "verify-finding");
 	}
-	if (stage === "Triage" || stage === "triage" || stage === "triaging") {
-		return formatScanStageLabel(t, "triage");
+	if (stage === "triaging") {
+		return formatScanStageLabel(t, "triage-finding");
 	}
 	return formatScanStageLabel(t, stage);
 };
-
-const isRunFuzzerStage = (stage?: string | null) =>
-	stage === "Run Fuzzer" || stage === "run-fuzzer" || stage === "fuzzing";
 
 const getTaskStatusLabel = (t: ScanTranslation, status?: string | null) => {
 	if (!status) {
@@ -533,10 +511,9 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 		api.scan.readTaskFile.useQuery(
 			{ scanJobId, taskId, filePath: selectedFilePath || "" },
 			{ enabled: !!scanJobId && !!taskId && !!selectedFilePath },
-		);
+	);
 
 	const task = data?.task;
-	const showFuzzingStatus = isRunFuzzerStage(task?.stageName);
 	const title =
 		task?.name ||
 		scanT(t, "scan.task.title", "Task {{id}}", { id: taskId.slice(0, 6) });
@@ -570,12 +547,6 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 		setExpandedDirectories({});
 		setDirectoryCache({});
 	}, [taskId, scanJobId]);
-
-	useEffect(() => {
-		if (activeTab === "fuzzing" && task && !showFuzzingStatus) {
-			setActiveTab("details");
-		}
-	}, [activeTab, showFuzzingStatus, task]);
 
 	useEffect(() => {
 		if (activeTab !== "files") {
@@ -774,11 +745,6 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 								<TabsTrigger value="monitoring">
 									{scanT(t, "scan.monitoring.title", "Monitoring")}
 								</TabsTrigger>
-								{showFuzzingStatus ? (
-									<TabsTrigger value="fuzzing">
-										{scanT(t, "scan.fuzzing.title", "Fuzzing Status")}
-									</TabsTrigger>
-								) : null}
 								<TabsTrigger value="files">
 									{scanT(t, "scan.files.title", "Files")}
 								</TabsTrigger>
@@ -927,12 +893,6 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 									taskId={task.taskId}
 								/>
 							</TabsContent>
-
-							{showFuzzingStatus ? (
-								<TabsContent value="fuzzing" className="pt-4">
-									<FuzzingStatusPanel taskId={task.taskId} />
-								</TabsContent>
-							) : null}
 
 							<TabsContent value="files" className="pt-4">
 								<div className="rounded-lg border">

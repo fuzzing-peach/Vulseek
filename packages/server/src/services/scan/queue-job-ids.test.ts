@@ -12,12 +12,12 @@ test("buildQueueTaskJobId uses queue name as the canonical job id prefix", () =>
 	);
 });
 
-test("buildKnownQueueJobIdsForTask includes legacy and canonical ids for retry cleanup", () => {
+test("buildKnownQueueJobIdsForTask includes canonical ids for retry cleanup", () => {
 	assert.deepEqual(
 		buildKnownQueueJobIdsForTask(
 			{ name: "scan:job-1:analysis" },
 			{
-				stageName: "analyze",
+				stageName: "analyze-finding",
 				taskId: "analysis-1",
 				scanJobId: "job-1",
 			},
@@ -29,7 +29,7 @@ test("buildKnownQueueJobIdsForTask includes legacy and canonical ids for retry c
 		buildKnownQueueJobIdsForTask(
 			{ name: "scan:job-1:repository" },
 			{
-				stageName: "repository-scan",
+				stageName: "repository-profile",
 				taskId: "job-1",
 				scanJobId: "job-1",
 			},

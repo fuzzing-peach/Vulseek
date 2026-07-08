@@ -18,7 +18,6 @@ export const scanTaskStatusSchema = z.enum([
 
 export const vulnerabilityCandidateStageSchema = z.enum([
 	"analyzing",
-	"fuzzing",
 	"verifying",
 ]);
 
@@ -100,7 +99,7 @@ export const evidenceSchema = z.object({
 });
 
 export const analysisFeedbackItemSchema = z.object({
-	kind: z.enum(["candidate", "fuzz_build", "fuzz_run", "critic", "manual"]),
+	kind: z.enum(["candidate", "critic", "manual"]),
 	summary: z.string(),
 	evidence: z.array(evidenceSchema),
 });
@@ -311,150 +310,6 @@ export const moduleThreatModelManifestSchema = z
 	})
 	.strict();
 
-export const executableRuleEngineSchema = z.enum(["semgrep", "ripgrep"]);
-
-export const ruleEngineSchema = z.enum(["semgrep", "ripgrep", "abstract"]);
-
-export const rulePrioritySchema = z.enum(["high", "medium", "low"]);
-
-export const rulePatternModeSchema = z.enum(["literal", "regex"]);
-
-export const rulePlanSchema = z
-	.object({
-		module: z.object({
-			moduleId: z.string().min(1),
-			moduleName: z.string().min(1),
-			modulePath: z.string().min(1),
-		}),
-		threatModelPath: artifactPathOf(moduleThreatModelSchema),
-		rules: z.array(
-			z
-				.object({
-					ruleId: z.string().min(1),
-					engine: executableRuleEngineSchema,
-					riskClass: z.string().min(1),
-					intent: z.string().min(1),
-					targetKinds: z.array(z.string()),
-					priority: rulePrioritySchema,
-					fileScopes: z.array(z.string()),
-					artifactPath: z.string().nullable(),
-					execution: z
-						.object({
-							patterns: z.array(z.string()).default([]),
-							patternMode: rulePatternModeSchema.nullable().default(null),
-							semgrepRule: z.string().nullable().default(null),
-						})
-						.default({ patterns: [], patternMode: null, semgrepRule: null }),
-				})
-				.strict(),
-		),
-		abstractPatterns: z.array(
-			z
-				.object({
-					patternId: z.string().min(1),
-					riskClass: z.string().min(1),
-					priority: rulePrioritySchema,
-					location: z
-						.object({
-							filePath: z.string().nullable(),
-							line: z.number().int().nullable(),
-							symbolName: z.string().nullable(),
-						})
-						.strict(),
-					reviewQuestions: z.array(z.string()),
-					evidenceToCollect: z.array(z.string()),
-					discardIf: z.array(z.string()),
-					summary: z.string(),
-				})
-				.strict(),
-		),
-		assumptions: z.array(z.string()),
-		limitations: z.array(z.string()),
-		summary: z.string(),
-	})
-	.strict();
-
-export const rulePlanManifestSchema = z
-	.object({
-		repository: artifactPathOf(repositorySchema),
-		module: artifactPathOf(moduleSchema),
-		threatModel: artifactPathOf(moduleThreatModelSchema),
-		rulePlan: artifactPathOf(rulePlanSchema),
-	})
-	.strict();
-
-export const ruleFindingSchema = z
-	.object({
-		findingId: z.string().min(1),
-		ruleId: z.string().min(1),
-		engine: ruleEngineSchema,
-		riskClass: z.string().min(1),
-		priority: rulePrioritySchema,
-		location: z
-			.object({
-				filePath: z.string().nullable(),
-				line: z.number().int().nullable(),
-				column: z.number().int().nullable(),
-				symbolName: z.string().nullable(),
-			})
-			.strict(),
-		message: z.string(),
-		matchedText: z.string().nullable(),
-		metadata: z.record(z.unknown()).default({}),
-	})
-	.strict();
-
-export const sinkReviewTargetSchema = z
-	.object({
-		targetId: z.string().min(1),
-		moduleId: z.string().min(1),
-		targetType: z.enum(["rule_finding", "abstract_pattern"]),
-		riskClass: z.string().min(1),
-		priority: rulePrioritySchema,
-		location: z
-			.object({
-				filePath: z.string().nullable(),
-				line: z.number().int().nullable(),
-				column: z.number().int().nullable(),
-				symbolName: z.string().nullable(),
-			})
-			.strict(),
-		ruleEvidence: z.array(z.string()),
-		reviewQuestions: z.array(z.string()),
-		evidenceToCollect: z.array(z.string()),
-		discardIf: z.array(z.string()),
-		normalization: z
-			.object({
-				key: z.string().min(1),
-				snippet: z.string().nullable(),
-				mergedFindingIds: z.array(z.string()),
-			})
-			.strict(),
-		summary: z.string(),
-	})
-	.strict();
-
-export const findingManifestSchema = z
-	.object({
-		rawFindings: artifactPathListOf(ruleFindingSchema),
-		executionReports: z.array(
-			z
-				.object({
-					ruleId: z.string().min(1),
-					engine: ruleEngineSchema,
-					status: z.enum(["completed", "failed", "skipped"]),
-					command: z.string().nullable(),
-					exitCode: z.number().int().nullable(),
-					findings: z.number().int().nonnegative(),
-					errorMessage: z.string().nullable(),
-					artifactPath: z.string().nullable(),
-				})
-				.strict(),
-		),
-		summary: z.string(),
-	})
-	.strict();
-
 export const candidateSchema = z.object({
 	id: z.string().min(1),
 	// scanJobId: z.string().min(1),
@@ -490,16 +345,6 @@ export const functionScanManifestSchema = z.object({
 
 export const scanTargetManifestSchema = functionScanManifestSchema;
 
-export const sinkPreAnalyzeManifestSchema = z
-	.object({
-		normalizedTargets: artifactPathListOf(sinkReviewTargetSchema),
-		candidates: artifactPathListOf(candidateSchema),
-		syntheticFunctions: artifactPathListOf(functionSchema),
-		discardedTargets: artifactPathListOf(sinkReviewTargetSchema),
-		summary: z.string(),
-	})
-	.strict();
-
 export const analysisSchema = z.object({
 	id: z.string().min(1),
 	// scanJobId: z.string().min(1),
@@ -521,74 +366,6 @@ export const analysisSchema = z.object({
 	status: scanTaskStatusSchema.optional(),
 });
 
-export const buildFuzzerRequestSchema = z.object({
-	id: z.string().min(1),
-	candidateId: z.string().min(1),
-	analysisFingerprint: z.string().min(1),
-	fuzzGoal: z.enum(["evidence", "exploration"]),
-	entryToCandidatePath: z.array(z.string().min(1)).min(1),
-	harnessRequirements: z.string().min(1),
-	harnessEntry: z.string().nullable(),
-	inputModel: z.string(),
-	expectedOracle: z.string(),
-	seedCorpusHints: z.array(z.string()),
-	buildCommandHints: z.array(z.string()),
-	sanitizerRuntimeAssumptions: z.array(z.string()),
-	expectedTriggerCondition: z.string().min(1),
-	targetFunction: z.string().nullable(),
-	targetFilePath: z.string().nullable(),
-	notes: z.array(z.string()).default([]),
-});
-
-export const fuzzBuildResultSchema = z.object({
-	id: z.string().min(1),
-	requestId: z.string().min(1).nullable(),
-	status: z.enum(["built", "failed"]),
-	cratePath: z.string().nullable(),
-	executablePath: z.string().nullable(),
-	usesLibAfl: z.boolean(),
-	usesJsonlPrintingMonitor: z.boolean(),
-	progressJsonlPath: z.literal("/task/fuzz-progress.jsonl").nullable(),
-	harnessSummary: z.string(),
-	buildLogsPath: z.string().nullable(),
-	errorSummary: z.string().nullable(),
-	fuzzGoal: z.enum(["evidence", "exploration"]).nullable(),
-	harnessEntry: z.string().nullable(),
-	inputModel: z.string().nullable(),
-	expectedOracle: z.string().nullable(),
-	seedCorpusPath: z.string().nullable(),
-	notes: z.array(z.string()),
-});
-
-export const fuzzRunResultSchema = z.object({
-	id: z.string().min(1),
-	buildResultId: z.string().min(1).nullable(),
-	runtimeSeconds: z.number().nullable(),
-	commandRun: z.string().nullable(),
-	exitStatus: z.string().nullable(),
-	crashSignal: z.string().nullable(),
-	usedLibAflMonitor: z.boolean(),
-	progressJsonlPath: z.literal("/task/fuzz-progress.jsonl"),
-	progressJsonlRecords: z.number().int().nonnegative(),
-	foundTriggeringInput: z.boolean(),
-	triggeringInputPath: z.string().nullable(),
-	corpusPath: z.string().nullable(),
-	crashArtifactsPath: z.string().nullable(),
-	logsPath: z.string().nullable(),
-	observedBehavior: z.string(),
-	negativeEvidence: z.array(evidenceSchema),
-	coverageProximity: z.string().nullable(),
-	newPathsOrStatesReached: z.array(z.string()),
-	inputClassesDiscovered: z.array(z.string()),
-	confidenceImpact: z.string().nullable(),
-	promotionDecision: z.object({
-		shouldPromote: z.boolean(),
-		reasons: z.array(z.string()),
-		metrics: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])),
-	}),
-	summary: z.string(),
-});
-
 export const criticResponseSchema = z.object({
 	id: z.string().min(1),
 	stance: z.enum(["object", "convinced"]),
@@ -608,14 +385,6 @@ export const criticResponseSchema = z.object({
 });
 
 export const analysisFeedbackEnvelopeSchema = z.discriminatedUnion("kind", [
-	z.object({
-		kind: z.literal("fuzz_build"),
-		result: fuzzBuildResultSchema,
-	}),
-	z.object({
-		kind: z.literal("fuzz_run"),
-		result: fuzzRunResultSchema,
-	}),
 	z.object({
 		kind: z.literal("critic"),
 		result: criticResponseSchema,
@@ -688,21 +457,12 @@ export type ModuleThreatModel = z.infer<typeof moduleThreatModelSchema>;
 export type ModuleThreatModelManifest = z.infer<
 	typeof moduleThreatModelManifestSchema
 >;
-export type RulePlan = z.infer<typeof rulePlanSchema>;
-export type RulePlanManifest = z.infer<typeof rulePlanManifestSchema>;
-export type RuleFinding = z.infer<typeof ruleFindingSchema>;
-export type FindingManifest = z.infer<typeof findingManifestSchema>;
-export type SinkReviewTarget = z.infer<typeof sinkReviewTargetSchema>;
-export type SinkPreAnalyzeManifest = z.infer<typeof sinkPreAnalyzeManifestSchema>;
 export type Function = z.infer<typeof functionSchema>;
 export type Evidence = z.infer<typeof evidenceSchema>;
 export type Candidate = z.infer<typeof candidateSchema>;
 export type FunctionScanManifest = z.infer<typeof functionScanManifestSchema>;
 export type ScanTargetManifest = z.infer<typeof scanTargetManifestSchema>;
 export type Analysis = z.infer<typeof analysisSchema>;
-export type BuildFuzzerRequest = z.infer<typeof buildFuzzerRequestSchema>;
-export type FuzzBuildResult = z.infer<typeof fuzzBuildResultSchema>;
-export type FuzzRunResult = z.infer<typeof fuzzRunResultSchema>;
 export type CriticResponse = z.infer<typeof criticResponseSchema>;
 export type AnalysisFeedbackEnvelope = z.infer<
 	typeof analysisFeedbackEnvelopeSchema

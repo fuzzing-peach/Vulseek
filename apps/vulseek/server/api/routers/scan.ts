@@ -117,7 +117,7 @@ const apiFindFullScanStageGraph = z
 	.object({
 		applicationId: z.string().min(1).optional(),
 		composeId: z.string().min(1).optional(),
-		scanType: z.enum(["delta", "full", "rule"]).optional(),
+		scanType: z.enum(["delta", "full"]).optional(),
 	})
 	.refine(
 		(value) => Boolean(value.applicationId) !== Boolean(value.composeId),

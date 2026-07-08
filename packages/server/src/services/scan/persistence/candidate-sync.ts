@@ -3,8 +3,6 @@ import type { Candidate, Task, VulnerabilityCandidate } from "../types";
 
 export const CANDIDATE_PRODUCER_STAGE_NAMES = [
 	"scan-target",
-	"function-scan",
-	"sink-pre-analyze",
 ] as const;
 
 export type CandidateProducerStageName =

@@ -18,8 +18,8 @@ const sendEvent = (
 	res.write(`data: ${JSON.stringify(payload)}\n\n`);
 };
 
-const isStage = (value: string): value is "analyzing" | "fuzzing" =>
-	value === "analyzing" || value === "fuzzing";
+const isStage = (value: string): value is "analyzing" | "verifying" =>
+	value === "analyzing" || value === "verifying";
 
 export default async function handler(
 	req: NextApiRequest,
