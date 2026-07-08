@@ -15,6 +15,8 @@ import type { Candidate, FinalAnalysis, ScanJob, Verification } from "../types";
 import {
 	launchAgentStageRuntime,
 	resolveAgentStageRuntime,
+	resolveStageRuntimeCwd,
+	resolveStageRuntimePrompt,
 } from "./agent-stage-runtime";
 import {
 	type PipelineContext,
@@ -98,6 +100,14 @@ const executeCandidateVerificationStage = async (
 	});
 	const reportPath = `${runtime.taskStageRootInContainer}/01_verify_report.md`;
 
+	const fallbackPrompt = buildCandidateVerificationPrompt(stageInput, {
+		analysisResult,
+		candidate,
+		taskDirContainer: runtime.taskStageRootInContainer,
+		reportPath,
+		taskId: ctx.taskId,
+	});
+
 	return await runSingleTurnAgentInContainer({
 		scanJob,
 		agentProfile: runtime.agentProfile,
@@ -115,17 +125,11 @@ const executeCandidateVerificationStage = async (
 		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
 		runtimeFileNames: SANDBOX_AGENT_RUNTIME_FILE_NAMES,
-		cwd: "/workspace/repo",
+		cwd: await resolveStageRuntimeCwd(ctx),
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
-		prompt: buildCandidateVerificationPrompt(stageInput, {
-			analysisResult,
-			candidate,
-			taskDirContainer: runtime.taskStageRootInContainer,
-			reportPath,
-			taskId: ctx.taskId,
-		}),
+		prompt: await resolveStageRuntimePrompt(ctx, fallbackPrompt),
 		outputSchema: outputSchema ?? verificationSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });

@@ -1,0 +1,18 @@
+CandidateAnalysisStageInput:
+  type: object
+  required: [scanJob, repositoryPath, modulePath, functionPath, candidatePath]
+  properties:
+    scanJob:
+      $ref: "#/schemas/ScanJobSnapshot"
+    repositoryPath:
+      $pathOf: "#/schemas/Repository"
+    modulePath:
+      $pathOf: "#/schemas/Module"
+    functionPath:
+      $pathOf: "#/schemas/Target"
+    candidatePath:
+      $pathOf: "#/schemas/Candidate"
+    analysisReportTemplatePath:
+      type: [string, "null"]
+    feedbackPath:
+      type: [string, "null"]

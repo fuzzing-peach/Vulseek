@@ -1,0 +1,21 @@
+verify-finding:
+  key: verification
+  name: Verify Finding
+  role: verification
+  group: review
+  concurrency: 1
+  maxConcurrency: 16
+  disableable: true
+  description: Fact-check target, paths, and evidence.
+  runtimeConfig:
+    persistent: true
+    reuseContainer: true
+    mode: fanout
+    nullableOutput: false
+    cwd: /workspace/repo
+    skills: [verify-finding]
+    promptFile: verify.prompt.md
+  inputSchema:
+    $ref: "#/schemas/CandidateVerificationStageInput"
+  outputSchema:
+    $ref: "#/schemas/Verification"

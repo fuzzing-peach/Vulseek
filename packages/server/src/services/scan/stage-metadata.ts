@@ -1,4 +1,4 @@
-import { SCAN_PIPELINE_CATALOG } from "./pipeline/scan-pipeline-catalog";
+import { SCAN_PIPELINE_DEFINITIONS } from "./pipeline/scan-pipeline-definitions";
 
 const EXPECTED_SCAN_STAGE_KEYS = [
 	"deltaScope",
@@ -18,7 +18,7 @@ type RequiredScanStageMetadata = Record<
 >;
 
 const requireStageMetadata = (): RequiredScanStageMetadata => {
-	const metadata = SCAN_PIPELINE_CATALOG.stageMetadata;
+	const metadata = SCAN_PIPELINE_DEFINITIONS.stageMetadata;
 	for (const key of EXPECTED_SCAN_STAGE_KEYS) {
 		if (!metadata[key]) {
 			throw new Error(`Missing scan stage metadata for key ${key}`);

@@ -17,6 +17,7 @@ const makeScanJob = (overrides?: Partial<ScanJob>): ScanJob => ({
 	targetRef: null,
 	targetTag: null,
 	scanRuntimeSettings: {},
+	scanPipelineDefinitionSnapshot: {},
 	commitWindow: 3,
 	moduleTasksTotal: 0,
 	moduleTasksCompleted: 0,

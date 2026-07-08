@@ -21,7 +21,7 @@ export const ScanPipelineYamlViewer = () => {
 					Scan Pipeline YAML
 				</CardTitle>
 				<CardDescription>
-					Read-only view of the active scan-pipelines.yaml definition.
+					Read-only view of the active scan pipeline definitions.
 				</CardDescription>
 			</CardHeader>
 			<CardContent>

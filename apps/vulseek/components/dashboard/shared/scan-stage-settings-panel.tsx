@@ -68,7 +68,7 @@ type StageDefinition = {
 	label: string;
 	role: "scan" | "analysis" | "verification";
 	group: string;
-	defaultConcurrency: number;
+	concurrency: number;
 	maxConcurrency: number;
 	disableable: boolean;
 	description: string;
@@ -106,7 +106,7 @@ const getStageConcurrency = (
 	stage: StageDefinition,
 ) =>
 	target.scanStageSettings?.[stage.stageName]?.concurrency ||
-	stage.defaultConcurrency;
+	stage.concurrency;
 
 export const ScanStageSettingsPanel = ({
 	target,
@@ -125,28 +125,28 @@ export const ScanStageSettingsPanel = ({
 	);
 	const [isBatchEditOpen, setIsBatchEditOpen] = useState(false);
 	const [isSaving, setIsSaving] = useState(false);
-	const { data: pipelineCatalog, isLoading: isLoadingPipelineCatalog } =
-		api.scan.pipelineCatalog.useQuery();
+	const { data: pipelineDefinitions, isLoading: isLoadingPipelineDefinitions } =
+		api.scan.pipelineDefinitions.useQuery();
 	const stages = useMemo<StageDefinition[]>(
 		() =>
-			pipelineCatalog?.stages.map((stage) => ({
+			pipelineDefinitions?.stages.map((stage) => ({
 				stageName: stage.id,
 				label: stage.name,
 				role: stage.role,
 				group: stage.group,
-				defaultConcurrency: stage.defaultConcurrency,
+				concurrency: stage.concurrency,
 				maxConcurrency: stage.maxConcurrency ?? 128,
 				disableable: stage.disableable,
 				description: stage.description ?? stage.name,
 			})) ?? [],
-		[pipelineCatalog],
+		[pipelineDefinitions],
 	);
 	const stageGroups = useMemo(
 		() =>
 			Array.from(new Set(stages.map((stage) => stage.group))).map((group) => ({
 				id: group,
 				title: titleCase(group),
-				description: `Stages in the ${titleCase(group)} group from scan-pipelines.yaml.`,
+				description: `Stages in the ${titleCase(group)} group from scan pipeline definitions.`,
 			})),
 		[stages],
 	);
@@ -221,7 +221,7 @@ export const ScanStageSettingsPanel = ({
 					agentProfileName: agentProfile?.name || "Default",
 					concurrency: target
 						? getStageConcurrency(target, stage)
-						: stage.defaultConcurrency,
+						: stage.concurrency,
 				};
 			}),
 		[target, enabledProfiles, stages],
@@ -259,7 +259,7 @@ export const ScanStageSettingsPanel = ({
 		});
 	}, [selectedStage, target, enabledProfiles, form]);
 
-	if (isLoadingPipelineCatalog) {
+	if (isLoadingPipelineDefinitions) {
 		return (
 			<Card className="bg-background">
 				<CardHeader>
@@ -268,7 +268,7 @@ export const ScanStageSettingsPanel = ({
 						Stage Agent Settings
 					</CardTitle>
 					<CardDescription>
-						Loading scan stage catalog from scan-pipelines.yaml.
+						Loading scan pipeline definitions.
 					</CardDescription>
 				</CardHeader>
 			</Card>

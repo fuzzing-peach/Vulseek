@@ -1,0 +1,13 @@
+NullStageInput:
+  type: "null"
+DeltaScopeManifest:
+  type: object
+  required: [repository, functions]
+  additionalProperties: false
+  properties:
+    repository:
+      $pathOf: "#/schemas/Repository"
+    functions:
+      type: array
+      items:
+        $pathOf: "#/schemas/Function"

@@ -14,6 +14,8 @@ import type { Candidate } from "../types";
 import {
 	launchAgentStageRuntime,
 	resolveAgentStageRuntime,
+	resolveStageRuntimeCwd,
+	resolveStageRuntimePrompt,
 } from "./agent-stage-runtime";
 import type { CandidateAnalysisStageInput } from "./candidate-analysis.stage";
 import {
@@ -64,6 +66,12 @@ const executeAnalysisCriticStage = async (
 		codexHomeName: ".codex-analysis-critic",
 	});
 
+	const fallbackPrompt = buildAnalysisCriticPrompt(stageInput, {
+		candidate,
+		taskDirContainer: runtime.taskStageRootInContainer,
+		taskId: ctx.taskId,
+	});
+
 	return await runSingleTurnAgentInContainer({
 		scanJob: stageInput.scanJob,
 		agentProfile: runtime.agentProfile,
@@ -80,15 +88,11 @@ const executeAnalysisCriticStage = async (
 		groupedPersistent: ctx.groupedPersistent,
 		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
-		cwd: "/workspace/repo",
+		cwd: await resolveStageRuntimeCwd(ctx),
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
-		prompt: buildAnalysisCriticPrompt(stageInput, {
-			candidate,
-			taskDirContainer: runtime.taskStageRootInContainer,
-			taskId: ctx.taskId,
-		}),
+		prompt: await resolveStageRuntimePrompt(ctx, fallbackPrompt),
 		outputSchema: outputSchema ?? criticResponseSchema,
 		routeOutputSchemas: ctx.routeOutputSchemas,
 		onThreadId: async (threadId) => {

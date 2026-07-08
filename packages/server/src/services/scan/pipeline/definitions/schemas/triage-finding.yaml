@@ -1,0 +1,25 @@
+CandidateTriageStageInput:
+  type: object
+  required:
+    - scanJob
+    - repositoryPath
+    - modulePath
+    - functionPath
+    - candidatePath
+    - analysisResultPath
+    - verifyResultPath
+  properties:
+    scanJob:
+      $ref: "#/schemas/ScanJobSnapshot"
+    repositoryPath:
+      $pathOf: "#/schemas/Repository"
+    modulePath:
+      $pathOf: "#/schemas/Module"
+    functionPath:
+      $pathOf: "#/schemas/Target"
+    candidatePath:
+      $pathOf: "#/schemas/Candidate"
+    analysisResultPath:
+      $pathOf: "#/schemas/FinalAnalysis"
+    verifyResultPath:
+      $pathOf: "#/schemas/Verification"

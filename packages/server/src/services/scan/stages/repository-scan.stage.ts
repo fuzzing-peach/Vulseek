@@ -15,6 +15,7 @@ import {
 } from "../pipeline/stage-definition";
 import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { buildRepositoryScannerPrompt } from "../prompts/repository-scanner.prompt";
+import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import {
 	prepareRepositoryForScanInContainer,
 	type PreparedRepositoryState,
@@ -24,6 +25,8 @@ import type { RepositoryScanManifest, ScanJob } from "../types";
 import {
 	launchAgentStageRuntime,
 	resolveAgentStageRuntime,
+	resolveStageRuntimeCwd,
+	resolveStageRuntimePrompt,
 } from "./agent-stage-runtime";
 import {
 	type PipelineContext,
@@ -96,15 +99,30 @@ const executeRepositoryScanStage = async (
 		commitSha: scanJob.commitSha,
 		baseSha: scanJob.baseSha,
 		commitWindow: scanJob.commitWindow || DEFAULT_DELTA_COMMIT_WINDOW,
-	};
-	const runtime = await resolveAgentStageRuntime({ ctx });
-	const repositoryRoot = runtime.taskStageRootInContainer;
-	const repositoryStateJson = await execAsync(
-		`docker exec ${runtime.containerName} bash -lc "cat '${repositoryRoot}/00_repository_state.json'"`,
-	);
+		};
+		const runtime = await resolveAgentStageRuntime({ ctx });
+		const repositoryRoot = runtime.taskStageRootInContainer;
+		const agentProvider = runtime.agentProfile?.provider || "codex";
+		const agentInstruction = runtime.agentProfile?.thinkingLevelEnabled
+			? `Use ${agentProvider} with reasoning effort around ${runtime.agentProfile.thinkingLevel}.`
+			: `Use ${agentProvider}.`;
+		const repositoryStateJson = await execAsync(
+			`docker exec ${runtime.containerName} bash -lc "cat '${repositoryRoot}/00_repository_state.json'"`,
+		);
 	const repositoryState = JSON.parse(
 		repositoryStateJson.stdout,
 	) as PreparedRepositoryState;
+
+	const fallbackPrompt = buildRepositoryScannerPrompt({
+			repositoryRoot,
+			repositoryState,
+			repositoryStatePath: `${repositoryRoot}/00_repository_state.json`,
+			repository,
+			agentProvider,
+			thinkingLevel: runtime.agentProfile?.thinkingLevelEnabled
+				? runtime.agentProfile.thinkingLevel
+				: null,
+	});
 
 	return await runSingleTurnAgentInContainer({
 		scanJob,
@@ -122,20 +140,26 @@ const executeRepositoryScanStage = async (
 		groupedPersistent: ctx.groupedPersistent,
 		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
-		cwd: "/workspace/repo",
+		cwd: await resolveStageRuntimeCwd(ctx),
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
-		prompt: buildRepositoryScannerPrompt({
-			repositoryRoot,
-			repositoryState,
-			repositoryStatePath: `${repositoryRoot}/00_repository_state.json`,
-			repository,
-			agentProvider: runtime.agentProfile?.provider || "codex",
-			thinkingLevel: runtime.agentProfile?.thinkingLevelEnabled
-				? runtime.agentProfile.thinkingLevel
-				: null,
-		}),
+			prompt: await resolveStageRuntimePrompt(ctx, fallbackPrompt, {
+				taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
+				repositoryId: repository.id,
+				repositoryName: repository.name,
+				targetRef:
+					repositoryState.currentBranch ||
+					repositoryState.targetRef ||
+					"<none>",
+				targetTag:
+					repositoryState.currentExactTag ||
+					repositoryState.targetTag ||
+					"<none>",
+				targetCommit: repositoryState.resolvedTargetSha,
+				agentInstruction,
+				repositoryStatePath: `${repositoryRoot}/00_repository_state.json`,
+			}),
 		outputSchema: outputSchema ?? repositoryScanManifestSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });

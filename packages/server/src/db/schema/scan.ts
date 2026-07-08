@@ -83,6 +83,10 @@ export const scanJobs = pgTable("scan_jobs", {
 		.$type<ScanRuntimeSettings>()
 		.notNull()
 		.default({}),
+	scanPipelineDefinitionSnapshot: jsonb("scanPipelineDefinitionSnapshot")
+		.$type<Record<string, unknown>>()
+		.notNull()
+		.default({}),
 	commitWindow: integer("commitWindow").notNull().default(3),
 	moduleTasksTotal: integer("moduleTasksTotal").notNull().default(0),
 	moduleTasksCompleted: integer("moduleTasksCompleted").notNull().default(0),

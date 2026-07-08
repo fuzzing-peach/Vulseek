@@ -84,12 +84,14 @@ import {
 	createPipelineDefinition,
 	createPipelineEdge,
 } from "./scan/pipeline/pipeline-definition";
+import { createStageRuntimeConfig } from "./scan/pipeline/scan-stage-runtime-config";
 import {
-	SCAN_PIPELINE_CATALOG,
-	readScanPipelinesYaml,
+	SCAN_PIPELINE_DEFINITIONS,
+	readScanPipelineDefinitionsYaml,
 	validatePipelineRegistryCoverage,
+	type ScanPipelineDefinitions,
 	type ScanPipelineConfig,
-} from "./scan/pipeline/scan-pipeline-catalog";
+} from "./scan/pipeline/scan-pipeline-definitions";
 import { transformPipelineEdgeInput } from "./scan/pipeline/scan-pipeline-edge-transform";
 import {
 	createJsonSchemaContract,
@@ -116,7 +118,7 @@ import {
 import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "./scan/runtime/sandbox-agent-shared";
 import {
 	buildEffectiveDisabledStageSet,
-	getRuntimeStageDefaultConcurrency,
+	getRuntimeStageConcurrency,
 	getRuntimeStageSetting,
 } from "./scan/runtime-settings";
 import { SCAN_STAGE_IDS, SCAN_STAGE_METADATA } from "./scan/stage-metadata";
@@ -4984,9 +4986,9 @@ type ScanStageGraphTargetInput = {
 	scanType?: "delta" | "full" | null;
 };
 
-export const getScanPipelineCatalog = () => SCAN_PIPELINE_CATALOG;
+export const getScanPipelineDefinitions = () => SCAN_PIPELINE_DEFINITIONS;
 
-export const getScanPipelineYaml = () => readScanPipelinesYaml();
+export const getScanPipelineYaml = () => readScanPipelineDefinitionsYaml();
 
 const resolveStaticStageConcurrency = (
 	stageName: string,
@@ -4998,7 +5000,7 @@ const resolveStaticStageConcurrency = (
 	if (stageConcurrency) {
 		return Math.max(1, stageConcurrency);
 	}
-	return getRuntimeStageDefaultConcurrency(stageName);
+	return getRuntimeStageConcurrency(stageName);
 };
 
 export const findFullScanStageGraph = async (
@@ -5012,10 +5014,10 @@ export const findFullScanStageGraph = async (
 			: "full";
 	const pipeline =
 		scanType === "delta"
-			? SCAN_PIPELINE_CATALOG.pipelines.delta
-			: SCAN_PIPELINE_CATALOG.pipelines.full;
+			? SCAN_PIPELINE_DEFINITIONS.pipelines.delta
+			: SCAN_PIPELINE_DEFINITIONS.pipelines.full;
 	const stages = pipeline.stageIds.map((stageId) => {
-		const stage = SCAN_PIPELINE_CATALOG.stageMetadataById[stageId];
+		const stage = SCAN_PIPELINE_DEFINITIONS.stageMetadataById[stageId];
 		if (!stage) {
 			throw new Error(`Unknown scan stage ${stageId} in ${pipeline.name}`);
 		}
@@ -5773,23 +5775,27 @@ type FullScanPipelineEdge = PipelineEdge<
 	any
 >;
 
-const buildCatalogSchemaContract = (
+const buildDefinitionsSchemaContract = (
+	definitions: ScanPipelineDefinitions,
 	schema: Record<string, unknown> | null | undefined,
 ): StructuredOutputSchemaSource | undefined =>
 	schema
 		? createJsonSchemaContract({
-				schemas: SCAN_PIPELINE_CATALOG.schemas,
+				schemas: definitions.schemas,
 				schema,
 			})
 		: undefined;
 
-const getCatalogStageOutputSchema = (stageId: string) =>
-	buildCatalogSchemaContract(
-		SCAN_PIPELINE_CATALOG.stages.find((stage) => stage.id === stageId)
-			?.outputSchema,
+const getDefinitionsStageOutputSchema = (
+	definitions: ScanPipelineDefinitions,
+	stageId: string,
+) =>
+	buildDefinitionsSchemaContract(
+		definitions,
+		definitions.stages.find((stage) => stage.id === stageId)?.outputSchema,
 	);
 
-const buildPipelineStagesFromCatalog = (
+const buildPipelineStagesFromDefinitions = (
 	pipeline: ScanPipelineConfig,
 	stageRegistry: Map<string, FullScanPipelineStage>,
 ) =>
@@ -5801,7 +5807,8 @@ const buildPipelineStagesFromCatalog = (
 		return stage;
 	});
 
-const buildPipelineEdgesFromCatalog = (
+const buildPipelineEdgesFromDefinitions = (
+	definitions: ScanPipelineDefinitions,
 	pipeline: ScanPipelineConfig,
 	edgeRegistry: Map<string, FullScanPipelineEdge>,
 ) =>
@@ -5843,7 +5850,8 @@ const buildPipelineEdgesFromCatalog = (
 							) as any[]
 					: edge.transformOutput,
 			outputSchema:
-				buildCatalogSchemaContract(edgeConfig.outputSchema) ?? edge.outputSchema,
+				buildDefinitionsSchemaContract(definitions, edgeConfig.outputSchema) ??
+				edge.outputSchema,
 			outputSchemaDescription:
 				edgeConfig.outputSchemaDescription ?? edge.outputSchemaDescription,
 			route: edgeConfig.route
@@ -5855,7 +5863,7 @@ const buildPipelineEdgesFromCatalog = (
 		};
 	});
 
-const buildPipelineGroupsFromCatalog = (
+const buildPipelineGroupsFromDefinitions = (
 	pipeline: ScanPipelineConfig,
 	stageRegistry: Map<string, FullScanPipelineStage>,
 ) =>
@@ -5876,6 +5884,33 @@ const buildPipelineGroupsFromCatalog = (
 			}),
 		};
 	});
+
+const resolveScanJobPipelineDefinitions = (
+	scanJob: Pick<ScanJob, "scanPipelineDefinitionSnapshot">,
+): ScanPipelineDefinitions => {
+	const snapshot = scanJob.scanPipelineDefinitionSnapshot;
+	if (
+		snapshot &&
+		typeof snapshot === "object" &&
+		"stages" in snapshot &&
+		"pipelines" in snapshot
+	) {
+		return snapshot as ScanPipelineDefinitions;
+	}
+	throw new TRPCError({
+		code: "INTERNAL_SERVER_ERROR",
+		message: "Scan job pipeline definition snapshot is missing or invalid",
+	});
+};
+
+const attachStageRuntimeConfigs = <TStage extends FullScanPipelineStage>(
+	scanJobId: string,
+	stages: readonly TStage[],
+): FullScanPipelineStage[] =>
+	stages.map((stage) => ({
+		...stage,
+		runtimeConfig: createStageRuntimeConfig(scanJobId, stage.id),
+	}));
 
 type FullScanRepositoryStage = StageDefinition<
 	FullScanPipelineContext,
@@ -6174,13 +6209,17 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 	const analysisCriticQueue = getAnalysisCriticQueue(scanJob.scanJobId);
 	const verificationQueue = getVerificationQueue(scanJob.scanJobId);
 	const triageQueue = getTriageQueue(scanJob.scanJobId);
+	const pipelineDefinitions = resolveScanJobPipelineDefinitions(scanJob);
 	const repositoryStage =
 		createRepositoryScanningStageDefinition<FullScanPipelineContext>({
 			id: SCAN_STAGE_METADATA.repositoryScan.id,
 			name: SCAN_STAGE_METADATA.repositoryScan.name,
 			persistent: false,
 			reuseContainer: true,
-			outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.repositoryScan),
+			outputSchema: getDefinitionsStageOutputSchema(
+				pipelineDefinitions,
+				SCAN_STAGE_IDS.repositoryScan,
+			),
 			queue: createStageQueueBinding({
 				queue: repositoryScanQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -6225,7 +6264,8 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			name: SCAN_STAGE_METADATA.attackSurfaceModel.name,
 			persistent: false,
 			reuseContainer: true,
-			outputSchema: getCatalogStageOutputSchema(
+			outputSchema: getDefinitionsStageOutputSchema(
+				pipelineDefinitions,
 				SCAN_STAGE_IDS.attackSurfaceModel,
 			),
 			queue: createStageQueueBinding({
@@ -6273,7 +6313,10 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			name: SCAN_STAGE_METADATA.moduleScan.name,
 			persistent: false,
 			reuseContainer: true,
-			outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.moduleScan),
+			outputSchema: getDefinitionsStageOutputSchema(
+				pipelineDefinitions,
+				SCAN_STAGE_IDS.moduleScan,
+			),
 			queue: createStageQueueBinding({
 				queue: moduleScanQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -6315,7 +6358,10 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			name: SCAN_STAGE_METADATA.functionScan.name,
 			persistent: true,
 			reuseContainer: true,
-			outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.functionScan),
+			outputSchema: getDefinitionsStageOutputSchema(
+				pipelineDefinitions,
+				SCAN_STAGE_IDS.functionScan,
+			),
 			queue: createStageQueueBinding({
 				queue: functionScanQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -6359,7 +6405,10 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 		name: SCAN_STAGE_METADATA.analysis.name,
 		persistent: false,
 		reuseContainer: true,
-		outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.analysis),
+		outputSchema: getDefinitionsStageOutputSchema(
+			pipelineDefinitions,
+			SCAN_STAGE_IDS.analysis,
+		),
 		queue: createStageQueueBinding({
 			queue: analysisQueue,
 			getGroupQueue: (groupInstanceId) =>
@@ -6400,7 +6449,10 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			name: SCAN_STAGE_METADATA.analysisCritic.name,
 			persistent: false,
 			reuseContainer: true,
-			outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.analysisCritic),
+			outputSchema: getDefinitionsStageOutputSchema(
+				pipelineDefinitions,
+				SCAN_STAGE_IDS.analysisCritic,
+			),
 			queue: createStageQueueBinding({
 				queue: analysisCriticQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -6445,7 +6497,10 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			name: SCAN_STAGE_METADATA.verification.name,
 			persistent: true,
 			reuseContainer: true,
-			outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.verification),
+			outputSchema: getDefinitionsStageOutputSchema(
+				pipelineDefinitions,
+				SCAN_STAGE_IDS.verification,
+			),
 			queue: createStageQueueBinding({
 				queue: verificationQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -6489,7 +6544,10 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 		name: SCAN_STAGE_METADATA.triage.name,
 		persistent: true,
 		reuseContainer: true,
-		outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.triage),
+		outputSchema: getDefinitionsStageOutputSchema(
+			pipelineDefinitions,
+			SCAN_STAGE_IDS.triage,
+		),
 		queue: createStageQueueBinding({
 			queue: triageQueue,
 			getGroupQueue: (groupInstanceId) =>
@@ -6535,6 +6593,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 		verifyingStage,
 		triageStage,
 	] as const;
+	const runtimeStages = attachStageRuntimeConfigs(scanJob.scanJobId, stages);
 	const edges = [
 		createPipelineEdge<
 			FullScanPipelineContext,
@@ -7224,21 +7283,25 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 		}),
 	] as const;
 	const stageRegistry = new Map<string, FullScanPipelineStage>(
-		stages.map((stage) => [stage.id, stage]),
+		runtimeStages.map((stage) => [stage.id, stage]),
 	);
 	const edgeRegistry = new Map<string, FullScanPipelineEdge>(
 		edges.map((edge) => [edge.name, edge]),
 	);
-	const pipelineConfig = SCAN_PIPELINE_CATALOG.pipelines.full;
+	const pipelineConfig = pipelineDefinitions.pipelines.full;
 	const pipeline: PipelineDefinition<
 		FullScanPipelineContext,
 		FullScanPipelineStage[],
 		FullScanPipelineEdge[]
 	> = createPipelineDefinition({
 		name: pipelineConfig.name,
-		stages: buildPipelineStagesFromCatalog(pipelineConfig, stageRegistry),
-		edges: buildPipelineEdgesFromCatalog(pipelineConfig, edgeRegistry),
-		groups: buildPipelineGroupsFromCatalog(pipelineConfig, stageRegistry),
+		stages: buildPipelineStagesFromDefinitions(pipelineConfig, stageRegistry),
+		edges: buildPipelineEdgesFromDefinitions(
+			pipelineDefinitions,
+			pipelineConfig,
+			edgeRegistry,
+		),
+		groups: buildPipelineGroupsFromDefinitions(pipelineConfig, stageRegistry),
 	});
 
 	return pipeline;
@@ -7365,7 +7428,10 @@ const buildDeltaScanPipeline = (context: FullScanPipelineContext) => {
 			persistent: false,
 			reuseContainer: true,
 			mode: "serial",
-			outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.deltaScope),
+			outputSchema: getDefinitionsStageOutputSchema(
+				resolveScanJobPipelineDefinitions(scanJob),
+				SCAN_STAGE_IDS.deltaScope,
+			),
 			queue: createStageQueueBinding({
 				queue: deltaScopeQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -7514,28 +7580,36 @@ const buildDeltaScanPipeline = (context: FullScanPipelineContext) => {
 				return taskIds;
 			},
 		});
+	const [runtimeDeltaScopeStage] = attachStageRuntimeConfigs(scanJob.scanJobId, [
+		deltaScopeStage,
+	]);
 	const stageRegistry = new Map<string, FullScanPipelineStage>([
 		...basePipeline.stages.map((stage) => [stage.id, stage] as const),
-		[deltaScopeStage.id, deltaScopeStage],
+		[runtimeDeltaScopeStage!.id, runtimeDeltaScopeStage!],
 	]);
 	const edgeRegistry = new Map<string, FullScanPipelineEdge>([
 		...basePipeline.edges.map((edge) => [edge.name, edge] as const),
 		[deltaScopeToFunctionEdge.name, deltaScopeToFunctionEdge],
 	]);
-	validatePipelineRegistryCoverage(SCAN_PIPELINE_CATALOG, {
+	validatePipelineRegistryCoverage(resolveScanJobPipelineDefinitions(scanJob), {
 		stageIds: new Set(stageRegistry.keys()),
 		edgeNames: new Set(edgeRegistry.keys()),
 	});
-	const pipelineConfig = SCAN_PIPELINE_CATALOG.pipelines.delta;
+	const pipelineDefinitions = resolveScanJobPipelineDefinitions(scanJob);
+	const pipelineConfig = pipelineDefinitions.pipelines.delta;
 	return createPipelineDefinition<
 		FullScanPipelineContext,
 		FullScanPipelineStage[],
 		FullScanPipelineEdge[]
 	>({
 		name: pipelineConfig.name,
-		stages: buildPipelineStagesFromCatalog(pipelineConfig, stageRegistry),
-		edges: buildPipelineEdgesFromCatalog(pipelineConfig, edgeRegistry),
-		groups: buildPipelineGroupsFromCatalog(pipelineConfig, stageRegistry),
+		stages: buildPipelineStagesFromDefinitions(pipelineConfig, stageRegistry),
+		edges: buildPipelineEdgesFromDefinitions(
+			pipelineDefinitions,
+			pipelineConfig,
+			edgeRegistry,
+		),
+		groups: buildPipelineGroupsFromDefinitions(pipelineConfig, stageRegistry),
 	});
 };
 

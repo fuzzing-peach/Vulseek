@@ -1,0 +1,21 @@
+scan-target:
+  key: functionScan
+  name: Scan Target
+  role: scan
+  group: full-scan
+  concurrency: 4
+  maxConcurrency: 64
+  disableable: true
+  description: Target-level candidate discovery.
+  runtimeConfig:
+    persistent: true
+    reuseContainer: true
+    mode: fanout
+    nullableOutput: true
+    cwd: /workspace/repo
+    skills: [scan-target]
+    promptFile: scan-target.prompt.md
+  inputSchema:
+    $ref: "#/schemas/ScanTargetStageInput"
+  outputSchema:
+    $ref: "#/schemas/ScanTargetManifest"

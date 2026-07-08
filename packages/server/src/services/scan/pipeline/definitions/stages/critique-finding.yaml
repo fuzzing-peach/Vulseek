@@ -1,0 +1,21 @@
+critique-finding:
+  key: analysisCritic
+  name: Critique Finding
+  role: analysis
+  group: review
+  concurrency: 2
+  maxConcurrency: 16
+  disableable: true
+  description: Challenge analysis results before verification.
+  runtimeConfig:
+    persistent: false
+    reuseContainer: true
+    mode: fanout
+    nullableOutput: false
+    cwd: /workspace/repo
+    skills: [critique-finding]
+    promptFile: criticize.prompt.md
+  inputSchema:
+    $ref: "#/schemas/AnalysisCriticStageInput"
+  outputSchema:
+    $ref: "#/schemas/CriticResponse"

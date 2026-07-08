@@ -1,0 +1,10 @@
+AnalysisCriticStageInput:
+  allOf:
+    - $ref: "#/schemas/CandidateAnalysisStageInput"
+    - type: object
+      required: [draftAnalysisPath, analysisFingerprint]
+      properties:
+        draftAnalysisPath:
+          $pathOf: "#/schemas/Analysis"
+        analysisFingerprint:
+          type: string

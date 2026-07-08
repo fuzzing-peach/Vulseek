@@ -1,0 +1,21 @@
+triage-finding:
+  key: triage
+  name: Triage Finding
+  role: verification
+  group: review
+  concurrency: 1
+  maxConcurrency: 8
+  disableable: true
+  description: Final security classification and severity.
+  runtimeConfig:
+    persistent: true
+    reuseContainer: true
+    mode: fanout
+    nullableOutput: false
+    cwd: /workspace/repo
+    skills: [triage-finding]
+    promptFile: triage.prompt.md
+  inputSchema:
+    $ref: "#/schemas/CandidateTriageStageInput"
+  outputSchema:
+    $ref: "#/schemas/Triage"

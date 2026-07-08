@@ -11,11 +11,14 @@ import {
 } from "../pipeline/stage-definition";
 import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { buildIdentifyTargetPrompt } from "../prompts/identify-target.prompt";
+import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
 import type { IdentifyTargetManifest, ScanJob } from "../types";
 import {
 	launchAgentStageRuntime,
 	resolveAgentStageRuntime,
+	resolveStageRuntimeCwd,
+	resolveStageRuntimePrompt,
 } from "./agent-stage-runtime";
 import {
 	type PipelineContext,
@@ -61,6 +64,21 @@ const executeIdentifyTargetStage = async (
 		ctx,
 		containerNameParts: [stageInput.moduleId.slice(0, 24)],
 	});
+	const thinkingInstruction = runtime.agentProfile?.thinkingLevelEnabled
+		? `use_reasoning_effort: ${runtime.agentProfile.thinkingLevel}`
+		: "";
+	const fallbackPrompt = buildIdentifyTargetPrompt({
+		scanJobId: stageInput.scanJob.scanJobId,
+		moduleId: stageInput.moduleId,
+		moduleName: stageInput.moduleName,
+		repositoryJsonPath: stageInput.repositoryPath,
+		moduleJsonPath: stageInput.modulePath,
+		threatModelJsonPath: stageInput.threatModelPath,
+		thinkingLevel: runtime.agentProfile?.thinkingLevelEnabled
+			? runtime.agentProfile.thinkingLevel
+			: null,
+	});
+
 	return await runSingleTurnAgentInContainer({
 		scanJob: stageInput.scanJob,
 		agentProfile: runtime.agentProfile,
@@ -77,21 +95,20 @@ const executeIdentifyTargetStage = async (
 		groupedPersistent: ctx.groupedPersistent,
 		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
-		cwd: "/workspace/repo",
+		cwd: await resolveStageRuntimeCwd(ctx),
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
-		prompt: buildIdentifyTargetPrompt({
-			scanJobId: stageInput.scanJob.scanJobId,
-			moduleId: stageInput.moduleId,
-			moduleName: stageInput.moduleName,
-			repositoryJsonPath: stageInput.repositoryPath,
-			moduleJsonPath: stageInput.modulePath,
-			threatModelJsonPath: stageInput.threatModelPath,
-			thinkingLevel: runtime.agentProfile?.thinkingLevelEnabled
-				? runtime.agentProfile.thinkingLevel
-				: null,
-		}),
+			prompt: await resolveStageRuntimePrompt(ctx, fallbackPrompt, {
+				taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
+				scanJobId: stageInput.scanJob.scanJobId,
+				moduleId: stageInput.moduleId,
+				moduleName: stageInput.moduleName,
+				repositoryJsonPath: stageInput.repositoryPath,
+				moduleJsonPath: stageInput.modulePath,
+				threatModelJsonPath: stageInput.threatModelPath,
+				thinkingInstruction,
+			}),
 		outputSchema: outputSchema ?? identifyTargetManifestSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });

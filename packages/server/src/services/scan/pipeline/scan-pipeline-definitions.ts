@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 
 export const SCAN_PIPELINE_IDS = {
@@ -10,18 +10,36 @@ export const SCAN_PIPELINE_IDS = {
 } as const;
 
 const stageRoleSchema = z.enum(["scan", "analysis", "verification"]);
+const stageRunModeSchema = z.enum(["serial", "fanout"]);
+
+const stageRuntimeConfigSchema = z
+	.object({
+		agentProfile: z.string().min(1).nullable().optional(),
+		persistent: z.boolean().nullable().optional(),
+		reuseContainer: z.boolean().nullable().optional(),
+		mode: stageRunModeSchema.nullable().optional(),
+		nullableOutput: z.boolean().nullable().optional(),
+		cwd: z.string().min(1).nullable().optional(),
+		skills: z.array(z.string().min(1)).nullable().optional(),
+		prompt: z.string().nullable().optional(),
+		promptFile: z.string().min(1).nullable().optional(),
+		inputArtifacts: z.record(z.unknown()).nullable().optional(),
+		outputSchema: z.record(z.unknown()).nullable().optional(),
+	})
+	.default({});
 
 const stageConfigSchema = z.object({
 	key: z.string().min(1),
 	name: z.string().min(1),
 	role: stageRoleSchema,
 	group: z.string().min(1),
-	defaultConcurrency: z.number().int().min(1),
+	concurrency: z.number().int().min(1),
 	maxConcurrency: z.number().int().min(1).optional(),
 	disableable: z.boolean().default(true),
 	description: z.string().optional(),
 	inputSchema: z.record(z.unknown()).optional(),
 	outputSchema: z.record(z.unknown()).optional(),
+	runtimeConfig: stageRuntimeConfigSchema,
 });
 
 const edgeConfigSchema = z.object({
@@ -57,7 +75,7 @@ const pipelineConfigSchema = z.object({
 	groups: z.array(groupConfigSchema).default([]),
 });
 
-const scanPipelineYamlSchema = z.object({
+const scanPipelineDefinitionsSourceSchema = z.object({
 	schemas: z.record(z.record(z.unknown())).default({}),
 	stages: z.record(stageConfigSchema),
 	pipelines: z.object({
@@ -74,11 +92,26 @@ export type ScanPipelineStageConfig = {
 	name: string;
 	role: ScanStageRole;
 	group: string;
-	defaultConcurrency: number;
+	concurrency: number;
 	maxConcurrency: number | null;
 	disableable: boolean;
 	description: string | null;
 	inputSchema: Record<string, unknown> | null;
+	outputSchema: Record<string, unknown> | null;
+	runtimeConfig: ScanStageRuntimeConfig | null;
+};
+
+export type ScanStageRuntimeConfig = {
+	agentProfile: string | null;
+	persistent: boolean | null;
+	reuseContainer: boolean | null;
+	mode: "serial" | "fanout" | null;
+	nullableOutput: boolean | null;
+	cwd: string | null;
+	skills: string[] | null;
+	prompt: string | null;
+	promptFile: string | null;
+	inputArtifacts: Record<string, unknown> | null;
 	outputSchema: Record<string, unknown> | null;
 };
 
@@ -115,7 +148,7 @@ export type ScanPipelineConfig = {
 	groups: ScanPipelineGroupConfig[];
 };
 
-export type ScanPipelineCatalog = {
+export type ScanPipelineDefinitions = {
 	pipelineIds: typeof SCAN_PIPELINE_IDS;
 	schemas: Record<string, Record<string, unknown>>;
 	stageIds: string[];
@@ -129,29 +162,92 @@ export type ScanPipelineCatalog = {
 			label: string;
 			role: ScanStageRole;
 			group: string;
-			defaultConcurrency: number;
+			concurrency: number;
 			maxConcurrency: number;
 			disableable: boolean;
 			description: string;
 			inputSchema: Record<string, unknown> | null;
 			outputSchema: Record<string, unknown> | null;
+			runtimeConfig: ScanStageRuntimeConfig | null;
 		}
 	>;
 	pipelines: Record<keyof typeof SCAN_PIPELINE_IDS, ScanPipelineConfig>;
 };
 
-export const resolveScanPipelineYamlPath = (moduleUrl: string) =>
-	join(dirname(fileURLToPath(moduleUrl)), "scan-pipelines.yaml");
+export type ScanPipelineDefinitionsSource = z.infer<
+	typeof scanPipelineDefinitionsSourceSchema
+>;
 
-export const SCAN_PIPELINES_YAML_PATH = resolveScanPipelineYamlPath(
+export const resolveScanPipelineDefinitionsDir = (moduleUrl: string) =>
+	join(dirname(fileURLToPath(moduleUrl)), "definitions");
+
+export const SCAN_PIPELINE_DEFINITIONS_DIR = resolveScanPipelineDefinitionsDir(
 	import.meta.url,
 );
 
-export const readScanPipelinesYaml = () =>
-	readFileSync(SCAN_PIPELINES_YAML_PATH, "utf-8");
+const yamlFileExtensions = new Set([".yaml", ".yml"]);
+
+const listDefinitionYamlFiles = (directory: string) =>
+	readdirSync(directory, { withFileTypes: true })
+		.filter((entry) => entry.isFile() && yamlFileExtensions.has(extname(entry.name)))
+		.map((entry) => entry.name)
+		.sort((left, right) => left.localeCompare(right))
+		.map((fileName) => join(directory, fileName));
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const readDefinitionSection = (
+	sectionName: "schemas" | "stages" | "pipelines",
+): Record<string, unknown> => {
+	const sectionDir = join(SCAN_PIPELINE_DEFINITIONS_DIR, sectionName);
+	const merged: Record<string, unknown> = {};
+	for (const filePath of listDefinitionYamlFiles(sectionDir)) {
+		const parsed = parseYaml(readFileSync(filePath, "utf-8")) as unknown;
+		if (!isRecord(parsed)) {
+			throw new Error(
+				`Scan pipeline ${sectionName} definition ${basename(filePath)} must be a YAML object`,
+			);
+		}
+		for (const [key, value] of Object.entries(parsed)) {
+			if (key in merged) {
+				throw new Error(
+					`Duplicate scan pipeline ${sectionName} definition ${key} in ${basename(filePath)}`,
+				);
+			}
+			merged[key] = value;
+		}
+	}
+	return merged;
+};
+
+export const readScanPipelineDefinitionsSource = () => ({
+	schemas: readDefinitionSection("schemas"),
+	stages: readDefinitionSection("stages"),
+	pipelines: readDefinitionSection("pipelines"),
+});
+
+export const readScanPipelineDefinitionsYaml = () =>
+	stringifyYaml(readScanPipelineDefinitionsSource());
 
 const toObjectKey = (stageId: string) =>
 	stageId.replace(/-([a-z])/g, (_match, char: string) => char.toUpperCase());
+
+const normalizeStageRuntimeConfig = (
+	config: z.infer<typeof stageRuntimeConfigSchema>,
+): ScanStageRuntimeConfig => ({
+	agentProfile: config.agentProfile ?? null,
+	persistent: config.persistent ?? null,
+	reuseContainer: config.reuseContainer ?? null,
+	mode: config.mode ?? null,
+	nullableOutput: config.nullableOutput ?? null,
+	cwd: config.cwd ?? null,
+	skills: config.skills ?? null,
+	prompt: config.prompt ?? null,
+	promptFile: config.promptFile ?? null,
+	inputArtifacts: config.inputArtifacts ?? null,
+	outputSchema: config.outputSchema ?? null,
+});
 
 const assertUnique = (values: string[], label: string) => {
 	const seen = new Set<string>();
@@ -277,7 +373,7 @@ const validateJsonSchemaReferences = (
 	}
 };
 
-const validateCatalogSchemaReferences = (
+const validateDefinitionsSchemaReferences = (
 	stages: ScanPipelineStageConfig[],
 	pipelines: Record<keyof typeof SCAN_PIPELINE_IDS, ScanPipelineConfig>,
 	schemas: Record<string, Record<string, unknown>>,
@@ -402,7 +498,7 @@ const validateTransformExpression = (input: {
 	throw new Error(`Unsupported transform expression: ${expression}`);
 };
 
-const validateCatalogEdgeTransformExpressions = (
+const validateDefinitionsEdgeTransformExpressions = (
 	stages: ScanPipelineStageConfig[],
 	pipelines: Record<keyof typeof SCAN_PIPELINE_IDS, ScanPipelineConfig>,
 	schemas: Record<string, Record<string, unknown>>,
@@ -433,10 +529,10 @@ const validateCatalogEdgeTransformExpressions = (
 	}
 };
 
-export const parseScanPipelineCatalogFromYaml = (
-	rawYaml: string,
-): ScanPipelineCatalog => {
-	const parsed = scanPipelineYamlSchema.parse(parseYaml(rawYaml));
+export const parseScanPipelineDefinitionsSource = (
+	source: unknown,
+): ScanPipelineDefinitions => {
+	const parsed = scanPipelineDefinitionsSourceSchema.parse(source);
 	const stageIds = Object.keys(parsed.stages);
 	assertUnique(stageIds, "stage id");
 	assertUnique(
@@ -445,19 +541,22 @@ export const parseScanPipelineCatalogFromYaml = (
 	);
 
 	const stages = Object.entries(parsed.stages).map(
-		([id, stage]): ScanPipelineStageConfig => ({
-			id,
-			key: stage.key,
-			name: stage.name,
-			role: stage.role,
-			group: stage.group,
-			defaultConcurrency: stage.defaultConcurrency,
-			maxConcurrency: stage.maxConcurrency ?? null,
-			disableable: stage.disableable,
-			description: stage.description ?? null,
-			inputSchema: stage.inputSchema ?? null,
-			outputSchema: stage.outputSchema ?? null,
-		}),
+		([id, stage]): ScanPipelineStageConfig => {
+			return {
+				id,
+				key: stage.key,
+				name: stage.name,
+				role: stage.role,
+				group: stage.group,
+				concurrency: stage.concurrency,
+				maxConcurrency: stage.maxConcurrency ?? null,
+				disableable: stage.disableable,
+				description: stage.description ?? null,
+				inputSchema: stage.inputSchema ?? null,
+				outputSchema: stage.outputSchema ?? null,
+				runtimeConfig: normalizeStageRuntimeConfig(stage.runtimeConfig),
+			};
+		},
 	);
 	const allStageIds = new Set(stageIds);
 	const buildPipeline = (
@@ -501,8 +600,8 @@ export const parseScanPipelineCatalogFromYaml = (
 	};
 	validatePipelineTopology("full", pipelines.full, allStageIds);
 	validatePipelineTopology("delta", pipelines.delta, allStageIds);
-	validateCatalogSchemaReferences(stages, pipelines, parsed.schemas);
-	validateCatalogEdgeTransformExpressions(stages, pipelines, parsed.schemas);
+	validateDefinitionsSchemaReferences(stages, pipelines, parsed.schemas);
+	validateDefinitionsEdgeTransformExpressions(stages, pipelines, parsed.schemas);
 
 	return {
 		pipelineIds: SCAN_PIPELINE_IDS,
@@ -526,12 +625,13 @@ export const parseScanPipelineCatalogFromYaml = (
 					label: stage.name,
 					role: stage.role,
 					group: stage.group,
-					defaultConcurrency: stage.defaultConcurrency,
+					concurrency: stage.concurrency,
 					maxConcurrency: stage.maxConcurrency ?? 128,
 					disableable: stage.disableable,
 					description: stage.description ?? stage.name,
 					inputSchema: stage.inputSchema,
 					outputSchema: stage.outputSchema,
+					runtimeConfig: stage.runtimeConfig,
 				},
 			]),
 		),
@@ -539,25 +639,103 @@ export const parseScanPipelineCatalogFromYaml = (
 	};
 };
 
-export const loadScanPipelineCatalog = () =>
-	parseScanPipelineCatalogFromYaml(readScanPipelinesYaml());
+export const parseScanPipelineDefinitionsFromYaml = (rawYaml: string) =>
+	parseScanPipelineDefinitionsSource(parseYaml(rawYaml));
 
-export const SCAN_PIPELINE_CATALOG = loadScanPipelineCatalog();
+export const loadScanPipelineDefinitions = () =>
+	parseScanPipelineDefinitionsSource(readScanPipelineDefinitionsSource());
+
+export const SCAN_PIPELINE_DEFINITIONS = loadScanPipelineDefinitions();
+
+export type StageRuntimeConfigDeps = {
+	loadScanJobPipelineDefinitionSnapshot: (
+		scanJobId: string,
+	) => Promise<ScanPipelineDefinitions>;
+};
+
+export const resolvePromptFileContent = (promptFile: string) => {
+	const fileName = basename(promptFile);
+	if (fileName !== promptFile) {
+		throw new Error(`Invalid prompt file name: ${promptFile}`);
+	}
+	for (const promptDir of ["stages", "prompts"]) {
+		try {
+			return readFileSync(
+				join(dirname(SCAN_PIPELINE_DEFINITIONS_DIR), "..", promptDir, fileName),
+				"utf-8",
+			);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+				throw error;
+			}
+		}
+	}
+	throw new Error(`Prompt file not found: ${promptFile}`);
+};
+
+export const createStageRuntimeConfigWithDeps = (input: {
+	scanJobId: string;
+	stageName: string;
+	loadScanJobPipelineDefinitionSnapshot: StageRuntimeConfigDeps["loadScanJobPipelineDefinitionSnapshot"];
+}) => {
+	const loadStage = async () => {
+		const definitions = await input.loadScanJobPipelineDefinitionSnapshot(
+			input.scanJobId,
+		);
+		const stage = definitions.stages.find((item) => item.id === input.stageName);
+		if (!stage) {
+			throw new Error(
+				`Stage ${input.stageName} not found in scan job pipeline definition snapshot`,
+			);
+		}
+		return stage;
+	};
+	const loadRuntimeConfig = async () => (await loadStage()).runtimeConfig;
+	return {
+		getConcurrency: async () => (await loadStage()).concurrency,
+		getAgentProfile: async () =>
+			(await loadRuntimeConfig())?.agentProfile ?? null,
+		getPersistent: async () => (await loadRuntimeConfig())?.persistent ?? null,
+		getReuseContainer: async () =>
+			(await loadRuntimeConfig())?.reuseContainer ?? null,
+		getMode: async () => (await loadRuntimeConfig())?.mode ?? null,
+		getNullableOutput: async () =>
+			(await loadRuntimeConfig())?.nullableOutput ?? null,
+		getCwd: async () => (await loadRuntimeConfig())?.cwd ?? null,
+		getSkills: async () => (await loadRuntimeConfig())?.skills ?? [],
+		getPrompt: async () => {
+			const runtimeConfig = await loadRuntimeConfig();
+			if (runtimeConfig?.prompt != null) {
+				return runtimeConfig.prompt;
+			}
+			if (runtimeConfig?.promptFile) {
+				return resolvePromptFileContent(runtimeConfig.promptFile);
+			}
+			return null;
+		},
+		getInputArtifacts: async () =>
+			(await loadRuntimeConfig())?.inputArtifacts ?? null,
+		getOutputSchema: async () =>
+			(await loadRuntimeConfig())?.outputSchema ??
+			(await loadStage()).outputSchema ??
+			null,
+	};
+};
 
 export const validatePipelineRegistryCoverage = (
-	catalog: ScanPipelineCatalog,
+	definitions: ScanPipelineDefinitions,
 	registry: {
 		stageIds: ReadonlySet<string>;
 		edgeNames: ReadonlySet<string>;
 	},
 ) => {
-	for (const stageId of catalog.stageIds) {
+	for (const stageId of definitions.stageIds) {
 		if (!registry.stageIds.has(stageId)) {
 			throw new Error(`missing stage implementation: ${stageId}`);
 		}
 	}
 	const edgeNames = new Set<string>();
-	for (const pipeline of Object.values(catalog.pipelines)) {
+	for (const pipeline of Object.values(definitions.pipelines)) {
 		for (const edge of pipeline.edges) {
 			edgeNames.add(edge.name);
 		}

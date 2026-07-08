@@ -24,6 +24,8 @@ import type { DeltaScopeManifest, ScanJob } from "../types";
 import {
 	launchAgentStageRuntime,
 	resolveAgentStageRuntime,
+	resolveStageRuntimeCwd,
+	resolveStageRuntimePrompt,
 } from "./agent-stage-runtime";
 import {
 	type PipelineContext,
@@ -91,6 +93,19 @@ const executeDeltaScopeStage = async (
 		repositoryStateJson.stdout,
 	) as PreparedRepositoryState;
 
+	const fallbackPrompt = buildDeltaScopePrompt({
+		repository: {
+			id: ctx.taskId,
+			name: ctx.serviceName,
+		},
+		repositoryState,
+		repositoryStatePath: `${repositoryRoot}/00_repository_state.json`,
+		agentProvider: runtime.agentProfile?.provider || "codex",
+		thinkingLevel: runtime.agentProfile?.thinkingLevelEnabled
+			? runtime.agentProfile.thinkingLevel
+			: null,
+	});
+
 	return await runSingleTurnAgentInContainer({
 		scanJob,
 		agentProfile: runtime.agentProfile,
@@ -107,22 +122,11 @@ const executeDeltaScopeStage = async (
 		groupedPersistent: ctx.groupedPersistent,
 		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
-		cwd: "/workspace/repo",
+		cwd: await resolveStageRuntimeCwd(ctx),
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
-		prompt: buildDeltaScopePrompt({
-			repository: {
-				id: ctx.taskId,
-				name: ctx.serviceName,
-			},
-			repositoryState,
-			repositoryStatePath: `${repositoryRoot}/00_repository_state.json`,
-			agentProvider: runtime.agentProfile?.provider || "codex",
-			thinkingLevel: runtime.agentProfile?.thinkingLevelEnabled
-				? runtime.agentProfile.thinkingLevel
-				: null,
-		}),
+		prompt: await resolveStageRuntimePrompt(ctx, fallbackPrompt),
 		outputSchema: outputSchema ?? deltaScopeManifestSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });

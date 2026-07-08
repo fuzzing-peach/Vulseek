@@ -1,0 +1,123 @@
+full:
+  name: full-scan-programmatic
+  root: repository-profile
+  stages:
+    - repository-profile
+    - attack-surface-model
+    - identify-target
+    - scan-target
+    - analyze-finding
+    - critique-finding
+    - verify-finding
+    - triage-finding
+  edges:
+    - name: repository-profile-to-attack-surface-model
+      from: repository-profile
+      to: attack-surface-model
+      fork: false
+      mode: fanOut
+      foreach: "$.modules[*]"
+      input:
+        scanJob: "$ctx.scanJob"
+        repositoryPath: "$.repository"
+        modulePath: "$item"
+        moduleId: ""
+        moduleName: ""
+        priority: null
+    - name: attack-surface-model-to-identify-target
+      from: attack-surface-model
+      to: identify-target
+      fork: false
+      mode: map
+      input:
+        scanJob: "$input.scanJob"
+        repositoryPath: "$input.repositoryPath"
+        modulePath: "$.module"
+        threatModelPath: "$.threatModel"
+        moduleId: "$input.moduleId"
+        moduleName: "$input.moduleName"
+        priority: "$input.priority"
+    - name: identify-target-to-scan-target
+      from: identify-target
+      to: scan-target
+      fork: false
+      mode: fanOut
+      foreach: "$.targets[*]"
+      input:
+        scanJob: "$input.scanJob"
+        repositoryPath: "$input.repositoryPath"
+        modulePath: "$.module"
+        threatModelPath: "$.threatModel"
+        targetPath: "$item"
+        moduleId: "$input.moduleId"
+        moduleName: "$input.moduleName"
+        targetId: ""
+        targetName: ""
+        targetKind: unknown
+        priority: null
+    - name: scan-target-to-analyze-finding
+      from: scan-target
+      to: analyze-finding
+      fork: false
+      mode: fanOut
+      foreach: "$.candidates[*]"
+      input:
+        scanJob: "$input.scanJob"
+        repositoryPath: "$input.repositoryPath"
+        modulePath: "$input.modulePath"
+        functionPath: "$input.targetPath"
+        candidatePath: "$item"
+    - name: analyze-finding-to-critique-finding
+      from: analyze-finding
+      to: critique-finding
+      fork: false
+      mode: map
+      route:
+        key: critic
+        default: true
+      outputSchema:
+        $ref: "#/schemas/Analysis"
+      outputSchemaDescription: Draft analysisSchema result for critic review
+      input:
+        scanJob: "$input.scanJob"
+        repositoryPath: "$input.repositoryPath"
+        modulePath: "$input.modulePath"
+        functionPath: "$input.functionPath"
+        candidatePath: "$input.candidatePath"
+        draftAnalysisPath: ""
+        analysisFingerprint: "$computed.analysisFingerprint"
+    - name: critique-finding-to-analyze-finding
+      from: critique-finding
+      to: analyze-finding
+      fork: false
+      mode: map
+      route:
+        key: analysis
+        default: true
+      outputSchema:
+        $ref: "#/schemas/CriticResponse"
+      outputSchemaDescription: CriticResponse feedback for analysis
+      input:
+        scanJob: "$input.scanJob"
+        repositoryPath: "$input.repositoryPath"
+        modulePath: "$input.modulePath"
+        functionPath: "$input.functionPath"
+        candidatePath: "$input.candidatePath"
+        feedbackPath: ""
+    - name: analyze-finding-to-verify-finding
+      from: analyze-finding
+      to: verify-finding
+      fork: false
+      route:
+        key: verification
+        default: false
+      outputSchema:
+        $ref: "#/schemas/FinalAnalysis"
+      outputSchemaDescription: Final critic-approved analysis result
+    - name: verify-finding-to-triage-finding
+      from: verify-finding
+      to: triage-finding
+      fork: false
+      outputSchema:
+        $ref: "#/schemas/Verification"
+  groups: []

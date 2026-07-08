@@ -68,7 +68,6 @@ import {
 	validatePipelineRouteConfiguration,
 } from "./pipeline-definition";
 import {
-	isFanoutStage,
 	type StageDefinition,
 	type StageExecution,
 	type StageQueueScope,
@@ -108,6 +107,51 @@ const schedulePipelineStateRefresh = (ctx: unknown) => {
 
 const getErrorMessage = (error: unknown) =>
 	error instanceof Error ? error.message : String(error);
+
+const resolveStagePersistent = async (
+	stage: Pick<
+		StageDefinition<PipelineContext, unknown, unknown>,
+		"persistent" | "runtimeConfig"
+	>,
+) => {
+	const runtimePersistent = stage.runtimeConfig
+		? await stage.runtimeConfig.getPersistent()
+		: null;
+	return runtimePersistent ?? (stage.persistent ?? true);
+};
+
+const resolveStageReuseContainer = async (
+	stage: Pick<
+		StageDefinition<PipelineContext, unknown, unknown>,
+		"reuseContainer" | "runtimeConfig"
+	>,
+) => {
+	const runtimeReuseContainer = stage.runtimeConfig
+		? await stage.runtimeConfig.getReuseContainer()
+		: null;
+	return runtimeReuseContainer ?? (stage.reuseContainer ?? true);
+};
+
+const resolveStageNullableOutput = async (
+	stage: Pick<
+		StageDefinition<PipelineContext, unknown, unknown>,
+		"nullableOutput" | "runtimeConfig"
+	>,
+) => {
+	const runtimeNullableOutput = stage.runtimeConfig
+		? await stage.runtimeConfig.getNullableOutput()
+		: null;
+	return runtimeNullableOutput ?? (stage.nullableOutput ?? false);
+};
+
+const resolveStageMode = async (
+	stage: Pick<StageDefinition<PipelineContext, unknown, unknown>, "mode" | "runtimeConfig">,
+) => {
+	const runtimeMode = stage.runtimeConfig
+		? await stage.runtimeConfig.getMode()
+		: null;
+	return runtimeMode ?? stage.mode;
+};
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
 	value && typeof value === "object"
@@ -810,8 +854,8 @@ const stopReusableSandboxAgentForTask = async (taskId: string) => {
 };
 
 const shouldRemoveContainerAfterTask = (
-	stage: Pick<StageDefinition<PipelineContext, unknown, unknown>, "reuseContainer">,
-) => !(stage.reuseContainer ?? true);
+	stageCtx: Pick<StageContext, "reuseContainer">,
+) => !stageCtx.reuseContainer;
 
 const cleanupFailedTaskRuntime = async (taskId: string) => {
 	const [task, lane] = await Promise.all([
@@ -1178,6 +1222,15 @@ const createStageContextForTask = async <
 		laneRuntime && getStageGroup(runtime.pipeline, task.stageName),
 	);
 	const stageDefinition = runtime.stageStates.get(task.stageName)?.stage;
+	const stagePersistent = stageDefinition
+		? await resolveStagePersistent(stageDefinition)
+		: Boolean(laneRuntime);
+	const stageReuseContainer = stageDefinition
+		? await resolveStageReuseContainer(stageDefinition)
+		: true;
+	const stageNullableOutput = stageDefinition
+		? await resolveStageNullableOutput(stageDefinition)
+		: false;
 	return createStageContext({
 		base: runtime.ctx,
 		stageName: task.stageName,
@@ -1188,8 +1241,9 @@ const createStageContextForTask = async <
 		},
 		taskId: task.taskId,
 		taskName: task.name || resolveStageTaskName(task.stageName, task.input),
-		persistent: Boolean(stageDefinition?.persistent ?? Boolean(laneRuntime)),
-		reuseContainer: stageDefinition?.reuseContainer ?? true,
+		persistent: stagePersistent,
+		reuseContainer: stageReuseContainer,
+		nullableOutput: stageNullableOutput,
 		groupedPersistent,
 		allowAgentExit: task.stageName === SCAN_STAGE_IDS.analysis,
 		containerIndex: laneRuntime?.laneIndex ?? task.containerIndex ?? null,
@@ -1480,7 +1534,7 @@ const getStageConcurrencyLimit = async <
 	stage: StageDefinition<TPipelineContext, TInput, TOutput, StageContext>,
 	ctx: TPipelineContext,
 ) =>
-	isFanoutStage(stage)
+	(await resolveStageMode(stage)) === "fanout"
 		? Math.max(1, (await stage.getDesiredConcurrency?.(ctx)) || 1)
 		: 1;
 
@@ -1562,7 +1616,7 @@ const resolveStageTaskId = (
 	throw new Error(`Unable to resolve taskId for stage ${stageName}`);
 };
 
-const createTaskStageContext = <
+const createTaskStageContext = async <
 	TPipelineContext extends PipelineContext,
 	TInput,
 	TOutput,
@@ -1591,6 +1645,9 @@ const createTaskStageContext = <
 	);
 	const taskName =
 		taskRuntime?.taskName || resolveStageTaskName(stage.id, input);
+	const stagePersistent = await resolveStagePersistent(stage);
+	const stageReuseContainer = await resolveStageReuseContainer(stage);
+	const stageNullableOutput = await resolveStageNullableOutput(stage);
 	const stageCtx = createStageContext({
 		base: ctx,
 		stageName: stage.id,
@@ -1598,9 +1655,9 @@ const createTaskStageContext = <
 		taskId,
 		taskName,
 		routeOutputSchemas: taskRuntime?.routeOutputSchemas,
-		persistent: stage.persistent ?? true,
-		reuseContainer: stage.reuseContainer ?? true,
-		nullableOutput: stage.nullableOutput ?? false,
+		persistent: stagePersistent,
+		reuseContainer: stageReuseContainer,
+		nullableOutput: stageNullableOutput,
 		groupedPersistent: taskRuntime?.groupedPersistent ?? false,
 		allowAgentExit:
 			taskRuntime?.allowAgentExit ?? stage.id === SCAN_STAGE_IDS.analysis,
@@ -1643,6 +1700,28 @@ const isOutputEnvelope = (value: unknown): value is OutputEnvelope => {
 	);
 };
 
+const parseValidOutputEnvelope = (
+	outputContent: string,
+	ctx: Pick<StageContext, "routeOutputSchemas">,
+) => {
+	if (!outputContent.trim()) {
+		return null;
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(outputContent);
+	} catch {
+		return null;
+	}
+	if (!isOutputEnvelope(parsed)) {
+		return null;
+	}
+	if (!ctx.routeOutputSchemas?.length && parsed.route !== null) {
+		return null;
+	}
+	return parsed;
+};
+
 const resolveStageRawOutput = async (ctx: StageContext) => {
 	const { jsonlPath, textPath, stderrPath, stdoutPath, statePath, outputPath } =
 		await getTaskRuntimePaths(ctx);
@@ -1675,6 +1754,17 @@ const resolveStageRawOutput = async (ctx: StageContext) => {
 		jsonlContent.trim().length > 0 || textContent.trim().length > 0;
 	const stateSummary = summarizeTaskState(stateContent);
 	if (!stateSummary.completedAt) {
+		const parsed = parseValidOutputEnvelope(outputContent, ctx);
+		if (parsed && stateSummary.activeToolCalls.length === 0) {
+			return {
+				rawOutput: JSON.stringify(parsed.output, null, 2),
+				stderrContent,
+				progressSignature,
+				hasAgentOutput,
+				hasExitSignal: ctx.allowAgentExit ? parsed.exit : false,
+				routeKey: parsed.route,
+			};
+		}
 		return {
 			rawOutput: null,
 			stderrContent,
@@ -1769,7 +1859,7 @@ const prepareStageSuccess = async <
 	}
 	await assertScanJobNotCancelled(stageCtx);
 	const output = stage.validateOutput
-		? stage.nullableOutput && rawOutput.trim() === "null"
+		? stageCtx.nullableOutput && rawOutput.trim() === "null"
 			? (null as TOutput)
 			: await stage.validateOutput(stageCtx, input, rawOutput)
 		: await defaultValidateOutput<TOutput>(stage.id, rawOutput);
@@ -1873,7 +1963,7 @@ const persistTerminalSuccess = async <
 	stepStartedAt = Date.now();
 	await copyPersistentLaneArtifactsToTaskDir(stageCtx);
 	logPersistTiming("copy_persistent_lane_artifacts_to_task_dir", stepStartedAt);
-	if (!(stage.persistent ?? true) && (stage.reuseContainer ?? true)) {
+	if (!stageCtx.persistent && stageCtx.reuseContainer) {
 		stepStartedAt = Date.now();
 		await stopReusableSandboxAgentForTask(stageCtx.taskId);
 		logPersistTiming("stop_reusable_sandbox_agent", stepStartedAt);
@@ -1881,7 +1971,7 @@ const persistTerminalSuccess = async <
 	stepStartedAt = Date.now();
 	if (stageCtx.laneIndex !== null) {
 		if (options?.exitLane) {
-			if (shouldRemoveContainerAfterTask(stage)) {
+			if (shouldRemoveContainerAfterTask(stageCtx)) {
 				await cleanupPersistentLaneForTask(stageCtx.taskId, options.runtime);
 			} else {
 				await resetStageLaneRuntimeSessionForExitRepo({
@@ -1889,7 +1979,7 @@ const persistTerminalSuccess = async <
 				}).catch(() => {});
 			}
 		} else {
-			if (stage.persistent ?? true) {
+			if (stageCtx.persistent) {
 				await releasePersistentLaneForTask(stageCtx.taskId);
 			} else {
 				await resetStageLaneRuntimeSessionForExitRepo({
@@ -1898,7 +1988,7 @@ const persistTerminalSuccess = async <
 			}
 		}
 	} else {
-		if (shouldRemoveContainerAfterTask(stage)) {
+		if (shouldRemoveContainerAfterTask(stageCtx)) {
 			await cleanupTaskContainer(stageCtx.taskId);
 		}
 	}
@@ -2005,6 +2095,72 @@ const persistTerminalFailure = async <
 	return true;
 };
 
+const persistPostSuccessHandlingFailure = async <
+	TPipelineContext extends PipelineContext,
+	TInput,
+	TOutput,
+	TStageContext extends StageContext,
+>(
+	stage: StageDefinition<TPipelineContext, TInput, TOutput, TStageContext>,
+	ctx: TPipelineContext,
+	stageCtx: TStageContext,
+	input: TInput,
+	error: unknown,
+) => {
+	const terminalFailurePersisted = await persistTerminalFailure(
+		stage,
+		ctx,
+		stageCtx,
+		input,
+		error,
+	);
+	if (terminalFailurePersisted) {
+		return true;
+	}
+
+	const updated = await transitionTaskStatusRepo({
+		taskId: stageCtx.taskId,
+		from: ["completed"],
+		to: "failed",
+		patch: { errorMessage: getErrorMessage(error) },
+	}).catch(() => null);
+	if (!updated) {
+		return false;
+	}
+
+	const failureDiagnostics = await buildTaskFailureDiagnostics(stageCtx).catch(
+		(diagnosticError) => ({
+			error: `Unable to collect task failure diagnostics: ${getErrorMessage(
+				diagnosticError,
+			)}`,
+		}),
+	);
+	await appendTaskFailureDiagnostics(
+		stageCtx,
+		getErrorMessage(error),
+		failureDiagnostics,
+	).catch(() => {});
+	await refreshPipelineState(ctx).catch(() => {});
+	await cleanupFailedTaskRuntime(stageCtx.taskId);
+	await stage.onFailure?.(stageCtx, input, error);
+	logPipelineEvent("stage.failed_after_success_handling", {
+		scanJobId: stageCtx.scanJobId,
+		stageName: stage.id,
+		taskId: stageCtx.taskId,
+		taskName: stageCtx.taskName,
+		errorMessage: getErrorMessage(error),
+		diagnostics: failureDiagnostics,
+	});
+	logPipelineEvent("loop.task_failed", {
+		scanJobId: stageCtx.scanJobId,
+		stageName: stage.id,
+		taskId: stageCtx.taskId,
+		taskName: stageCtx.taskName,
+		errorMessage: getErrorMessage(error),
+	});
+	return true;
+};
+
 const runStageTaskLifecycle = async <
 	TPipelineContext extends PipelineContext,
 	TInput,
@@ -2019,7 +2175,7 @@ const runStageTaskLifecycle = async <
 		resumeOnly?: boolean;
 	},
 ): Promise<StageLifecycleSuccess<TOutput, TStageContext>> => {
-	const { taskId, taskName, stageCtx } = createTaskStageContext(
+	const { taskId, taskName, stageCtx } = await createTaskStageContext(
 		stage,
 		ctx,
 		input,
@@ -2164,7 +2320,7 @@ export const runStageOnce = async <
 		await refreshPipelineState(ctx).catch(() => {});
 		return result.output;
 	} catch (error) {
-		const { stageCtx } = createTaskStageContext(
+		const { stageCtx } = await createTaskStageContext(
 			stage,
 			ctx,
 			input,
@@ -2366,8 +2522,8 @@ const launchStageExecution = async <
 		runtime.pipeline,
 		stageState.stageName,
 	);
-	const persistentBacked = stageState.stage.persistent ?? true;
-	const reuseContainer = stageState.stage.reuseContainer ?? true;
+	const persistentBacked = await resolveStagePersistent(stageState.stage);
+	const reuseContainer = await resolveStageReuseContainer(stageState.stage);
 	logLaunchTiming("load_pending_and_scope", stepStartedAt, {
 		concurrencyLimit: limit,
 		persistent: persistentBacked,
@@ -2506,7 +2662,7 @@ const launchStageExecution = async <
 	stepStartedAt = Date.now();
 	if (
 		laneRuntime &&
-		(stageState.stage.persistent ?? true) &&
+		persistentBacked &&
 		laneRuntime.threadId &&
 		!pendingTask?.stageGroupInstanceId &&
 		((laneRuntime.forkedFromTaskId ?? null) !==
@@ -2540,7 +2696,7 @@ const launchStageExecution = async <
 	});
 
 	stepStartedAt = Date.now();
-	const stageCtx = createTaskStageContext(
+	const { stageCtx } = await createTaskStageContext(
 		stageState.stage,
 		runtime.ctx,
 		execution.input,
@@ -2557,7 +2713,7 @@ const launchStageExecution = async <
 			groupedPersistent: Boolean(laneRuntime && group),
 			allowAgentExit: stageState.stageName === SCAN_STAGE_IDS.analysis,
 		},
-	).stageCtx;
+	);
 	logLaunchTiming("create_stage_context", stepStartedAt, {
 		laneIndex: laneRuntime?.laneIndex ?? null,
 		containerIndex,
@@ -2767,7 +2923,7 @@ const launchStageExecution = async <
 			await backfillStageQueue(runtime, stageState);
 			return true;
 		}
-		await persistTerminalFailure(
+		await persistPostSuccessHandlingFailure(
 			stageState.stage,
 			runtime.ctx,
 			stageCtx,
@@ -2874,7 +3030,7 @@ const startStageRunAsync = <TPipelineContext extends PipelineContext>(
 				});
 			}
 		} catch (error) {
-			await persistTerminalFailure(
+			await persistPostSuccessHandlingFailure(
 				stageState.stage,
 				runtime.ctx,
 				stageCtx,
@@ -3137,13 +3293,12 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 				logInspectTiming("persist_exit_lane_success_with_error", stepStartedAt);
 			} else {
 				stepStartedAt = Date.now();
-				await persistTerminalFailure(
+				await persistPostSuccessHandlingFailure(
 					stageState.stage,
 					runtime.ctx,
 					stageCtx,
 					input,
 					error,
-					{ exitLane: hasExitSignal },
 				);
 				await maybeMarkTaskStageGroupExited(task.taskId, runtime);
 				logInspectTiming("persist_success_handling_failure", stepStartedAt);

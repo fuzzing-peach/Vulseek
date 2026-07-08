@@ -1,6 +1,7 @@
 import { db } from "@vulseek/server/db";
-import { tasks } from "@vulseek/server/db/schema";
+import { applications, compose, tasks } from "@vulseek/server/db/schema";
 import type { apiCreateScanJob } from "@vulseek/server/db/schema";
+import type { ScanStageSettings } from "@vulseek/server/db/schema";
 import { eq } from "drizzle-orm";
 import { DEFAULT_DELTA_COMMIT_WINDOW } from "../constants";
 import { computeTaskCost } from "../cost";
@@ -13,17 +14,53 @@ import {
 	resetScanJobForRetryRepo,
 	sumClaudeCodeCachedReadTokensByScanJobIdRepo,
 	updateScanJobNoteRepo,
+	updateScanJobPipelineDefinitionSnapshotRepo,
 	updateScanJobRuntimeSettingsRepo,
 	updateScanJobRepositoryTaskStatusRepo,
 	updateScanJobStatusRepo,
 } from "../persistence/scan-job.repo";
-import { normalizeScanRuntimeSettings } from "../runtime-settings";
+import {
+	buildCompleteScanRuntimeSettings,
+	normalizeScanRuntimeSettings,
+} from "../runtime-settings";
+import type { ScanPipelineDefinitions } from "../pipeline/scan-pipeline-definitions";
 
-export const createScanJob = async (input: typeof apiCreateScanJob._type) =>
-	await createScanJobRepo({
+const resolveCreateScanJobTargetStageSettings = async (
+	input: typeof apiCreateScanJob._type,
+): Promise<ScanStageSettings> => {
+	if (input.applicationId) {
+		const [row] = await db
+			.select({ scanStageSettings: applications.scanStageSettings })
+			.from(applications)
+			.where(eq(applications.applicationId, input.applicationId))
+			.limit(1);
+		return row?.scanStageSettings ?? {};
+	}
+	if (input.composeId) {
+		const [row] = await db
+			.select({ scanStageSettings: compose.scanStageSettings })
+			.from(compose)
+			.where(eq(compose.composeId, input.composeId))
+			.limit(1);
+		return row?.scanStageSettings ?? {};
+	}
+	return {};
+};
+
+export const createScanJob = async (input: typeof apiCreateScanJob._type) => {
+	const targetStageSettings =
+		await resolveCreateScanJobTargetStageSettings(input);
+	const scanRuntimeSettings = buildCompleteScanRuntimeSettings({
+		scanType: input.scanType,
+		targetStageSettings,
+		runtimeOverrides: input.scanRuntimeSettings ?? {},
+	});
+	return await createScanJobRepo({
 		...input,
+		scanRuntimeSettings,
 		defaultDeltaCommitWindow: DEFAULT_DELTA_COMMIT_WINDOW,
 	});
+};
 
 export const findScanJobById = async (scanJobId: string) => {
 	const [scanJob, claudeCachedReadTokens, taskRows] = await Promise.all([
@@ -74,6 +111,24 @@ export const updateScanJobRuntimeSettings = async (
 		scanJobId,
 		normalizeScanRuntimeSettings(scanRuntimeSettings),
 	);
+
+export const updateScanJobPipelineDefinitionSnapshot = async (
+	scanJobId: string,
+	scanPipelineDefinitionSnapshot: unknown,
+) => {
+	if (
+		!scanPipelineDefinitionSnapshot ||
+		typeof scanPipelineDefinitionSnapshot !== "object" ||
+		!("stages" in scanPipelineDefinitionSnapshot) ||
+		!("pipelines" in scanPipelineDefinitionSnapshot)
+	) {
+		throw new Error("Invalid scan pipeline definition snapshot");
+	}
+	return await updateScanJobPipelineDefinitionSnapshotRepo(
+		scanJobId,
+		scanPipelineDefinitionSnapshot as ScanPipelineDefinitions,
+	);
+};
 
 export const updateScanJobStatus = async (
 	scanJobId: string,

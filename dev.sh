@@ -273,6 +273,7 @@ start_vulseek() {
         --publish published=29229,target=9229,mode=host \
         --publish published=25555,target=5555,mode=host \
         --env VULSEEK_SCAN_CONTEXT_HOST_PATH="${effective_scan_context_host_path}" \
+        --env VULSEEK_SCAN_CONTEXT_APP_PATH=/scan-context \
         $env_args \
         --mount type=bind,source="${SCRIPT_DIR}/apps",target=/app/apps \
         --mount type=bind,source="${SCRIPT_DIR}/agents",target=/app/agents \

@@ -1,0 +1,21 @@
+delta-scope:
+  key: deltaScope
+  name: Delta Scope
+  role: scan
+  group: delta
+  concurrency: 1
+  maxConcurrency: 8
+  disableable: false
+  description: Scope changed repository targets for a delta scan.
+  runtimeConfig:
+    persistent: false
+    reuseContainer: true
+    mode: serial
+    nullableOutput: false
+    cwd: /workspace/repo
+    skills: [delta-scope]
+    promptFile: scan-delta-scope.prompt.md
+  inputSchema:
+    $ref: "#/schemas/NullStageInput"
+  outputSchema:
+    $ref: "#/schemas/DeltaScopeManifest"

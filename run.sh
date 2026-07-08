@@ -155,6 +155,7 @@ start_vulseek() {
         --env DATABASE_URL=postgresql://vulseek:vulseek_release_password@"$POSTGRES_SERVICE":5432/vulseek \
         --env REDIS_URL=redis://"$REDIS_SERVICE":6379 \
         --env VULSEEK_SCAN_CONTEXT_HOST_PATH="${effective_scan_context_host_path}" \
+        --env VULSEEK_SCAN_CONTEXT_APP_PATH=/scan-context \
         $env_args \
         --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
         --mount type=bind,source="${effective_scan_context_host_path}",target=/scan-context \

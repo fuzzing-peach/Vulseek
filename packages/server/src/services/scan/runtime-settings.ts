@@ -1,15 +1,16 @@
 import {
 	type ScanRuntimeSettings,
+	type ScanStageSettings,
 	ScanRuntimeSettingsSchema,
 } from "../../db/schema/shared";
-import { SCAN_PIPELINE_CATALOG } from "./pipeline/scan-pipeline-catalog";
+import { SCAN_PIPELINE_DEFINITIONS } from "./pipeline/scan-pipeline-definitions";
 import { SCAN_STAGE_IDS, SCAN_STAGE_METADATA } from "./stage-metadata";
 
 export const FULL_SCAN_STAGE_IDS =
-	SCAN_PIPELINE_CATALOG.pipelines.full.stageIds;
+	SCAN_PIPELINE_DEFINITIONS.pipelines.full.stageIds;
 
 export const DELTA_SCAN_STAGE_IDS =
-	SCAN_PIPELINE_CATALOG.pipelines.delta.stageIds;
+	SCAN_PIPELINE_DEFINITIONS.pipelines.delta.stageIds;
 
 const RUNTIME_STAGE_IDS = [
 	...FULL_SCAN_STAGE_IDS,
@@ -19,14 +20,14 @@ const RUNTIME_STAGE_IDS = [
 export const FULL_SCAN_STAGE_ID_SET = new Set<string>(FULL_SCAN_STAGE_IDS);
 export const RUNTIME_STAGE_ID_SET = new Set<string>(RUNTIME_STAGE_IDS);
 const RUNTIME_STAGE_BY_ID = new Map(
-	SCAN_PIPELINE_CATALOG.stages.map((stage) => [stage.id, stage]),
+	SCAN_PIPELINE_DEFINITIONS.stages.map((stage) => [stage.id, stage]),
 );
 
 export const isRuntimeStageDisableable = (stageName: string) =>
 	RUNTIME_STAGE_BY_ID.get(stageName)?.disableable ?? true;
 
-export const getRuntimeStageDefaultConcurrency = (stageName: string) =>
-	RUNTIME_STAGE_BY_ID.get(stageName)?.defaultConcurrency ?? 1;
+export const getRuntimeStageConcurrency = (stageName: string) =>
+	RUNTIME_STAGE_BY_ID.get(stageName)?.concurrency ?? 1;
 
 export type ScanRuntimeStageState = {
 	disabled: boolean;
@@ -54,6 +55,40 @@ export const normalizeScanRuntimeSettings = (
 		};
 	}
 	return { stages };
+};
+
+export const buildCompleteScanRuntimeSettings = (input: {
+	scanType: "delta" | "full";
+	targetStageSettings?: ScanStageSettings | null;
+	runtimeOverrides?: ScanRuntimeSettings | null;
+}): ScanRuntimeSettings => {
+	const stageIds =
+		input.scanType === "delta" ? DELTA_SCAN_STAGE_IDS : FULL_SCAN_STAGE_IDS;
+	const overrides = normalizeScanRuntimeSettings(input.runtimeOverrides ?? {});
+	const stages: NonNullable<ScanRuntimeSettings["stages"]> = {};
+
+	for (const stageName of stageIds) {
+		const stageDefinition = RUNTIME_STAGE_BY_ID.get(stageName);
+		const targetSetting = input.targetStageSettings?.[stageName] ?? {};
+		const override = overrides.stages?.[stageName] ?? {};
+		stages[stageName] = {
+			disabled: isRuntimeStageDisableable(stageName)
+				? override.disabled === true
+				: false,
+			agentProfileId:
+				override.agentProfileId ||
+				targetSetting.agentProfileId ||
+				stageDefinition?.runtimeConfig?.agentProfile ||
+				null,
+			concurrency:
+				override.concurrency ||
+				targetSetting.concurrency ||
+				stageDefinition?.concurrency ||
+				1,
+		};
+	}
+
+	return normalizeScanRuntimeSettings({ stages });
 };
 
 export const getRuntimeStageSetting = (

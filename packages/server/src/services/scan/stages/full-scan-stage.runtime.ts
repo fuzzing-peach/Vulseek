@@ -18,6 +18,7 @@ import {
 } from "../runtime-settings";
 import { SCAN_STAGE_IDS } from "../stage-metadata";
 import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
+import { createStageRuntimeConfig } from "../pipeline/scan-stage-runtime-config";
 
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
 const CONTAINER_TASK_RUNTIME_ROOT = "/task";
@@ -108,6 +109,37 @@ const resolveMountedProfileDir = (
 		sanitizePathPart(input.serviceName),
 	);
 
+const resolveScanContextAppRoot = async () => {
+	const configuredAppRoot = process.env.VULSEEK_SCAN_CONTEXT_APP_PATH?.trim();
+	if (configuredAppRoot) {
+		return configuredAppRoot;
+	}
+	try {
+		await fs.access(CONTAINER_SCAN_CONTEXT_ROOT);
+		return CONTAINER_SCAN_CONTEXT_ROOT;
+	} catch {
+		return process.env.VULSEEK_SCAN_CONTEXT_HOST_PATH?.trim() || "";
+	}
+};
+
+const resolveAppProfileDir = async (
+	input: Pick<PipelineContext, "projectName" | "serviceName">,
+) => {
+	const appRoot = await resolveScanContextAppRoot();
+	if (!appRoot) {
+		throw new Error(
+			"Scan context app path is not configured. Set VULSEEK_SCAN_CONTEXT_APP_PATH or VULSEEK_SCAN_CONTEXT_HOST_PATH.",
+		);
+	}
+	return path.join(
+		appRoot,
+		"projects",
+		sanitizePathPart(input.projectName),
+		"profiles",
+		sanitizePathPart(input.serviceName),
+	);
+};
+
 export const resolveTaskRootSegment = (
 	stageName: string,
 	taskName: string,
@@ -187,7 +219,7 @@ export const resolveStageAgentProfileFromTarget = async (
 
 export const resolveStageAgentProfile = async (
 	scanJob: ScanJobRuntimeRef,
-	kind: StageAgentKind,
+	_kind: StageAgentKind,
 	stageName?: string,
 ): Promise<AgentProfileLike | null> => {
 	if (stageName) {
@@ -207,8 +239,15 @@ export const resolveStageAgentProfile = async (
 				null
 			);
 		}
+		const snapshotAgentProfileId = await createStageRuntimeConfig(
+			scanJob.scanJobId,
+			stageName,
+		).getAgentProfile();
+		if (snapshotAgentProfileId) {
+			return await getAgentProfileById(snapshotAgentProfileId);
+		}
 	}
-	return await resolveStageAgentProfileFromTarget(scanJob, kind, stageName);
+	return null;
 };
 
 export const resolveScanProfileConcurrencySettingsFromTarget = async (
@@ -265,11 +304,9 @@ export const resolveScanProfileConcurrencySettings = async (
 		.where(eq(scanJobs.scanJobId, scanJobId))
 		.limit(1);
 
-	const targetSettings = await resolveScanProfileConcurrencySettingsFromTarget(
-		scanJob ?? {},
-	);
 	return {
-		...targetSettings,
+		fuzzingBudgetSeconds: null,
+		scanStageSettings: {},
 		scanRuntimeSettings: normalizeScanRuntimeSettings(
 			scanJob?.scanRuntimeSettings ?? {},
 		),
@@ -282,11 +319,13 @@ export const resolveStageConcurrencySetting = async (
 	fallback: (settings: ScanProfileConcurrencySettings) => number | null,
 ) => {
 	const settings = await resolveScanProfileConcurrencySettings(scanJobId);
+	const snapshotConcurrency = await createStageRuntimeConfig(scanJobId, stageName)
+		.getConcurrency();
 	return Math.max(
 		1,
 		getRuntimeStageSetting(settings.scanRuntimeSettings, stageName)
 			.concurrency ||
-		settings.scanStageSettings?.[stageName]?.concurrency ||
+			snapshotConcurrency ||
 			fallback(settings) ||
 			1,
 	);
@@ -373,9 +412,10 @@ export const resolveTaskRuntimeDirForTask = async (input: {
 	taskName: string;
 	taskId: string;
 }) => {
-	const mount = await resolveScanContextMount(input);
+	await resolveScanContextMount(input);
+	const appProfileDir = await resolveAppProfileDir(input);
 	const taskDirPath = path.join(
-		mount.mountSource,
+		appProfileDir,
 		"jobs",
 		input.scanJobId,
 		resolveTaskRootSegment(input.stageName, input.taskName, input.taskId),

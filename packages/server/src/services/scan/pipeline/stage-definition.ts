@@ -25,6 +25,20 @@ export type StageRunResult =
 			threadId?: string | null;
 	  };
 
+export type StageRuntimeConfigGetters = {
+	getConcurrency: () => Promise<number>;
+	getAgentProfile: () => Promise<string | null>;
+	getPersistent: () => Promise<boolean | null>;
+	getReuseContainer: () => Promise<boolean | null>;
+	getMode: () => Promise<StageRunMode | null>;
+	getNullableOutput: () => Promise<boolean | null>;
+	getCwd: () => Promise<string | null>;
+	getSkills: () => Promise<string[]>;
+	getPrompt: () => Promise<string | null>;
+	getInputArtifacts: () => Promise<Record<string, unknown> | null>;
+	getOutputSchema: () => Promise<unknown>;
+};
+
 export type StageQueueBinding<
 	TPipelineContext extends PipelineContext,
 	TInput,
@@ -70,6 +84,7 @@ export type StageDefinition<
 	persistent?: boolean;
 	reuseContainer?: boolean;
 	nullableOutput?: boolean;
+	runtimeConfig?: StageRuntimeConfigGetters;
 	queue?: StageQueueBinding<TPipelineContext, TInput>;
 	validateInput?: (ctx: TStageContext, input: TInput) => Promise<boolean>;
 	launch?: (ctx: TStageContext, input: TInput) => Promise<void>;

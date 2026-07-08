@@ -1,5 +1,10 @@
 import { buildTaskAgentProfileSnapshot } from "../agent-profile-snapshot";
 import { bindTaskRuntimeRepo } from "../persistence/task.repo";
+import { createStageRuntimeConfig } from "../pipeline/scan-stage-runtime-config";
+import {
+	renderPromptTemplateString,
+	type PromptTemplateValues,
+} from "../prompts/prompt-template";
 import {
 	startContainer,
 	type StageContainerInput,
@@ -79,4 +84,23 @@ export const launchAgentStageRuntime = async (input: {
 		runtimeFileNames: input.runtimeFileNames,
 	});
 	return runtime;
+};
+
+export const resolveStageRuntimeCwd = async (
+	ctx: StageContext,
+	fallback = "/workspace/repo",
+) =>
+	(await createStageRuntimeConfig(ctx.scanJobId, ctx.stageName).getCwd()) ||
+	fallback;
+
+export const resolveStageRuntimePrompt = async (
+	ctx: StageContext,
+	fallback: string,
+	values?: PromptTemplateValues,
+) => {
+	const prompt = await createStageRuntimeConfig(ctx.scanJobId, ctx.stageName).getPrompt();
+	if (prompt == null) {
+		return fallback;
+	}
+	return values ? renderPromptTemplateString(prompt, values) : prompt;
 };

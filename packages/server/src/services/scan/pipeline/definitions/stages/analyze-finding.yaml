@@ -1,0 +1,21 @@
+analyze-finding:
+  key: analysis
+  name: Analyze Finding
+  role: analysis
+  group: review
+  concurrency: 2
+  maxConcurrency: 16
+  disableable: true
+  description: Candidate analysis and critic routing.
+  runtimeConfig:
+    persistent: false
+    reuseContainer: true
+    mode: fanout
+    nullableOutput: false
+    cwd: /workspace/repo
+    skills: [analyze-finding]
+    promptFile: analyze.prompt.md
+  inputSchema:
+    $ref: "#/schemas/CandidateAnalysisStageInput"
+  outputSchema:
+    $ref: "#/schemas/Analysis"

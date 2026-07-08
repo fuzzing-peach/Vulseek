@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-	parseScanPipelineCatalogFromYaml,
-	resolveScanPipelineYamlPath,
+	parseScanPipelineDefinitionsFromYaml,
+	resolveScanPipelineDefinitionsDir,
 	validatePipelineRegistryCoverage,
-} from "./scan-pipeline-catalog";
+} from "./scan-pipeline-definitions";
 
-test("parseScanPipelineCatalogFromYaml parses full and delta pipeline topology", () => {
-	const catalog = parseScanPipelineCatalogFromYaml(`
+test("parseScanPipelineDefinitionsFromYaml parses full and delta pipeline topology", () => {
+	const definitions = parseScanPipelineDefinitionsFromYaml(`
 schemas:
   RepositoryProfileOutput:
     type: object
@@ -31,10 +31,20 @@ stages:
     name: Repository Profile
     role: scan
     group: full-scan
-    defaultConcurrency: 1
+    concurrency: 1
     maxConcurrency: 8
     disableable: false
     description: Repository profiling.
+    runtimeConfig:
+      agentProfile: repository-agent
+      persistent: false
+      reuseContainer: true
+      mode: serial
+      nullableOutput: false
+      cwd: /workspace/repo
+      skills: [repo-profiler]
+      prompt: |
+        Profile the repository.
     outputSchema:
       $ref: "#/schemas/RepositoryProfileOutput"
   scan-target:
@@ -42,7 +52,7 @@ stages:
     name: Scan Target
     role: scan
     group: full-scan
-    defaultConcurrency: 4
+    concurrency: 4
     maxConcurrency: 64
     disableable: true
     description: Target-level candidate discovery.
@@ -57,7 +67,7 @@ stages:
     name: Analyze Finding
     role: analysis
     group: review
-    defaultConcurrency: 2
+    concurrency: 2
     maxConcurrency: 16
     disableable: true
     description: Candidate analysis.
@@ -110,61 +120,76 @@ pipelines:
 `);
 
 	assert.deepEqual(
-		catalog.pipelineIds,
+		definitions.pipelineIds,
 		{
 			full: "full",
 			delta: "delta",
 		},
 	);
-	assert.deepEqual(catalog.stageIds, [
+	assert.deepEqual(definitions.stageIds, [
 		"repository-profile",
 		"scan-target",
 		"analyze-finding",
 	]);
-	assert.equal(catalog.stageMetadata.repositoryScan?.id, "repository-profile");
-	assert.equal(catalog.stageMetadata.functionScan?.id, "scan-target");
-	assert.equal(catalog.stageMetadata.analysis?.name, "Analyze Finding");
-	assert.equal(catalog.pipelines.full.rootStageId, "repository-profile");
-	assert.deepEqual(catalog.pipelines.delta.stageIds, [
+	assert.equal(definitions.stageMetadata.repositoryScan?.id, "repository-profile");
+	assert.equal(definitions.stageMetadata.functionScan?.id, "scan-target");
+	assert.equal(definitions.stageMetadata.analysis?.name, "Analyze Finding");
+	assert.equal(definitions.pipelines.full.rootStageId, "repository-profile");
+	assert.deepEqual(definitions.pipelines.delta.stageIds, [
 		"scan-target",
 		"analyze-finding",
 	]);
-	assert.deepEqual(catalog.pipelines.delta.edges[0]?.route, {
+	assert.deepEqual(definitions.pipelines.delta.edges[0]?.route, {
 		key: "verification",
 		default: true,
 	});
-	assert.equal(catalog.stageSettings.scanTarget?.disableable, true);
-	assert.equal(catalog.stageSettings.repositoryProfile?.disableable, false);
-	assert.equal(catalog.schemas.Module?.type, "object");
-	assert.deepEqual(catalog.stages[0]?.outputSchema, {
+	assert.equal(definitions.stageSettings.scanTarget?.disableable, true);
+	assert.equal(definitions.stageSettings.repositoryProfile?.disableable, false);
+	assert.equal(definitions.stages[0]?.concurrency, 1);
+	assert.equal(definitions.stageSettings.repositoryProfile?.concurrency, 1);
+	assert.deepEqual(definitions.stages[0]?.runtimeConfig, {
+		agentProfile: "repository-agent",
+		persistent: false,
+		reuseContainer: true,
+		mode: "serial",
+		nullableOutput: false,
+		cwd: "/workspace/repo",
+		skills: ["repo-profiler"],
+		prompt: "Profile the repository.\n",
+		promptFile: null,
+		inputArtifacts: null,
+		outputSchema: null,
+	});
+	assert.equal(definitions.schemas.Module?.type, "object");
+	assert.deepEqual(definitions.stages[0]?.outputSchema, {
 		$ref: "#/schemas/RepositoryProfileOutput",
 	});
-	assert.equal(catalog.stages[1]?.inputSchema?.type, "object");
-	assert.equal(catalog.pipelines.full.edges[0]?.mode, "fanOut");
-	assert.equal(catalog.pipelines.full.edges[0]?.foreach, "$.modules[*]");
-	assert.deepEqual(catalog.pipelines.full.edges[0]?.input, {
+	assert.equal(definitions.stages[1]?.inputSchema?.type, "object");
+	assert.equal(definitions.pipelines.full.edges[0]?.mode, "fanOut");
+	assert.equal(definitions.pipelines.full.edges[0]?.foreach, "$.modules[*]");
+	assert.deepEqual(definitions.pipelines.full.edges[0]?.input, {
 		modulePath: "$item",
 	});
-	assert.deepEqual(catalog.pipelines.full.edges[1]?.outputSchema, {
+	assert.deepEqual(definitions.pipelines.full.edges[1]?.outputSchema, {
 		$ref: "#/schemas/RepositoryProfileOutput",
 	});
 	assert.equal(
-		catalog.pipelines.full.edges[1]?.outputSchemaDescription,
+		definitions.pipelines.full.edges[1]?.outputSchemaDescription,
 		"Sample routed output schema",
 	);
 });
 
-test("parseScanPipelineCatalogFromYaml rejects invalid topology", () => {
+test("parseScanPipelineDefinitionsFromYaml rejects invalid topology", () => {
 	assert.throws(
 		() =>
-			parseScanPipelineCatalogFromYaml(`
+			parseScanPipelineDefinitionsFromYaml(`
 stages:
   repository-profile:
     key: repositoryScan
     name: Repository Profile
     role: scan
     group: full-scan
-    defaultConcurrency: 1
+    concurrency: 1
     disableable: false
 pipelines:
   full:
@@ -187,10 +212,10 @@ pipelines:
 	);
 });
 
-test("parseScanPipelineCatalogFromYaml rejects unknown schema references", () => {
+test("parseScanPipelineDefinitionsFromYaml requires concurrency", () => {
 	assert.throws(
 		() =>
-			parseScanPipelineCatalogFromYaml(`
+			parseScanPipelineDefinitionsFromYaml(`
 stages:
   repository-profile:
     key: repositoryScan
@@ -198,6 +223,36 @@ stages:
     role: scan
     group: full-scan
     defaultConcurrency: 1
+    disableable: false
+pipelines:
+  full:
+    name: full-scan-programmatic
+    root: repository-profile
+    stages: [repository-profile]
+    edges: []
+    groups: []
+  delta:
+    name: delta-scan-programmatic
+    root: repository-profile
+    stages: [repository-profile]
+    edges: []
+    groups: []
+`),
+		/concurrency/,
+	);
+});
+
+test("parseScanPipelineDefinitionsFromYaml rejects unknown schema references", () => {
+	assert.throws(
+		() =>
+			parseScanPipelineDefinitionsFromYaml(`
+stages:
+  repository-profile:
+    key: repositoryScan
+    name: Repository Profile
+    role: scan
+    group: full-scan
+    concurrency: 1
     disableable: false
     outputSchema:
       $ref: "#/schemas/Missing"
@@ -219,10 +274,10 @@ pipelines:
 	);
 });
 
-test("parseScanPipelineCatalogFromYaml rejects invalid edge transform expressions", () => {
+test("parseScanPipelineDefinitionsFromYaml rejects invalid edge transform expressions", () => {
 	assert.throws(
 		() =>
-			parseScanPipelineCatalogFromYaml(`
+			parseScanPipelineDefinitionsFromYaml(`
 schemas:
   SourceOutput:
     type: object
@@ -244,7 +299,7 @@ stages:
     name: Source
     role: scan
     group: scan
-    defaultConcurrency: 1
+    concurrency: 1
     outputSchema:
       $ref: "#/schemas/SourceOutput"
   target:
@@ -252,7 +307,7 @@ stages:
     name: Target
     role: scan
     group: scan
-    defaultConcurrency: 1
+    concurrency: 1
     inputSchema:
       $ref: "#/schemas/TargetInput"
 pipelines:
@@ -281,20 +336,20 @@ pipelines:
 
 	assert.throws(
 		() =>
-			parseScanPipelineCatalogFromYaml(`
+			parseScanPipelineDefinitionsFromYaml(`
 stages:
   source:
     key: source
     name: Source
     role: scan
     group: scan
-    defaultConcurrency: 1
+    concurrency: 1
   target:
     key: target
     name: Target
     role: scan
     group: scan
-    defaultConcurrency: 1
+    concurrency: 1
 pipelines:
   full:
     name: full
@@ -320,21 +375,21 @@ pipelines:
 });
 
 test("validatePipelineRegistryCoverage rejects missing stage and edge implementations", () => {
-	const catalog = parseScanPipelineCatalogFromYaml(`
+	const definitions = parseScanPipelineDefinitionsFromYaml(`
 stages:
   repository-profile:
     key: repositoryScan
     name: Repository Profile
     role: scan
     group: full-scan
-    defaultConcurrency: 1
+    concurrency: 1
     disableable: false
   scan-target:
     key: functionScan
     name: Scan Target
     role: scan
     group: full-scan
-    defaultConcurrency: 4
+    concurrency: 4
     disableable: true
 pipelines:
   full:
@@ -356,7 +411,7 @@ pipelines:
 
 	assert.throws(
 		() =>
-			validatePipelineRegistryCoverage(catalog, {
+			validatePipelineRegistryCoverage(definitions, {
 				stageIds: new Set(["repository-profile"]),
 				edgeNames: new Set<string>(),
 			}),
@@ -364,7 +419,7 @@ pipelines:
 	);
 	assert.throws(
 		() =>
-			validatePipelineRegistryCoverage(catalog, {
+			validatePipelineRegistryCoverage(definitions, {
 				stageIds: new Set(["repository-profile", "scan-target"]),
 				edgeNames: new Set<string>(),
 			}),
@@ -372,10 +427,10 @@ pipelines:
 	);
 });
 
-test("resolveScanPipelineYamlPath reads the YAML as a filesystem sibling", () => {
-	const moduleUrl = new URL("./scan-pipeline-catalog.ts", import.meta.url).href;
-	const yamlPath = resolveScanPipelineYamlPath(moduleUrl);
+test("resolveScanPipelineDefinitionsDir resolves the definitions directory", () => {
+	const moduleUrl = new URL("./scan-pipeline-definitions.ts", import.meta.url).href;
+	const definitionsDir = resolveScanPipelineDefinitionsDir(moduleUrl);
 
-	assert.equal(yamlPath.endsWith("/scan-pipelines.yaml"), true);
-	assert.equal(yamlPath.includes("/_next/static/media/"), false);
+	assert.equal(definitionsDir.endsWith("/definitions"), true);
+	assert.equal(definitionsDir.includes("/_next/static/media/"), false);
 });

@@ -1,0 +1,27 @@
+AttackSurfaceModelStageInput:
+  type: object
+  required: [scanJob, repositoryPath, modulePath, moduleId, moduleName, priority]
+  properties:
+    scanJob:
+      $ref: "#/schemas/ScanJobSnapshot"
+    repositoryPath:
+      $pathOf: "#/schemas/Repository"
+    modulePath:
+      $pathOf: "#/schemas/Module"
+    moduleId:
+      type: string
+    moduleName:
+      type: string
+    priority:
+      type: [integer, "null"]
+ModuleThreatModelManifest:
+  type: object
+  required: [repository, module, threatModel]
+  additionalProperties: false
+  properties:
+    repository:
+      $pathOf: "#/schemas/Repository"
+    module:
+      $pathOf: "#/schemas/Module"
+    threatModel:
+      $pathOf: "#/schemas/ModuleThreatModel"

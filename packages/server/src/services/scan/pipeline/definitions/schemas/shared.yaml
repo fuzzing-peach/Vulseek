@@ -1,0 +1,747 @@
+ScanJobSnapshot:
+  type: object
+  required: [scanJobId]
+  additionalProperties: true
+  properties:
+    scanJobId:
+      type: string
+Evidence:
+  type: object
+  required:
+    - id
+    - kind
+    - summary
+    - filePath
+    - line
+    - symbol
+    - command
+    - artifactPath
+    - observation
+    - supports
+    - contradicts
+    - confidenceImpact
+  additionalProperties: false
+  properties:
+    id:
+      type: string
+    kind:
+      enum: [code, runtime, fuzz, negative, assumption, external]
+    summary:
+      type: string
+    filePath:
+      type: [string, "null"]
+    line:
+      type: [integer, "null"]
+    symbol:
+      type: [string, "null"]
+    command:
+      type: [string, "null"]
+    artifactPath:
+      type: [string, "null"]
+    observation:
+      type: [string, "null"]
+    supports:
+      type: array
+      items:
+        type: string
+    contradicts:
+      type: array
+      items:
+        type: string
+    confidenceImpact:
+      type: [string, "null"]
+Repository:
+  type: object
+  required:
+    - id
+    - name
+    - summary
+    - languages
+    - buildSystems
+    - runtimeDirectories
+    - downrankedDirectories
+    - notes
+    - targetRef
+    - targetTag
+    - commitSha
+    - baseSha
+    - commitWindow
+  properties:
+    id:
+      type: string
+    name:
+      type: string
+    summary:
+      type: string
+    languages:
+      type: array
+      items:
+        type: string
+    buildSystems:
+      type: array
+      items:
+        type: string
+    runtimeDirectories:
+      type: array
+      items:
+        type: string
+    downrankedDirectories:
+      type: array
+      items:
+        type: string
+    notes:
+      type: array
+      items:
+        type: string
+    targetRef:
+      type: [string, "null"]
+    targetTag:
+      type: [string, "null"]
+    commitSha:
+      type: [string, "null"]
+    baseSha:
+      type: [string, "null"]
+    commitWindow:
+      type: integer
+Module:
+  type: object
+  required:
+    - id
+    - moduleId
+    - name
+    - summary
+    - priority
+    - files
+    - entryPoints
+    - trustBoundaries
+    - attackSurfaces
+    - vulnerabilityThemes
+    - runtimeComponents
+    - notes
+  additionalProperties: false
+  properties:
+    id:
+      type: string
+    moduleId:
+      type: string
+    name:
+      type: string
+    summary:
+      type: string
+    priority:
+      type: integer
+    files:
+      type: array
+      items:
+        type: string
+    entryPoints:
+      type: array
+      items:
+        type: string
+    trustBoundaries:
+      type: array
+      items:
+        type: string
+    attackSurfaces:
+      type: array
+      items:
+        type: string
+    vulnerabilityThemes:
+      type: array
+      items:
+        type: string
+    runtimeComponents:
+      type: array
+      items:
+        type: string
+    notes:
+      type: array
+      items:
+        type: string
+Function:
+  type: object
+  required:
+    - id
+    - moduleId
+    - moduleName
+    - functionId
+    - functionName
+    - filePath
+    - line
+    - priority
+    - summary
+    - vulnerabilityType
+    - score
+    - role
+    - reachability
+    - sourceToSinkHint
+    - excludeReason
+    - priorityReason
+    - securityModelRelation
+    - attackSurface
+    - trustBoundary
+    - likelyVulnerabilityTypes
+  properties:
+    id:
+      type: string
+    moduleId:
+      type: string
+    moduleName:
+      type: string
+    functionId:
+      type: string
+    functionName:
+      type: string
+    filePath:
+      type: [string, "null"]
+    line:
+      type: [integer, "null"]
+    priority:
+      type: integer
+    summary:
+      type: [string, "null"]
+    vulnerabilityType:
+      type: [string, "null"]
+    score:
+      type: [number, "null"]
+    role:
+      type: string
+    reachability:
+      type: string
+    sourceToSinkHint:
+      type: [string, "null"]
+    excludeReason:
+      type: [string, "null"]
+    priorityReason:
+      type: string
+    securityModelRelation:
+      type: string
+    attackSurface:
+      type: [string, "null"]
+    trustBoundary:
+      type: [string, "null"]
+    likelyVulnerabilityTypes:
+      type: array
+      items:
+        type: string
+TargetKind:
+  enum:
+    - function
+    - route-handler
+    - middleware
+    - api-route
+    - server-action
+    - page-loader
+    - controller-action
+    - view-function
+    - resolver
+    - job-handler
+    - cli-command
+    - security-config
+    - template-render
+    - parser-deserializer
+    - data-access
+    - unknown
+Target:
+  type: object
+  required:
+    - id
+    - moduleId
+    - moduleName
+    - targetId
+    - targetName
+    - targetKind
+    - language
+    - framework
+    - sourceFiles
+    - filePath
+    - line
+    - routePath
+    - httpMethods
+    - priority
+    - summary
+    - attackerInputs
+    - sinks
+    - trustBoundary
+    - likelyVulnerabilityTypes
+    - evidence
+    - score
+    - excludeReason
+    - priorityReason
+  additionalProperties: false
+  properties:
+    id:
+      type: string
+    moduleId:
+      type: string
+    moduleName:
+      type: string
+    targetId:
+      type: string
+    targetName:
+      type: string
+    targetKind:
+      $ref: "#/schemas/TargetKind"
+    language:
+      type: [string, "null"]
+    framework:
+      type: [string, "null"]
+    sourceFiles:
+      type: array
+      minItems: 1
+      items:
+        type: string
+    filePath:
+      type: [string, "null"]
+    line:
+      type: [integer, "null"]
+    routePath:
+      type: [string, "null"]
+    httpMethods:
+      type: array
+      items:
+        type: string
+    priority:
+      type: integer
+    summary:
+      type: [string, "null"]
+    attackerInputs:
+      type: array
+      items:
+        type: string
+    sinks:
+      type: array
+      items:
+        type: string
+    trustBoundary:
+      type: [string, "null"]
+    likelyVulnerabilityTypes:
+      type: array
+      items:
+        type: string
+    evidence:
+      type: array
+      items:
+        type: string
+    score:
+      type: [number, "null"]
+    excludeReason:
+      type: [string, "null"]
+    priorityReason:
+      type: string
+ModuleThreatModel:
+  type: object
+  required:
+    - moduleId
+    - moduleName
+    - modulePath
+    - assets
+    - entrypoints
+    - trustBoundaries
+    - attackerInputs
+    - sinkClasses
+    - likelyVulnerabilityClasses
+    - rulePriorities
+    - securityAssumptions
+    - assumptions
+    - limitations
+    - summary
+  additionalProperties: false
+  properties:
+    moduleId:
+      type: string
+    moduleName:
+      type: string
+    modulePath:
+      type: string
+    assets:
+      type: array
+      items:
+        type: string
+    entrypoints:
+      type: array
+      items:
+        type: string
+    trustBoundaries:
+      type: array
+      items:
+        type: string
+    attackerInputs:
+      type: array
+      items:
+        type: string
+    sinkClasses:
+      type: array
+      items:
+        type: string
+    likelyVulnerabilityClasses:
+      type: array
+      items:
+        type: string
+    rulePriorities:
+      type: array
+      items:
+        type: string
+    securityAssumptions:
+      type: array
+      items:
+        type: string
+    assumptions:
+      type: array
+      items:
+        type: string
+    limitations:
+      type: array
+      items:
+        type: string
+    summary:
+      type: string
+Candidate:
+  type: object
+  required:
+    - id
+    - functionId
+    - title
+    - description
+    - filePath
+    - line
+    - vulnerabilityType
+    - confidence
+    - score
+    - claim
+    - rootCauseKey
+    - evidence
+    - attackerControl
+    - affectedSink
+    - preconditions
+    - quickDisproofAttempt
+    - needsFuzzing
+    - needsManualAnalysis
+  properties:
+    id:
+      type: string
+    functionId:
+      type: [string, "null"]
+    title:
+      type: string
+    description:
+      type: string
+    filePath:
+      type: [string, "null"]
+    line:
+      type: [integer, "null"]
+    vulnerabilityType:
+      type: [string, "null"]
+    confidence:
+      type: [number, "null"]
+    score:
+      type: [number, "null"]
+    claim:
+      type: string
+    rootCauseKey:
+      type: [string, "null"]
+    targetId:
+      type: [string, "null"]
+    targetKind:
+      anyOf:
+        - $ref: "#/schemas/TargetKind"
+        - type: "null"
+    evidence:
+      type: array
+      items:
+        $ref: "#/schemas/Evidence"
+    attackerControl:
+      type: [string, "null"]
+    affectedSink:
+      type: [string, "null"]
+    preconditions:
+      type: array
+      items:
+        type: string
+    quickDisproofAttempt:
+      type: [string, "null"]
+    needsFuzzing:
+      type: boolean
+    needsManualAnalysis:
+      type: boolean
+AnalysisFeedbackItem:
+  type: object
+  required: [kind, summary, evidence]
+  properties:
+    kind:
+      enum: [candidate, critic, manual]
+    summary:
+      type: string
+    evidence:
+      type: array
+      items:
+        $ref: "#/schemas/Evidence"
+Analysis:
+  type: object
+  required:
+    - id
+    - result
+    - summary
+    - confidence
+    - score
+    - reportPath
+    - runtimeSeconds
+    - hypothesis
+    - evidenceTable
+    - attackPath
+    - blockers
+    - rulingRationale
+    - missingEvidenceRequest
+    - feedbackHistory
+  properties:
+    id:
+      type: string
+    result:
+      enum:
+        - real_vulnerability
+        - likely_vulnerability
+        - plausible_but_unproven
+        - false_positive
+    summary:
+      type: string
+    confidence:
+      type: [number, "null"]
+    score:
+      type: [number, "null"]
+    reportPath:
+      type: [string, "null"]
+    runtimeSeconds:
+      type: [number, "null"]
+    analysisFingerprint:
+      type: string
+    hypothesis:
+      type: string
+    evidenceTable:
+      type: array
+      items:
+        $ref: "#/schemas/Evidence"
+    attackPath:
+      type: array
+      items:
+        type: string
+    blockers:
+      type: array
+      items:
+        type: string
+    rulingRationale:
+      type: string
+    missingEvidenceRequest:
+      type: array
+      items:
+        type: string
+    feedbackHistory:
+      type: array
+      items:
+        $ref: "#/schemas/AnalysisFeedbackItem"
+CriticResponse:
+  type: object
+  required:
+    - id
+    - stance
+    - reviewedAnalysisFingerprint
+    - summary
+    - objections
+    - requiredAdditionalEvidence
+    - codeExistenceChecks
+    - citationValidityChecks
+    - reachabilityAssessment
+    - preconditionAssessment
+    - falsePositiveAlternatives
+    - severityExploitabilityAssessment
+    - refutedClaims
+    - missingEvidenceFields
+    - suggestedNextAction
+  properties:
+    id:
+      type: string
+    stance:
+      enum: [object, convinced]
+    reviewedAnalysisFingerprint:
+      type: string
+    summary:
+      type: string
+    objections:
+      type: array
+      items:
+        type: string
+    requiredAdditionalEvidence:
+      type: array
+      items:
+        type: string
+    codeExistenceChecks:
+      type: array
+      items:
+        type: string
+    citationValidityChecks:
+      type: array
+      items:
+        type: string
+    reachabilityAssessment:
+      type: string
+    preconditionAssessment:
+      type: string
+    falsePositiveAlternatives:
+      type: array
+      items:
+        type: string
+    severityExploitabilityAssessment:
+      type: string
+    refutedClaims:
+      type: array
+      items:
+        type: string
+    missingEvidenceFields:
+      type: array
+      items:
+        type: string
+    suggestedNextAction:
+      type: [string, "null"]
+FinalAnalysis:
+  allOf:
+    - $ref: "#/schemas/Analysis"
+    - type: object
+      required: [analysisFingerprint, criticApproval, evidenceBundle, fuzzEvidence]
+      properties:
+        analysisFingerprint:
+          type: string
+        criticApproval:
+          type: object
+          required:
+            - criticTaskId
+            - reviewedAnalysisFingerprint
+            - stance
+            - summary
+          properties:
+            criticTaskId:
+              type: string
+            reviewedAnalysisFingerprint:
+              type: string
+            stance:
+              const: convinced
+            summary:
+              type: string
+        evidenceBundle:
+          type: array
+          items:
+            $ref: "#/schemas/Evidence"
+        fuzzEvidence:
+          type: array
+          items:
+            $ref: "#/schemas/Evidence"
+Verification:
+  type: object
+  required:
+    - id
+    - result
+    - summary
+    - confidence
+    - score
+    - reportPath
+    - runtimeSeconds
+    - evidenceBundle
+    - residualUncertainty
+  properties:
+    id:
+      type: string
+    result:
+      enum: [true, likely, false]
+    summary:
+      type: string
+    confidence:
+      type: [number, "null"]
+    score:
+      type: [number, "null"]
+    reportPath:
+      type: [string, "null"]
+    runtimeSeconds:
+      type: [number, "null"]
+    evidenceBundle:
+      type: array
+      items:
+        $ref: "#/schemas/Evidence"
+    residualUncertainty:
+      type: array
+      items:
+        type: string
+Triage:
+  type: object
+  required:
+    - id
+    - result
+    - disqualifier
+    - disqualifierReason
+    - securityClassification
+    - isSecurityIssue
+    - impactType
+    - cvssVector
+    - cvssScore
+    - cvssSeverity
+    - exploitability
+    - isExploitable
+    - commonTriggerConditions
+    - hardeningOrRobustness
+    - epssProbability30d
+    - epssSource
+    - summary
+    - reportPath
+    - runtimeSeconds
+    - evidenceBundle
+    - residualUncertainty
+  properties:
+    id:
+      type: string
+    result:
+      enum: [security_issue, non_security, hardening, needs_review]
+    disqualifier:
+      enum: [D-0, D-1, D-1.5, D-2, D-3, D-4, D-5, null]
+    disqualifierReason:
+      type: [string, "null"]
+    securityClassification:
+      enum: [vulnerability, security_hardening, robustness, non_security, unknown]
+    isSecurityIssue:
+      type: boolean
+    impactType:
+      type: string
+    cvssVector:
+      type: [string, "null"]
+    cvssScore:
+      type: [number, "null"]
+      minimum: 0
+      maximum: 10
+    cvssSeverity:
+      enum: [none, low, medium, high, critical, unknown]
+    exploitability:
+      enum: [none, theoretical, proof_of_concept, practical, unknown]
+    isExploitable:
+      type: [boolean, "null"]
+    commonTriggerConditions:
+      type: array
+      items:
+        type: string
+    hardeningOrRobustness:
+      type: boolean
+    epssProbability30d:
+      type: [number, "null"]
+      minimum: 0
+      maximum: 1
+    epssSource:
+      type: string
+    summary:
+      type: string
+    reportPath:
+      type: [string, "null"]
+    runtimeSeconds:
+      type: [number, "null"]
+    evidenceBundle:
+      type: array
+      items:
+        $ref: "#/schemas/Evidence"
+    residualUncertainty:
+      type: array
+      items:
+        type: string

@@ -21,6 +21,8 @@ import type {
 import {
 	launchAgentStageRuntime,
 	resolveAgentStageRuntime,
+	resolveStageRuntimeCwd,
+	resolveStageRuntimePrompt,
 } from "./agent-stage-runtime";
 import {
 	type PipelineContext,
@@ -109,6 +111,15 @@ const executeCandidateTriageStage = async (
 	});
 	const reportPath = `${runtime.taskStageRootInContainer}/01_triage_report.md`;
 
+	const fallbackPrompt = buildCandidateTriagePrompt(stageInput, {
+		analysisResult,
+		verifyResult,
+		candidate,
+		taskDirContainer: runtime.taskStageRootInContainer,
+		reportPath,
+		taskId: ctx.taskId,
+	});
+
 	return await runSingleTurnAgentInContainer({
 		scanJob,
 		agentProfile: runtime.agentProfile,
@@ -126,18 +137,11 @@ const executeCandidateTriageStage = async (
 		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
 		runtimeFileNames: SANDBOX_AGENT_RUNTIME_FILE_NAMES,
-		cwd: "/workspace/repo",
+		cwd: await resolveStageRuntimeCwd(ctx),
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
-		prompt: buildCandidateTriagePrompt(stageInput, {
-			analysisResult,
-			verifyResult,
-			candidate,
-			taskDirContainer: runtime.taskStageRootInContainer,
-			reportPath,
-			taskId: ctx.taskId,
-		}),
+		prompt: await resolveStageRuntimePrompt(ctx, fallbackPrompt),
 		outputSchema: outputSchema ?? triageSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });

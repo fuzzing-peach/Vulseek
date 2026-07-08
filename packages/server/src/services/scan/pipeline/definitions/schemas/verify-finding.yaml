@@ -1,0 +1,22 @@
+CandidateVerificationStageInput:
+  type: object
+  required:
+    - scanJob
+    - repositoryPath
+    - modulePath
+    - functionPath
+    - candidatePath
+    - analysisResultPath
+  properties:
+    scanJob:
+      $ref: "#/schemas/ScanJobSnapshot"
+    repositoryPath:
+      $pathOf: "#/schemas/Repository"
+    modulePath:
+      $pathOf: "#/schemas/Module"
+    functionPath:
+      $pathOf: "#/schemas/Target"
+    candidatePath:
+      $pathOf: "#/schemas/Candidate"
+    analysisResultPath:
+      $pathOf: "#/schemas/FinalAnalysis"

@@ -1,0 +1,21 @@
+repository-profile:
+  key: repositoryScan
+  name: Repository Profile
+  role: scan
+  group: full-scan
+  concurrency: 1
+  maxConcurrency: 8
+  disableable: false
+  description: Repository-wide runtime and security surface profiling.
+  runtimeConfig:
+    persistent: false
+    reuseContainer: true
+    mode: serial
+    nullableOutput: false
+    cwd: /workspace/repo
+    skills: [repository-profile]
+    promptFile: scan-repository.prompt.md
+  inputSchema:
+    $ref: "#/schemas/NullStageInput"
+  outputSchema:
+    $ref: "#/schemas/RepositoryScanManifest"

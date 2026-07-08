@@ -1,0 +1,21 @@
+identify-target:
+  key: moduleScan
+  name: Identify Target
+  role: scan
+  group: full-scan
+  concurrency: 4
+  maxConcurrency: 32
+  disableable: true
+  description: Identify route, handler, parser, function, and other scan targets.
+  runtimeConfig:
+    persistent: false
+    reuseContainer: true
+    mode: fanout
+    nullableOutput: false
+    cwd: /workspace/repo
+    skills: [identify-target]
+    promptFile: identify-target.prompt.md
+  inputSchema:
+    $ref: "#/schemas/IdentifyTargetStageInput"
+  outputSchema:
+    $ref: "#/schemas/IdentifyTargetManifest"

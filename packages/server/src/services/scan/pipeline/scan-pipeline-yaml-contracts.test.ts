@@ -5,7 +5,7 @@ import {
 	validateJsonSchemaContract,
 	validateJsonSchemaContractArtifacts,
 } from "./scan-pipeline-schema-contracts";
-import { SCAN_PIPELINE_CATALOG } from "./scan-pipeline-catalog";
+import { SCAN_PIPELINE_DEFINITIONS } from "./scan-pipeline-definitions";
 
 const artifactPath = (name: string) => `/task/artifacts/${name}.json`;
 
@@ -234,10 +234,10 @@ const artifacts: Record<string, unknown> = {
 };
 
 const contractForStage = (stageId: string) => {
-	const stage = SCAN_PIPELINE_CATALOG.stages.find((item) => item.id === stageId);
+	const stage = SCAN_PIPELINE_DEFINITIONS.stages.find((item) => item.id === stageId);
 	assert.ok(stage?.outputSchema, `stage ${stageId} must define outputSchema`);
 	return createJsonSchemaContract({
-		schemas: SCAN_PIPELINE_CATALOG.schemas,
+		schemas: SCAN_PIPELINE_DEFINITIONS.schemas,
 		schema: stage.outputSchema,
 	});
 };
@@ -282,12 +282,12 @@ test("YAML stage output schemas validate current scan output shapes", async () =
 });
 
 test("YAML routed final analysis schema validates critic-approved analysis", () => {
-	const edge = SCAN_PIPELINE_CATALOG.pipelines.full.edges.find(
+	const edge = SCAN_PIPELINE_DEFINITIONS.pipelines.full.edges.find(
 		(item) => item.name === "analyze-finding-to-verify-finding",
 	);
 	assert.ok(edge?.outputSchema);
 	const contract = createJsonSchemaContract({
-		schemas: SCAN_PIPELINE_CATALOG.schemas,
+		schemas: SCAN_PIPELINE_DEFINITIONS.schemas,
 		schema: edge.outputSchema,
 	});
 

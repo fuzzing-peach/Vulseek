@@ -3,6 +3,10 @@ import { scanJobs, tasks } from "@vulseek/server/db/schema";
 import type { ScanRuntimeSettings } from "@vulseek/server/db/schema";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, or, sql } from "drizzle-orm";
+import {
+	SCAN_PIPELINE_DEFINITIONS,
+	type ScanPipelineDefinitions,
+} from "../pipeline/scan-pipeline-definitions";
 import { normalizeScanRuntimeSettings } from "../runtime-settings";
 import { createTaskRepo } from "./task.repo";
 
@@ -19,6 +23,7 @@ const selectScanJobWithRepositoryTaskStatus = {
 	targetRef: scanJobs.targetRef,
 	targetTag: scanJobs.targetTag,
 	scanRuntimeSettings: scanJobs.scanRuntimeSettings,
+	scanPipelineDefinitionSnapshot: scanJobs.scanPipelineDefinitionSnapshot,
 	commitWindow: scanJobs.commitWindow,
 	moduleTasksTotal: scanJobs.moduleTasksTotal,
 	moduleTasksCompleted: scanJobs.moduleTasksCompleted,
@@ -167,6 +172,7 @@ export const createScanJobRepo = async (input: {
 			scanRuntimeSettings: normalizeScanRuntimeSettings(
 				input.scanRuntimeSettings ?? {},
 			),
+			scanPipelineDefinitionSnapshot: SCAN_PIPELINE_DEFINITIONS,
 			commitWindow: input.commitWindow || input.defaultDeltaCommitWindow,
 			status: "pending",
 		})
@@ -207,6 +213,49 @@ export const updateScanJobRuntimeSettingsRepo = async (
 		throw new TRPCError({ code: "NOT_FOUND", message: "Scan job not found" });
 	}
 
+	return updated[0];
+};
+
+const hasUsableScanPipelineDefinitionSnapshot = (
+	value: unknown,
+): value is ScanPipelineDefinitions =>
+	Boolean(
+		value &&
+			typeof value === "object" &&
+			"stages" in value &&
+			"pipelines" in value,
+	);
+
+export const loadScanJobPipelineDefinitionSnapshotRepo = async (scanJobId: string) => {
+	const [row] = await db
+		.select({ scanPipelineDefinitionSnapshot: scanJobs.scanPipelineDefinitionSnapshot })
+		.from(scanJobs)
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.limit(1);
+	if (!row) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Scan job not found" });
+	}
+	if (hasUsableScanPipelineDefinitionSnapshot(row.scanPipelineDefinitionSnapshot)) {
+		return row.scanPipelineDefinitionSnapshot;
+	}
+	throw new TRPCError({
+		code: "INTERNAL_SERVER_ERROR",
+		message: "Scan job pipeline definition snapshot is missing or invalid",
+	});
+};
+
+export const updateScanJobPipelineDefinitionSnapshotRepo = async (
+	scanJobId: string,
+	scanPipelineDefinitionSnapshot: ScanPipelineDefinitions,
+) => {
+	const updated = await db
+		.update(scanJobs)
+		.set({ scanPipelineDefinitionSnapshot })
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.returning();
+	if (!updated[0]) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Scan job not found" });
+	}
 	return updated[0];
 };
 

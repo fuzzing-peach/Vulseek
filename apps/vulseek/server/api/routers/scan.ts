@@ -12,7 +12,7 @@ import {
 	findRunningCheckoutTask,
 	findScanJobById,
 	findFullScanStageGraph,
-	getScanPipelineCatalog,
+	getScanPipelineDefinitions,
 	getScanPipelineYaml,
 	findScanJobSandboxAgentSession,
 	findScanJobStageGraph,
@@ -48,6 +48,7 @@ import {
 	syncFullScanTasksFromArtifacts,
 	updateVulnerabilityCandidateMetadata,
 	updateScanJobNote,
+	updateScanJobPipelineDefinitionSnapshot,
 	updateScanJobRuntimeSettings,
 } from "@vulseek/server";
 import { TRPCError } from "@trpc/server";
@@ -134,6 +135,11 @@ const apiUpdateScanRuntimeSettings = z.object({
 	scanRuntimeSettings: ScanRuntimeSettingsSchema,
 });
 
+const apiUpdateScanPipelineDefinitionSnapshot = z.object({
+	scanJobId: z.string().min(1),
+	scanPipelineDefinitionSnapshot: z.record(z.unknown()),
+});
+
 const apiStartScanEvaluation = z.object({
 	scanJobId: z.string().min(1),
 	configSnapshot: scanEvaluationConfigSchema,
@@ -145,7 +151,7 @@ const apiStartCandidateReviewContainer = z.object({
 });
 
 export const scanRouter = createTRPCRouter({
-	pipelineCatalog: protectedProcedure.query(async () => getScanPipelineCatalog()),
+	pipelineDefinitions: protectedProcedure.query(async () => getScanPipelineDefinitions()),
 
 	pipelineYaml: protectedProcedure.query(async () => ({
 		yaml: getScanPipelineYaml(),
@@ -508,6 +514,39 @@ export const scanRouter = createTRPCRouter({
 			return await updateScanJobRuntimeSettings(
 				input.scanJobId,
 				input.scanRuntimeSettings,
+			);
+		}),
+
+	updatePipelineDefinitionSnapshot: protectedProcedure
+		.input(apiUpdateScanPipelineDefinitionSnapshot)
+		.mutation(async ({ input, ctx }) => {
+			const scanJob = await findScanJobById(input.scanJobId);
+			let organizationId: string | undefined;
+			if (scanJob.applicationId) {
+				const application = await findApplicationById(scanJob.applicationId);
+				organizationId = application.environment.project.organizationId;
+			}
+			if (scanJob.composeId) {
+				const compose = await findComposeById(scanJob.composeId);
+				organizationId = compose.environment.project.organizationId;
+			}
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid scan job target",
+				});
+			}
+
+			if (organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to update this scan job",
+				});
+			}
+
+			return await updateScanJobPipelineDefinitionSnapshot(
+				input.scanJobId,
+				input.scanPipelineDefinitionSnapshot,
 			);
 		}),
 

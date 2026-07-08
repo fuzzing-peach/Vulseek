@@ -1,0 +1,51 @@
+ScanTargetStageInput:
+  type: object
+  required:
+    - scanJob
+    - repositoryPath
+    - modulePath
+    - threatModelPath
+    - targetPath
+    - moduleId
+    - moduleName
+    - targetId
+    - targetName
+    - targetKind
+    - priority
+  properties:
+    scanJob:
+      $ref: "#/schemas/ScanJobSnapshot"
+    repositoryPath:
+      $pathOf: "#/schemas/Repository"
+    modulePath:
+      $pathOf: "#/schemas/Module"
+    threatModelPath:
+      $pathOf: "#/schemas/ModuleThreatModel"
+    targetPath:
+      $pathOf: "#/schemas/Target"
+    moduleId:
+      type: string
+    moduleName:
+      type: string
+    targetId:
+      type: string
+    targetName:
+      type: string
+    targetKind:
+      type: string
+    filePath:
+      type: [string, "null"]
+    line:
+      type: [integer, "null"]
+    summary:
+      type: [string, "null"]
+    priority:
+      type: [integer, "null"]
+ScanTargetManifest:
+  type: object
+  required: [candidates]
+  properties:
+    candidates:
+      type: array
+      items:
+        $pathOf: "#/schemas/Candidate"

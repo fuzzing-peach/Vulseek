@@ -1,0 +1,10 @@
+RepositoryScanManifest:
+  type: object
+  required: [repository, modules]
+  properties:
+    repository:
+      $pathOf: "#/schemas/Repository"
+    modules:
+      type: array
+      items:
+        $pathOf: "#/schemas/Module"

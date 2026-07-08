@@ -1,0 +1,21 @@
+attack-surface-model:
+  key: attackSurfaceModel
+  name: Attack Surface Model
+  role: scan
+  group: full-scan
+  concurrency: 4
+  maxConcurrency: 32
+  disableable: true
+  description: Module-level threat and attack-surface modeling.
+  runtimeConfig:
+    persistent: false
+    reuseContainer: true
+    mode: fanout
+    nullableOutput: false
+    cwd: /workspace/repo
+    skills: [attack-surface-model]
+    promptFile: attack-surface-model.prompt.md
+  inputSchema:
+    $ref: "#/schemas/AttackSurfaceModelStageInput"
+  outputSchema:
+    $ref: "#/schemas/ModuleThreatModelManifest"

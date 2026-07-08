@@ -14,6 +14,8 @@ import type { Candidate, ScanJob } from "../types";
 import {
 	launchAgentStageRuntime,
 	resolveAgentStageRuntime,
+	resolveStageRuntimeCwd,
+	resolveStageRuntimePrompt,
 } from "./agent-stage-runtime";
 import {
 	type PipelineContext,
@@ -87,6 +89,13 @@ const executeCandidateAnalysisStage = async (
 	});
 	const reportPath = `${runtime.taskStageRootInContainer}/01_report.md`;
 
+	const fallbackPrompt = buildCandidateAnalysisPrompt(stageInput, {
+		candidate,
+		reportPath,
+		taskDirContainer: runtime.taskStageRootInContainer,
+		taskId: ctx.taskId,
+	});
+
 	return await runSingleTurnAgentInContainer({
 		scanJob,
 		agentProfile: runtime.agentProfile,
@@ -103,16 +112,11 @@ const executeCandidateAnalysisStage = async (
 		groupedPersistent: ctx.groupedPersistent,
 		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
-		cwd: "/workspace/repo",
+		cwd: await resolveStageRuntimeCwd(ctx),
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
-		prompt: buildCandidateAnalysisPrompt(stageInput, {
-			candidate,
-			reportPath,
-			taskDirContainer: runtime.taskStageRootInContainer,
-			taskId: ctx.taskId,
-		}),
+		prompt: await resolveStageRuntimePrompt(ctx, fallbackPrompt),
 		outputSchema: outputSchema ?? analysisSchema,
 		routeOutputSchemas: ctx.routeOutputSchemas,
 		onThreadId: async (threadId) => {

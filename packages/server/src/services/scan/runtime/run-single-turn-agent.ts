@@ -25,6 +25,7 @@ import {
 import { resolveStageTaskName } from "../stage-task-name";
 import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { SCAN_STAGE_IDS } from "../stage-metadata";
+import { getRuntimeStageSetting } from "../runtime-settings";
 import { writeScanJobSecurityPolicyArtifact } from "../security-policy-artifact";
 import {
 	buildStructuredOutputEnvelopeJsonSchema,
@@ -585,8 +586,10 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 		? await findApplicationById(scanJob.applicationId as string)
 		: await findComposeById(scanJob.composeId as string);
 	const repositoryScanAgentProfileId =
-		target.scanStageSettings?.[SCAN_STAGE_IDS.repositoryScan]?.agentProfileId ||
-		null;
+		getRuntimeStageSetting(
+			scanJob.scanRuntimeSettings,
+			SCAN_STAGE_IDS.repositoryScan,
+		).agentProfileId || null;
 	const scanAgentProfile = repositoryScanAgentProfileId
 		? await getAgentProfileById(repositoryScanAgentProfileId).catch(() => null)
 		: null;
