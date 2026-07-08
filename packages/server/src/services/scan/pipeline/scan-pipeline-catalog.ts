@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
@@ -121,17 +122,15 @@ export type ScanPipelineCatalog = {
 	pipelines: Record<keyof typeof SCAN_PIPELINE_IDS, ScanPipelineConfig>;
 };
 
-export const SCAN_PIPELINES_YAML_URL = new URL(
-	"./scan-pipelines.yaml",
+export const resolveScanPipelineYamlPath = (moduleUrl: string) =>
+	join(dirname(fileURLToPath(moduleUrl)), "scan-pipelines.yaml");
+
+export const SCAN_PIPELINES_YAML_PATH = resolveScanPipelineYamlPath(
 	import.meta.url,
 );
 
-export const scanPipelineYamlUrlToPath = (
-	url: URL | { href: string } | string,
-) => fileURLToPath(typeof url === "string" ? url : url.href);
-
 export const readScanPipelinesYaml = () =>
-	readFileSync(scanPipelineYamlUrlToPath(SCAN_PIPELINES_YAML_URL), "utf-8");
+	readFileSync(SCAN_PIPELINES_YAML_PATH, "utf-8");
 
 const toObjectKey = (stageId: string) =>
 	stageId.replace(/-([a-z])/g, (_match, char: string) => char.toUpperCase());

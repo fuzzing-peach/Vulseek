@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
 	parseScanPipelineCatalogFromYaml,
-	scanPipelineYamlUrlToPath,
+	resolveScanPipelineYamlPath,
 	validatePipelineRegistryCoverage,
 } from "./scan-pipeline-catalog";
 
@@ -190,15 +190,10 @@ pipelines:
 	);
 });
 
-test("scanPipelineYamlUrlToPath accepts URL-like objects from other runtimes", () => {
-	const urlLikeFromAnotherRuntime = {
-		href: new URL("./scan-pipelines.yaml", import.meta.url).href,
-	};
+test("resolveScanPipelineYamlPath reads the YAML as a filesystem sibling", () => {
+	const moduleUrl = new URL("./scan-pipeline-catalog.ts", import.meta.url).href;
+	const yamlPath = resolveScanPipelineYamlPath(moduleUrl);
 
-	assert.equal(
-		scanPipelineYamlUrlToPath(urlLikeFromAnotherRuntime).endsWith(
-			"/scan-pipelines.yaml",
-		),
-		true,
-	);
+	assert.equal(yamlPath.endsWith("/scan-pipelines.yaml"), true);
+	assert.equal(yamlPath.includes("/_next/static/media/"), false);
 });
