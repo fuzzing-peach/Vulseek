@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
 	parseScanPipelineCatalogFromYaml,
+	scanPipelineYamlUrlToPath,
 	validatePipelineRegistryCoverage,
 } from "./scan-pipeline-catalog";
 
@@ -186,5 +187,18 @@ pipelines:
 				edgeNames: new Set<string>(),
 			}),
 		/missing edge implementation: repository-profile-to-scan-target/,
+	);
+});
+
+test("scanPipelineYamlUrlToPath accepts URL-like objects from other runtimes", () => {
+	const urlLikeFromAnotherRuntime = {
+		href: new URL("./scan-pipelines.yaml", import.meta.url).href,
+	};
+
+	assert.equal(
+		scanPipelineYamlUrlToPath(urlLikeFromAnotherRuntime).endsWith(
+			"/scan-pipelines.yaml",
+		),
+		true,
 	);
 });

@@ -126,8 +126,12 @@ export const SCAN_PIPELINES_YAML_URL = new URL(
 	import.meta.url,
 );
 
+export const scanPipelineYamlUrlToPath = (
+	url: URL | { href: string } | string,
+) => fileURLToPath(typeof url === "string" ? url : url.href);
+
 export const readScanPipelinesYaml = () =>
-	readFileSync(fileURLToPath(SCAN_PIPELINES_YAML_URL), "utf-8");
+	readFileSync(scanPipelineYamlUrlToPath(SCAN_PIPELINES_YAML_URL), "utf-8");
 
 const toObjectKey = (stageId: string) =>
 	stageId.replace(/-([a-z])/g, (_match, char: string) => char.toUpperCase());
