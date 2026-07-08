@@ -44,14 +44,10 @@ export const buildHomeHeatmapDays = (input: {
 	const start = new Date(end);
 	start.setUTCDate(end.getUTCDate() - (dayCount - 1));
 	start.setUTCDate(start.getUTCDate() - mondayFirstDayIndex(start));
-	const calendarEnd = new Date(end);
-	calendarEnd.setUTCDate(
-		calendarEnd.getUTCDate() + (6 - mondayFirstDayIndex(calendarEnd)),
-	);
 	const sourceByDate = new Map(input.days.map((day) => [day.date, day]));
 	const normalized: HomeHeatmapDayInput[] = [];
 	const calendarDayCount =
-		Math.round((calendarEnd.getTime() - start.getTime()) / 86_400_000) + 1;
+		Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1;
 	for (let offset = 0; offset < calendarDayCount; offset += 1) {
 		const date = new Date(start);
 		date.setUTCDate(start.getUTCDate() + offset);

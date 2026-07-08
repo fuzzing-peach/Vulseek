@@ -30,13 +30,14 @@ test("buildHomeHeatmapDays fills calendar weeks from Monday to Sunday", () => {
 		],
 	});
 
-	assert.equal(days.length, 14);
+	assert.equal(days.length, 10);
 	assert.equal(days[0]?.date, "2026-06-29");
 	assert.equal(days[0]?.dayIndex, 0);
 	assert.equal(days[6]?.date, "2026-07-05");
 	assert.equal(days[6]?.dayIndex, 6);
 	assert.equal(days[8]?.date, "2026-07-07");
 	assert.equal(days[8]?.level, 4);
+	assert.equal(days[9]?.date, "2026-07-08");
 	assert.deepEqual(
 		days.slice(0, 7).map((day) => [day.weekIndex, day.dayIndex]),
 		[
@@ -63,7 +64,8 @@ test("groupHomeHeatmapWeeks returns seven-day columns", () => {
 
 	assert.equal(weeks.length, 2);
 	assert.equal(weeks[0]?.length, 7);
-	assert.equal(weeks[1]?.length, 7);
+	assert.equal(weeks[1]?.length, 3);
 	assert.equal(weeks[0]?.[0]?.date, "2026-06-29");
 	assert.equal(weeks[1]?.[0]?.date, "2026-07-06");
+	assert.equal(weeks[1]?.[2]?.date, "2026-07-08");
 });
