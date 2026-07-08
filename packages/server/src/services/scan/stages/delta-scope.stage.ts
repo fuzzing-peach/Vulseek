@@ -13,6 +13,7 @@ import {
 	type StageDefinition,
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
+import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { buildDeltaScopePrompt } from "../prompts/delta-scope.prompt";
 import {
 	prepareRepositoryForScanInContainer,
@@ -74,6 +75,7 @@ const validateDeltaScopeStageOutput = async (
 const executeDeltaScopeStage = async (
 	ctx: StageContext,
 	_stageInput: DeltaScopeStageInput,
+	outputSchema?: StructuredOutputSchemaSource,
 ) => {
 	const pipelineScanJob = (ctx as StageContext & { scanJob?: ScanJob }).scanJob;
 	if (!pipelineScanJob) {
@@ -121,7 +123,7 @@ const executeDeltaScopeStage = async (
 				? runtime.agentProfile.thinkingLevel
 				: null,
 		}),
-		outputSchema: deltaScopeManifestSchema,
+		outputSchema: outputSchema ?? deltaScopeManifestSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
@@ -163,6 +165,7 @@ export const createDeltaScopeStageDefinition = <
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
 	reuseContainer?: boolean;
+	outputSchema?: StructuredOutputSchemaSource;
 	queue?: StageQueueBinding<TPipelineContext, DeltaScopeStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -186,6 +189,7 @@ export const createDeltaScopeStageDefinition = <
 			const result = await executeDeltaScopeStage(
 				ctx as unknown as StageContext,
 				stageInput,
+				input.outputSchema,
 			);
 			return {
 				completion: "deferred",

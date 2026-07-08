@@ -20,6 +20,8 @@ const stageConfigSchema = z.object({
 	maxConcurrency: z.number().int().min(1).optional(),
 	disableable: z.boolean().default(true),
 	description: z.string().optional(),
+	inputSchema: z.record(z.unknown()).optional(),
+	outputSchema: z.record(z.unknown()).optional(),
 });
 
 const edgeConfigSchema = z.object({
@@ -27,6 +29,11 @@ const edgeConfigSchema = z.object({
 	from: z.string().min(1),
 	to: z.string().min(1),
 	fork: z.boolean().default(false),
+	mode: z.enum(["map", "fanOut"]).optional(),
+	foreach: z.string().min(1).optional(),
+	input: z.unknown().optional(),
+	outputSchema: z.record(z.unknown()).optional(),
+	outputSchemaDescription: z.string().optional(),
 	route: z
 		.object({
 			key: z.string().min(1),
@@ -51,6 +58,7 @@ const pipelineConfigSchema = z.object({
 });
 
 const scanPipelineYamlSchema = z.object({
+	schemas: z.record(z.record(z.unknown())).default({}),
 	stages: z.record(stageConfigSchema),
 	pipelines: z.object({
 		full: pipelineConfigSchema,
@@ -70,6 +78,8 @@ export type ScanPipelineStageConfig = {
 	maxConcurrency: number | null;
 	disableable: boolean;
 	description: string | null;
+	inputSchema: Record<string, unknown> | null;
+	outputSchema: Record<string, unknown> | null;
 };
 
 export type ScanPipelineEdgeConfig = {
@@ -78,6 +88,11 @@ export type ScanPipelineEdgeConfig = {
 	from: string;
 	to: string;
 	fork: boolean;
+	mode: "map" | "fanOut" | null;
+	foreach: string | null;
+	input: unknown;
+	outputSchema: Record<string, unknown> | null;
+	outputSchemaDescription: string | null;
 	route: {
 		key: string;
 		default?: boolean;
@@ -102,6 +117,7 @@ export type ScanPipelineConfig = {
 
 export type ScanPipelineCatalog = {
 	pipelineIds: typeof SCAN_PIPELINE_IDS;
+	schemas: Record<string, Record<string, unknown>>;
 	stageIds: string[];
 	stages: ScanPipelineStageConfig[];
 	stageMetadata: Record<string, { id: string; name: string }>;
@@ -117,6 +133,8 @@ export type ScanPipelineCatalog = {
 			maxConcurrency: number;
 			disableable: boolean;
 			description: string;
+			inputSchema: Record<string, unknown> | null;
+			outputSchema: Record<string, unknown> | null;
 		}
 	>;
 	pipelines: Record<keyof typeof SCAN_PIPELINE_IDS, ScanPipelineConfig>;
@@ -225,6 +243,59 @@ const validatePipelineTopology = (
 	}
 };
 
+const validateJsonSchemaReferences = (
+	schema: unknown,
+	schemas: Record<string, Record<string, unknown>>,
+) => {
+	if (!schema || typeof schema !== "object") {
+		return;
+	}
+	if (Array.isArray(schema)) {
+		for (const item of schema) {
+			validateJsonSchemaReferences(item, schemas);
+		}
+		return;
+	}
+
+	const record = schema as Record<string, unknown>;
+	for (const key of ["$ref", "$pathOf"]) {
+		const ref = record[key];
+		if (typeof ref !== "string") {
+			continue;
+		}
+		const prefix = "#/schemas/";
+		if (!ref.startsWith(prefix)) {
+			throw new Error(`Unsupported schema reference ${ref}`);
+		}
+		if (!schemas[ref.slice(prefix.length)]) {
+			throw new Error(`Unknown schema reference ${ref}`);
+		}
+	}
+
+	for (const value of Object.values(record)) {
+		validateJsonSchemaReferences(value, schemas);
+	}
+};
+
+const validateCatalogSchemaReferences = (
+	stages: ScanPipelineStageConfig[],
+	pipelines: Record<keyof typeof SCAN_PIPELINE_IDS, ScanPipelineConfig>,
+	schemas: Record<string, Record<string, unknown>>,
+) => {
+	for (const stage of stages) {
+		validateJsonSchemaReferences(stage.inputSchema, schemas);
+		validateJsonSchemaReferences(stage.outputSchema, schemas);
+	}
+	for (const pipeline of Object.values(pipelines)) {
+		for (const edge of pipeline.edges) {
+			validateJsonSchemaReferences(edge.outputSchema, schemas);
+		}
+	}
+	for (const schema of Object.values(schemas)) {
+		validateJsonSchemaReferences(schema, schemas);
+	}
+};
+
 export const parseScanPipelineCatalogFromYaml = (
 	rawYaml: string,
 ): ScanPipelineCatalog => {
@@ -247,6 +318,8 @@ export const parseScanPipelineCatalogFromYaml = (
 			maxConcurrency: stage.maxConcurrency ?? null,
 			disableable: stage.disableable,
 			description: stage.description ?? null,
+			inputSchema: stage.inputSchema ?? null,
+			outputSchema: stage.outputSchema ?? null,
 		}),
 	);
 	const allStageIds = new Set(stageIds);
@@ -265,6 +338,11 @@ export const parseScanPipelineCatalogFromYaml = (
 				from: edge.from,
 				to: edge.to,
 				fork: edge.fork,
+				mode: edge.mode ?? null,
+				foreach: edge.foreach ?? null,
+				input: edge.input ?? null,
+				outputSchema: edge.outputSchema ?? null,
+				outputSchemaDescription: edge.outputSchemaDescription ?? null,
 				route: edge.route
 					? {
 							key: edge.route.key,
@@ -286,9 +364,11 @@ export const parseScanPipelineCatalogFromYaml = (
 	};
 	validatePipelineTopology("full", pipelines.full, allStageIds);
 	validatePipelineTopology("delta", pipelines.delta, allStageIds);
+	validateCatalogSchemaReferences(stages, pipelines, parsed.schemas);
 
 	return {
 		pipelineIds: SCAN_PIPELINE_IDS,
+		schemas: parsed.schemas,
 		stageIds,
 		stages,
 		stageMetadata: Object.fromEntries(
@@ -312,6 +392,8 @@ export const parseScanPipelineCatalogFromYaml = (
 					maxConcurrency: stage.maxConcurrency ?? 128,
 					disableable: stage.disableable,
 					description: stage.description ?? stage.name,
+					inputSchema: stage.inputSchema,
+					outputSchema: stage.outputSchema,
 				},
 			]),
 		),

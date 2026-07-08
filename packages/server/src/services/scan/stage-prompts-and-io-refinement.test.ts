@@ -21,6 +21,7 @@ import { buildDeltaScopePrompt } from "./prompts/delta-scope.prompt";
 import { buildModuleScannerPrompt } from "./prompts/module-scanner.prompt";
 import { buildRepositoryScannerPrompt } from "./prompts/repository-scanner.prompt";
 import { buildScanTargetPrompt } from "./prompts/scan-target.prompt";
+import { createJsonSchemaContract } from "./pipeline/scan-pipeline-schema-contracts";
 import { buildStructuredOutputPromptSuffix } from "./runtime/run-single-turn-agent";
 
 const scanDir = dirname(fileURLToPath(import.meta.url));
@@ -438,6 +439,42 @@ test("structured output prompts include annotated task artifact schemas", () => 
 		{ allowAgentExit: true },
 	);
 	assert.match(analysisExitSuffix, /stage prompt explicitly instructs/);
+});
+
+test("structured output prompts include YAML JSON Schema contract artifact schemas", () => {
+	const suffix = buildStructuredOutputPromptSuffix(
+		createJsonSchemaContract({
+			schemas: {
+				Module: {
+					type: "object",
+					required: ["moduleId"],
+					properties: {
+						moduleId: { type: "string" },
+					},
+				},
+			},
+			schema: {
+				type: "object",
+				required: ["modules"],
+				properties: {
+					modules: {
+						type: "array",
+						items: {
+							$pathOf: "#/schemas/Module",
+						},
+					},
+				},
+			},
+		}),
+		"/task/output.schema.json",
+		"/task/output.json",
+	);
+
+	assert.match(suffix, /Task artifact JSON schemas/);
+	assert.match(suffix, /output\.modules\[\] points to JSON files/);
+	assert.match(suffix, /"moduleId"/);
+	assert.match(suffix, /"output":/);
+	assert.doesNotMatch(suffix, /"\\$pathOf"/);
 });
 
 test("analysis prompt removes fuzz routing", () => {

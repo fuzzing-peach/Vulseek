@@ -1,6 +1,5 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { ZodTypeAny } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import type { ScanJob, AgentProfileLike } from "../types";
 import { getAgentProfileById } from "../../ai";
@@ -26,6 +25,11 @@ import {
 } from "../stages/full-scan-stage.runtime";
 import { resolveStageTaskName } from "../stage-task-name";
 import { getArtifactSchemaAnnotations } from "../artifacts/artifact-schema-annotations";
+import {
+	getJsonSchemaArtifactAnnotations,
+	isJsonSchemaContract,
+	type StructuredOutputSchemaSource,
+} from "../pipeline/scan-pipeline-schema-contracts";
 import { SCAN_STAGE_IDS } from "../stage-metadata";
 import { writeScanJobSecurityPolicyArtifact } from "../security-policy-artifact";
 
@@ -947,11 +951,11 @@ export type RunSingleTurnAgentInput = StageContainerInput & {
 	taskStageRootInContainer?: string;
 	taskRealRootInContainer?: string;
 	laneThreadId?: string | null;
-	outputSchema?: ZodTypeAny;
+	outputSchema?: StructuredOutputSchemaSource;
 	routeOutputSchemas?: Array<{
 		routeKey: string;
 		description?: string;
-		schema: ZodTypeAny;
+		schema: StructuredOutputSchemaSource;
 		default?: boolean;
 	}>;
 	onThreadId?: (threadId: string) => Promise<void>;
@@ -964,32 +968,39 @@ export type RunSingleTurnAgentResult = {
 	threadId: string | null;
 };
 
+const outputSchemaSourceToJsonSchema = (
+	outputSchema: StructuredOutputSchemaSource,
+) =>
+	isJsonSchemaContract(outputSchema)
+		? outputSchema.schema
+		: zodToJsonSchema(outputSchema, {
+				target: "jsonSchema7",
+				$refStrategy: "none",
+			});
+
 const buildStructuredOutputEnvelopeJsonSchema = (
-	schema: ZodTypeAny,
+	schema: StructuredOutputSchemaSource,
 	routeOutputSchemas?: Array<{
 		routeKey: string;
 		description?: string;
-		schema: ZodTypeAny;
+		schema: StructuredOutputSchemaSource;
 		default?: boolean;
 	}>,
 	options?: {
 		nullableOutput?: boolean;
 	},
 ) => {
-	const buildOutputSchema = (outputSchema: ZodTypeAny) =>
-		zodToJsonSchema(outputSchema, {
-			target: "jsonSchema7",
-			$refStrategy: "none",
-		});
-	const buildEnvelopeOutputSchema = (outputSchema: ZodTypeAny) => {
-		const jsonSchema = buildOutputSchema(outputSchema);
+	const buildEnvelopeOutputSchema = (
+		outputSchema: StructuredOutputSchemaSource,
+	) => {
+		const jsonSchema = outputSchemaSourceToJsonSchema(outputSchema);
 		return options?.nullableOutput
 			? { anyOf: [jsonSchema, { type: "null" }] }
 			: jsonSchema;
 	};
 	const buildEnvelopeSchema = (input: {
 		route: string | null;
-		outputSchema: ZodTypeAny;
+		outputSchema: StructuredOutputSchemaSource;
 	}) => ({
 		type: "object",
 		properties: {
@@ -1018,22 +1029,28 @@ const buildStructuredOutputEnvelopeJsonSchema = (
 };
 
 const buildArtifactSchemaPromptLines = (
-	schema: ZodTypeAny,
+	schema: StructuredOutputSchemaSource,
 	routeOutputSchemas?: Array<{
 		routeKey: string;
 		description?: string;
-		schema: ZodTypeAny;
+		schema: StructuredOutputSchemaSource;
 		default?: boolean;
 	}>,
 ) => {
 	const entries = routeOutputSchemas?.length
 		? routeOutputSchemas.flatMap((route) =>
-				getArtifactSchemaAnnotations(route.schema).map((annotation) => ({
+				(isJsonSchemaContract(route.schema)
+					? getJsonSchemaArtifactAnnotations(route.schema)
+					: getArtifactSchemaAnnotations(route.schema)
+				).map((annotation) => ({
 					routeKey: route.routeKey,
 					...annotation,
 				})),
 			)
-		: getArtifactSchemaAnnotations(schema).map((annotation) => ({
+		: (isJsonSchemaContract(schema)
+				? getJsonSchemaArtifactAnnotations(schema)
+				: getArtifactSchemaAnnotations(schema)
+			).map((annotation) => ({
 				routeKey: null,
 				...annotation,
 			}));
@@ -1055,13 +1072,13 @@ const buildArtifactSchemaPromptLines = (
 };
 
 export const buildStructuredOutputPromptSuffix = (
-	schema: ZodTypeAny,
+	schema: StructuredOutputSchemaSource,
 	schemaFilePath: string,
 	outputFilePath: string,
 	routeOutputSchemas?: Array<{
 		routeKey: string;
 		description?: string;
-		schema: ZodTypeAny;
+		schema: StructuredOutputSchemaSource;
 		default?: boolean;
 	}>,
 	options?: {

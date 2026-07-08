@@ -9,6 +9,7 @@ import {
 	type StageDefinition,
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
+import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { buildIdentifyTargetPrompt } from "../prompts/identify-target.prompt";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
 import type { IdentifyTargetManifest, ScanJob } from "../types";
@@ -54,6 +55,7 @@ const validateIdentifyTargetOutput = async (
 const executeIdentifyTargetStage = async (
 	ctx: StageContext,
 	stageInput: IdentifyTargetStageInput,
+	outputSchema?: StructuredOutputSchemaSource,
 ) => {
 	const runtime = await resolveAgentStageRuntime({
 		ctx,
@@ -90,7 +92,7 @@ const executeIdentifyTargetStage = async (
 				? runtime.agentProfile.thinkingLevel
 				: null,
 		}),
-		outputSchema: identifyTargetManifestSchema,
+		outputSchema: outputSchema ?? identifyTargetManifestSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
@@ -105,6 +107,7 @@ export const createIdentifyTargetStageDefinition = <
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
 	reuseContainer?: boolean;
+	outputSchema?: StructuredOutputSchemaSource;
 	queue?: StageQueueBinding<TPipelineContext, IdentifyTargetStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -132,6 +135,7 @@ export const createIdentifyTargetStageDefinition = <
 			const result = await executeIdentifyTargetStage(
 				ctx as unknown as StageContext,
 				stageInput,
+				input.outputSchema,
 			);
 			return {
 				completion: "deferred",

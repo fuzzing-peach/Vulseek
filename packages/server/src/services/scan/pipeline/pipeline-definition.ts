@@ -1,8 +1,8 @@
-import type { ZodType } from "zod";
 import type {
 	PipelineContext,
 	StageContext,
 } from "../stages/full-scan-stage.runtime";
+import type { StructuredOutputSchemaSource } from "./scan-pipeline-schema-contracts";
 import type { StageDefinition } from "./stage-definition";
 
 export type PipelineStageName = string;
@@ -54,7 +54,7 @@ export type PipelineEdge<
 		key: string;
 		default?: boolean;
 	};
-	outputSchema?: ZodType<TSelectedOutput, any, any>;
+	outputSchema?: StructuredOutputSchemaSource;
 	outputSchemaDescription?: string;
 	transformOutput?: (input: {
 		ctx: TPipelineContext;

@@ -6,6 +6,7 @@ import {
 	type StageDefinition,
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
+import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { renderPromptTemplate } from "../prompts/prompt-template";
 import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
@@ -76,6 +77,7 @@ const buildCandidateVerificationPrompt = (
 const executeCandidateVerificationStage = async (
 	ctx: StageContext,
 	stageInput: CandidateVerificationStageInput,
+	outputSchema?: StructuredOutputSchemaSource,
 ) => {
 	const scanJob = stageInput.scanJob;
 	const taskStageDirPath = await ctx.taskDir();
@@ -124,7 +126,7 @@ const executeCandidateVerificationStage = async (
 			reportPath,
 			taskId: ctx.taskId,
 		}),
-		outputSchema: verificationSchema,
+		outputSchema: outputSchema ?? verificationSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
@@ -141,6 +143,7 @@ export const createVerifyingStageDefinition = <
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
 	reuseContainer?: boolean;
+	outputSchema?: StructuredOutputSchemaSource;
 	queue?: StageQueueBinding<TPipelineContext, CandidateVerificationStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -177,6 +180,7 @@ export const createVerifyingStageDefinition = <
 				await executeCandidateVerificationStage(
 					ctx as unknown as StageContext,
 					stageInput,
+					input.outputSchema,
 				)
 			).threadId,
 		}),

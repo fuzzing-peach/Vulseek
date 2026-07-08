@@ -5,6 +5,7 @@ import {
 	type StageDefinition,
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
+import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { buildScanTargetPrompt } from "../prompts/scan-target.prompt";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
 import type { ScanJob, ScanTargetManifest } from "../types";
@@ -41,6 +42,7 @@ export type ScanTargetStageOutput = ScanTargetManifest;
 const executeScanTargetStage = async (
 	ctx: StageContext,
 	stageInput: ScanTargetStageInput,
+	outputSchema?: StructuredOutputSchemaSource,
 ) => {
 	const runtime = await resolveAgentStageRuntime({
 		ctx,
@@ -85,7 +87,7 @@ const executeScanTargetStage = async (
 				? runtime.agentProfile.thinkingLevel
 				: null,
 		}),
-		outputSchema: scanTargetManifestSchema,
+		outputSchema: outputSchema ?? scanTargetManifestSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
@@ -100,6 +102,7 @@ export const createScanTargetStageDefinition = <
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
 	reuseContainer?: boolean;
+	outputSchema?: StructuredOutputSchemaSource;
 	queue?: StageQueueBinding<TPipelineContext, ScanTargetStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -128,6 +131,7 @@ export const createScanTargetStageDefinition = <
 			const result = await executeScanTargetStage(
 				ctx as unknown as StageContext,
 				stageInput,
+				input.outputSchema,
 			);
 			return {
 				completion: "deferred",

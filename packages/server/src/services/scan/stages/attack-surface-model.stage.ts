@@ -9,6 +9,7 @@ import {
 	type StageDefinition,
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
+import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { buildAttackSurfaceModelPrompt } from "../prompts/attack-surface-model.prompt";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
 import type { ModuleThreatModelManifest, ScanJob } from "../types";
@@ -51,6 +52,7 @@ const validateAttackSurfaceModelOutput = async (
 const executeAttackSurfaceModelStage = async (
 	ctx: StageContext,
 	stageInput: AttackSurfaceModelStageInput,
+	outputSchema?: StructuredOutputSchemaSource,
 ) => {
 	const runtime = await resolveAgentStageRuntime({
 		ctx,
@@ -86,7 +88,7 @@ const executeAttackSurfaceModelStage = async (
 				? runtime.agentProfile.thinkingLevel
 				: null,
 		}),
-		outputSchema: moduleThreatModelManifestSchema,
+		outputSchema: outputSchema ?? moduleThreatModelManifestSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
@@ -101,6 +103,7 @@ export const createAttackSurfaceModelStageDefinition = <
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
 	reuseContainer?: boolean;
+	outputSchema?: StructuredOutputSchemaSource;
 	queue?: StageQueueBinding<TPipelineContext, AttackSurfaceModelStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -128,6 +131,7 @@ export const createAttackSurfaceModelStageDefinition = <
 			const result = await executeAttackSurfaceModelStage(
 				ctx as unknown as StageContext,
 				stageInput,
+				input.outputSchema,
 			);
 			return {
 				completion: "deferred",

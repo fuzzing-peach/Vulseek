@@ -73,6 +73,7 @@ import {
 	type StageExecution,
 	type StageQueueScope,
 } from "./stage-definition";
+import { validateStructuredOutputSchemaSource } from "./scan-pipeline-schema-contracts";
 
 type PipelineRefreshContext = {
 	refreshPipelineState?: () => Promise<void>;
@@ -1526,7 +1527,7 @@ const validateSelectedDownstreamOutput = <
 		throw new Error(`Invalid route key ${routeKey} for stage ${stageName}`);
 	}
 	if (selected.outputSchema) {
-		selected.outputSchema.parse(stageOutput);
+		validateStructuredOutputSchemaSource(selected.outputSchema, stageOutput);
 	}
 };
 
@@ -3830,7 +3831,7 @@ const dispatchPipelineDownstream = async <
 			continue;
 		}
 		const selectedStageOutput = edge.outputSchema
-			? edge.outputSchema.parse(stageOutput)
+			? validateStructuredOutputSchemaSource(edge.outputSchema, stageOutput)
 			: stageOutput;
 		const downstreamInputs = edge.transformOutput
 			? await edge.transformOutput({

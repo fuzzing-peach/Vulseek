@@ -3,7 +3,6 @@ import path from "node:path";
 import { db } from "@vulseek/server/db";
 import { applications, compose, scanJobs } from "@vulseek/server/db/schema";
 import { eq } from "drizzle-orm";
-import type { ZodTypeAny } from "zod";
 import { getAgentProfileById } from "../../ai";
 import { findApplicationById } from "../../application";
 import { findComposeById } from "../../compose";
@@ -18,6 +17,7 @@ import {
 	normalizeScanRuntimeSettings,
 } from "../runtime-settings";
 import { SCAN_STAGE_IDS } from "../stage-metadata";
+import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
 const CONTAINER_TASK_RUNTIME_ROOT = "/task";
@@ -401,7 +401,7 @@ export type StageContext = PipelineContext & {
 	routeOutputSchemas?: Array<{
 		routeKey: string;
 		description?: string;
-		schema: ZodTypeAny;
+		schema: StructuredOutputSchemaSource;
 		default?: boolean;
 	}>;
 	sessionMode: "new" | "fork";
@@ -440,7 +440,7 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 	routeOutputSchemas?: Array<{
 		routeKey: string;
 		description?: string;
-		schema: ZodTypeAny;
+		schema: StructuredOutputSchemaSource;
 		default?: boolean;
 	}>;
 	persistent?: boolean;

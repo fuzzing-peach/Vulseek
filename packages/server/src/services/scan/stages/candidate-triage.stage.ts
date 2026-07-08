@@ -6,6 +6,7 @@ import {
 	type StageDefinition,
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
+import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { renderPromptTemplate } from "../prompts/prompt-template";
 import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
@@ -83,6 +84,7 @@ const buildCandidateTriagePrompt = (
 const executeCandidateTriageStage = async (
 	ctx: StageContext,
 	stageInput: CandidateTriageStageInput,
+	outputSchema?: StructuredOutputSchemaSource,
 ) => {
 	const scanJob = stageInput.scanJob;
 	const taskStageDirPath = await ctx.taskDir();
@@ -136,7 +138,7 @@ const executeCandidateTriageStage = async (
 			reportPath,
 			taskId: ctx.taskId,
 		}),
-		outputSchema: triageSchema,
+		outputSchema: outputSchema ?? triageSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
@@ -153,6 +155,7 @@ export const createTriageStageDefinition = <
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
 	reuseContainer?: boolean;
+	outputSchema?: StructuredOutputSchemaSource;
 	queue?: StageQueueBinding<TPipelineContext, CandidateTriageStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -189,6 +192,7 @@ export const createTriageStageDefinition = <
 				await executeCandidateTriageStage(
 					ctx as unknown as StageContext,
 					stageInput,
+					input.outputSchema,
 				)
 			).threadId,
 		}),

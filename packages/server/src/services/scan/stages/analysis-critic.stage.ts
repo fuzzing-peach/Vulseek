@@ -6,6 +6,7 @@ import {
 	type StageDefinition,
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
+import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { renderPromptTemplate } from "../prompts/prompt-template";
 import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
@@ -50,6 +51,7 @@ const buildAnalysisCriticPrompt = (
 const executeAnalysisCriticStage = async (
 	ctx: StageContext,
 	stageInput: AnalysisCriticStageInput,
+	outputSchema?: StructuredOutputSchemaSource,
 ) => {
 	const taskStageDirPath = await ctx.taskDir();
 	const candidate = await readTaskJsonArtifact<Candidate>({
@@ -87,7 +89,7 @@ const executeAnalysisCriticStage = async (
 			taskDirContainer: runtime.taskStageRootInContainer,
 			taskId: ctx.taskId,
 		}),
-		outputSchema: criticResponseSchema,
+		outputSchema: outputSchema ?? criticResponseSchema,
 		routeOutputSchemas: ctx.routeOutputSchemas,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
@@ -103,6 +105,7 @@ export const createAnalysisCriticStageDefinition = <
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
 	reuseContainer?: boolean;
+	outputSchema?: StructuredOutputSchemaSource;
 	queue?: StageQueueBinding<TPipelineContext, AnalysisCriticStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -138,6 +141,7 @@ export const createAnalysisCriticStageDefinition = <
 				await executeAnalysisCriticStage(
 					ctx as unknown as StageContext,
 					stageInput,
+					input.outputSchema,
 				)
 			).threadId,
 		}),

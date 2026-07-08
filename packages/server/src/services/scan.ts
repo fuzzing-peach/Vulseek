@@ -90,6 +90,11 @@ import {
 	validatePipelineRegistryCoverage,
 	type ScanPipelineConfig,
 } from "./scan/pipeline/scan-pipeline-catalog";
+import { transformPipelineEdgeInput } from "./scan/pipeline/scan-pipeline-edge-transform";
+import {
+	createJsonSchemaContract,
+	type StructuredOutputSchemaSource,
+} from "./scan/pipeline/scan-pipeline-schema-contracts";
 import {
 	runPipeline,
 	startPipelineRuntime,
@@ -5768,6 +5773,22 @@ type FullScanPipelineEdge = PipelineEdge<
 	any
 >;
 
+const buildCatalogSchemaContract = (
+	schema: Record<string, unknown> | null | undefined,
+): StructuredOutputSchemaSource | undefined =>
+	schema
+		? createJsonSchemaContract({
+				schemas: SCAN_PIPELINE_CATALOG.schemas,
+				schema,
+			})
+		: undefined;
+
+const getCatalogStageOutputSchema = (stageId: string) =>
+	buildCatalogSchemaContract(
+		SCAN_PIPELINE_CATALOG.stages.find((stage) => stage.id === stageId)
+			?.outputSchema,
+	);
+
 const buildPipelineStagesFromCatalog = (
 	pipeline: ScanPipelineConfig,
 	stageRegistry: Map<string, FullScanPipelineStage>,
@@ -5792,6 +5813,39 @@ const buildPipelineEdgesFromCatalog = (
 		return {
 			...edge,
 			fork: edgeConfig.fork,
+			transformOutput:
+				edgeConfig.input !== null || edgeConfig.mode !== null
+					? async (input: {
+							ctx: FullScanPipelineContext;
+							stageInput: unknown;
+							stageOutput: unknown;
+						}) =>
+							transformPipelineEdgeInput(
+								{
+									mode: edgeConfig.mode,
+									foreach: edgeConfig.foreach,
+									input: edgeConfig.input,
+								},
+								{
+									ctx: {
+										...input.ctx,
+										computed: {
+											analysisFingerprint:
+												edgeConfig.name ===
+												"analyze-finding-to-critique-finding"
+													? buildAnalysisFingerprint(input.stageOutput)
+													: undefined,
+										},
+									},
+									stageInput: input.stageInput,
+									stageOutput: input.stageOutput,
+								},
+							) as any[]
+					: edge.transformOutput,
+			outputSchema:
+				buildCatalogSchemaContract(edgeConfig.outputSchema) ?? edge.outputSchema,
+			outputSchemaDescription:
+				edgeConfig.outputSchemaDescription ?? edge.outputSchemaDescription,
 			route: edgeConfig.route
 				? {
 						key: edgeConfig.route.key,
@@ -6126,6 +6180,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			name: SCAN_STAGE_METADATA.repositoryScan.name,
 			persistent: false,
 			reuseContainer: true,
+			outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.repositoryScan),
 			queue: createStageQueueBinding({
 				queue: repositoryScanQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -6170,6 +6225,9 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			name: SCAN_STAGE_METADATA.attackSurfaceModel.name,
 			persistent: false,
 			reuseContainer: true,
+			outputSchema: getCatalogStageOutputSchema(
+				SCAN_STAGE_IDS.attackSurfaceModel,
+			),
 			queue: createStageQueueBinding({
 				queue: attackSurfaceModelQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -6215,6 +6273,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			name: SCAN_STAGE_METADATA.moduleScan.name,
 			persistent: false,
 			reuseContainer: true,
+			outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.moduleScan),
 			queue: createStageQueueBinding({
 				queue: moduleScanQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -6256,6 +6315,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			name: SCAN_STAGE_METADATA.functionScan.name,
 			persistent: true,
 			reuseContainer: true,
+			outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.functionScan),
 			queue: createStageQueueBinding({
 				queue: functionScanQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -6299,6 +6359,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 		name: SCAN_STAGE_METADATA.analysis.name,
 		persistent: false,
 		reuseContainer: true,
+		outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.analysis),
 		queue: createStageQueueBinding({
 			queue: analysisQueue,
 			getGroupQueue: (groupInstanceId) =>
@@ -6339,6 +6400,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			name: SCAN_STAGE_METADATA.analysisCritic.name,
 			persistent: false,
 			reuseContainer: true,
+			outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.analysisCritic),
 			queue: createStageQueueBinding({
 				queue: analysisCriticQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -6383,6 +6445,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			name: SCAN_STAGE_METADATA.verification.name,
 			persistent: true,
 			reuseContainer: true,
+			outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.verification),
 			queue: createStageQueueBinding({
 				queue: verificationQueue,
 				getGroupQueue: (groupInstanceId) =>
@@ -6426,6 +6489,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 		name: SCAN_STAGE_METADATA.triage.name,
 		persistent: true,
 		reuseContainer: true,
+		outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.triage),
 		queue: createStageQueueBinding({
 			queue: triageQueue,
 			getGroupQueue: (groupInstanceId) =>
@@ -7301,6 +7365,7 @@ const buildDeltaScanPipeline = (context: FullScanPipelineContext) => {
 			persistent: false,
 			reuseContainer: true,
 			mode: "serial",
+			outputSchema: getCatalogStageOutputSchema(SCAN_STAGE_IDS.deltaScope),
 			queue: createStageQueueBinding({
 				queue: deltaScopeQueue,
 				getGroupQueue: (groupInstanceId) =>

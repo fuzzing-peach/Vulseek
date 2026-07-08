@@ -13,6 +13,7 @@ import {
 	type StageDefinition,
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
+import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { buildRepositoryScannerPrompt } from "../prompts/repository-scanner.prompt";
 import {
 	prepareRepositoryForScanInContainer,
@@ -74,6 +75,7 @@ const validateRepositoryStageOutput = async (
 const executeRepositoryScanStage = async (
 	ctx: StageContext,
 	_stageInput: RepositoryScanningStageInput,
+	outputSchema?: StructuredOutputSchemaSource,
 ) => {
 	const pipelineScanJob = (ctx as StageContext & { scanJob?: ScanJob }).scanJob;
 	if (!pipelineScanJob) {
@@ -134,7 +136,7 @@ const executeRepositoryScanStage = async (
 				? runtime.agentProfile.thinkingLevel
 				: null,
 		}),
-		outputSchema: repositoryScanManifestSchema,
+		outputSchema: outputSchema ?? repositoryScanManifestSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
@@ -176,6 +178,7 @@ export const createRepositoryScanningStageDefinition = <
 	mode?: "serial" | "fanout";
 	persistent?: boolean;
 	reuseContainer?: boolean;
+	outputSchema?: StructuredOutputSchemaSource;
 	queue?: StageQueueBinding<TPipelineContext, RepositoryScanningStageInput>;
 }): StageDefinition<
 	TPipelineContext,
@@ -199,6 +202,7 @@ export const createRepositoryScanningStageDefinition = <
 			const result = await executeRepositoryScanStage(
 				ctx as unknown as StageContext,
 				stageInput,
+				input.outputSchema,
 			);
 			return {
 				completion: "deferred",
