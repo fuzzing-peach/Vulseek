@@ -296,6 +296,143 @@ const validateCatalogSchemaReferences = (
 	}
 };
 
+const resolveSchemaObject = (
+	schema: Record<string, unknown> | null | undefined,
+	schemas: Record<string, Record<string, unknown>>,
+): Record<string, unknown> | null => {
+	if (!schema) {
+		return null;
+	}
+	const ref = schema.$ref;
+	if (typeof ref === "string") {
+		const prefix = "#/schemas/";
+		return schemas[ref.slice(prefix.length)] ?? null;
+	}
+	return schema;
+};
+
+const getSchemaProperties = (
+	schema: Record<string, unknown> | null | undefined,
+	schemas: Record<string, Record<string, unknown>>,
+): Record<string, unknown> => {
+	const resolved = resolveSchemaObject(schema, schemas);
+	if (!resolved) {
+		return {};
+	}
+	if (resolved.properties && typeof resolved.properties === "object") {
+		return resolved.properties as Record<string, unknown>;
+	}
+	if (Array.isArray(resolved.allOf)) {
+		return Object.assign(
+			{},
+			...resolved.allOf.map((item) =>
+				typeof item === "object" && item
+					? getSchemaProperties(item as Record<string, unknown>, schemas)
+					: {},
+			),
+		);
+	}
+	return {};
+};
+
+const collectTransformExpressions = (value: unknown): string[] => {
+	if (typeof value === "string" && value.startsWith("$")) {
+		return [value];
+	}
+	if (Array.isArray(value)) {
+		return value.flatMap(collectTransformExpressions);
+	}
+	if (value && typeof value === "object") {
+		return Object.values(value).flatMap(collectTransformExpressions);
+	}
+	return [];
+};
+
+const readFirstField = (expression: string, prefix: string) => {
+	const tail = expression.slice(prefix.length);
+	const normalized = tail.endsWith("[*]") ? tail.slice(0, -3) : tail;
+	return normalized.split(".")[0] || "";
+};
+
+const validateTransformExpression = (input: {
+	expression: string;
+	edge: ScanPipelineEdgeConfig;
+	sourceStage: ScanPipelineStageConfig;
+	schemas: Record<string, Record<string, unknown>>;
+}) => {
+	const { expression, edge, sourceStage, schemas } = input;
+	if (expression === "$item") {
+		if (edge.mode !== "fanOut") {
+			throw new Error(`Edge ${edge.name} uses $item outside fanOut mode`);
+		}
+		return;
+	}
+	if (/^\$item\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/.test(expression)) {
+		if (edge.mode !== "fanOut") {
+			throw new Error(`Edge ${edge.name} uses $item outside fanOut mode`);
+		}
+		return;
+	}
+	if (/^\$ctx\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/.test(expression)) {
+		return;
+	}
+	if (/^\$computed\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/.test(expression)) {
+		return;
+	}
+	if (/^\$\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*(\[\*\])?$/.test(expression)) {
+		const field = readFirstField(expression, "$.");
+		const properties = getSchemaProperties(sourceStage.outputSchema, schemas);
+		if (Object.keys(properties).length > 0 && !(field in properties)) {
+			throw new Error(
+				`Edge ${edge.name} references unknown output field ${field}`,
+			);
+		}
+		return;
+	}
+	if (/^\$input\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/.test(expression)) {
+		const field = readFirstField(expression, "$input.");
+		const properties = getSchemaProperties(sourceStage.inputSchema, schemas);
+		if (Object.keys(properties).length > 0 && !(field in properties)) {
+			throw new Error(
+				`Edge ${edge.name} references unknown input field ${field}`,
+			);
+		}
+		return;
+	}
+	throw new Error(`Unsupported transform expression: ${expression}`);
+};
+
+const validateCatalogEdgeTransformExpressions = (
+	stages: ScanPipelineStageConfig[],
+	pipelines: Record<keyof typeof SCAN_PIPELINE_IDS, ScanPipelineConfig>,
+	schemas: Record<string, Record<string, unknown>>,
+) => {
+	const stagesById = new Map(stages.map((stage) => [stage.id, stage]));
+	for (const pipeline of Object.values(pipelines)) {
+		for (const edge of pipeline.edges) {
+			if (edge.mode === "fanOut") {
+				if (!edge.foreach) {
+					throw new Error(`Edge ${edge.name} fanOut requires foreach`);
+				}
+				validateTransformExpression({
+					expression: edge.foreach,
+					edge,
+					sourceStage: stagesById.get(edge.from)!,
+					schemas,
+				});
+			}
+			for (const expression of collectTransformExpressions(edge.input)) {
+				validateTransformExpression({
+					expression,
+					edge,
+					sourceStage: stagesById.get(edge.from)!,
+					schemas,
+				});
+			}
+		}
+	}
+};
+
 export const parseScanPipelineCatalogFromYaml = (
 	rawYaml: string,
 ): ScanPipelineCatalog => {
@@ -365,6 +502,7 @@ export const parseScanPipelineCatalogFromYaml = (
 	validatePipelineTopology("full", pipelines.full, allStageIds);
 	validatePipelineTopology("delta", pipelines.delta, allStageIds);
 	validateCatalogSchemaReferences(stages, pipelines, parsed.schemas);
+	validateCatalogEdgeTransformExpressions(stages, pipelines, parsed.schemas);
 
 	return {
 		pipelineIds: SCAN_PIPELINE_IDS,

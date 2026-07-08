@@ -22,7 +22,7 @@ import { buildModuleScannerPrompt } from "./prompts/module-scanner.prompt";
 import { buildRepositoryScannerPrompt } from "./prompts/repository-scanner.prompt";
 import { buildScanTargetPrompt } from "./prompts/scan-target.prompt";
 import { createJsonSchemaContract } from "./pipeline/scan-pipeline-schema-contracts";
-import { buildStructuredOutputPromptSuffix } from "./runtime/run-single-turn-agent";
+import { buildStructuredOutputPromptSuffix } from "./runtime/structured-output-schema";
 
 const scanDir = dirname(fileURLToPath(import.meta.url));
 const readStagePromptTemplate = (fileName: string) =>

@@ -103,15 +103,18 @@ const normalizePathOfSchema = (input: {
 
 	const pathOf = input.schema[PATH_OF_KEY];
 	if (typeof pathOf === "string") {
+		const artifactSchema = normalizeJsonSchema({
+			schema: resolveInternalSchemaRef(pathOf, input.schemas),
+			schemas: input.schemas,
+			path: input.path,
+		});
 		return {
 			schema: { type: "string" },
 			artifactAnnotations: [
 				{
 					path: input.path,
 					kind: input.path.endsWith("[]") ? "path_list" : "path",
-					jsonSchema: cloneJson(
-						resolveInternalSchemaRef(pathOf, input.schemas),
-					),
+					jsonSchema: cloneJson(artifactSchema.schema) as JsonSchemaObject,
 				},
 			],
 		};
@@ -212,6 +215,61 @@ export const validateJsonSchemaContract = (
 	contract: JsonSchemaContract,
 	value: unknown,
 ) => contract.validate(value);
+
+const readOutputPath = (value: unknown, annotationPath: string) => {
+	const path = annotationPath.replace(/^output\.?/, "");
+	if (!path) {
+		return value;
+	}
+	let current = value;
+	for (const part of path.split(".")) {
+		if (!part) {
+			continue;
+		}
+		const isArray = part.endsWith("[]");
+		const key = isArray ? part.slice(0, -2) : part;
+		if (!isObject(current)) {
+			throw new Error(`${annotationPath} parent is not an object`);
+		}
+		current = current[key];
+		if (isArray) {
+			if (!Array.isArray(current)) {
+				throw new Error(`${annotationPath} must be an array of artifact paths`);
+			}
+			return current;
+		}
+	}
+	return current;
+};
+
+export const validateJsonSchemaContractArtifacts = async (
+	contract: JsonSchemaContract,
+	value: unknown,
+	readArtifactJson: (artifactPath: string) => Promise<unknown>,
+) => {
+	for (const annotation of contract.artifactAnnotations) {
+		const artifactPaths = readOutputPath(value, annotation.path);
+		const paths =
+			annotation.kind === "path_list" ? artifactPaths : [artifactPaths];
+		if (!Array.isArray(paths)) {
+			throw new Error(`${annotation.path} must be an array of artifact paths`);
+		}
+		const ajv = createAjv();
+		const validate = ajv.compile(annotation.jsonSchema);
+		for (const artifactPath of paths) {
+			if (typeof artifactPath !== "string" || artifactPath.length === 0) {
+				throw new Error(`${annotation.path} must contain artifact path strings`);
+			}
+			const artifactJson = await readArtifactJson(artifactPath);
+			if (validate(artifactJson)) {
+				continue;
+			}
+			throw new Error(
+				`${annotation.path} artifact ${artifactPath} JSON Schema validation failed: ${formatAjvErrors(validate.errors)}`,
+			);
+		}
+	}
+};
 
 export const validateStructuredOutputSchemaSource = <T = unknown>(
 	schema: StructuredOutputSchemaSource,

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
 	createJsonSchemaContract,
 	getJsonSchemaArtifactAnnotations,
+	validateJsonSchemaContractArtifacts,
 	validateJsonSchemaContract,
 } from "./scan-pipeline-schema-contracts";
 
@@ -129,4 +130,57 @@ test("createJsonSchemaContract resolves nested internal $ref schemas", () => {
 		additionalProperties: false,
 	});
 	assert.equal(getJsonSchemaArtifactAnnotations(contract)[0]?.path, "output.candidate");
+});
+
+test("validateJsonSchemaContractArtifacts validates referenced artifact JSON content", async () => {
+	const contract = createJsonSchemaContract({
+		schemas: {
+			Module: {
+				type: "object",
+				required: ["moduleId"],
+				properties: {
+					moduleId: { type: "string" },
+				},
+				additionalProperties: false,
+			},
+			RepositoryProfileOutput: {
+				type: "object",
+				required: ["modules"],
+				properties: {
+					modules: {
+						type: "array",
+						items: {
+							$pathOf: "#/schemas/Module",
+						},
+					},
+				},
+			},
+		},
+		schema: {
+			$ref: "#/schemas/RepositoryProfileOutput",
+		},
+	});
+
+	await validateJsonSchemaContractArtifacts(
+		contract,
+		{
+			modules: ["/task/modules/auth.json"],
+		},
+		async (artifactPath) => {
+			assert.equal(artifactPath, "/task/modules/auth.json");
+			return { moduleId: "auth" };
+		},
+	);
+
+	await assert.rejects(
+		() =>
+			validateJsonSchemaContractArtifacts(
+				contract,
+				{
+					modules: ["/task/modules/auth.json"],
+				},
+				async () => ({ moduleId: 42 }),
+			),
+		/output\.modules\[\].*JSON Schema validation failed/,
+	);
 });

@@ -219,6 +219,106 @@ pipelines:
 	);
 });
 
+test("parseScanPipelineCatalogFromYaml rejects invalid edge transform expressions", () => {
+	assert.throws(
+		() =>
+			parseScanPipelineCatalogFromYaml(`
+schemas:
+  SourceOutput:
+    type: object
+    required: [modules]
+    properties:
+      modules:
+        type: array
+        items:
+          type: string
+  TargetInput:
+    type: object
+    required: [modulePath]
+    properties:
+      modulePath:
+        type: string
+stages:
+  source:
+    key: source
+    name: Source
+    role: scan
+    group: scan
+    defaultConcurrency: 1
+    outputSchema:
+      $ref: "#/schemas/SourceOutput"
+  target:
+    key: target
+    name: Target
+    role: scan
+    group: scan
+    defaultConcurrency: 1
+    inputSchema:
+      $ref: "#/schemas/TargetInput"
+pipelines:
+  full:
+    name: full
+    root: source
+    stages: [source, target]
+    edges:
+      - name: source-to-target
+        from: source
+        to: target
+        mode: fanOut
+        foreach: "$.missing[*]"
+        input:
+          modulePath: "$item"
+    groups: []
+  delta:
+    name: delta
+    root: source
+    stages: [source]
+    edges: []
+    groups: []
+`),
+		/unknown output field missing/,
+	);
+
+	assert.throws(
+		() =>
+			parseScanPipelineCatalogFromYaml(`
+stages:
+  source:
+    key: source
+    name: Source
+    role: scan
+    group: scan
+    defaultConcurrency: 1
+  target:
+    key: target
+    name: Target
+    role: scan
+    group: scan
+    defaultConcurrency: 1
+pipelines:
+  full:
+    name: full
+    root: source
+    stages: [source, target]
+    edges:
+      - name: source-to-target
+        from: source
+        to: target
+        mode: map
+        input:
+          bad: "$bad.value"
+    groups: []
+  delta:
+    name: delta
+    root: source
+    stages: [source]
+    edges: []
+    groups: []
+`),
+		/Unsupported transform expression/,
+	);
+});
+
 test("validatePipelineRegistryCoverage rejects missing stage and edge implementations", () => {
 	const catalog = parseScanPipelineCatalogFromYaml(`
 stages:
