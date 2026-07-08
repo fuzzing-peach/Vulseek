@@ -29,6 +29,8 @@ export const heatmapLevelForTokens = (
 
 const dateKey = (date: Date) => date.toISOString().slice(0, 10);
 
+const mondayFirstDayIndex = (date: Date) => (date.getUTCDay() + 6) % 7;
+
 export const buildHomeHeatmapDays = (input: {
 	days: HomeHeatmapDayInput[];
 	dayCount?: number;
@@ -41,9 +43,16 @@ export const buildHomeHeatmapDays = (input: {
 	);
 	const start = new Date(end);
 	start.setUTCDate(end.getUTCDate() - (dayCount - 1));
+	start.setUTCDate(start.getUTCDate() - mondayFirstDayIndex(start));
+	const calendarEnd = new Date(end);
+	calendarEnd.setUTCDate(
+		calendarEnd.getUTCDate() + (6 - mondayFirstDayIndex(calendarEnd)),
+	);
 	const sourceByDate = new Map(input.days.map((day) => [day.date, day]));
 	const normalized: HomeHeatmapDayInput[] = [];
-	for (let offset = 0; offset < dayCount; offset += 1) {
+	const calendarDayCount =
+		Math.round((calendarEnd.getTime() - start.getTime()) / 86_400_000) + 1;
+	for (let offset = 0; offset < calendarDayCount; offset += 1) {
 		const date = new Date(start);
 		date.setUTCDate(start.getUTCDate() + offset);
 		const key = dateKey(date);
@@ -66,7 +75,7 @@ export const buildHomeHeatmapDays = (input: {
 		...day,
 		level: heatmapLevelForTokens(day.totalTokens, maxTokens),
 		weekIndex: Math.floor(index / 7),
-		dayIndex: index % 7,
+		dayIndex: mondayFirstDayIndex(new Date(`${day.date}T00:00:00.000Z`)),
 	}));
 };
 

@@ -68,6 +68,8 @@ const heatmapLevelClass: Record<HomeHeatmapDay["level"], string> = {
 	4: "bg-emerald-300",
 };
 
+const heatmapWeekdayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
 type LiveScanSummary = {
 	activeJobCount?: number;
 	runningContainerCount?: number;
@@ -436,17 +438,26 @@ const DashboardHome = () => {
 					<CardContent>
 						{hasActivity ? (
 							<div ref={heatmapScrollRef} className="overflow-x-auto pb-2">
-								<div className="flex min-w-max gap-1">
-									{heatmapWeeks.map((week) => (
-										<div
-											key={week[0]?.date || "week"}
-											className="grid grid-rows-7 gap-1.5"
-										>
-											{week.map((day) => (
-												<HeatmapCell key={day.date} day={day} />
-											))}
-										</div>
-									))}
+								<div className="flex min-w-max items-start gap-2">
+									<div className="grid grid-rows-7 gap-1.5 pt-px text-[10px] uppercase leading-4 text-muted-foreground">
+										{heatmapWeekdayLabels.map((label) => (
+											<div key={label} className="h-4">
+												{label}
+											</div>
+										))}
+									</div>
+									<div className="flex gap-1">
+										{heatmapWeeks.map((week) => (
+											<div
+												key={week[0]?.date || "week"}
+												className="grid grid-rows-7 gap-1.5"
+											>
+												{week.map((day) => (
+													<HeatmapCell key={day.date} day={day} />
+												))}
+											</div>
+										))}
+									</div>
 								</div>
 							</div>
 						) : (

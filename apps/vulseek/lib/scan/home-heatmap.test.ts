@@ -14,7 +14,7 @@ test("heatmapLevelForTokens buckets token pressure into five levels", () => {
 	assert.equal(heatmapLevelForTokens(76, 100), 4);
 });
 
-test("buildHomeHeatmapDays fills missing dates and assigns week/day positions", () => {
+test("buildHomeHeatmapDays fills calendar weeks from Monday to Sunday", () => {
 	const days = buildHomeHeatmapDays({
 		dayCount: 8,
 		now: new Date("2026-07-08T12:00:00.000Z"),
@@ -30,12 +30,15 @@ test("buildHomeHeatmapDays fills missing dates and assigns week/day positions", 
 		],
 	});
 
-	assert.equal(days.length, 8);
-	assert.equal(days[0]?.date, "2026-07-01");
-	assert.equal(days[6]?.date, "2026-07-07");
-	assert.equal(days[6]?.level, 4);
+	assert.equal(days.length, 14);
+	assert.equal(days[0]?.date, "2026-06-29");
+	assert.equal(days[0]?.dayIndex, 0);
+	assert.equal(days[6]?.date, "2026-07-05");
+	assert.equal(days[6]?.dayIndex, 6);
+	assert.equal(days[8]?.date, "2026-07-07");
+	assert.equal(days[8]?.level, 4);
 	assert.deepEqual(
-		days.map((day) => [day.weekIndex, day.dayIndex]),
+		days.slice(0, 7).map((day) => [day.weekIndex, day.dayIndex]),
 		[
 			[0, 0],
 			[0, 1],
@@ -44,7 +47,6 @@ test("buildHomeHeatmapDays fills missing dates and assigns week/day positions", 
 			[0, 4],
 			[0, 5],
 			[0, 6],
-			[1, 0],
 		],
 	);
 	assert.equal(days[1]?.scanJobCount, 0);
@@ -61,5 +63,7 @@ test("groupHomeHeatmapWeeks returns seven-day columns", () => {
 
 	assert.equal(weeks.length, 2);
 	assert.equal(weeks[0]?.length, 7);
-	assert.equal(weeks[1]?.length, 1);
+	assert.equal(weeks[1]?.length, 7);
+	assert.equal(weeks[0]?.[0]?.date, "2026-06-29");
+	assert.equal(weeks[1]?.[0]?.date, "2026-07-06");
 });
