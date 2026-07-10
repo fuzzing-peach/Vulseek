@@ -460,3 +460,12 @@ test("resolveScanPipelineDefinitionsDir resolves the definitions directory", () 
 	assert.equal(definitionsDir.endsWith("/definitions"), true);
 	assert.equal(definitionsDir.includes("/_next/static/media/"), false);
 });
+
+test("resolveScanPipelineDefinitionsDir falls back to bundled runtime assets", () => {
+	const definitionsDir = resolveScanPipelineDefinitionsDir(
+		"file:///packages/server/dist/services/scan/pipeline/scan-pipeline-definitions.js",
+		"/app",
+	);
+
+	assert.equal(definitionsDir, "/app/dist/definitions");
+});

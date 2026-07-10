@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
@@ -178,8 +178,18 @@ export type ScanPipelineDefinitionsSource = z.infer<
 	typeof scanPipelineDefinitionsSourceSchema
 >;
 
-export const resolveScanPipelineDefinitionsDir = (moduleUrl: string) =>
-	join(dirname(fileURLToPath(moduleUrl)), "definitions");
+export const resolveScanPipelineDefinitionsDir = (
+	moduleUrl: string,
+	runtimeRoot = process.cwd(),
+) => {
+	const moduleDefinitionsDir = join(
+		dirname(fileURLToPath(moduleUrl)),
+		"definitions",
+	);
+	return existsSync(join(moduleDefinitionsDir, "schemas"))
+		? moduleDefinitionsDir
+		: join(runtimeRoot, "dist", "definitions");
+};
 
 export const SCAN_PIPELINE_DEFINITIONS_DIR = resolveScanPipelineDefinitionsDir(
 	import.meta.url,

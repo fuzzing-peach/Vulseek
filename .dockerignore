@@ -17,6 +17,8 @@ dist
 !packages/trpc-openapi/dist/**
 
 # Runtime and debugging artifacts
+apps/vulseek/.docker
+apps/vulseek/.docker/**
 **/.scan-runtime
 **/core
 *.log
