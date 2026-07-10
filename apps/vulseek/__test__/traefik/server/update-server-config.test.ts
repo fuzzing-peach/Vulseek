@@ -5,12 +5,11 @@ vi.mock("node:fs", () => ({
 	default: fs,
 }));
 
-import type { FileConfig, User } from "@vulseek/server";
-import {
-	createDefaultServerTraefikConfig,
-	loadOrCreateConfig,
-	updateServerTraefik,
-} from "@vulseek/server";
+import type { User } from "@vulseek/server/services/user";
+import { createDefaultServerTraefikConfig } from "@vulseek/server/setup/traefik-setup";
+import { loadOrCreateConfig } from "@vulseek/server/utils/traefik/application";
+import type { FileConfig } from "@vulseek/server/utils/traefik/file-types";
+import { updateServerTraefik } from "@vulseek/server/utils/traefik/web-server";
 import { beforeEach, expect, test, vi } from "vitest";
 
 const baseAdmin: User = {
