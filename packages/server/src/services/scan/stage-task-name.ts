@@ -13,19 +13,33 @@ export const resolveStageTaskName = <TInput>(
 			return typeof record?.moduleName === "string"
 				? record.moduleName
 				: "attack-surface-model";
-		case "identify-target":
-			return typeof record?.moduleName === "string"
-				? record.moduleName
-				: "identify-target";
-		case "scan-target":
-			return typeof record?.function === "object" &&
+		case "identify-target": {
+			const moduleName =
+				typeof record?.moduleName === "string"
+					? record.moduleName
+					: "identify-target";
+			const focus =
+				typeof record?.vulnerabilityClassFocus === "string"
+					? record.vulnerabilityClassFocus.trim()
+					: "";
+			return focus ? `${moduleName}:${focus}` : moduleName;
+		}
+		case "scan-target": {
+			const targetName =
+				typeof record?.function === "object" &&
 				record.function &&
 				"functionName" in record.function &&
 				typeof record.function.functionName === "string"
-				? record.function.functionName
-				: typeof record?.targetName === "string"
-					? record.targetName
-					: "scan-target";
+					? record.function.functionName
+					: typeof record?.targetName === "string"
+						? record.targetName
+						: "scan-target";
+			const focus =
+				typeof record?.vulnerabilityClassFocus === "string"
+					? record.vulnerabilityClassFocus.trim()
+					: "";
+			return focus ? `${targetName}:${focus}` : targetName;
+		}
 		case "analyze-finding":
 		case "critique-finding":
 			return typeof record?.candidate === "object" &&

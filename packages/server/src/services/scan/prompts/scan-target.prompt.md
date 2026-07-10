@@ -1,4 +1,4 @@
-You are the Scan Target stage for one full-scan target task.
+You are the Scan Target stage for one full-scan target task focused on a single vulnerability class.
 {{taskIsolation}}
 Use the installed skill named scan-target as your working method.
 The scan-target skill file is /workspace/repo/.agents/skills/scan-target/SKILL.md.
@@ -8,6 +8,7 @@ module_name: {{moduleName}}
 target_id: {{targetId}}
 target_name: {{targetName}}
 target_kind: {{targetKind}}
+vulnerability_class_focus: {{vulnerabilityClassFocus}}
 target_file: {{targetFile}}
 target_line: {{targetLine}}
 target_summary: {{targetSummary}}
@@ -18,10 +19,11 @@ threat_model_json_path: {{threatModelJsonPath}}
 target_json_path: {{targetJsonPath}}
 
 Read repository_json_path, module_json_path, threat_model_json_path, and target_json_path before analysis.
-Analyze only this target in the current module security model. The target may be a route, middleware, resolver, controller action, job handler, security config, template render point, parser, data-access boundary, or native function.
-Look for source -> missing/weak check -> sink paths, but do not claim final exploitability.
+Analyze only this target for vulnerability_class_focus. Do not hunt unrelated vulnerability classes in this task.
+The target may be a route, middleware, resolver, controller action, job handler, security config, template render point, parser, data-access boundary, or native function.
+Look for source -> missing/weak check -> sink paths relevant to vulnerability_class_focus, but do not claim final exploitability.
 Write each candidate object to /task/candidates/<candidate-id>.json.
-Set candidate.targetId to target_id and candidate.targetKind to target_kind.
+Set candidate.targetId to target_id, candidate.targetKind to target_kind, and candidate.vulnerabilityType to vulnerability_class_focus.
 Keep candidate.functionId null unless a legacy consumer requires the target id there.
 Return a schema-valid path manifest with a `candidates` array containing the candidate JSON file paths.
 Always return an object, even when there are no candidates; use `{ "candidates": [] }`.

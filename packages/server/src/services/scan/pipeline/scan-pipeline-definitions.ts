@@ -450,13 +450,14 @@ const readFirstField = (expression: string, prefix: string) => {
 	return normalized.split(".")[0] || "";
 };
 
-const validateTransformExpression = (input: {
+const validatePathExpressionPrefix = (input: {
 	expression: string;
 	edge: ScanPipelineEdgeConfig;
 	sourceStage: ScanPipelineStageConfig;
 	schemas: Record<string, Record<string, unknown>>;
+	allowForEachSuffix: boolean;
 }) => {
-	const { expression, edge, sourceStage, schemas } = input;
+	const { expression, edge, sourceStage, schemas, allowForEachSuffix } = input;
 	if (expression === "$item") {
 		if (edge.mode !== "fanOut") {
 			throw new Error(`Edge ${edge.name} uses $item outside fanOut mode`);
@@ -475,7 +476,10 @@ const validateTransformExpression = (input: {
 	if (/^\$computed\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/.test(expression)) {
 		return;
 	}
-	if (/^\$\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*(\[\*\])?$/.test(expression)) {
+	const outputPattern = allowForEachSuffix
+		? /^\$\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*(\[\*\])?$/
+		: /^\$\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/;
+	if (outputPattern.test(expression)) {
 		const field = readFirstField(expression, "$.");
 		const properties = getSchemaProperties(sourceStage.outputSchema, schemas);
 		if (Object.keys(properties).length > 0 && !(field in properties)) {
@@ -498,6 +502,69 @@ const validateTransformExpression = (input: {
 	throw new Error(`Unsupported transform expression: ${expression}`);
 };
 
+const validateFileExpression = (input: {
+	expression: string;
+	edge: ScanPipelineEdgeConfig;
+	sourceStage: ScanPipelineStageConfig;
+	schemas: Record<string, Record<string, unknown>>;
+	requireForEach: boolean;
+}) => {
+	const match = input.expression.match(
+		/^\$file\((.+?)\)((?:\.[A-Za-z0-9_-]+)*)(\[\*\])?$/,
+	);
+	if (!match) {
+		throw new Error(
+			`Unsupported transform expression: ${input.expression}`,
+		);
+	}
+	const pathExpr = match[1] ?? "";
+	const hasForEach = Boolean(match[3]);
+	if (input.requireForEach && !hasForEach) {
+		throw new Error(
+			`Edge ${input.edge.name} fanOut foreach $file expression must end with [*]`,
+		);
+	}
+	if (!input.requireForEach && hasForEach) {
+		throw new Error(
+			`Edge ${input.edge.name} uses foreach [*] outside fanOut foreach`,
+		);
+	}
+	validatePathExpressionPrefix({
+		expression: pathExpr,
+		edge: input.edge,
+		sourceStage: input.sourceStage,
+		schemas: input.schemas,
+		allowForEachSuffix: false,
+	});
+};
+
+const validateTransformExpression = (input: {
+	expression: string;
+	edge: ScanPipelineEdgeConfig;
+	sourceStage: ScanPipelineStageConfig;
+	schemas: Record<string, Record<string, unknown>>;
+	isForEach?: boolean;
+}) => {
+	const { expression, edge, sourceStage, schemas, isForEach = false } = input;
+	if (expression.startsWith("$file(")) {
+		validateFileExpression({
+			expression,
+			edge,
+			sourceStage,
+			schemas,
+			requireForEach: isForEach,
+		});
+		return;
+	}
+	validatePathExpressionPrefix({
+		expression,
+		edge,
+		sourceStage,
+		schemas,
+		allowForEachSuffix: isForEach,
+	});
+};
+
 const validateDefinitionsEdgeTransformExpressions = (
 	stages: ScanPipelineStageConfig[],
 	pipelines: Record<keyof typeof SCAN_PIPELINE_IDS, ScanPipelineConfig>,
@@ -515,6 +582,7 @@ const validateDefinitionsEdgeTransformExpressions = (
 					edge,
 					sourceStage: stagesById.get(edge.from)!,
 					schemas,
+					isForEach: true,
 				});
 			}
 			for (const expression of collectTransformExpressions(edge.input)) {
@@ -523,6 +591,7 @@ const validateDefinitionsEdgeTransformExpressions = (
 					edge,
 					sourceStage: stagesById.get(edge.from)!,
 					schemas,
+					isForEach: false,
 				});
 			}
 		}

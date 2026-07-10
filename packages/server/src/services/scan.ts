@@ -159,6 +159,10 @@ import {
 	type IdentifyTargetStageInput,
 } from "./scan/stages/identify-target.stage";
 import {
+	DEFAULT_VULNERABILITY_CLASS_FOCUS,
+	normalizeLikelyVulnerabilityClasses,
+} from "./scan/stages/normalize-likely-vulnerability-classes";
+import {
 	createScanTargetStageDefinition,
 	type ScanTargetStageInput,
 	type ScanTargetStageOutput,
@@ -172,9 +176,9 @@ import {
 	type RepositoryScanningStageOutput,
 } from "./scan/stages/repository-scan.stage";
 import {
-	getPendingAnalysisCandidateState,
-	getPendingVerificationCandidateState,
-} from "./scan/state/pending-candidate-state";
+	type CandidateTaskExecutionState,
+	deriveCandidateTaskExecutionState,
+} from "./scan/state/candidate-task-state";
 import { getPendingScanTaskStateView } from "./scan/state/scan-pipeline-read-model";
 import { resolveNextScanPipelineState } from "./scan/state/scan-state-machine";
 import { createShortTaskId } from "./scan/task-id";
@@ -192,7 +196,6 @@ import type {
 	Task,
 	TriageResult,
 	VerificationResult,
-	VulnerabilityCandidateStage,
 } from "./scan/types";
 
 const DEFAULT_FULL_SCAN_MODULE_CONCURRENCY = 4;
@@ -777,11 +780,12 @@ const readFunctionTaskView = (task: Task): UnifiedFunctionTaskView | null => {
 		attempt: task.attempt,
 		score: readNumber(input, "score") ?? readNumber(func, "score"),
 		vulnerabilityType:
-			readString(input, "targetKind") ||
-			readString(target, "targetKind") ||
+			readString(input, "vulnerabilityClassFocus") ||
 			readString(input, "vulnerabilityType") ||
 			readString(func, "vulnerabilityType") ||
-			readString(func, "riskType"),
+			readString(func, "riskType") ||
+			readString(input, "targetKind") ||
+			readString(target, "targetKind"),
 		summary: readString(input, "summary") || readString(func, "summary"),
 		errorMessage: task.errorMessage ?? null,
 		startedAt: task.startedAt ?? null,
@@ -4600,6 +4604,24 @@ const deriveCandidateVerifierRuntimeLiveAction = async (
 	return deriveRuntimeLiveActionFromMessages(messages);
 };
 
+const deriveCandidateExecutionState = async (input: {
+	producerTaskId: string;
+	vulnerabilityCandidateId: string;
+}) =>
+	deriveCandidateTaskExecutionState(
+		(
+			await listCandidateDescendantTasksByProducerTaskIdRepo({
+				producerTaskId: input.producerTaskId,
+				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+			})
+		).map((task) => ({
+			taskId: task.taskId,
+			stageName: task.stageName,
+			status: task.status,
+			createdAt: task.createdAt,
+		})),
+	);
+
 export const findScanJobStatusView = async (scanJobId: string) => {
 	const [
 		scanJob,
@@ -4691,6 +4713,23 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 		}
 	}
 
+	const candidateExecutionStateById = new Map<
+		string,
+		CandidateTaskExecutionState
+	>(
+		await Promise.all(
+			candidates.map(async (candidate) =>
+				[
+				candidate.vulnerabilityCandidateId,
+				await deriveCandidateExecutionState({
+					producerTaskId: candidate.producerTaskId,
+					vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
+				}),
+				] as const,
+			),
+		),
+	);
+
 	const analysisLikelyOrConfirmedCount = candidates.filter((candidate) => {
 		const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
 			candidate.vulnerabilityCandidateId,
@@ -4714,9 +4753,18 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 		latestAnalysisResultByCandidateId.has(candidate.vulnerabilityCandidateId),
 	).length;
 	const failedAnalysisCount = candidates.filter(
-		(candidate) =>
-			candidate.status === "failed" &&
-			(candidate.currentStage || "analyzing") === "analyzing",
+		(candidate) => {
+			const executionState = candidateExecutionStateById.get(
+				candidate.vulnerabilityCandidateId,
+			);
+			return (
+				!latestAnalysisResultByCandidateId.has(
+					candidate.vulnerabilityCandidateId,
+				) &&
+				executionState?.latestStage === "analyzing" &&
+				executionState.latestTask?.status === "failed"
+			);
+		},
 	).length;
 	const verificationEligibleCount = analysisLikelyOrConfirmedCount;
 	const verificationCompletedCount = candidates.filter((candidate) =>
@@ -4728,24 +4776,73 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 		latestTriageResultByCandidateId.has(candidate.vulnerabilityCandidateId),
 	).length;
 	const failedVerificationCount = candidates.filter(
-		(candidate) =>
-			candidate.status === "failed" && candidate.currentStage === "verifying",
+		(candidate) => {
+			const executionState = candidateExecutionStateById.get(
+				candidate.vulnerabilityCandidateId,
+			);
+			return (
+				verificationEligibleCount > 0 &&
+				!latestVerificationResultByCandidateId.has(
+					candidate.vulnerabilityCandidateId,
+				) &&
+				executionState?.latestStage === "verifying" &&
+				executionState.latestTask?.status === "failed"
+			);
+		},
 	).length;
 	const analysisQueuedCount = candidates.filter(
-		(candidate) =>
-			candidate.status === "pending" &&
-			(candidate.currentStage || "analyzing") === "analyzing",
+		(candidate) => {
+			const executionState = candidateExecutionStateById.get(
+				candidate.vulnerabilityCandidateId,
+			);
+			return (
+				!latestAnalysisResultByCandidateId.has(
+					candidate.vulnerabilityCandidateId,
+				) &&
+				!executionState?.activeTask &&
+				!(
+					executionState?.latestStage === "analyzing" &&
+					executionState.latestTask?.status === "failed"
+				)
+			);
+		},
 	).length;
 	const verificationQueuedCount = candidates.filter(
-		(candidate) =>
-			candidate.status === "pending" && candidate.currentStage === "verifying",
+		(candidate) => {
+			const executionState = candidateExecutionStateById.get(
+				candidate.vulnerabilityCandidateId,
+			);
+			const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
+				candidate.vulnerabilityCandidateId,
+			);
+			return (
+				(latestAnalysisResult?.result === "real_vulnerability" ||
+					latestAnalysisResult?.result === "likely_vulnerability") &&
+				!latestVerificationResultByCandidateId.has(
+					candidate.vulnerabilityCandidateId,
+				) &&
+				!executionState?.activeTask &&
+				!(
+					executionState?.latestStage === "verifying" &&
+					executionState.latestTask?.status === "failed"
+				)
+			);
+		},
 	).length;
 	const inProgressCandidates = await Promise.all(
 		candidates
-			.filter((candidate) => candidate.status === "running")
+			.filter(
+				(candidate) =>
+					Boolean(
+						candidateExecutionStateById.get(candidate.vulnerabilityCandidateId)
+							?.activeTask,
+					),
+			)
 			.map(async (candidate) => {
-				const candidateStage = (candidate.currentStage ||
-					"analyzing") as VulnerabilityCandidateStage;
+				const executionState = candidateExecutionStateById.get(
+					candidate.vulnerabilityCandidateId,
+				);
+				const candidateStage = executionState?.activeStage || "analyzing";
 				const candidateRuntimeLiveAction =
 					candidateStage === "verifying"
 						? await deriveCandidateVerifierRuntimeLiveAction(
@@ -4756,7 +4853,6 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 								scanJobId,
 								candidate.vulnerabilityCandidateId,
 							);
-				const resolvedStage = candidate.currentStage || "analyzing";
 				const resolvedActionType =
 					candidateRuntimeLiveAction?.actionType || "other";
 				const resolvedActionText =
@@ -4764,22 +4860,14 @@ export const findScanJobStatusView = async (scanJobId: string) => {
 					candidateRuntimeLiveAction.actionText !== "-"
 						? candidateRuntimeLiveAction.actionText
 						: "-";
-				const taskId =
-					candidateStage === "verifying"
-						? latestVerificationResultByCandidateId.get(
-								candidate.vulnerabilityCandidateId,
-							)?.taskId || ""
-						: latestAnalysisResultByCandidateId.get(
-								candidate.vulnerabilityCandidateId,
-							)?.taskId || "";
 
 				return {
-					taskId,
+					taskId: executionState?.activeTask?.taskId || "",
 					vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
 					title: candidate.title,
 					filePath: candidate.filePath,
 					line: candidate.line,
-					stage: candidate.currentStage || resolvedStage,
+					stage: candidateStage,
 					actionType: resolvedActionType,
 					actionText: resolvedActionText,
 					updatedAt: candidate.updatedAt,
@@ -5824,10 +5912,16 @@ const buildPipelineEdgesFromDefinitions = (
 				edgeConfig.input !== null || edgeConfig.mode !== null
 					? async (input: {
 							ctx: FullScanPipelineContext;
+							fromTaskId: string;
 							stageInput: unknown;
 							stageOutput: unknown;
-						}) =>
-							transformPipelineEdgeInput(
+						}) => {
+							const fromTask = await findTaskByIdRepo(input.fromTaskId);
+							const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
+								input.ctx,
+								fromTask,
+							);
+							return (await transformPipelineEdgeInput(
 								{
 									mode: edgeConfig.mode,
 									foreach: edgeConfig.foreach,
@@ -5846,8 +5940,15 @@ const buildPipelineEdgesFromDefinitions = (
 									},
 									stageInput: input.stageInput,
 									stageOutput: input.stageOutput,
+									readJsonFile: async (containerPath) =>
+										await readTaskJsonArtifact({
+											taskDir: fromTaskDir,
+											containerPath,
+										}),
+									allowedRoots: [fromTaskDir],
 								},
-							) as any[]
+							)) as any[];
+						}
 					: edge.transformOutput,
 			outputSchema:
 				buildDefinitionsSchemaContract(definitions, edgeConfig.outputSchema) ??
@@ -5935,6 +6036,7 @@ type DeltaScopeFunctionInput = Pick<
 	| "targetName"
 	| "targetKind"
 	| "priority"
+	| "vulnerabilityClassFocus"
 >;
 
 const buildRepositoryObject = (
@@ -5978,8 +6080,6 @@ const buildCandidateObject = (candidate: {
 	quickDisproofAttempt: string | null;
 	needsFuzzing: boolean;
 	needsManualAnalysis: boolean;
-	status: string;
-	currentStage: string;
 }): CanonicalCandidate => {
 	const parsedTargetKind = targetKindSchema
 		.nullable()
@@ -6005,17 +6105,6 @@ const buildCandidateObject = (candidate: {
 		quickDisproofAttempt: candidate.quickDisproofAttempt,
 		needsFuzzing: candidate.needsFuzzing,
 		needsManualAnalysis: candidate.needsManualAnalysis,
-		status:
-			candidate.status === "running" ||
-			candidate.status === "completed" ||
-			candidate.status === "failed" ||
-			candidate.status === "exited"
-				? candidate.status
-				: "pending",
-		currentStage:
-			candidate.currentStage === "verifying"
-				? candidate.currentStage
-				: "analyzing",
 	};
 };
 
@@ -6677,8 +6766,22 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			from: attackSurfaceModelStage,
 			to: moduleStage,
 			fork: false,
-				transformOutput: async ({ stageInput, stageOutput }) => [
-				{
+			transformOutput: async ({ stageInput, stageOutput, fromTaskId }) => {
+				const fromTask = await findTaskByIdRepo(fromTaskId);
+				const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
+					context,
+					fromTask,
+				);
+				const threatModel = await readTaskJsonArtifact<{
+					likelyVulnerabilityClasses?: unknown;
+				}>({
+					taskDir: fromTaskDir,
+					containerPath: stageOutput.threatModel,
+				});
+				const classes = normalizeLikelyVulnerabilityClasses(
+					threatModel.likelyVulnerabilityClasses,
+				);
+				return classes.map((vulnerabilityClassFocus) => ({
 					scanJob: stageInput.scanJob,
 					repositoryPath: stageInput.repositoryPath,
 					modulePath: stageOutput.module,
@@ -6686,8 +6789,9 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					moduleId: stageInput.moduleId,
 					moduleName: stageInput.moduleName,
 					priority: stageInput.priority,
-				},
-			],
+					vulnerabilityClassFocus,
+				}));
+			},
 			createTasks: async ({ fromTaskId, nextInputObjects }) => {
 				const fromTask = await findTaskByIdRepo(fromTaskId);
 				const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
@@ -6700,8 +6804,11 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						taskDir: fromTaskDir,
 						containerPath: manifestInput.modulePath,
 					});
+					const vulnerabilityClassFocus =
+						manifestInput.vulnerabilityClassFocus?.trim() ||
+						DEFAULT_VULNERABILITY_CLASS_FOCUS;
 					const taskId = createShortTaskId();
-					const taskName = module.name;
+					const taskName = `${module.name}:${vulnerabilityClassFocus}`;
 					const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
 						taskId,
 						stageName: SCAN_STAGE_IDS.moduleScan,
@@ -6733,6 +6840,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						moduleId: module.moduleId,
 						moduleName: module.name,
 						priority: module.priority,
+						vulnerabilityClassFocus,
 					};
 					const task = await createTaskRepo({
 						taskId,
@@ -6771,6 +6879,9 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					targetName: "",
 					targetKind: "unknown",
 					priority: null,
+					vulnerabilityClassFocus:
+						stageInput.vulnerabilityClassFocus ||
+						DEFAULT_VULNERABILITY_CLASS_FOCUS,
 				})),
 			createTasks: async ({ fromTaskId, nextInputObjects }) => {
 				const fromTask = await findTaskByIdRepo(fromTaskId);
@@ -6784,8 +6895,11 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						taskDir: fromTaskDir,
 						containerPath: manifestInput.targetPath,
 					});
+					const vulnerabilityClassFocus =
+						manifestInput.vulnerabilityClassFocus?.trim() ||
+						DEFAULT_VULNERABILITY_CLASS_FOCUS;
 					const taskId = createShortTaskId();
-					const taskName = target.targetName;
+					const taskName = `${target.targetName}:${vulnerabilityClassFocus}`;
 					const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
 						taskId,
 						stageName: SCAN_STAGE_IDS.functionScan,
@@ -6830,6 +6944,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						line: target.line,
 						summary: target.summary,
 						priority: target.priority,
+						vulnerabilityClassFocus,
 					};
 					const task = await createTaskRepo({
 						taskId,
@@ -7495,6 +7610,7 @@ const buildDeltaScanPipeline = (context: FullScanPipelineContext) => {
 					targetName: "",
 					targetKind: "function",
 					priority: null,
+					vulnerabilityClassFocus: "delta-scoped",
 				})),
 			createTasks: async ({ fromTaskId, stageOutput, nextInputObjects }) => {
 				const fromTask = await findTaskByIdRepo(fromTaskId);
@@ -7550,6 +7666,11 @@ const buildDeltaScanPipeline = (context: FullScanPipelineContext) => {
 						toRelativePath: "inputs/target.json",
 						value: target,
 					});
+					const vulnerabilityClassFocus =
+						manifestInput.vulnerabilityClassFocus?.trim() ||
+						func.vulnerabilityType?.trim() ||
+						func.likelyVulnerabilityTypes?.[0]?.trim() ||
+						DEFAULT_VULNERABILITY_CLASS_FOCUS;
 					const downstreamInput: ScanTargetStageInput = {
 						scanJob: manifestInput.scanJob,
 						repositoryPath,
@@ -7565,6 +7686,7 @@ const buildDeltaScanPipeline = (context: FullScanPipelineContext) => {
 						line: func.line,
 						summary: func.summary,
 						priority: func.priority,
+						vulnerabilityClassFocus,
 					};
 					const task = await createTaskRepo({
 						taskId,
@@ -8359,11 +8481,7 @@ export const cancelScanJob = async (scanJobId: string) => {
 		clearedTasks: tasksToCancel.length,
 		clearedModuleTasks: moduleTasks.length,
 		clearedFunctionTasks: functionTasks.length,
-		clearedCandidates: candidates.filter((candidate) =>
-			["pending", "launching", "launched", "starting", "running"].includes(
-				candidate.status,
-			),
-		).length,
+		clearedCandidates: candidates.length,
 	};
 };
 
@@ -8372,10 +8490,45 @@ const getPendingAnalysisCandidates = async (scanJobId: string) => {
 		findVulnerabilityCandidatesByScanJobIdRepo(scanJobId),
 		listAnalysisResultsByScanJobIdRepo(scanJobId),
 	]);
-	return getPendingAnalysisCandidateState({
-		candidates,
-		analysisResults: analysisResultsList,
+	const candidateStateById = new Map<string, CandidateTaskExecutionState>(
+		await Promise.all(
+			candidates.map(async (candidate) =>
+				[
+				candidate.vulnerabilityCandidateId,
+				await deriveCandidateExecutionState({
+					producerTaskId: candidate.producerTaskId,
+					vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
+				}),
+				] as const,
+			),
+		),
+	);
+	const analysisCandidateIds = new Set(
+		analysisResultsList.map((item) => item.vulnerabilityCandidateId),
+	);
+	const pendingCandidates = candidates.filter((candidate) => {
+		if (analysisCandidateIds.has(candidate.vulnerabilityCandidateId)) {
+			return false;
+		}
+		const state = candidateStateById.get(candidate.vulnerabilityCandidateId);
+		return !(
+			state?.latestStage === "analyzing" &&
+			(state.latestTask?.status === "failed" ||
+				state.latestTask?.status === "exited" ||
+				state.latestTask?.status === "canceled")
+		);
 	});
+	const failed = candidates.filter((candidate) => {
+		if (analysisCandidateIds.has(candidate.vulnerabilityCandidateId)) {
+			return false;
+		}
+		const state = candidateStateById.get(candidate.vulnerabilityCandidateId);
+		return (
+			state?.latestStage === "analyzing" &&
+			state.latestTask?.status === "failed"
+		);
+	}).length;
+	return { candidates, pendingCandidates, failed };
 };
 
 const getPendingVerificationCandidates = async (scanJobId: string) => {
@@ -8385,12 +8538,109 @@ const getPendingVerificationCandidates = async (scanJobId: string) => {
 			listAnalysisResultsByScanJobIdRepo(scanJobId),
 			listVerificationResultsByScanJobIdRepo(scanJobId),
 		]);
-	return getPendingVerificationCandidateState({
-		candidates,
-		analysisResults: analysisResultsList,
-		verificationResults: verificationResultsList,
-		shouldVerifyFromAnalysisResult,
+	const candidateStateById = new Map<string, CandidateTaskExecutionState>(
+		await Promise.all(
+			candidates.map(async (candidate) =>
+				[
+				candidate.vulnerabilityCandidateId,
+				await deriveCandidateExecutionState({
+					producerTaskId: candidate.producerTaskId,
+					vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
+				}),
+				] as const,
+			),
+		),
+	);
+	const latestAnalysisResultByCandidateId = new Map<string, AnalysisResult>();
+	for (const analysisResult of analysisResultsList) {
+		if (
+			!latestAnalysisResultByCandidateId.has(
+				analysisResult.vulnerabilityCandidateId,
+			)
+		) {
+			latestAnalysisResultByCandidateId.set(
+				analysisResult.vulnerabilityCandidateId,
+				analysisResult,
+			);
+		}
+	}
+	const latestVerificationResultByCandidateId = new Map<
+		string,
+		VerificationResult
+	>();
+	for (const verificationResult of verificationResultsList) {
+		if (
+			!latestVerificationResultByCandidateId.has(
+				verificationResult.vulnerabilityCandidateId,
+			)
+		) {
+			latestVerificationResultByCandidateId.set(
+				verificationResult.vulnerabilityCandidateId,
+				verificationResult,
+			);
+		}
+	}
+	const pendingCandidates = candidates.filter((candidate) => {
+		const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
+			candidate.vulnerabilityCandidateId,
+		);
+		if (!latestAnalysisResult) {
+			return false;
+		}
+		if (!shouldVerifyFromAnalysisResult(latestAnalysisResult.result)) {
+			return false;
+		}
+		if (
+			latestVerificationResultByCandidateId.has(
+				candidate.vulnerabilityCandidateId,
+			)
+		) {
+			return false;
+		}
+		const state = candidateStateById.get(candidate.vulnerabilityCandidateId);
+		return !(
+			state?.latestStage === "verifying" &&
+			(state.latestTask?.status === "failed" ||
+				state.latestTask?.status === "exited" ||
+				state.latestTask?.status === "canceled")
+		);
 	});
+	const failed = candidates.filter((candidate) => {
+		const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
+			candidate.vulnerabilityCandidateId,
+		);
+		if (!latestAnalysisResult) {
+			return false;
+		}
+		if (!shouldVerifyFromAnalysisResult(latestAnalysisResult.result)) {
+			return false;
+		}
+		if (
+			latestVerificationResultByCandidateId.has(
+				candidate.vulnerabilityCandidateId,
+			)
+		) {
+			return false;
+		}
+		const state = candidateStateById.get(candidate.vulnerabilityCandidateId);
+		return (
+			state?.latestStage === "verifying" &&
+			state.latestTask?.status === "failed"
+		);
+	}).length;
+	return {
+		candidates,
+		pendingCandidates,
+		totalTargets: candidates.filter((candidate) => {
+			const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
+				candidate.vulnerabilityCandidateId,
+			);
+			return latestAnalysisResult
+				? shouldVerifyFromAnalysisResult(latestAnalysisResult.result)
+				: false;
+		}).length,
+		failed,
+	};
 };
 
 const getPendingTriageTaskState = async (scanJobId: string) => {
@@ -8745,11 +8995,14 @@ export const startCandidateVerification = async (
 	const hasPreviousVerification = Boolean(
 		existingVerificationTask?.output || existingVerificationTask?.threadId,
 	);
+	const hasActiveVerification = Boolean(
+		existingVerificationTask &&
+			["pending", "launching", "launched", "starting", "running"].includes(
+				existingVerificationTask.status,
+			),
+	);
 	if (
-		candidate.currentStage === "verifying" &&
-		["pending", "launching", "launched", "starting", "running"].includes(
-			candidate.status,
-		)
+		hasActiveVerification
 	) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
@@ -8757,7 +9010,9 @@ export const startCandidateVerification = async (
 		});
 	}
 
-	if (hasPreviousVerification || candidate.status === "failed") {
+	const shouldReuseVerificationTask =
+		hasPreviousVerification || existingVerificationTask?.status === "failed";
+	if (shouldReuseVerificationTask) {
 		if (existingVerificationTask) {
 			await removeQueuedVerificationTask(
 				scanJob.scanJobId,
@@ -8833,7 +9088,7 @@ export const startCandidateVerification = async (
 
 	if (
 		verificationTask &&
-		(hasPreviousVerification || candidate.status === "failed")
+		shouldReuseVerificationTask
 	) {
 		await stopScanContainer(verificationTask.containerName).catch(() => false);
 		await updateTaskRepo(verificationTask.taskId, {
@@ -8883,17 +9138,22 @@ export const startCandidateAnalysis = async (input: {
 		scanJobId: input.scanJobId,
 		producerTaskId: input.producerTaskId,
 	});
-	if (!["completed", "failed", "exited"].includes(candidate.status)) {
-		throw new TRPCError({
-			code: "BAD_REQUEST",
-			message:
-				"Candidate analysis can only be requeued after the candidate reaches a terminal state",
-		});
-	}
 	if (!candidate.producerTaskId) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
 			message: "Candidate does not have a producer task",
+		});
+	}
+
+	const candidateExecutionState = await deriveCandidateExecutionState({
+		producerTaskId: candidate.producerTaskId,
+		vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+	});
+	if (!candidateExecutionState.canRerunAnalysis) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message:
+				"Candidate analysis can only be requeued after the candidate reaches a terminal state",
 		});
 	}
 
@@ -9134,7 +9394,6 @@ export const startCandidateReviewContainer = async (input: {
 		candidates: lineageByCandidate.map(({ candidate, lineage }) => ({
 			candidateId: candidate.vulnerabilityCandidateId,
 			title: candidate.title,
-			status: candidate.status,
 			producerTaskId: candidate.producerTaskId,
 			tasks: lineage.tasks.map((task) => ({
 				taskId: task.taskId,

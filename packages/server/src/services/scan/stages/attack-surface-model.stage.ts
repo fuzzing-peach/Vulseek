@@ -2,7 +2,10 @@ import {
 	moduleThreatModelManifestSchema,
 	moduleThreatModelSchema,
 } from "../artifacts/contracts/domain-object.contract";
-import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";
+import {
+	readTaskJsonArtifact,
+	writeTaskJsonArtifact,
+} from "../artifacts/task-artifact-paths";
 import { bindTaskRuntimeRepo } from "../persistence/task.repo";
 import {
 	createStageDefinition,
@@ -25,6 +28,7 @@ import {
 	resolveStageConcurrencySetting,
 	type StageContext,
 } from "./full-scan-stage.runtime";
+import { normalizeLikelyVulnerabilityClasses } from "./normalize-likely-vulnerability-classes";
 
 export type AttackSurfaceModelStageInput = {
 	scanJob: ScanJob;
@@ -43,12 +47,30 @@ const validateAttackSurfaceModelOutput = async (
 ) => {
 	const manifest = moduleThreatModelManifestSchema.parse(JSON.parse(rawOutput));
 	const taskDir = await ctx.taskDir();
-	moduleThreatModelSchema.parse(
+	const threatModel = moduleThreatModelSchema.parse(
 		await readTaskJsonArtifact({
 			taskDir,
 			containerPath: manifest.threatModel,
 		}),
 	);
+	const normalizedClasses = normalizeLikelyVulnerabilityClasses(
+		threatModel.likelyVulnerabilityClasses,
+	);
+	const previous = threatModel.likelyVulnerabilityClasses ?? [];
+	const changed =
+		previous.length !== normalizedClasses.length ||
+		previous.some((value, index) => value !== normalizedClasses[index]);
+	if (changed) {
+		const relativePath = manifest.threatModel.replace(/^\/task\//, "");
+		await writeTaskJsonArtifact({
+			taskDir,
+			relativePath,
+			value: {
+				...threatModel,
+				likelyVulnerabilityClasses: normalizedClasses,
+			},
+		});
+	}
 	return manifest;
 };
 

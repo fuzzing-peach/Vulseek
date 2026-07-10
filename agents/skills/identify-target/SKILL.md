@@ -7,7 +7,7 @@ description: Identify high-value vulnerability scanning targets from a module an
 
 ## Purpose
 
-Turn a module threat model into concrete scan targets. A target is the smallest useful unit for vulnerability mining; it is not necessarily a function.
+Turn a module threat model into concrete scan targets for **one assigned vulnerability class** (`vulnerability_class_focus` from the stage prompt). A target is the smallest useful unit for vulnerability mining; it is not necessarily a function.
 
 This is a routing stage. It should produce target artifacts, not vulnerability candidates.
 
@@ -44,14 +44,18 @@ Use the target kind that best matches source evidence:
 
 ## Selection Policy
 
+Only select targets relevant to `vulnerability_class_focus`. Ignore other vulnerability classes for this task.
+
 Prefer targets with one or more of:
 
-- attacker-controlled inputs
-- auth/session/authorization decisions
-- tenant, owner, role, quota, workflow, or object-level checks
-- database, command, filesystem, network, template, deserialization, crypto, parser, memory, or resource sinks
+- attacker-controlled inputs related to the focus class
+- auth/session/authorization decisions when the focus is authz/authn related
+- tenant, owner, role, quota, workflow, or object-level checks when relevant
+- sinks and boundaries that match the focus class
 - framework entrypoint semantics, such as route handler, middleware, resolver, controller action, server action, worker job, or CLI command
-- security configuration that changes runtime trust, CORS, cookies, sessions, headers, CSRF, auth, secrets, or sandbox/tool permissions
+- security configuration that changes runtime trust when the focus is configuration related
+
+For every emitted target, set `likelyVulnerabilityTypes` to exactly `[vulnerability_class_focus]`.
 
 Do not enumerate every helper when a route/controller/resolver target gives a better review unit.
 For native modules, functions can still be the right target.

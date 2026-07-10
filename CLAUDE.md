@@ -59,6 +59,25 @@ pnpm vitest run __test__/compose/compose.test.ts  # Run a single test file
 pnpm vitest __test__/compose/                     # Watch mode for a directory
 ```
 
+### Docker Swarm dev environment (`dev.sh`)
+
+An alternative dev workflow runs the whole stack (Vulseek, Postgres, Redis, Traefik) as Docker Swarm services, matching production orchestration more closely than the bare `pnpm run vulseek:dev` flow above:
+
+```bash
+./dev.sh init             # Initialize Docker Swarm (first time only)
+./dev.sh build             # Build the dev image
+./dev.sh start              # Deploy services
+./dev.sh status             # Show service status/URLs
+./dev.sh logs vulseek       # Tail a service's logs
+./dev.sh shell               # Shell into the main container (or `./dev.sh shell postgres`)
+./dev.sh update vulseek      # Redeploy after code changes
+./dev.sh db:migrate | db:seed | db:studio
+./dev.sh test | lint | format
+./dev.sh stop                # Tear down
+```
+
+`run.sh` is the equivalent manager for the released GHCR image (`vulseek-*-release` services). Both scripts default the scan sandbox host mount to `./vulseek-data` (override with `VULSEEK_SCAN_CONTEXT_HOST_PATH`).
+
 ## Architecture
 
 ### Monorepo Structure
@@ -132,66 +151,45 @@ Scan jobs progress through states: `pending` → `running` → `completed` / `fa
 
 The `auto-delta-scan` utility (`apps/vulseek/server/utils/auto-delta-scan.ts`) periodically polls for new commits and triggers delta scans.
 
-### Full Scan Pipeline — Two Parallel Branches
+### Full & Delta Scan Pipelines — YAML-Defined Graph
 
-The full scan pipeline (`packages/server/src/services/scan/stages/`) has two independent branches that run in parallel, connected at the verify/triage stage:
+The pipeline topology used to be two parallel branches (a rule/pattern-matching branch and a function-level deep-analysis branch) hardcoded in TypeScript. That was removed (`refactor(scan): remove legacy stages`) in favor of a single, declarative pipeline defined in YAML and executed by a generic graph runner:
 
-#### Rule-Based Branch (pattern matching approach)
-
-```
-delta-scope → repository-scan → module-scan → module-threat-model
-                                                       │
-                                          ┌────────────┴────────────┐
-                                          ▼                         ▼
-                                    design-rule              attack-surface-model
-                                          │                         │
-                                          ▼                         ▼
-                                      scan-rule              identify-target
-                                          │                         │
-                                          ▼                         ▼
-                                    scan-pattern               scan-target
-                                          │                         │
-                                          └──────────┬──────────────┘
-                                                     ▼
-                                              sink-pre-analyze
-                                                     │
-                                                     ▼
-                                               function-scan
-```
-
-#### Function-Based Branch (deep analysis approach)
+- **Definitions**: `packages/server/src/services/scan/pipeline/definitions/`
+  - `pipelines/{full,delta}.yaml` — the stage list, root stage, and edges (with `fanOut`/`map` modes and `$ctx.` / `$input.` / `$item` / `$computed.` templated input mapping) for each pipeline
+  - `stages/*.yaml` — per-stage config: `key`, `role`, `group`, `concurrency`, `disableable`, and `runtimeConfig` (agent profile, `persistent`/`reuseContainer`, `skills`, `promptFile`, input/output schema refs)
+  - `schemas/*.yaml` — shared JSON Schema fragments referenced via `$ref: "#/schemas/Name"`
+- **Loading & validation**: `scan-pipeline-definitions.ts` reads and Zod-validates the YAML into `ScanPipelineStageConfig`/`ScanPipelineEdgeConfig`; `scan-pipeline-schema-contracts.ts` resolves `$ref`/`$pathOf` schema references into JSON Schema or Zod contracts.
+- **Execution**: `pipeline-runner.ts` is a generic DAG executor over `StageDefinition`s (`packages/server/src/services/scan/stages/*.stage.ts`) driven by the loaded edges — it doesn't know about specific stages, just how to fan out, map, route, and loop between them.
 
 ```
-attack-surface-model → identify-target → scan-target → function-scan
-                                                             │
-                                      ┌──────────────────────┘
-                                      ▼
-                                   analyze ──(loop)──► criticize
-                                      │
-                                      ▼
-                                    verify → triage
+full:  repository-profile ─(fanOut modules)─► attack-surface-model ─► identify-target ─(fanOut targets)─► scan-target
+                                                                                                              │
+delta:                                                     delta-scope ─(fanOut functions)─► scan-target ◄──┘
+                                                                                                              │
+                                                                                            (fanOut candidates)
+                                                                                                              ▼
+                                                                          analyze-finding ⇄(critic loop)⇄ critique-finding
+                                                                                                              │
+                                                                                                              ▼
+                                                                                         verify-finding ─► triage-finding
 ```
 
 #### Stage Summary
 
 | Stage | AI Agent? | Purpose |
 |-------|:---------:|---------|
-| `delta-scope` | ✓ | Determine which modules changed since last scan |
-| `repository-scan` | ✓ | Profile repository structure, identify modules |
-| `module-scan` | ✓ | Deep-dive into a single module |
-| `module-threat-model` | ✗ | Algorithmically infer threat model from module metadata (sink classes, trust boundaries, entrypoints) |
-| `attack-surface-model` | ✓ | AI-driven attack surface analysis for a module |
-| `design-rule` | ✓ | Design custom scan rules (semgrep-like patterns) for the module based on threat model |
-| `scan-rule` | ✓ | Execute rule-based scanning using generated rules |
-| `scan-pattern` | ✗ | Run structured grep/pattern matching based on rule plans |
+| `delta-scope` | ✓ | Determine which modules/functions changed since last scan (delta pipeline root) |
+| `repository-profile` | ✓ | Profile repository structure, identify modules (full pipeline root) |
+| `attack-surface-model` | ✓ | AI-driven attack surface / threat-model analysis for a module |
 | `identify-target` | ✓ | Identify high-value vulnerability targets within a module |
-| `scan-target` | ✓ | Deep vulnerability scan on a specific target (file/function/API) |
-| `sink-pre-analyze` | ✗ | Convert rule findings into structured candidates, normalize candidate IDs, deduplicate |
-| `function-scan` | ✓ | Function-level vulnerability discovery |
-| `analyze` / `analyze-finding` | ✓ | In-depth analysis with CodeQL, path tracing, critic review loop |
-| `criticize` | ✓ | Adversarial critic that challenges or confirms analysis findings |
-| `verify` / `verify-finding` | ✓ | Final verification of analyzed vulnerabilities |
-| `triage` | ✗ | Classify, score (CVSS, EPSS), and prioritize verified findings |
+| `scan-target` | ✓ | Deep vulnerability scan on a specific target (file/function/API), emits candidates |
+| `analyze-finding` | ✓ | In-depth analysis of a candidate (CodeQL, path tracing); loops with `critique-finding` |
+| `critique-finding` | ✓ | Adversarial critic that challenges or approves the draft analysis, routes back to `analyze-finding` |
+| `verify-finding` | ✓ | Final verification of the critic-approved analysis |
+| `triage-finding` | ✗ | Classify, score (CVSS, EPSS), and prioritize verified findings |
+
+Older stage names (`module-scan`, `function-scan`, `repository-scan`, `analysis-critic`, `candidate-*`) still exist as `.stage.ts` files/tests in `packages/server/src/services/scan/stages/` but are superseded by the YAML-driven `repository-profile`/`scan-target`/`analyze-finding`/`critique-finding`/`triage-finding` stages above — check `pipeline/definitions/pipelines/*.yaml` for what's actually wired into a given pipeline before assuming a `.stage.ts` file is live.
 
 ### Agent Runtime Architecture
 
@@ -205,7 +203,7 @@ Each AI-powered stage runs an agent inside a **Docker sandbox container**:
 
 ### Agent Skills
 
-23 agent skill definitions in `agents/skills/` — each is a Markdown file with detailed instructions for a specific scan stage. Key skills: `analyze`, `verify`, `scan-function`, `scan-target`, `identify-target`, `attack-surface-model`, `design-rule`, `full-scan`, `delta-scan`, `semgrep`, `codeql`, `serena`, `tree-sitter`, `libafl`, `address-sanitizer`, etc.
+Agent skill definitions live in `agents/skills/<name>/SKILL.md` (plus reference/workflow docs for some, e.g. `codeql/references/`, `codeql/workflows/`). Referenced by stage YAML (`skills:` list) and passed into the sandbox container. Includes: `delta-scope`, `scan-repository`, `attack-surface-model`, `identify-target`, `scan-target`, `scan-function`, `scan-module`, `analyze`, `criticize`, `verify`, `full-scan`, `full-scan-subagent`, `delta-scan`, plus tool-specific skills `codeql`, `semgrep`, `tree-sitter`, `libafl`, `build-fuzzer`, `run-fuzzer`, `address-sanitizer`, `coverage-analysis`, `search-registries`. Note some stage YAML `skills:` entries (e.g. `repository-profile`, `analyze-finding`, `critique-finding`, `verify-finding`, `triage-finding`) reference skill names that don't yet have a matching directory here — this is mid-refactor from the YAML pipeline rewrite, check for drift before relying on a skill existing.
 
 ### Candidate Management
 
@@ -227,7 +225,7 @@ The scans-queue uses a **semaphore** (`acquireScanExecutionSlot`) that allows fi
 
 Stage-level concurrency is further controllable via `resolveStageConcurrencySetting`, which respects per-stage defaults (e.g., `analyze` = 2, `verify` = 1, module stages = 4).
 
-**Queue job deduplication** (`queue-job-ids.ts`): Maps stage names to deduplication keys so that related tasks share queue slots instead of competing independently. Groups stages: `repository:scanJobId`, `module:taskId`, `function:taskId`, `analysis:taskId`, `verification:taskId`, etc.
+**Queue job deduplication** (`queue-job-ids.ts`): Maps stage names to deduplication keys so that related tasks share queue slots instead of competing independently, e.g. `delta-scope` → `delta-scope:scanJobId`, `repository-profile` → `repository:scanJobId`, `identify-target` → `module:taskId`, `attack-surface-model` → `attack-surface-model:taskId`, `scan-target` → `function:taskId`, `analyze-finding` → `analysis:taskId`, `verify-finding` → `verification:taskId`.
 
 ### WebSocket System
 
@@ -253,8 +251,6 @@ Handlers in `apps/vulseek/server/wss/`:
 - `scanStageSettings` — per-stage agent profile + concurrency configuration
 - `scanRuntimeSettings` — runtime stage toggling (enable/disable stages)
 - `agentProfiles` — Codex/Claude Code agent configurations (model, provider, auth mode, thinking level, envs)
-- `ruleScanType` — distinguishes rule-based from function-based scan approaches
-- `applicationTargetTag` — tagging for scan targets
 - `autoDeltaScan` — per-application auto-delta-scan toggle (default `false`)
 - `localSourceType` — local directory-based source provider
 
@@ -302,7 +298,7 @@ pnpm run vulseek:dev
 
 ## Testing
 
-Tests in `apps/vulseek/__test__/`. Uses Vitest with `vite-tsconfig-paths` and `pool: "forks"`. Test config at `apps/vulseek/__test__/vitest.config.ts`. Vulseek has scan-specific contract tests in `packages/server/src/services/scan/` (e.g., `rule-scan.contract.test.ts`, `retry-failed-tasks.test.ts`, `scan-state-machine.test.ts`, `fuzz-run.stage.test.ts`).
+Tests in `apps/vulseek/__test__/`. Uses Vitest with `vite-tsconfig-paths` and `pool: "forks"`. Test config at `apps/vulseek/__test__/vitest.config.ts`. Vulseek has scan-specific contract tests in `packages/server/src/services/scan/` (e.g., `pipeline/scan-pipeline-definitions.test.ts`, `pipeline/scan-pipeline-yaml-contracts.test.ts`, `pipeline/pipeline-routing.test.ts`, `pipeline/scan-pipeline-edge-transform.test.ts`, `retry-failed-tasks.test.ts`, `state/scan-state-machine.test.ts`).
 
 ```bash
 pnpm run test

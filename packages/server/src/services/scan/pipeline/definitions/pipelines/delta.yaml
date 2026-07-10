@@ -27,6 +27,7 @@ delta:
         targetName: ""
         targetKind: function
         priority: null
+        vulnerabilityClassFocus: delta-scoped
     - name: scan-target-to-analyze-finding
       from: scan-target
       to: analyze-finding

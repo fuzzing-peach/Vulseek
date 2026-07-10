@@ -1,5 +1,7 @@
 import {
+	deriveCandidateTaskExecutionState,
 	findApplicationById,
+	findCandidateTaskLineage,
 	findComposeById,
 	findScanJobById,
 	findVulnerabilityCandidateById,
@@ -98,6 +100,24 @@ export default async function handler(
 	});
 	res.flushHeaders?.();
 
+	const deriveExecutionState = async () => {
+		const lineage = await findCandidateTaskLineage({
+			vulnerabilityCandidateId: candidateId,
+			scanJobId: candidate.scanJobId,
+			producerTaskId: candidate.producerTaskId || undefined,
+		});
+		return deriveCandidateTaskExecutionState(
+			lineage.tasks
+				.filter((task) => task.relation === "candidate")
+				.map((task) => ({
+					taskId: task.taskId,
+					stageName: task.stageName,
+					status: task.status,
+					createdAt: task.createdAt,
+				})),
+		);
+	};
+
 	const filePath =
 		requestedStage === "verifying"
 			? await getCandidateVerifierAppServerJsonlPath(
@@ -174,14 +194,14 @@ export default async function handler(
 
 	const statusPoll = setInterval(async () => {
 		try {
-			const latestCandidate = await findVulnerabilityCandidateById(candidateId);
-			if (
-				latestCandidate.status === "completed" ||
-				latestCandidate.status === "failed"
-			) {
+			const executionState = await deriveExecutionState();
+			if (!executionState.activeTask && executionState.latestTask) {
 				sendEvent(res, "done", {
-					status: latestCandidate.status,
-					stage: requestedStage,
+					status: executionState.latestTask.status,
+					stage:
+						executionState.latestStage ||
+						executionState.activeStage ||
+						requestedStage,
 				});
 				cleanup();
 				res.end();

@@ -1,9 +1,12 @@
 import {
+	deriveCandidateTaskExecutionState,
 	findApplicationById,
+	findCandidateTaskLineage,
 	findComposeById,
 	findScanJobById,
 	findVulnerabilityCandidateById,
 	getCandidateAnalysisAppServerTextPath,
+	getCandidateVerifierAppServerTextPath,
 	validateRequest,
 } from "@vulseek/server";
 import type { NextApiRequest, NextApiResponse } from "next";
@@ -17,9 +20,6 @@ const sendEvent = (
 	res.write(`event: ${event}\n`);
 	res.write(`data: ${JSON.stringify(payload)}\n\n`);
 };
-
-const isStage = (value: string): value is "analyzing" | "verifying" =>
-	value === "analyzing" || value === "verifying";
 
 export default async function handler(
 	req: NextApiRequest,
@@ -60,10 +60,26 @@ export default async function handler(
 		return;
 	}
 
-	const currentCandidateStage = isStage(candidate.currentStage)
-		? candidate.currentStage
-		: "analyzing";
-	let activeStage = currentCandidateStage;
+	const deriveExecutionState = async () => {
+		const lineage = await findCandidateTaskLineage({
+			vulnerabilityCandidateId: candidateId,
+			scanJobId: candidate.scanJobId,
+			producerTaskId: candidate.producerTaskId || undefined,
+		});
+		return deriveCandidateTaskExecutionState(
+			lineage.tasks
+				.filter((task) => task.relation === "candidate")
+				.map((task) => ({
+					taskId: task.taskId,
+					stageName: task.stageName,
+					status: task.status,
+					createdAt: task.createdAt,
+				})),
+		);
+	};
+	const executionState = await deriveExecutionState();
+	let activeStage =
+		executionState.activeStage || executionState.latestStage || "analyzing";
 
 	res.writeHead(200, {
 		"Content-Type": "text/event-stream",
@@ -73,10 +89,16 @@ export default async function handler(
 	});
 	res.flushHeaders?.();
 
-	const textPath = await getCandidateAnalysisAppServerTextPath(
-		scanJob.scanJobId,
-		candidate.vulnerabilityCandidateId,
-	);
+	const textPath =
+		activeStage === "verifying"
+			? await getCandidateVerifierAppServerTextPath(
+					scanJob.scanJobId,
+					candidate.vulnerabilityCandidateId,
+				)
+			: await getCandidateAnalysisAppServerTextPath(
+					scanJob.scanJobId,
+					candidate.vulnerabilityCandidateId,
+				);
 	if (!textPath) {
 		res.status(404).json({ message: "Candidate runtime log not found" });
 		return;
@@ -120,17 +142,15 @@ export default async function handler(
 
 	const statusPoll = setInterval(async () => {
 		try {
-			const latestCandidate = await findVulnerabilityCandidateById(candidateId);
-			activeStage = isStage(latestCandidate.currentStage)
-				? latestCandidate.currentStage
-				: "analyzing";
+			const latestExecutionState = await deriveExecutionState();
+			activeStage =
+				latestExecutionState.activeStage ||
+				latestExecutionState.latestStage ||
+				"analyzing";
 
-			if (
-				latestCandidate.status === "completed" ||
-				latestCandidate.status === "failed"
-			) {
+			if (!latestExecutionState.activeTask && latestExecutionState.latestTask) {
 				sendEvent(res, "done", {
-					status: latestCandidate.status,
+					status: latestExecutionState.latestTask.status,
 					stage: activeStage,
 				});
 				cleanup();

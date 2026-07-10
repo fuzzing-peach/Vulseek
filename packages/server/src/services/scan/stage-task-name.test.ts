@@ -33,3 +33,20 @@ test("resolveStageTaskName uses candidate title for analysis-adjacent stages", (
 test("resolveStageTaskName uses a stable delta scope root task name", () => {
 	assert.equal(resolveStageTaskName("delta-scope", null), "delta-scoping");
 });
+
+test("resolveStageTaskName appends vulnerability class focus", () => {
+	assert.equal(
+		resolveStageTaskName("identify-target", {
+			moduleName: "API",
+			vulnerabilityClassFocus: "SQL injection",
+		}),
+		"API:SQL injection",
+	);
+	assert.equal(
+		resolveStageTaskName("scan-target", {
+			targetName: "createIssue",
+			vulnerabilityClassFocus: "authorization bypass",
+		}),
+		"createIssue:authorization bypass",
+	);
+});

@@ -58,6 +58,7 @@ export type PipelineEdge<
 	outputSchemaDescription?: string;
 	transformOutput?: (input: {
 		ctx: TPipelineContext;
+		fromTaskId: string;
 		stageInput: StageInputOf<TFromStage>;
 		stageOutput: TSelectedOutput;
 	}) => Promise<TToStageInputObject[]>;

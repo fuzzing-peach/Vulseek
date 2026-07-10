@@ -236,6 +236,7 @@ test("repository, module, and function prompts stay concise while delegating det
 		targetId: "api-user-get",
 		targetName: "GET /api/users/:id",
 		targetKind: "route-handler",
+		vulnerabilityClassFocus: "authorization bypass",
 		filePath: "src/routes/users.ts",
 		line: 12,
 		summary: "User lookup route",
@@ -246,13 +247,14 @@ test("repository, module, and function prompts stay concise while delegating det
 	});
 	assert.match(scanTargetPrompt, /scan-target skill/);
 	assert.match(scanTargetPrompt, /target_kind: route-handler/);
-	assert.match(scanTargetPrompt, /source -> missing\/weak check -> sink/);
+	assert.match(scanTargetPrompt, /vulnerability_class_focus: authorization bypass/);
+	assert.match(scanTargetPrompt, /vulnerability_class_focus/);
 	assert.doesNotMatch(scanTargetPrompt, /function_json_path/);
 
 	const scanTargetSkill = readSkillSource("scan-target");
 	assert.match(scanTargetSkill, /route registration, middleware/i);
-	assert.match(scanTargetSkill, /auth bypass, missing authorization, IDOR\/BOLA/i);
-	assert.match(scanTargetSkill, /C\/C\+\+ memory safety/i);
+	assert.match(scanTargetSkill, /vulnerability_class_focus/i);
+	assert.match(scanTargetSkill, /one assigned vulnerability class/i);
 });
 
 test("delta scope prompt and schema stay limited to repository and functions", () => {
@@ -490,6 +492,16 @@ test("analysis prompt removes fuzz routing", () => {
 });
 
 test("verification is a three-value sanity check and triage owns security classification", () => {
+	const verificationPromptTemplate = readStagePromptTemplate("verify.prompt.md");
+	assert.match(
+		verificationPromptTemplate,
+		/Set result to the JSON string "true", "likely", or "false"\./,
+	);
+	assert.match(
+		verificationPromptTemplate,
+		/Do not return boolean true\/false\./,
+	);
+
 	const baseVerification = {
 		id: "verify-1",
 		summary: "The code path and precondition exist.",

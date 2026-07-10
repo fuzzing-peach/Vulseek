@@ -1221,7 +1221,7 @@ const CONTAINER_BOOTSTRAP_LOG_FILE_NAME = "container-bootstrap.log";
 const SANDBOX_AGENT_DRIVER_TASK_DIR_NAME = "sandbox-agent-driver-tasks";
 const SANDBOX_AGENT_AGENT_HOME_DIR_NAME = "agent-home";
 const SANDBOX_AGENT_ACP_REQUEST_TIMEOUT_MS = 30 * 60 * 1000;
-const SANDBOX_AGENT_DRIVER_VERSION = "2026-06-01-fork-model-alias-v1";
+const SANDBOX_AGENT_DRIVER_VERSION = "2026-07-09-nullable-output-newline-fix";
 
 const buildSandboxAgentDriverScript =
 	() => String.raw`import fsSync from "node:fs";
@@ -1733,7 +1733,8 @@ const writeNullableOutputFallbackIfMissing = async (taskInput, state) => {
   }
   await fs.writeFile(
     taskInput.structuredOutputResultPathInContainer,
-    JSON.stringify({ route: null, exit: false, output: null }, null, 2) + "\\n",
+    // String.raw: use "\n" so the generated driver appends a real newline.
+    JSON.stringify({ route: null, exit: false, output: null }, null, 2) + "\n",
     "utf-8",
   );
   await appendDriverLog(
@@ -2868,7 +2869,7 @@ const main = async () => {
       await appendDriverLifecycleLog(input, "session_close_failed error=" + message).catch(() => {});
       await appendScanRuntimeFile(
         input.stderrPath,
-        "[sandbox-agent-cleanup] session.close failed: " + message + "\\n",
+        "[sandbox-agent-cleanup] session.close failed: " + message + "\n",
       ).catch(() => {});
     }
     if (typeof client.close === "function") {
@@ -2880,7 +2881,7 @@ const main = async () => {
         await appendDriverLifecycleLog(input, "client_close_failed error=" + message).catch(() => {});
         await appendScanRuntimeFile(
           input.stderrPath,
-          "[sandbox-agent-cleanup] client.close failed: " + message + "\\n",
+          "[sandbox-agent-cleanup] client.close failed: " + message + "\n",
         ).catch(() => {});
       }
     } else {

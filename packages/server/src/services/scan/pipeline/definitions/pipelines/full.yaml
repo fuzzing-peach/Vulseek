@@ -28,7 +28,8 @@ full:
       from: attack-surface-model
       to: identify-target
       fork: false
-      mode: map
+      mode: fanOut
+      foreach: "$file($.threatModel).likelyVulnerabilityClasses[*]"
       input:
         scanJob: "$input.scanJob"
         repositoryPath: "$input.repositoryPath"
@@ -37,6 +38,7 @@ full:
         moduleId: "$input.moduleId"
         moduleName: "$input.moduleName"
         priority: "$input.priority"
+        vulnerabilityClassFocus: "$item"
     - name: identify-target-to-scan-target
       from: identify-target
       to: scan-target
@@ -55,6 +57,7 @@ full:
         targetName: ""
         targetKind: unknown
         priority: null
+        vulnerabilityClassFocus: "$input.vulnerabilityClassFocus"
     - name: scan-target-to-analyze-finding
       from: scan-target
       to: analyze-finding

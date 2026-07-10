@@ -153,8 +153,6 @@ const CANDIDATE_EXPORT_FIELDS = [
 	{ key: "fileHostPath", label: "Source File Host Path" },
 	{ key: "line", label: "Line" },
 	{ key: "vulnerabilityType", label: "Vulnerability Type" },
-	{ key: "status", label: "Status" },
-	{ key: "currentStage", label: "Current Stage" },
 	{ key: "confidence", label: "Confidence" },
 	{ key: "score", label: "Score" },
 	{ key: "createdAt", label: "Created At" },
@@ -678,7 +676,6 @@ const getTaskStageLabel = (t: ScanTranslation, stage?: string) => {
 	return formatScanStageLabel(t, stage);
 };
 
-const RERUNNABLE_CANDIDATE_STATUSES = new Set(["completed", "failed", "exited"]);
 const RERUNNABLE_TASK_STATUSES = new Set(["completed", "failed", "exited", "canceled"]);
 
 const buildCandidateReanalysisKey = (input: {
@@ -2275,8 +2272,6 @@ export const ShowScanJobDetail = ({
 			fileHostPath: candidateWithHostPaths.fileHostPath,
 			line: candidate.line,
 			vulnerabilityType: candidate.vulnerabilityType,
-			status: candidate.status,
-			currentStage: candidate.currentStage,
 			confidence: candidate.confidence,
 			score: candidate.score,
 			createdAt: candidate.createdAt,
@@ -3587,9 +3582,6 @@ export const ShowScanJobDetail = ({
 																		}
 																	/>
 																</th>
-																<th className="w-[10%] px-4 py-3 font-medium">
-																	{scanT(t, "scan.field.status", "Status")}
-																</th>
 																<th className="w-[32%] px-4 py-3 font-medium">
 																	<button
 																		type="button"
@@ -3693,10 +3685,6 @@ export const ShowScanJobDetail = ({
 																		t,
 																		candidate.latestVerificationResult?.result,
 																	);
-																const isTerminalCandidate =
-																	RERUNNABLE_CANDIDATE_STATUSES.has(
-																		candidate.status,
-																	);
 																const isReanalyzingCandidate =
 																	reanalyzingCandidateId ===
 																	buildCandidateReanalysisKey(candidate);
@@ -3731,20 +3719,6 @@ export const ShowScanJobDetail = ({
 																					)
 																				}
 																			/>
-																		</td>
-																		<td className="px-4 py-3 align-top text-xs text-muted-foreground capitalize">
-																			<Link
-																				href={buildCandidateDetailHref(
-																					candidate,
-																				)}
-																				onClick={handleCandidateLinkClick}
-																				className="block"
-																			>
-																				{formatScanStatusLabel(
-																					t,
-																					candidate.status,
-																				)}
-																			</Link>
 																		</td>
 																		<td className="px-4 py-3 align-top">
 																			<Link
@@ -3895,36 +3869,17 @@ export const ShowScanJobDetail = ({
 																				type="button"
 																				variant="outline"
 																				size="icon"
-																				title={
-																					isTerminalCandidate
-																						? scanT(
-																								t,
-																								"scan.candidates.rerunAnalysis",
-																								"Re-run analysis",
-																							)
-																						: scanT(
-																								t,
-																								"scan.candidates.rerunAnalysisDisabled",
-																								"Analysis can be re-run after the candidate reaches a terminal state",
-																							)
-																				}
-																				aria-label={
-																					isTerminalCandidate
-																						? scanT(
-																								t,
-																								"scan.candidates.rerunAnalysis",
-																								"Re-run analysis",
-																							)
-																						: scanT(
-																								t,
-																								"scan.candidates.rerunAnalysisDisabled",
-																								"Analysis can be re-run after the candidate reaches a terminal state",
-																							)
-																				}
-																				disabled={
-																					!isTerminalCandidate ||
-																					isReanalyzingCandidate
-																				}
+																				title={scanT(
+																					t,
+																					"scan.candidates.rerunAnalysis",
+																					"Re-run analysis",
+																				)}
+																				aria-label={scanT(
+																					t,
+																					"scan.candidates.rerunAnalysis",
+																					"Re-run analysis",
+																				)}
+																				disabled={isReanalyzingCandidate}
 																				onClick={() =>
 																					handleAnalyzeCandidate(candidate)
 																				}

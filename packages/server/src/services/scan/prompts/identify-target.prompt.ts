@@ -5,6 +5,7 @@ export const buildIdentifyTargetPrompt = (input: {
 	scanJobId: string;
 	moduleId: string;
 	moduleName: string;
+	vulnerabilityClassFocus: string;
 	repositoryJsonPath: string;
 	moduleJsonPath: string;
 	threatModelJsonPath: string;
@@ -15,6 +16,7 @@ export const buildIdentifyTargetPrompt = (input: {
 		scanJobId: input.scanJobId,
 		moduleId: input.moduleId,
 		moduleName: input.moduleName,
+		vulnerabilityClassFocus: input.vulnerabilityClassFocus,
 		repositoryJsonPath: input.repositoryJsonPath,
 		moduleJsonPath: input.moduleJsonPath,
 		threatModelJsonPath: input.threatModelJsonPath,

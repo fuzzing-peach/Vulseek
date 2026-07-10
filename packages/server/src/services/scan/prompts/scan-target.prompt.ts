@@ -8,6 +8,7 @@ export const buildScanTargetPrompt = (input: {
 	targetId: string;
 	targetName: string;
 	targetKind: string;
+	vulnerabilityClassFocus: string;
 	filePath?: string;
 	line?: number;
 	summary?: string;
@@ -25,6 +26,7 @@ export const buildScanTargetPrompt = (input: {
 		targetId: input.targetId,
 		targetName: input.targetName,
 		targetKind: input.targetKind,
+		vulnerabilityClassFocus: input.vulnerabilityClassFocus,
 		targetFile: input.filePath || "-",
 		targetLine: input.line ?? "-",
 		targetSummary: input.summary || "-",

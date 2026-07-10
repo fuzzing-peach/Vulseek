@@ -383,11 +383,6 @@ export const vulnerabilityCandidates = pgTable(
 		filePath: text("filePath"),
 		line: integer("line"),
 		vulnerabilityType: text("vulnerabilityType"),
-		status: taskStatusEnum("status").notNull().default("pending"),
-		currentStage: text("currentStage")
-			.$type<"analyzing" | "verifying">()
-			.notNull()
-			.default("analyzing"),
 		confidence: real("confidence"),
 		score: real("score"),
 		targetId: text("targetId"),

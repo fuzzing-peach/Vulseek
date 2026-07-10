@@ -12,6 +12,7 @@ ScanTargetStageInput:
     - targetName
     - targetKind
     - priority
+    - vulnerabilityClassFocus
   properties:
     scanJob:
       $ref: "#/schemas/ScanJobSnapshot"
@@ -41,6 +42,8 @@ ScanTargetStageInput:
       type: [string, "null"]
     priority:
       type: [integer, "null"]
+    vulnerabilityClassFocus:
+      type: string
 ScanTargetManifest:
   type: object
   required: [candidates]

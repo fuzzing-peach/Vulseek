@@ -287,8 +287,6 @@ subagent 遍历模块中的每个函数，快速判断其是否安全敏感。
 - `filePath`
 - `line`
 - `confidence`
-- `currentStage`
-- `status`
 
 ### 5.3 Analysis Result / Verification Result
 

@@ -613,7 +613,6 @@ export const findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId 
 				candidate.note || "",
 				...(candidate.tags || []),
 				candidate.filePath || "",
-				candidate.status,
 				typeof candidate.line === "number" ? String(candidate.line) : "",
 				candidate.latestAnalysisResult?.result || "",
 				candidate.latestAnalysisResult?.reportPath || "",

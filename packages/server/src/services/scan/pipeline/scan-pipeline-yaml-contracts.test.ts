@@ -293,3 +293,57 @@ test("YAML routed final analysis schema validates critic-approved analysis", () 
 
 	validateJsonSchemaContract(contract, finalAnalysis);
 });
+
+test("identify-target and scan-target input schemas require vulnerabilityClassFocus", () => {
+	const identify = SCAN_PIPELINE_DEFINITIONS.stages.find(
+		(stage) => stage.id === "identify-target",
+	);
+	const scanTarget = SCAN_PIPELINE_DEFINITIONS.stages.find(
+		(stage) => stage.id === "scan-target",
+	);
+	assert.ok(identify?.inputSchema);
+	assert.ok(scanTarget?.inputSchema);
+
+	const identifyContract = createJsonSchemaContract({
+		schemas: SCAN_PIPELINE_DEFINITIONS.schemas,
+		schema: identify.inputSchema,
+	});
+	const scanContract = createJsonSchemaContract({
+		schemas: SCAN_PIPELINE_DEFINITIONS.schemas,
+		schema: scanTarget.inputSchema,
+	});
+
+	validateJsonSchemaContract(identifyContract, {
+		scanJob: {
+			scanJobId: "scan-1",
+			scanType: "full",
+			status: "running",
+		},
+		repositoryPath: artifactPath("repository"),
+		modulePath: artifactPath("module"),
+		threatModelPath: artifactPath("threat-model"),
+		moduleId: "web",
+		moduleName: "Web",
+		priority: 1,
+		vulnerabilityClassFocus: "authorization bypass",
+	});
+
+	validateJsonSchemaContract(scanContract, {
+		scanJob: {
+			scanJobId: "scan-1",
+			scanType: "full",
+			status: "running",
+		},
+		repositoryPath: artifactPath("repository"),
+		modulePath: artifactPath("module"),
+		threatModelPath: artifactPath("threat-model"),
+		targetPath: artifactPath("target"),
+		moduleId: "web",
+		moduleName: "Web",
+		targetId: "target-1",
+		targetName: "createIssue",
+		targetKind: "function",
+		priority: 1,
+		vulnerabilityClassFocus: "authorization bypass",
+	});
+});

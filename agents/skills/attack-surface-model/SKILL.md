@@ -44,6 +44,8 @@ Do not assume C/C++ or function-centric code. Fit the module:
 
 Prefer source-backed facts over generic lists. Keep the model compact but useful for target identification.
 
+For `likelyVulnerabilityClasses`, emit concrete separable labels. Downstream identify-target tasks fan out one task per class, so prefer specific classes over a single catch-all. Avoid empty arrays and duplicates.
+
 ## Boundaries
 
 Do not emit vulnerability candidates, rule plans, exploit claims, or final findings.

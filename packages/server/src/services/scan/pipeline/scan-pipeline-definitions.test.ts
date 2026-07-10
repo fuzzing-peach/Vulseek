@@ -3,8 +3,34 @@ import test from "node:test";
 import {
 	parseScanPipelineDefinitionsFromYaml,
 	resolveScanPipelineDefinitionsDir,
+	SCAN_PIPELINE_DEFINITIONS,
 	validatePipelineRegistryCoverage,
 } from "./scan-pipeline-definitions";
+
+test("loaded full pipeline fans out identify-target by threat-model vulnerability classes", () => {
+	const edge = SCAN_PIPELINE_DEFINITIONS.pipelines.full.edges.find(
+		(item) => item.name === "attack-surface-model-to-identify-target",
+	);
+	assert.ok(edge);
+	assert.equal(edge.mode, "fanOut");
+	assert.equal(
+		edge.foreach,
+		"$file($.threatModel).likelyVulnerabilityClasses[*]",
+	);
+	assert.equal(
+		(edge.input as Record<string, unknown>).vulnerabilityClassFocus,
+		"$item",
+	);
+
+	const scanEdge = SCAN_PIPELINE_DEFINITIONS.pipelines.full.edges.find(
+		(item) => item.name === "identify-target-to-scan-target",
+	);
+	assert.ok(scanEdge);
+	assert.equal(
+		(scanEdge.input as Record<string, unknown>).vulnerabilityClassFocus,
+		"$input.vulnerabilityClassFocus",
+	);
+});
 
 test("parseScanPipelineDefinitionsFromYaml parses full and delta pipeline topology", () => {
 	const definitions = parseScanPipelineDefinitionsFromYaml(`

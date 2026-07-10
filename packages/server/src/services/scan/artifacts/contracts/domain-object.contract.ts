@@ -16,11 +16,6 @@ export const scanTaskStatusSchema = z.enum([
 	"canceled",
 ]);
 
-export const vulnerabilityCandidateStageSchema = z.enum([
-	"analyzing",
-	"verifying",
-]);
-
 export const analysisResultEnumSchema = z.enum([
 	"real_vulnerability",
 	"likely_vulnerability",
@@ -335,8 +330,6 @@ export const candidateSchema = z.object({
 	quickDisproofAttempt: z.string().nullable(),
 	needsFuzzing: z.boolean(),
 	needsManualAnalysis: z.boolean(),
-	status: scanTaskStatusSchema.optional(),
-	currentStage: vulnerabilityCandidateStageSchema.optional(),
 });
 
 export const functionScanManifestSchema = z.object({

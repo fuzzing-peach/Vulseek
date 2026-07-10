@@ -51,17 +51,6 @@ export type VulnerabilityCandidate = {
 	filePath: string | null;
 	line: number | null;
 	vulnerabilityType: string | null;
-	status:
-		| "pending"
-		| "launching"
-		| "launched"
-		| "starting"
-		| "running"
-		| "completed"
-		| "failed"
-		| "exited"
-		| "canceled";
-	currentStage: "analyzing" | "verifying";
 	confidence: number | null;
 	score: number | null;
 	targetId: string | null;
@@ -143,8 +132,6 @@ export type TriageResult = {
 	updatedAt: string;
 	status?: typeof tasks.$inferSelect.status;
 };
-
-export type VulnerabilityCandidateStage = "analyzing" | "verifying";
 
 export type ScanCandidateQueueJob = {
 	scanJobId: string;

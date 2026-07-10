@@ -3991,6 +3991,7 @@ const dispatchPipelineDownstream = async <
 		const downstreamInputs = edge.transformOutput
 			? await edge.transformOutput({
 					ctx: runtime.ctx,
+					fromTaskId,
 					stageInput,
 					stageOutput: selectedStageOutput,
 				})

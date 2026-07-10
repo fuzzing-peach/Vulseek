@@ -34,7 +34,9 @@ Set id to {{taskId}}.
 Set reportPath to {{reportPath}}.
 Set runtimeSeconds to null if unknown.
 Set status to completed when the run succeeds.
+Set result to the JSON string "true", "likely", or "false".
+Do not return boolean true/false.
 Use result exactly as:
-- true: core facts, paths, code locations, and trigger conditions are present and materially support the analysis.
-- likely: most core facts hold, but some uncertainty remains that does not clearly refute the analysis.
-- false: a central factual claim, code path, trigger, or precondition is absent or contradicted.
+- "true": core facts, paths, code locations, and trigger conditions are present and materially support the analysis.
+- "likely": most core facts hold, but some uncertainty remains that does not clearly refute the analysis.
+- "false": a central factual claim, code path, trigger, or precondition is absent or contradicted.

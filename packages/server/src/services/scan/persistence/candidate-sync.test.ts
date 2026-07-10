@@ -47,8 +47,6 @@ const makeProducerTask = (overrides?: Partial<Task>): Task => ({
 				quickDisproofAttempt: "checked registration validation",
 				needsFuzzing: false,
 				needsManualAnalysis: true,
-				status: "completed",
-				currentStage: "analyzing",
 			},
 			"/task/candidates/candidate-2.json",
 		],

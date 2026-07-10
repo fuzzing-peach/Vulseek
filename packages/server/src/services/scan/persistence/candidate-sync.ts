@@ -50,8 +50,6 @@ const toPersistedCandidate = (
 	filePath: candidate.filePath,
 	line: candidate.line,
 	vulnerabilityType: candidate.vulnerabilityType,
-	status: candidate.status || "pending",
-	currentStage: candidate.currentStage || "analyzing",
 	confidence: candidate.confidence,
 	score: candidate.score,
 	targetId: candidate.targetId ?? null,

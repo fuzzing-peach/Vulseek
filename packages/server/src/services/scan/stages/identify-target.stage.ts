@@ -34,6 +34,7 @@ export type IdentifyTargetStageInput = {
 	moduleId: string;
 	moduleName: string;
 	priority: number | null;
+	vulnerabilityClassFocus: string;
 };
 
 export type IdentifyTargetStageOutput = IdentifyTargetManifest;
@@ -62,7 +63,10 @@ const executeIdentifyTargetStage = async (
 ) => {
 	const runtime = await resolveAgentStageRuntime({
 		ctx,
-		containerNameParts: [stageInput.moduleId.slice(0, 24)],
+		containerNameParts: [
+			stageInput.moduleId.slice(0, 16),
+			stageInput.vulnerabilityClassFocus.slice(0, 16),
+		],
 	});
 	const thinkingInstruction = runtime.agentProfile?.thinkingLevelEnabled
 		? `use_reasoning_effort: ${runtime.agentProfile.thinkingLevel}`
@@ -71,6 +75,7 @@ const executeIdentifyTargetStage = async (
 		scanJobId: stageInput.scanJob.scanJobId,
 		moduleId: stageInput.moduleId,
 		moduleName: stageInput.moduleName,
+		vulnerabilityClassFocus: stageInput.vulnerabilityClassFocus,
 		repositoryJsonPath: stageInput.repositoryPath,
 		moduleJsonPath: stageInput.modulePath,
 		threatModelJsonPath: stageInput.threatModelPath,
@@ -104,6 +109,7 @@ const executeIdentifyTargetStage = async (
 				scanJobId: stageInput.scanJob.scanJobId,
 				moduleId: stageInput.moduleId,
 				moduleName: stageInput.moduleName,
+				vulnerabilityClassFocus: stageInput.vulnerabilityClassFocus,
 				repositoryJsonPath: stageInput.repositoryPath,
 				moduleJsonPath: stageInput.modulePath,
 				threatModelJsonPath: stageInput.threatModelPath,
@@ -145,7 +151,10 @@ export const createIdentifyTargetStageDefinition = <
 			await launchAgentStageRuntime({
 				ctx: ctx as unknown as StageContext,
 				scanJob: stageInput.scanJob,
-				containerNameParts: [stageInput.moduleId.slice(0, 24)],
+				containerNameParts: [
+					stageInput.moduleId.slice(0, 16),
+					stageInput.vulnerabilityClassFocus.slice(0, 16),
+				],
 			});
 		},
 		run: async (ctx, stageInput) => {

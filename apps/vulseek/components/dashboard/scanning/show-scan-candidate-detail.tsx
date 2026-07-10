@@ -64,7 +64,19 @@ interface Props {
 	routeSegment: "profiles" | "services";
 }
 
-const RERUNNABLE_CANDIDATE_STATUSES = new Set(["completed", "failed", "exited"]);
+const ACTIVE_CANDIDATE_TASK_STATUSES = new Set([
+	"pending",
+	"launching",
+	"launched",
+	"starting",
+	"running",
+]);
+
+const RERUNNABLE_CANDIDATE_TASK_STATUSES = new Set([
+	"completed",
+	"failed",
+	"exited",
+]);
 
 const getAnalysisResultBadgeClassName = (result?: string | null) => {
 	if (result === "real_vulnerability") {
@@ -133,6 +145,16 @@ type CandidateTaskLineageTask = {
 	startedAt: string | null;
 	completedAt: string | null;
 	relation: "repository" | "module" | "function" | "candidate";
+};
+
+const classifyCandidateTaskStage = (stageName?: string | null) => {
+	if (stageName === "analyze-finding" || stageName === "critique-finding") {
+		return "analyzing" as const;
+	}
+	if (stageName === "verify-finding" || stageName === "triage-finding") {
+		return "verifying" as const;
+	}
+	return null;
 };
 
 const getTaskStageLabel = (t: ScanTranslation, stage?: string | null) => {
@@ -589,6 +611,14 @@ export const ShowScanCandidateDetail = ({
 			},
 			{ enabled: !!candidateId && !!scanJobId, refetchInterval: 2000 },
 		);
+	const { data: candidateLineage } = api.scan.candidateTaskLineage.useQuery(
+		{
+			vulnerabilityCandidateId: candidateId,
+			scanJobId: scanJobId || undefined,
+			producerTaskId: producerTaskId || undefined,
+		},
+		{ enabled: !!candidateId && !!scanJobId, refetchInterval: 2000 },
+	);
 	const { data: fileTree, isLoading: isLoadingFileTree } =
 		api.scan.candidateFilesTree.useQuery(
 			{
@@ -679,25 +709,41 @@ export const ShowScanCandidateDetail = ({
 			getVerificationTruthBadge(t, candidate?.latestVerificationResult?.result),
 		[candidate?.latestVerificationResult?.result, t],
 	);
+	const candidateExecutionState = useMemo(() => {
+		const candidateTasks = ((candidateLineage?.tasks || []) as CandidateTaskLineageTask[])
+			.filter((task) => task.relation === "candidate")
+			.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+		const latestTask = candidateTasks[0] || null;
+		const activeTask =
+			candidateTasks.find((task) =>
+				ACTIVE_CANDIDATE_TASK_STATUSES.has(task.status),
+			) || null;
+		return {
+			latestTask,
+			activeTask,
+			activeStage: classifyCandidateTaskStage(activeTask?.stageName),
+			latestStage: classifyCandidateTaskStage(latestTask?.stageName),
+			canRerunAnalysis: latestTask
+				? RERUNNABLE_CANDIDATE_TASK_STATUSES.has(latestTask.status)
+				: false,
+		};
+	}, [candidateLineage?.tasks]);
 	const candidateStreamStage =
-		candidate?.currentStage === "verifying" ? "verifying" : "analyzing";
-	const candidateTaskId =
-		candidateStreamStage === "verifying"
-			? candidate?.latestVerificationResult?.taskId || ""
-			: candidate?.latestAnalysisResult?.taskId || "";
+		candidateExecutionState.activeStage ||
+		candidateExecutionState.latestStage ||
+		"analyzing";
+	const candidateTaskId = candidateExecutionState.activeTask?.taskId || "";
 	const { messages: liveJsonRpcMessages } = useSandboxAgentSession({
 		taskId: candidateTaskId,
 		enabled:
 			activeTab === "overview" &&
 			!!candidateTaskId &&
-			candidate?.status === "running",
+			!!candidateExecutionState.activeTask,
 	});
 	const canVerify =
 		candidate?.latestAnalysisResult?.result === "real_vulnerability" ||
 		candidate?.latestAnalysisResult?.result === "likely_vulnerability";
-	const canRerunAnalysis = candidate
-		? RERUNNABLE_CANDIDATE_STATUSES.has(candidate.status)
-		: false;
+	const canRerunAnalysis = candidateExecutionState.canRerunAnalysis;
 	const verifyButtonLabel = candidate?.latestVerificationResult
 		? scanT(t, "scan.candidate.reverify", "Reverify")
 		: scanT(t, "scan.candidate.verify", "Verify");
@@ -948,8 +994,7 @@ export const ShowScanCandidateDetail = ({
 									isLoading={verifyCandidateMutation.isLoading}
 									disabled={
 										verifyCandidateMutation.isLoading ||
-										(candidate?.status === "running" &&
-											candidate?.currentStage === "verifying")
+										candidateExecutionState.activeStage === "verifying"
 									}
 									onClick={async () => {
 										try {
@@ -1015,22 +1060,6 @@ export const ShowScanCandidateDetail = ({
 											{scanT(t, "scan.section.general", "General")}
 										</div>
 										<div className="grid gap-3 md:grid-cols-2">
-											<div className="rounded-lg border p-3">
-												<div className="text-sm text-muted-foreground">
-													{scanT(t, "scan.field.status", "Status")}
-												</div>
-												<div className="mt-1 font-medium capitalize">
-													{formatScanStatusLabel(t, candidate.status)}
-												</div>
-											</div>
-											<div className="rounded-lg border p-3">
-												<div className="text-sm text-muted-foreground">
-													{scanT(t, "scan.field.currentStage", "Current Stage")}
-												</div>
-												<div className="mt-1 font-medium capitalize">
-													{formatScanStageLabel(t, candidate.currentStage)}
-												</div>
-											</div>
 											<div className="rounded-lg border p-3">
 												<div className="text-sm text-muted-foreground">
 													{scanT(t, "scan.field.sanityCheck", "Sanity Check")}
@@ -1221,7 +1250,7 @@ export const ShowScanCandidateDetail = ({
 										</div>
 									</section>
 
-									{candidate.status === "running" ? (
+									{candidateExecutionState.activeTask ? (
 										<section className="rounded-lg border p-4">
 											<div className="mb-4 text-lg font-semibold">
 												{scanT(t, "scan.candidate.liveOutput", "Live Output")}
@@ -1235,10 +1264,7 @@ export const ShowScanCandidateDetail = ({
 													)}
 												</div>
 												<Badge variant="outline" className="capitalize">
-													{formatScanStageLabel(
-														t,
-														candidate.currentStage || candidateStreamStage,
-													)}
+													{formatScanStageLabel(t, candidateStreamStage)}
 												</Badge>
 											</div>
 											<JsonRpcSummaryPanel

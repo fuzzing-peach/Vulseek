@@ -335,14 +335,7 @@ type Candidate = {
 
 ### Candidate execution metadata
 
-```ts
-type CandidateMeta = {
-  status: "queued" | "running" | "completed" | "failed";
-  currentStage: "analyzing" | "verifying";
-  analysisThreadId: string | null;
-  verifierThreadId: string | null;
-}
-```
+Candidate 不再持久化执行态字段。运行中的分析 / 验证阶段由 candidate descendant tasks 推导，线程与运行时信息也归属于对应 task/result。
 
 ### Current sources
 

@@ -44,6 +44,7 @@ export * from "./services/scan/api/evaluations";
 export * from "./services/scan/api/tasks";
 export * from "./services/scan/home-overview";
 export * from "./services/scan/live-session";
+export * from "./services/scan/state/candidate-task-state";
 export type {
 	ScanCandidateQueueJob,
 } from "./services/scan/types";

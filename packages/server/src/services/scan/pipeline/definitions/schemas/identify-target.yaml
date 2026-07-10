@@ -8,6 +8,7 @@ IdentifyTargetStageInput:
     - moduleId
     - moduleName
     - priority
+    - vulnerabilityClassFocus
   properties:
     scanJob:
       $ref: "#/schemas/ScanJobSnapshot"
@@ -23,6 +24,8 @@ IdentifyTargetStageInput:
       type: string
     priority:
       type: [integer, "null"]
+    vulnerabilityClassFocus:
+      type: string
 IdentifyTargetManifest:
   type: object
   required: [repository, module, threatModel, targets]

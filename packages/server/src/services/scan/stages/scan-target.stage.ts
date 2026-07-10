@@ -22,6 +22,7 @@ import {
 	resolveStageConcurrencySetting,
 	type StageContext,
 } from "./full-scan-stage.runtime";
+import { slugVulnerabilityClassFocus } from "./normalize-likely-vulnerability-classes";
 
 export type ScanTargetStageInput = {
 	scanJob: ScanJob;
@@ -38,6 +39,7 @@ export type ScanTargetStageInput = {
 	line?: number | null;
 	summary?: string | null;
 	priority: number | null;
+	vulnerabilityClassFocus: string;
 };
 
 export type ScanTargetStageOutput = ScanTargetManifest;
@@ -47,9 +49,12 @@ const executeScanTargetStage = async (
 	stageInput: ScanTargetStageInput,
 	outputSchema?: StructuredOutputSchemaSource,
 ) => {
+	const focusSlug = slugVulnerabilityClassFocus(
+		stageInput.vulnerabilityClassFocus,
+	);
 	const runtime = await resolveAgentStageRuntime({
 		ctx,
-		containerNameParts: [stageInput.targetId.slice(0, 24)],
+		containerNameParts: [stageInput.targetId.slice(0, 16), focusSlug],
 	});
 	const thinkingInstruction = runtime.agentProfile?.thinkingLevelEnabled
 		? `use_reasoning_effort: ${runtime.agentProfile.thinkingLevel}`
@@ -61,6 +66,7 @@ const executeScanTargetStage = async (
 		targetId: stageInput.targetId,
 		targetName: stageInput.targetName,
 		targetKind: stageInput.targetKind,
+		vulnerabilityClassFocus: stageInput.vulnerabilityClassFocus,
 		filePath: stageInput.filePath || undefined,
 		line: stageInput.line ?? undefined,
 		summary: stageInput.summary || undefined,
@@ -102,6 +108,7 @@ const executeScanTargetStage = async (
 				targetId: stageInput.targetId,
 				targetName: stageInput.targetName,
 				targetKind: stageInput.targetKind,
+				vulnerabilityClassFocus: stageInput.vulnerabilityClassFocus,
 				targetFile: stageInput.filePath || "-",
 				targetLine: stageInput.line ?? "-",
 				targetSummary: stageInput.summary || "-",
@@ -148,7 +155,10 @@ export const createScanTargetStageDefinition = <
 			await launchAgentStageRuntime({
 				ctx: ctx as unknown as StageContext,
 				scanJob: stageInput.scanJob,
-				containerNameParts: [stageInput.targetId.slice(0, 24)],
+				containerNameParts: [
+					stageInput.targetId.slice(0, 16),
+					slugVulnerabilityClassFocus(stageInput.vulnerabilityClassFocus),
+				],
 			});
 		},
 		run: async (ctx, stageInput) => {
