@@ -1335,89 +1335,117 @@
     {
       "idx": 190,
       "version": "7",
+      "when": 1779744300000,
+      "tag": "0190_rule_scan_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 191,
+      "version": "7",
+      "when": 1779744400000,
+      "tag": "0191_application_target_tag",
+      "breakpoints": true
+    },
+    {
+      "idx": 192,
+      "version": "7",
+      "when": 1779744500000,
+      "tag": "0192_auto_delta_scan_default_false",
+      "breakpoints": true
+    },
+    {
+      "idx": 193,
+      "version": "7",
+      "when": 1779744600000,
+      "tag": "0193_scan_job_status_failed",
+      "breakpoints": true
+    },
+    {
+      "idx": 194,
+      "version": "7",
       "when": 1780800000000,
       "tag": "0194_application_analysis_report_template",
       "breakpoints": true
     },
     {
-      "idx": 191,
+      "idx": 195,
       "version": "7",
       "when": 1782000000000,
       "tag": "0195_local_source_type",
       "breakpoints": true
     },
     {
-      "idx": 192,
+      "idx": 196,
       "version": "7",
       "when": 1782000100000,
       "tag": "0196_token_columns_bigint",
       "breakpoints": true
     },
     {
-      "idx": 193,
+      "idx": 197,
       "version": "7",
       "when": 1782000200000,
       "tag": "0197_pricing_provider_estimated_cost",
       "breakpoints": true
     },
     {
-      "idx": 194,
+      "idx": 198,
       "version": "7",
       "when": 1782000300000,
       "tag": "0198_drop_estimated_cost",
       "breakpoints": true
     },
     {
-      "idx": 195,
+      "idx": 199,
       "version": "7",
       "when": 1782000400000,
       "tag": "0199_injection_prompt",
       "breakpoints": true
     },
     {
-      "idx": 196,
+      "idx": 200,
       "version": "7",
       "when": 1783428000000,
       "tag": "0200_vulnerability_candidates",
       "breakpoints": true
     },
     {
-      "idx": 197,
+      "idx": 201,
       "version": "7",
       "when": 1783434000000,
       "tag": "0201_subject_security_policy",
       "breakpoints": true
     },
     {
-      "idx": 198,
+      "idx": 202,
       "version": "7",
       "when": 1783435000000,
       "tag": "0202_remove_rule_scan_type",
       "breakpoints": true
     },
     {
-      "idx": 199,
+      "idx": 203,
       "version": "7",
       "when": 1783436000000,
       "tag": "0203_prune_legacy_scan_stage_settings",
       "breakpoints": true
     },
     {
-      "idx": 200,
+      "idx": 204,
       "version": "7",
       "when": 1783437000000,
       "tag": "0204_scan_pipeline_snapshot",
       "breakpoints": true
     },
     {
-      "idx": 201,
+      "idx": 205,
       "version": "7",
       "when": 1783438000000,
       "tag": "0205_scan_pipeline_definition_snapshot",
       "breakpoints": true
     },
     {
-      "idx": 202,
+      "idx": 206,
       "version": "7",
       "when": 1783439000000,
       "tag": "0206_drop_candidate_status_stage",

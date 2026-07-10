@@ -4,11 +4,11 @@ import {
 	createDefaultServerTraefikConfig,
 	createDefaultTraefikConfig,
 	IS_CLOUD,
+	initCancelDeployments,
 	initCronJobs,
 	initializeNetwork,
 	initSchedules,
 	initVolumeBackupsCronJobs,
-	initCancelDeployments,
 	recoverPendingFullScanQueues,
 	sendVulseekRestartNotifications,
 	setupDirectories,
@@ -17,6 +17,8 @@ import {
 import { config } from "dotenv";
 import next from "next";
 import { migration } from "@/server/db/migration";
+import { exitOnStartupError } from "./startup-error";
+import { initAutoDeltaScanPolling } from "./utils/auto-delta-scan";
 import { setupDockerContainerLogsWebSocketServer } from "./wss/docker-container-logs";
 import { setupDockerContainerTerminalWebSocketServer } from "./wss/docker-container-terminal";
 import { setupDockerStatsMonitoringSocketServer } from "./wss/docker-stats";
@@ -24,7 +26,6 @@ import { setupDrawerLogsWebSocketServer } from "./wss/drawer-logs";
 import { setupDeploymentLogsWebSocketServer } from "./wss/listen-deployment";
 import { setupScanStatsMonitoringSocketServer } from "./wss/scan-stats";
 import { setupTerminalWebSocketServer } from "./wss/terminal";
-import { initAutoDeltaScanPolling } from "./utils/auto-delta-scan";
 
 config({ path: ".env" });
 const PORT = Number.parseInt(process.env.PORT || "3000", 10);
@@ -93,6 +94,6 @@ void app.prepare().then(async () => {
 			await initAutoDeltaScanPolling();
 		}
 	} catch (e) {
-		console.error("Main Server Error", e);
+		exitOnStartupError(e);
 	}
 });

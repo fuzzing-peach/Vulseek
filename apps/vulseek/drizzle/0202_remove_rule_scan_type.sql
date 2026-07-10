@@ -1,4 +1,4 @@
-UPDATE "scan_jobs" SET "scanType" = 'full' WHERE "scanType" = 'rule';
+UPDATE "scan_jobs" SET "scanType" = 'full' WHERE "scanType"::text = 'rule';
 
 ALTER TYPE "scanType" RENAME TO "scanType_old";
 CREATE TYPE "scanType" AS ENUM ('delta', 'full');

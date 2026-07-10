@@ -9,16 +9,12 @@ const migrationsFolder = "drizzle";
 const sql = postgres(connectionString, { max: 1 });
 const db = drizzle(sql);
 
-export const migration = async () =>
-	await ensureLegacyDrizzleBaseline(sql, migrationsFolder)
-		.then(async () => await migrate(db, { migrationsFolder }))
-		.then(() => {
-			console.log("Migration complete");
-			sql.end();
-		})
-		.catch((error) => {
-			console.log("Migration failed", error);
-		})
-		.finally(() => {
-			sql.end();
-		});
+export const migration = async () => {
+	try {
+		await ensureLegacyDrizzleBaseline(sql, migrationsFolder);
+		await migrate(db, { migrationsFolder });
+		console.log("Migration complete");
+	} finally {
+		await sql.end();
+	}
+};
