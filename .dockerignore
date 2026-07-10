@@ -13,6 +13,8 @@ dist
 .next
 **/.next
 **/dist
+!packages/trpc-openapi/dist
+!packages/trpc-openapi/dist/**
 
 # Runtime and debugging artifacts
 **/.scan-runtime
