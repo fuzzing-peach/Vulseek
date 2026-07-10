@@ -1450,6 +1450,13 @@
       "when": 1783439000000,
       "tag": "0206_drop_candidate_status_stage",
       "breakpoints": true
+    },
+    {
+      "idx": 207,
+      "version": "7",
+      "when": 1783440000000,
+      "tag": "0207_application_analysis_report_template",
+      "breakpoints": true
     }
   ]
 }
