@@ -10,17 +10,18 @@ describe("username", () => {
 		expect(normalizeUsername(" Alice.Dev ")).toBe("alice.dev");
 	});
 
-	it("accepts only 3-30 letters, digits, underscores, and dots", () => {
+	it("accepts only 3-30 letters, digits, underscores, dots, and hyphens", () => {
 		expect(usernameSchema.safeParse("alice_01.dev").success).toBe(true);
+		expect(usernameSchema.safeParse("alice-user").success).toBe(true);
 		expect(usernameSchema.safeParse("ab").success).toBe(false);
-		expect(usernameSchema.safeParse("alice-user").success).toBe(false);
+		expect(usernameSchema.safeParse("alice+user").success).toBe(false);
 		expect(usernameSchema.safeParse("用户").success).toBe(false);
 	});
 
 	it("derives a valid username from an email address", async () => {
 		await expect(
 			createAvailableUsername("A-li+ce@example.com", async () => false),
-		).resolves.toBe("alice");
+		).resolves.toBe("a-lice");
 	});
 
 	it("uses a stable fallback for short or empty email prefixes", async () => {
@@ -28,7 +29,7 @@ describe("username", () => {
 			createAvailableUsername("a@example.com", async () => false),
 		).resolves.toBe("user_a");
 		await expect(
-			createAvailableUsername("---@example.com", async () => false),
+			createAvailableUsername("+++@example.com", async () => false),
 		).resolves.toBe("user");
 	});
 

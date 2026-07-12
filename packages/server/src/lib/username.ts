@@ -6,8 +6,8 @@ export const usernameSchema = z
 	.min(3, "Username must be at least 3 characters")
 	.max(30, "Username must be at most 30 characters")
 	.regex(
-		/^[a-zA-Z0-9_.]+$/,
-		"Username may only contain letters, numbers, underscores, and dots",
+		/^[a-zA-Z0-9_.-]+$/,
+		"Username may only contain letters, numbers, underscores, dots, and hyphens",
 	);
 
 export const loginIdentifierSchema = z.object({
@@ -20,7 +20,7 @@ export const normalizeUsername = (username: string) =>
 
 const usernameFromEmail = (email: string) => {
 	const localPart = email.split("@", 1)[0]?.toLowerCase() || "";
-	const cleaned = localPart.replace(/[^a-z0-9_.]/g, "").slice(0, 30);
+	const cleaned = localPart.replace(/[^a-z0-9_.-]/g, "").slice(0, 30);
 	if (cleaned.length >= 3) return cleaned;
 	if (cleaned.length > 0) return `user_${cleaned}`;
 	return "user";

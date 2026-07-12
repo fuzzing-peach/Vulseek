@@ -35,8 +35,8 @@ const registerSchema = z
 			.min(3, "Username must be at least 3 characters")
 			.max(30, "Username must be at most 30 characters")
 			.regex(
-				/^[a-zA-Z0-9_.]+$/,
-				"Username may only contain letters, numbers, underscores, and dots",
+				/^[a-zA-Z0-9_.-]+$/,
+				"Username may only contain letters, numbers, underscores, dots, and hyphens",
 			),
 		email: z
 			.string()
