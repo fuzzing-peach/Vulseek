@@ -32,6 +32,7 @@ export const users_temp = pgTable("user_temp", {
 		.primaryKey()
 		.$defaultFn(() => nanoid()),
 	name: text("name").notNull().default(""),
+	username: text("username").notNull().unique(),
 	isRegistered: boolean("isRegistered").notNull().default(false),
 	expirationDate: text("expirationDate")
 		.notNull()
@@ -327,6 +328,7 @@ export const apiUpdateWebServerMonitoring = z.object({
 });
 
 export const apiUpdateUser = createSchema.partial().extend({
+	username: z.never().optional(),
 	email: z
 		.string()
 		.email("Please enter a valid email address")

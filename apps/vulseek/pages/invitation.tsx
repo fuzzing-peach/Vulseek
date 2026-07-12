@@ -1,5 +1,5 @@
-import { getUserByToken, IS_CLOUD } from "@vulseek/server";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { getUserByToken, IS_CLOUD } from "@vulseek/server";
 import type { GetServerSidePropsContext } from "next";
 import Link from "next/link";
 import { useRouter } from "next/router";
@@ -29,6 +29,15 @@ const registerSchema = z
 		name: z.string().min(1, {
 			message: "Name is required",
 		}),
+		username: z
+			.string()
+			.trim()
+			.min(3, "Username must be at least 3 characters")
+			.max(30, "Username must be at most 30 characters")
+			.regex(
+				/^[a-zA-Z0-9_.]+$/,
+				"Username may only contain letters, numbers, underscores, and dots",
+			),
 		email: z
 			.string()
 			.min(1, {
@@ -92,6 +101,7 @@ const Invitation = ({
 	const form = useForm<Register>({
 		defaultValues: {
 			name: "",
+			username: "",
 			email: "",
 			password: "",
 			confirmPassword: "",
@@ -103,6 +113,8 @@ const Invitation = ({
 		if (data?.email) {
 			form.reset({
 				email: data?.email || "",
+				name: form.getValues("name") || "",
+				username: form.getValues("username") || "",
 				password: "",
 				confirmPassword: "",
 			});
@@ -115,6 +127,7 @@ const Invitation = ({
 				email: values.email,
 				password: values.password,
 				name: values.name,
+				username: values.username.toLowerCase(),
 				fetchOptions: {
 					headers: {
 						"x-vulseek-token": token,
@@ -203,6 +216,19 @@ const Invitation = ({
 																	placeholder="Enter your name"
 																	{...field}
 																/>
+															</FormControl>
+															<FormMessage />
+														</FormItem>
+													)}
+												/>
+												<FormField
+													control={form.control}
+													name="username"
+													render={({ field }) => (
+														<FormItem>
+															<FormLabel>Username</FormLabel>
+															<FormControl>
+																<Input placeholder="Username" {...field} />
 															</FormControl>
 															<FormMessage />
 														</FormItem>

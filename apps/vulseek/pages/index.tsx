@@ -1,6 +1,6 @@
+import { zodResolver } from "@hookform/resolvers/zod";
 import { IS_CLOUD, isAdminPresent } from "@vulseek/server";
 import { validateRequest } from "@vulseek/server/lib/auth";
-import { zodResolver } from "@hookform/resolvers/zod";
 import { REGEXP_ONLY_DIGITS } from "input-otp";
 import type { GetServerSidePropsContext } from "next";
 import Link from "next/link";
@@ -39,7 +39,7 @@ import { Label } from "@/components/ui/label";
 import { authClient } from "@/lib/auth-client";
 
 const LoginSchema = z.object({
-	email: z.string().email(),
+	identifier: z.string().trim().min(1, "Email or username is required"),
 	password: z.string().min(8),
 });
 
@@ -67,7 +67,7 @@ export default function Home({ IS_CLOUD }: Props) {
 	const loginForm = useForm<LoginForm>({
 		resolver: zodResolver(LoginSchema),
 		defaultValues: {
-			email: "",
+			identifier: "",
 			password: "",
 		},
 	});
@@ -75,9 +75,14 @@ export default function Home({ IS_CLOUD }: Props) {
 	const onSubmit = async (values: LoginForm) => {
 		setIsLoginLoading(true);
 		try {
-			const { data, error } = await authClient.signIn.email({
-				email: values.email,
-				password: values.password,
+			const { data, error } = await authClient.$fetch<{
+				twoFactorRedirect?: boolean;
+			}>("/sign-in/identifier", {
+				method: "POST",
+				body: {
+					identifier: values.identifier,
+					password: values.password,
+				},
 			});
 
 			if (error) {
@@ -86,8 +91,7 @@ export default function Home({ IS_CLOUD }: Props) {
 				return;
 			}
 
-			// @ts-ignore
-			if (data?.twoFactorRedirect as boolean) {
+			if (data?.twoFactorRedirect) {
 				setTwoFactorCode("");
 				setIsTwoFactor(true);
 				toast.info("Please enter your 2FA code");
@@ -210,7 +214,7 @@ export default function Home({ IS_CLOUD }: Props) {
 					</div>
 				</h1>
 				<p className="text-sm text-muted-foreground">
-					Enter your email and password to sign in
+					Enter your email or username and password to sign in
 				</p>
 			</div>
 			{error && (
@@ -275,12 +279,15 @@ export default function Home({ IS_CLOUD }: Props) {
 							>
 								<FormField
 									control={loginForm.control}
-									name="email"
+									name="identifier"
 									render={({ field }) => (
 										<FormItem>
-											<FormLabel>Email</FormLabel>
+											<FormLabel>Email or username</FormLabel>
 											<FormControl>
-												<Input placeholder="john@example.com" {...field} />
+												<Input
+													placeholder="john@example.com or john"
+													{...field}
+												/>
 											</FormControl>
 											<FormMessage />
 										</FormItem>

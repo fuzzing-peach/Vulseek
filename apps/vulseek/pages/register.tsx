@@ -1,5 +1,5 @@
-import { IS_CLOUD, isAdminPresent, validateRequest } from "@vulseek/server";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { IS_CLOUD, isAdminPresent, validateRequest } from "@vulseek/server";
 import { AlertTriangle } from "lucide-react";
 import type { GetServerSidePropsContext } from "next";
 import Link from "next/link";
@@ -29,6 +29,15 @@ const registerSchema = z
 		name: z.string().min(1, {
 			message: "Name is required",
 		}),
+		username: z
+			.string()
+			.trim()
+			.min(3, "Username must be at least 3 characters")
+			.max(30, "Username must be at most 30 characters")
+			.regex(
+				/^[a-zA-Z0-9_.]+$/,
+				"Username may only contain letters, numbers, underscores, and dots",
+			),
 		email: z
 			.string()
 			.min(1, {
@@ -79,6 +88,7 @@ const Register = ({ isCloud }: Props) => {
 	const form = useForm<Register>({
 		defaultValues: {
 			name: "",
+			username: "",
 			email: "",
 			password: "",
 			confirmPassword: "",
@@ -95,6 +105,7 @@ const Register = ({ isCloud }: Props) => {
 			email: values.email,
 			password: values.password,
 			name: values.name,
+			username: values.username.toLowerCase(),
 		});
 
 		if (error) {
@@ -161,6 +172,19 @@ const Register = ({ isCloud }: Props) => {
 													<FormLabel>Name</FormLabel>
 													<FormControl>
 														<Input placeholder="name" {...field} />
+													</FormControl>
+													<FormMessage />
+												</FormItem>
+											)}
+										/>
+										<FormField
+											control={form.control}
+											name="username"
+											render={({ field }) => (
+												<FormItem>
+													<FormLabel>Username</FormLabel>
+													<FormControl>
+														<Input placeholder="username" {...field} />
 													</FormControl>
 													<FormMessage />
 												</FormItem>

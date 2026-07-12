@@ -4,7 +4,8 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";
 import { admin, apiKey, organization, twoFactor } from "better-auth/plugins";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, or, sql } from "drizzle-orm";
+import { z } from "zod";
 import { IS_CLOUD } from "../constants";
 import { db } from "../db";
 import * as schema from "../db/schema";
@@ -13,6 +14,12 @@ import { updateUser } from "../services/user";
 import { getHubSpotUTK, submitToHubSpot } from "../utils/tracking/hubspot";
 import { sendEmail } from "../verification/send-verification-email";
 import { getPublicIpWithFallback } from "../wss/utils";
+import {
+	createAvailableUsername,
+	loginIdentifierSchema,
+	normalizeUsername,
+	usernameSchema,
+} from "./username";
 
 const { handler, api } = betterAuth({
 	database: drizzleAdapter(db, {
@@ -118,6 +125,47 @@ const { handler, api } = betterAuth({
 							}
 						}
 					}
+
+					const requestedUsername = (
+						_user as typeof _user & { username?: unknown }
+					).username;
+					const username = requestedUsername
+						? normalizeUsername(String(requestedUsername))
+						: await createAvailableUsername(_user.email, async (candidate) => {
+								const existingUser = await db.query.users_temp.findFirst({
+									where: eq(schema.users_temp.username, candidate),
+									columns: { id: true },
+								});
+								return Boolean(existingUser);
+							});
+
+					const parsedUsername = usernameSchema.safeParse(username);
+					if (!parsedUsername.success) {
+						throw new APIError("BAD_REQUEST", {
+							message: parsedUsername.error.issues[0]?.message,
+						});
+					}
+					if (requestedUsername) {
+						const existingUser = await db.query.users_temp.findFirst({
+							where: eq(
+								schema.users_temp.username,
+								parsedUsername.data.toLowerCase(),
+							),
+							columns: { id: true },
+						});
+						if (existingUser) {
+							throw new APIError("BAD_REQUEST", {
+								message: "Username is already taken",
+							});
+						}
+					}
+
+					return {
+						data: {
+							..._user,
+							username: parsedUsername.data.toLowerCase(),
+						},
+					};
 				},
 				after: async (user, context) => {
 					const isAdminPresent = await db.query.member.findFirst({
@@ -208,6 +256,10 @@ const { handler, api } = betterAuth({
 	user: {
 		modelName: "users_temp",
 		additionalFields: {
+			username: {
+				type: "string",
+				required: false,
+			},
 			role: {
 				type: "string",
 				// required: true,
@@ -259,8 +311,51 @@ const { handler, api } = betterAuth({
 	],
 });
 
+const signInWithIdentifier = async (request: Request) => {
+	try {
+		const input = loginIdentifierSchema.parse(await request.json());
+		const identifier = input.identifier.toLowerCase();
+		const user = await db.query.users_temp.findFirst({
+			where: or(
+				eq(sql`lower(${schema.users_temp.email})`, identifier),
+				eq(schema.users_temp.username, identifier),
+			),
+			columns: { email: true },
+		});
+
+		if (!user) {
+			return Response.json(
+				{ message: "Invalid email, username, or password" },
+				{ status: 401 },
+			);
+		}
+
+		const response = await api.signInEmail({
+			body: { email: user.email, password: input.password },
+			headers: request.headers,
+			asResponse: true,
+		});
+		if (response.status === 401) {
+			return Response.json(
+				{ message: "Invalid email, username, or password" },
+				{ status: 401, headers: response.headers },
+			);
+		}
+		return response;
+	} catch (error) {
+		if (error instanceof z.ZodError) {
+			return Response.json(
+				{ message: "Invalid login request" },
+				{ status: 400 },
+			);
+		}
+		throw error;
+	}
+};
+
 export const auth = {
 	handler,
+	signInWithIdentifier,
 	createApiKey: api.createApiKey,
 };
 
@@ -271,10 +366,7 @@ export const validateRequest = async (request: IncomingMessage) => {
 	) {
 		const member = await db.query.member.findFirst({
 			where: eq(schema.member.role, "owner"),
-			orderBy: [
-				desc(schema.member.isDefault),
-				desc(schema.member.createdAt),
-			],
+			orderBy: [desc(schema.member.isDefault), desc(schema.member.createdAt)],
 			with: {
 				user: true,
 				organization: true,
