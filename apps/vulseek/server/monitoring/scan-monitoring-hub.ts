@@ -238,6 +238,7 @@ class JobSampler {
 	private readonly taskSubscriptions = new Map<string, Subscription>();
 	private readonly taskSnapshots = new Map<string, TaskSnapshot>();
 	private reconcileTimer?: NodeJS.Timeout;
+	private publishTimer?: NodeJS.Timeout;
 	private disposeTimer?: NodeJS.Timeout;
 	private snapshot: ScanMonitoringSample | null = null;
 
@@ -256,6 +257,7 @@ class JobSampler {
 		if (!this.reconcileTimer) {
 			void this.reconcile();
 			this.reconcileTimer = setInterval(() => void this.reconcile(), RECONCILE_INTERVAL_MS);
+			this.publishTimer = setInterval(() => this.publish(), SAMPLE_INTERVAL_MS);
 		}
 		return { release: () => this.release(listener) };
 	}
@@ -271,6 +273,8 @@ class JobSampler {
 	private stop() {
 		if (this.reconcileTimer) clearInterval(this.reconcileTimer);
 		this.reconcileTimer = undefined;
+		if (this.publishTimer) clearInterval(this.publishTimer);
+		this.publishTimer = undefined;
 		for (const subscription of this.taskSubscriptions.values()) subscription.release();
 		this.taskSubscriptions.clear();
 		this.taskSnapshots.clear();
@@ -293,7 +297,6 @@ class JobSampler {
 			this.taskSamplers.set(runtime.taskId, sampler);
 			const subscription = sampler.subscribe((snapshot) => {
 				this.taskSnapshots.set(snapshot.taskId, snapshot);
-				this.publish();
 			});
 			this.taskSubscriptions.set(runtime.taskId, subscription);
 		}
@@ -303,7 +306,6 @@ class JobSampler {
 			this.taskSubscriptions.delete(taskId);
 			this.taskSnapshots.delete(taskId);
 		}
-		this.publish();
 	}
 
 	private publish() {
@@ -346,6 +348,7 @@ class OrganizationSampler {
 	private readonly taskSamplers: Map<string, TaskSampler>;
 	private readonly containerStats: ContainerStatsCache;
 	private reconcileTimer?: NodeJS.Timeout;
+	private publishTimer?: NodeJS.Timeout;
 	private disposeTimer?: NodeJS.Timeout;
 	private snapshot: ScanMonitoringSample | null = null;
 
@@ -367,6 +370,7 @@ class OrganizationSampler {
 		if (!this.reconcileTimer) {
 			void this.reconcile();
 			this.reconcileTimer = setInterval(() => void this.reconcile(), RECONCILE_INTERVAL_MS);
+			this.publishTimer = setInterval(() => this.publish(), SAMPLE_INTERVAL_MS);
 		}
 		return { release: () => this.release(listener) };
 	}
@@ -382,6 +386,8 @@ class OrganizationSampler {
 	private stop() {
 		if (this.reconcileTimer) clearInterval(this.reconcileTimer);
 		this.reconcileTimer = undefined;
+		if (this.publishTimer) clearInterval(this.publishTimer);
+		this.publishTimer = undefined;
 		for (const subscription of this.jobSubscriptions.values()) subscription.release();
 		this.jobSubscriptions.clear();
 		this.jobSnapshots.clear();
@@ -405,7 +411,6 @@ class OrganizationSampler {
 			this.jobSamplers.set(job.scanJobId, sampler);
 			const subscription = sampler.subscribe((snapshot) => {
 				this.jobSnapshots.set(job.scanJobId, snapshot);
-				this.publish();
 			});
 			this.jobSubscriptions.set(job.scanJobId, subscription);
 		}
@@ -415,7 +420,6 @@ class OrganizationSampler {
 			this.jobSubscriptions.delete(jobId);
 			this.jobSnapshots.delete(jobId);
 		}
-		this.publish();
 	}
 
 	private publish() {

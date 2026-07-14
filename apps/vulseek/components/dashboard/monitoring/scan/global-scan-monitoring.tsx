@@ -227,7 +227,12 @@ const UsageChart = ({
 					data={data}
 					margin={{ top: axisUnit.label ? 22 : 10, right: 24, left: 0, bottom: 0 }}
 				>
-					<CartesianGrid strokeDasharray="3 3" stroke="#27272A" opacity={0.35} />
+					<CartesianGrid
+						strokeDasharray="3 3"
+						stroke="#27272A"
+						opacity={0.35}
+						vertical={false}
+					/>
 					<YAxis
 						stroke="#A1A1AA"
 						domain={max ? [0, max] : undefined}
@@ -264,6 +269,9 @@ const UsageChart = ({
 							fill={item.color}
 							fillOpacity={0.12}
 							name={item.name}
+							isAnimationActive={true}
+							animationDuration={1000}
+							animationEasing="linear"
 						/>
 					))}
 				</AreaChart>

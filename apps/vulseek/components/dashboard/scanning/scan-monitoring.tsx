@@ -279,6 +279,7 @@ const UsageChart = ({
 						strokeDasharray="3 3"
 						stroke="#27272A"
 						opacity={0.35}
+						vertical={false}
 					/>
 					<YAxis
 						stroke="#A1A1AA"
@@ -321,6 +322,9 @@ const UsageChart = ({
 							fill={item.color}
 							fillOpacity={0.12}
 							name={item.name}
+							isAnimationActive={true}
+							animationDuration={1000}
+							animationEasing="linear"
 						/>
 					))}
 				</AreaChart>
