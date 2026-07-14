@@ -1,0 +1,96 @@
+ARG VULSEEK_TOOLS_IMAGE=vulseek-scan-tools:missing
+
+FROM ${VULSEEK_TOOLS_IMAGE} AS repository-source
+
+ARG GIT_URL="<GIT_URL>"
+ARG GIT_BRANCH="<GIT_BRANCH>"
+ARG GIT_TAG=""
+ARG ENABLE_SUBMODULES="false"
+ARG POST_CHECKOUT_SCRIPT=""
+ARG GIT_DEPTH="10"
+ARG GIT_RETRY_ATTEMPTS="5"
+ARG GIT_RETRY_DELAY_SECONDS="3"
+ARG DEBIAN_FRONTEND=noninteractive
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
+ENV HTTP_PROXY=$HTTP_PROXY \
+    HTTPS_PROXY=$HTTPS_PROXY \
+    NO_PROXY=$NO_PROXY \
+    http_proxy=$http_proxy \
+    https_proxy=$https_proxy \
+    no_proxy=$no_proxy
+
+WORKDIR /workspace
+
+RUN set -eux; \
+    git init repo; \
+    cd repo; \
+    git remote add origin "${GIT_URL}"; \
+    git_retry() { \
+      attempt=1; \
+      while true; do \
+        "$@" && return 0; \
+        rc="$?"; \
+        if [ "$rc" = "2" ] && [ "${1:-}" = "git" ] && [ "${2:-}" = "ls-remote" ]; then \
+          return "$rc"; \
+        fi; \
+        if [ "$attempt" -ge "${GIT_RETRY_ATTEMPTS}" ]; then \
+          return "$rc"; \
+        fi; \
+        sleep_for="$((GIT_RETRY_DELAY_SECONDS * attempt))"; \
+        printf '%s\n' "[checkout] git command failed with exit ${rc}; retrying in ${sleep_for}s (${attempt}/${GIT_RETRY_ATTEMPTS}): $*"; \
+        sleep "${sleep_for}"; \
+        attempt="$((attempt + 1))"; \
+      done; \
+    }; \
+    git_ref_exists() { \
+      git_retry git ls-remote --exit-code "$@" >/dev/null; \
+    }; \
+    if [ -n "${GIT_TAG}" ]; then \
+      printf '%s\n' "[checkout] using explicit tag: ${GIT_TAG}"; \
+      git_retry git fetch --progress --depth=1 origin "refs/tags/${GIT_TAG}:refs/tags/${GIT_TAG}"; \
+      git checkout --detach "refs/tags/${GIT_TAG}"; \
+    elif [ -n "${GIT_BRANCH}" ] && git_ref_exists --heads origin "${GIT_BRANCH}"; then \
+      printf '%s\n' "[checkout] using explicit branch: ${GIT_BRANCH}"; \
+      git_retry git fetch --progress --depth="${GIT_DEPTH}" origin "refs/heads/${GIT_BRANCH}:refs/remotes/origin/${GIT_BRANCH}"; \
+      git checkout -B "${GIT_BRANCH}" "refs/remotes/origin/${GIT_BRANCH}"; \
+    elif [ -n "${GIT_BRANCH}" ] && git_ref_exists --tags origin "${GIT_BRANCH}"; then \
+      printf '%s\n' "[checkout] branch name matched a tag, using tag: ${GIT_BRANCH}"; \
+      git_retry git fetch --progress --depth=1 origin "refs/tags/${GIT_BRANCH}:refs/tags/${GIT_BRANCH}"; \
+      git checkout --detach "refs/tags/${GIT_BRANCH}"; \
+    else \
+      latest_tag="$(git_retry git ls-remote --tags --refs origin 'refs/tags/*' \
+        | awk '{ sub("refs/tags/", "", $2); print $2 }' \
+        | sort -V \
+        | tail -n 1)"; \
+      if [ -n "${latest_tag}" ]; then \
+        printf '%s\n' "[checkout] no explicit ref selected; using latest discovered tag: ${latest_tag}"; \
+        git_retry git fetch --progress --depth=1 origin "refs/tags/${latest_tag}:refs/tags/${latest_tag}"; \
+        git checkout --detach "refs/tags/${latest_tag}"; \
+      else \
+        printf '%s\n' "[checkout] no tags found; using remote HEAD with depth ${GIT_DEPTH}"; \
+        git_retry git fetch --progress --depth="${GIT_DEPTH}" origin HEAD; \
+        git checkout --detach FETCH_HEAD; \
+      fi; \
+    fi; \
+    if [ "${ENABLE_SUBMODULES}" = "true" ]; then \
+      git_retry git submodule update --init --recursive --depth=1; \
+    fi; \
+    if [ -n "${POST_CHECKOUT_SCRIPT}" ]; then \
+      printf '%s\n' "[checkout] running post-checkout script"; \
+      printf '%s\n' "${POST_CHECKOUT_SCRIPT}" > /tmp/vulseek-post-checkout.sh; \
+      bash /tmp/vulseek-post-checkout.sh; \
+      rm -f /tmp/vulseek-post-checkout.sh; \
+    fi
+
+FROM ${VULSEEK_TOOLS_IMAGE} AS final
+
+WORKDIR /workspace
+COPY --from=repository-source /workspace/repo /workspace/repo
+WORKDIR /workspace/repo
+CMD ["/bin/bash"]

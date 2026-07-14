@@ -38,6 +38,7 @@ export * from "./services/registry";
 export * from "./services/rollbacks";
 export * from "./services/scan";
 export * from "./services/scan/constants";
+export * from "./services/scan/checkout-tools";
 export * from "./services/scan/api/scan-jobs";
 export * from "./services/scan/api/candidate-records";
 export * from "./services/scan/api/evaluations";

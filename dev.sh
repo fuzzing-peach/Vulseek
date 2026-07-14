@@ -20,16 +20,110 @@ TRAEFIK_SERVICE="vulseek-traefik-dev"
 IMAGE_NAME="vulseek-dev:latest"
 ENV_FILE="env.development"
 
+VULSEEK_PORT="${VULSEEK_DEV_PORT:-23000}"
+POSTGRES_PORT="${POSTGRES_DEV_PORT:-25432}"
+REDIS_PORT="${REDIS_DEV_PORT:-26379}"
+TRAEFIK_HTTP_PORT="${TRAEFIK_DEV_HTTP_PORT:-20080}"
+TRAEFIK_DASHBOARD_PORT="${TRAEFIK_DEV_DASHBOARD_PORT:-28080}"
+NODE_DEBUG_PORT="${NODE_DEBUG_DEV_PORT:-29229}"
+DRIZZLE_STUDIO_PORT="${DRIZZLE_STUDIO_DEV_PORT:-25555}"
+
+ROOT_NODE_MODULES_VOLUME="vulseek_dev_root_node_modules"
+APP_NODE_MODULES_VOLUME="vulseek_dev_app_node_modules"
+SERVER_NODE_MODULES_VOLUME="vulseek_dev_server_node_modules"
+APP_DATA_VOLUME="vulseek_dev_data"
+DOCKER_CONFIG_VOLUME="vulseek_dev_docker_config"
+POSTGRES_DATA_VOLUME="vulseek_dev_postgres_data"
+REDIS_DATA_VOLUME="vulseek_dev_redis_data"
+TRAEFIK_DATA_VOLUME="vulseek_dev_traefik_data"
+
 # 当前脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CURRENT_DIR="$(pwd -P)"
-DEFAULT_SCAN_CONTEXT_HOST_PATH="${CURRENT_DIR}/vulseek-data"
+DEFAULT_SCAN_CONTEXT_HOST_PATH="${SCRIPT_DIR}/vulseek-data-dev"
 SCAN_CONTEXT_HOST_PATH=""
 
 resolve_scan_context_host_path() {
     local configured_path="${SCAN_CONTEXT_HOST_PATH:-${VULSEEK_SCAN_CONTEXT_HOST_PATH:-$DEFAULT_SCAN_CONTEXT_HOST_PATH}}"
     mkdir -p "$configured_path"
     (cd "$configured_path" && pwd -P)
+}
+
+service_exists() {
+    docker service inspect "$1" >/dev/null 2>&1
+}
+
+port_is_listening() {
+    local port="$1"
+    ss -H -ltn 2>/dev/null | awk -v port=":${port}" '$4 ~ port "$" { found=1 } END { exit !found }'
+}
+
+require_available_port() {
+    local port="$1"
+    local service="$2"
+    if ! service_exists "$service" && port_is_listening "$port"; then
+        echo -e "${RED}❌ 端口 ${port} 已被其他进程或服务占用，无法启动 ${service}${NC}"
+        return 1
+    fi
+}
+
+list_environment_services() {
+    docker service ls | awk -v app="$VULSEEK_SERVICE" -v postgres="$POSTGRES_SERVICE" \
+        -v redis="$REDIS_SERVICE" -v traefik="$TRAEFIK_SERVICE" \
+        'NR == 1 || $2 == app || $2 == postgres || $2 == redis || $2 == traefik'
+}
+
+resolve_service_name() {
+    case "${1:-vulseek}" in
+        vulseek|"$VULSEEK_SERVICE") echo "$VULSEEK_SERVICE" ;;
+        postgres|"$POSTGRES_SERVICE") echo "$POSTGRES_SERVICE" ;;
+        redis|"$REDIS_SERVICE") echo "$REDIS_SERVICE" ;;
+        traefik|"$TRAEFIK_SERVICE") echo "$TRAEFIK_SERVICE" ;;
+        *)
+            echo -e "${RED}❌ 未知的开发环境服务: $1${NC}" >&2
+            return 1
+            ;;
+    esac
+}
+
+wait_for_service_healthy() {
+    local service="$1"
+    local timeout_seconds="${2:-120}"
+    local elapsed=0
+
+    while [ "$elapsed" -lt "$timeout_seconds" ]; do
+        local task_id
+        task_id=$(docker service ps "$service" --filter desired-state=running -q | head -n1)
+        if [ -n "$task_id" ]; then
+            local container_id
+            container_id=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' "$task_id" 2>/dev/null || true)
+            if [ -n "$container_id" ]; then
+                local health
+                health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id" 2>/dev/null || true)
+                if [ "$health" = "healthy" ] || [ "$health" = "running" ]; then
+                    return 0
+                fi
+                if [ "$health" = "unhealthy" ] || [ "$health" = "exited" ] || [ "$health" = "dead" ]; then
+                    echo -e "${RED}❌ ${service} 状态异常: ${health}${NC}"
+                    return 1
+                fi
+            fi
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+
+    echo -e "${RED}❌ 等待 ${service} 健康状态超时${NC}"
+    return 1
+}
+
+preflight_ports() {
+    require_available_port "$POSTGRES_PORT" "$POSTGRES_SERVICE"
+    require_available_port "$REDIS_PORT" "$REDIS_SERVICE"
+    require_available_port "$VULSEEK_PORT" "$VULSEEK_SERVICE"
+    require_available_port "$NODE_DEBUG_PORT" "$VULSEEK_SERVICE"
+    require_available_port "$DRIZZLE_STUDIO_PORT" "$VULSEEK_SERVICE"
+    require_available_port "$TRAEFIK_HTTP_PORT" "$TRAEFIK_SERVICE"
+    require_available_port "$TRAEFIK_DASHBOARD_PORT" "$TRAEFIK_SERVICE"
 }
 
 # 显示帮助信息
@@ -77,6 +171,12 @@ show_help() {
     echo "  status      - 显示服务状态和访问地址"
     echo "  update      - 更新服务（重新部署）"
     echo "  help        - 显示此帮助信息"
+    echo ""
+    echo "默认端口:"
+    echo "  Vulseek ${VULSEEK_PORT}, PostgreSQL ${POSTGRES_PORT}, Redis ${REDIS_PORT}"
+    echo "  Traefik HTTP ${TRAEFIK_HTTP_PORT}, Dashboard ${TRAEFIK_DASHBOARD_PORT}"
+    echo "  Node debug ${NODE_DEBUG_PORT}, Drizzle Studio ${DRIZZLE_STUDIO_PORT}"
+    echo "  可通过对应的 *_DEV_PORT 环境变量覆盖"
     echo ""
 }
 
@@ -137,14 +237,14 @@ init_swarm() {
     
     # 创建卷
     echo -e "${BLUE}💾 创建数据卷...${NC}"
-    docker volume create node_modules 2>/dev/null || true
-    docker volume create vulseek_node_modules 2>/dev/null || true
-    docker volume create server_node_modules 2>/dev/null || true
-    docker volume create vulseek_data 2>/dev/null || true
-    docker volume create docker_config 2>/dev/null || true
-    docker volume create postgres_data 2>/dev/null || true
-    docker volume create redis_data 2>/dev/null || true
-    docker volume create traefik_data 2>/dev/null || true
+    docker volume create "$ROOT_NODE_MODULES_VOLUME" >/dev/null
+    docker volume create "$APP_NODE_MODULES_VOLUME" >/dev/null
+    docker volume create "$SERVER_NODE_MODULES_VOLUME" >/dev/null
+    docker volume create "$APP_DATA_VOLUME" >/dev/null
+    docker volume create "$DOCKER_CONFIG_VOLUME" >/dev/null
+    docker volume create "$POSTGRES_DATA_VOLUME" >/dev/null
+    docker volume create "$REDIS_DATA_VOLUME" >/dev/null
+    docker volume create "$TRAEFIK_DATA_VOLUME" >/dev/null
     
     echo -e "${GREEN}✅ 初始化完成！${NC}"
 }
@@ -188,47 +288,60 @@ build_image() {
 # 启动 PostgreSQL 服务
 start_postgres() {
     echo -e "${BLUE}🗄️  启动 PostgreSQL...${NC}"
+    if service_exists "$POSTGRES_SERVICE"; then
+        echo -e "${YELLOW}⚠️  PostgreSQL 服务已存在${NC}"
+        return 0
+    fi
+    require_available_port "$POSTGRES_PORT" "$POSTGRES_SERVICE"
     
     docker service create \
         --name "$POSTGRES_SERVICE" \
         --network "$NETWORK_NAME" \
-        --publish published=25432,target=5432,mode=host \
+        --publish published="$POSTGRES_PORT",target=5432,mode=host \
         --env POSTGRES_USER=vulseek \
         --env POSTGRES_PASSWORD=vulseek_dev_password \
         --env POSTGRES_DB=vulseek \
-        --mount type=volume,source=postgres_data,target=/var/lib/postgresql/data \
+        --mount type=volume,source="$POSTGRES_DATA_VOLUME",target=/var/lib/postgresql/data \
         --health-cmd "pg_isready -U vulseek" \
         --health-interval 10s \
         --health-timeout 5s \
         --health-retries 5 \
         --constraint 'node.role==manager' \
-        postgres:16 2>/dev/null || {
-        echo -e "${YELLOW}⚠️  PostgreSQL 服务已存在${NC}"
-    }
+        postgres:16
 }
 
 # 启动 Redis 服务
 start_redis() {
     echo -e "${BLUE}📦 启动 Redis...${NC}"
+    if service_exists "$REDIS_SERVICE"; then
+        echo -e "${YELLOW}⚠️  Redis 服务已存在${NC}"
+        return 0
+    fi
+    require_available_port "$REDIS_PORT" "$REDIS_SERVICE"
     
     docker service create \
         --name "$REDIS_SERVICE" \
         --network "$NETWORK_NAME" \
-        --publish published=26379,target=6379,mode=host \
-        --mount type=volume,source=redis_data,target=/data \
+        --publish published="$REDIS_PORT",target=6379,mode=host \
+        --mount type=volume,source="$REDIS_DATA_VOLUME",target=/data \
         --health-cmd "redis-cli ping" \
         --health-interval 10s \
         --health-timeout 5s \
         --health-retries 5 \
         --constraint 'node.role==manager' \
-        redis:7 2>/dev/null || {
-        echo -e "${YELLOW}⚠️  Redis 服务已存在${NC}"
-    }
+        redis:7
 }
 
 # 启动 Vulseek 主服务
 start_vulseek() {
     echo -e "${BLUE}🚀 启动 Vulseek 主应用...${NC}"
+    if service_exists "$VULSEEK_SERVICE"; then
+        echo -e "${YELLOW}⚠️  Vulseek 服务已存在${NC}"
+        return 0
+    fi
+    require_available_port "$VULSEEK_PORT" "$VULSEEK_SERVICE"
+    require_available_port "$NODE_DEBUG_PORT" "$VULSEEK_SERVICE"
+    require_available_port "$DRIZZLE_STUDIO_PORT" "$VULSEEK_SERVICE"
     local effective_scan_context_host_path
     effective_scan_context_host_path="$(resolve_scan_context_host_path)"
     export VULSEEK_SCAN_CONTEXT_HOST_PATH="$effective_scan_context_host_path"
@@ -269,43 +382,50 @@ start_vulseek() {
     eval docker service create \
         --name "$VULSEEK_SERVICE" \
         --network "$NETWORK_NAME" \
-        --publish published=23000,target=3000,mode=host \
-        --publish published=29229,target=9229,mode=host \
-        --publish published=25555,target=5555,mode=host \
+        --publish published="$VULSEEK_PORT",target=3000,mode=host \
+        --publish published="$NODE_DEBUG_PORT",target=9229,mode=host \
+        --publish published="$DRIZZLE_STUDIO_PORT",target=5555,mode=host \
+        $env_args \
+        --env VULSEEK_SERVICE_NAME="$VULSEEK_SERVICE" \
         --env VULSEEK_SCAN_CONTEXT_HOST_PATH="${effective_scan_context_host_path}" \
         --env VULSEEK_SCAN_CONTEXT_APP_PATH=/scan-context \
-        $env_args \
+        --env DATABASE_URL=postgresql://vulseek:vulseek_dev_password@"$POSTGRES_SERVICE":5432/vulseek \
+        --env REDIS_URL=redis://"$REDIS_SERVICE":6379 \
         --mount type=bind,source="${SCRIPT_DIR}/apps",target=/app/apps \
         --mount type=bind,source="${SCRIPT_DIR}/agents",target=/app/agents \
         --mount type=bind,source="${SCRIPT_DIR}/packages",target=/app/packages \
         --mount type=bind,source="${SCRIPT_DIR}/package.json",target=/app/package.json \
         --mount type=bind,source="${SCRIPT_DIR}/pnpm-workspace.yaml",target=/app/pnpm-workspace.yaml \
         --mount type=bind,source="${env_file_path}",target=/app/.env \
-        --mount type=volume,source=node_modules,target=/app/node_modules \
-        --mount type=volume,source=vulseek_node_modules,target=/app/apps/vulseek/node_modules \
-        --mount type=volume,source=server_node_modules,target=/app/packages/server/node_modules \
+        --mount type=volume,source="$ROOT_NODE_MODULES_VOLUME",target=/app/node_modules \
+        --mount type=volume,source="$APP_NODE_MODULES_VOLUME",target=/app/apps/vulseek/node_modules \
+        --mount type=volume,source="$SERVER_NODE_MODULES_VOLUME",target=/app/packages/server/node_modules \
         --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
         --mount type=bind,source="${effective_scan_context_host_path}",target=/scan-context \
-        --mount type=volume,source=vulseek_data,target=/etc/vulseek \
-        --mount type=volume,source=traefik_data,target=/etc/traefik \
-        --mount type=volume,source=docker_config,target=/root/.docker \
+        --mount type=volume,source="$APP_DATA_VOLUME",target=/etc/vulseek \
+        --mount type=volume,source="$TRAEFIK_DATA_VOLUME",target=/etc/traefik \
+        --mount type=volume,source="$DOCKER_CONFIG_VOLUME",target=/root/.docker \
         --constraint "'node.role==manager'" \
-        "$IMAGE_NAME" 2>/dev/null || {
-        echo -e "${YELLOW}⚠️  Vulseek 服务已存在${NC}"
-    }
+        "$IMAGE_NAME"
 }
 
 # 启动 Traefik 服务
 start_traefik() {
     echo -e "${BLUE}🌐 启动 Traefik...${NC}"
+    if service_exists "$TRAEFIK_SERVICE"; then
+        echo -e "${YELLOW}⚠️  Traefik 服务已存在${NC}"
+        return 0
+    fi
+    require_available_port "$TRAEFIK_HTTP_PORT" "$TRAEFIK_SERVICE"
+    require_available_port "$TRAEFIK_DASHBOARD_PORT" "$TRAEFIK_SERVICE"
     
     docker service create \
         --name "$TRAEFIK_SERVICE" \
         --network "$NETWORK_NAME" \
-        --publish published=20080,target=80,mode=host \
-        --publish published=28080,target=8080,mode=host \
+        --publish published="$TRAEFIK_HTTP_PORT",target=80,mode=host \
+        --publish published="$TRAEFIK_DASHBOARD_PORT",target=8080,mode=host \
         --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock,readonly \
-        --mount type=volume,source=traefik_data,target=/etc/traefik \
+        --mount type=volume,source="$TRAEFIK_DATA_VOLUME",target=/etc/traefik \
         --constraint 'node.role==manager' \
         traefik:v3.5.0 \
         --api.insecure=true \
@@ -316,34 +436,30 @@ start_traefik() {
         --providers.swarm.network="$NETWORK_NAME" \
         --entrypoints.web.address=:80 \
         --log.level=DEBUG \
-        --accesslog=true 2>/dev/null || {
-        echo -e "${YELLOW}⚠️  Traefik 服务已存在${NC}"
-    }
+        --accesslog=true
 }
 
 # 启动所有服务
 start_all() {
     echo -e "${GREEN}🚀 启动 Vulseek 开发环境...${NC}"
     
-    # 确保 Swarm 已初始化
-    if ! check_swarm; then
-        echo -e "${YELLOW}⚠️  Swarm 未初始化，执行初始化...${NC}"
-        init_swarm
-    fi
+    # 复用现有 Swarm，并确保开发环境自己的网络和卷存在。
+    init_swarm
     
-    # 按顺序启动服务
+    preflight_ports
+
+    # 按顺序启动服务，并在应用启动前等待依赖健康。
     start_postgres
-    sleep 2
+    wait_for_service_healthy "$POSTGRES_SERVICE"
     start_redis
-    sleep 2
+    wait_for_service_healthy "$REDIS_SERVICE"
     start_vulseek
-    sleep 2
     start_traefik
     
     echo ""
     echo -e "${GREEN}✅ 开发环境已启动！${NC}"
-    echo -e "${BLUE}📱 访问: http://localhost:23000${NC}"
-    echo -e "${BLUE}🐛 调试端口: localhost:29229${NC}"
+    echo -e "${BLUE}📱 访问: http://localhost:${VULSEEK_PORT}${NC}"
+    echo -e "${BLUE}🐛 调试端口: localhost:${NODE_DEBUG_PORT}${NC}"
     echo ""
     echo -e "${YELLOW}💡 提示: 使用 './dev.sh status' 查看服务状态${NC}"
 }
@@ -362,7 +478,8 @@ stop_all() {
 
 # 重启服务
 restart_service() {
-    local service=${1:-$VULSEEK_SERVICE}
+    local service
+    service=$(resolve_service_name "${1:-vulseek}")
     echo -e "${YELLOW}🔄 重启服务: $service${NC}"
     docker service update --force "$service"
     echo -e "${GREEN}✅ 服务已重启${NC}"
@@ -370,22 +487,8 @@ restart_service() {
 
 # 查看日志
 show_logs() {
-    local service_name=${1:-}
-    
-    case "$service_name" in
-        vulseek|"")
-            service_name="$VULSEEK_SERVICE"
-            ;;
-        postgres)
-            service_name="$POSTGRES_SERVICE"
-            ;;
-        redis)
-            service_name="$REDIS_SERVICE"
-            ;;
-        traefik)
-            service_name="$TRAEFIK_SERVICE"
-            ;;
-    esac
+    local service_name
+    service_name=$(resolve_service_name "${1:-vulseek}")
     
     echo -e "${BLUE}📋 查看 $service_name 日志 (Ctrl+C 退出)${NC}"
     
@@ -407,22 +510,8 @@ show_logs() {
 
 # 进入容器 shell
 enter_shell() {
-    local service_name=${1:-vulseek}
-    
-    case "$service_name" in
-        vulseek|"")
-            service_name="$VULSEEK_SERVICE"
-            ;;
-        postgres)
-            service_name="$POSTGRES_SERVICE"
-            ;;
-        redis)
-            service_name="$REDIS_SERVICE"
-            ;;
-        traefik)
-            service_name="$TRAEFIK_SERVICE"
-            ;;
-    esac
+    local service_name
+    service_name=$(resolve_service_name "${1:-vulseek}")
     
     echo -e "${BLUE}🐚 进入 $service_name 容器 shell...${NC}"
     
@@ -448,14 +537,14 @@ show_status() {
     effective_scan_context_host_path="$(resolve_scan_context_host_path)"
     echo -e "${BLUE}📊 服务状态:${NC}"
     echo ""
-    docker service ls --filter "name=vulseek"
+    list_environment_services
     echo ""
     echo -e "${GREEN}🌐 访问地址:${NC}"
-    echo -e "  ${BLUE}主应用:${NC}        http://localhost:23000"
-    echo -e "  ${BLUE}调试端口:${NC}      localhost:29229"
-    echo -e "  ${BLUE}Traefik 面板:${NC}  http://localhost:28080"
-    echo -e "  ${BLUE}PostgreSQL:${NC}    localhost:25432 (用户: vulseek, 密码: vulseek_dev_password)"
-    echo -e "  ${BLUE}Redis:${NC}         localhost:26379"
+    echo -e "  ${BLUE}主应用:${NC}        http://localhost:${VULSEEK_PORT}"
+    echo -e "  ${BLUE}调试端口:${NC}      localhost:${NODE_DEBUG_PORT}"
+    echo -e "  ${BLUE}Traefik 面板:${NC}  http://localhost:${TRAEFIK_DASHBOARD_PORT}"
+    echo -e "  ${BLUE}PostgreSQL:${NC}    localhost:${POSTGRES_PORT} (用户: vulseek, 密码: vulseek_dev_password)"
+    echo -e "  ${BLUE}Redis:${NC}         localhost:${REDIS_PORT}"
     echo -e "  ${BLUE}Scan Context:${NC}  ${effective_scan_context_host_path}"
     echo ""
 }
@@ -527,7 +616,7 @@ db_seed() {
 # 数据库管理界面
 db_studio() {
     echo -e "${BLUE}🎨 启动数据库管理界面...${NC}"
-    echo -e "${YELLOW}💡 Drizzle Studio 将在 http://localhost:25555 启动${NC}"
+    echo -e "${YELLOW}💡 Drizzle Studio 将在 http://localhost:${DRIZZLE_STUDIO_PORT} 启动${NC}"
     
     task_id=$(docker service ps "$VULSEEK_SERVICE" --filter "desired-state=running" -q | head -n1)
     
@@ -698,7 +787,8 @@ show_env() {
 
 # 更新服务
 update_service() {
-    local service=${1:-$VULSEEK_SERVICE}
+    local service
+    service=$(resolve_service_name "${1:-vulseek}")
     echo -e "${YELLOW}🔄 更新服务: $service${NC}"
     
     # 如果是 Vulseek 服务，重新构建镜像
@@ -730,14 +820,14 @@ clean_all() {
         read -p "是否删除数据卷（包括数据库数据）？(y/N) " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            docker volume rm node_modules 2>/dev/null || true
-            docker volume rm vulseek_node_modules 2>/dev/null || true
-            docker volume rm server_node_modules 2>/dev/null || true
-            docker volume rm vulseek_data 2>/dev/null || true
-            docker volume rm docker_config 2>/dev/null || true
-            docker volume rm postgres_data 2>/dev/null || true
-            docker volume rm redis_data 2>/dev/null || true
-            docker volume rm traefik_data 2>/dev/null || true
+            docker volume rm "$ROOT_NODE_MODULES_VOLUME" 2>/dev/null || true
+            docker volume rm "$APP_NODE_MODULES_VOLUME" 2>/dev/null || true
+            docker volume rm "$SERVER_NODE_MODULES_VOLUME" 2>/dev/null || true
+            docker volume rm "$APP_DATA_VOLUME" 2>/dev/null || true
+            docker volume rm "$DOCKER_CONFIG_VOLUME" 2>/dev/null || true
+            docker volume rm "$POSTGRES_DATA_VOLUME" 2>/dev/null || true
+            docker volume rm "$REDIS_DATA_VOLUME" 2>/dev/null || true
+            docker volume rm "$TRAEFIK_DATA_VOLUME" 2>/dev/null || true
         fi
         
         # 删除镜像

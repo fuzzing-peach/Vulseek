@@ -1,13 +1,12 @@
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import { Ban, GitBranch, PackageSearch, Shield, Terminal } from "lucide-react";
-import { useTranslation } from "next-i18next";
+import { Ban, GitBranch, Shield, Terminal } from "lucide-react";
 import { useRouter } from "next/router";
-import { useEffect, useState } from "react";
+import { useTranslation } from "next-i18next";
 import { toast } from "sonner";
 import { ShowBuildChooseForm } from "@/components/dashboard/application/build/show";
 import { ShowProviderForm } from "@/components/dashboard/application/general/generic/show";
+import { CheckoutImageAction } from "@/components/dashboard/scanning/checkout-image-action";
 import { CreateScanDialog } from "@/components/dashboard/scanning/create-scan-dialog";
-import { CheckoutLogModal } from "@/components/dashboard/scanning/checkout-log-modal";
 import { scanT } from "@/components/dashboard/scanning/scan-i18n";
 import { DialogAction } from "@/components/shared/dialog-action";
 import { Button } from "@/components/ui/button";
@@ -47,106 +46,10 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 		},
 	);
 	const { mutateAsync: update } = api.application.update.useMutation();
-	const { mutateAsync: checkout, isLoading: isCheckingOut } =
-		api.scan.checkout.useMutation();
 	const { mutateAsync: stop, isLoading: isStopping } =
 		api.application.stop.useMutation();
 	const { mutateAsync: createScanJob, isLoading: isCreatingScanJob } =
 		api.scan.create.useMutation();
-
-	const [checkoutModalOpen, setCheckoutModalOpen] = useState(false);
-	const [checkoutId, setCheckoutId] = useState<string | null>(null);
-	const [checkoutLogs, setCheckoutLogs] = useState("");
-	const [checkoutFinalized, setCheckoutFinalized] = useState(false);
-	const { data: checkoutImageStatus, refetch: refetchCheckoutImageStatus } =
-		api.scan.checkoutImageStatus.useQuery(
-			{
-				applicationId,
-			},
-			{
-				enabled: !!applicationId,
-			},
-		);
-	const { data: runningCheckoutTask } = api.scan.runningCheckout.useQuery(
-		{
-			applicationId,
-		},
-		{
-			enabled: !!applicationId,
-			refetchInterval: checkoutFinalized ? false : 2000,
-		},
-	);
-	const { data: checkoutStatus } = api.scan.checkoutStatus.useQuery(
-		{
-			checkoutId: checkoutId || "",
-		},
-		{
-			enabled: !!checkoutId,
-			refetchInterval: checkoutId && !checkoutFinalized ? 1500 : false,
-		},
-	);
-	const isCheckouting =
-		checkoutStatus?.status === "running" ||
-		runningCheckoutTask?.status === "running";
-	const isCheckouted = checkoutImageStatus?.exists === true;
-
-	useEffect(() => {
-		if (!checkoutId && runningCheckoutTask?.checkoutId) {
-			setCheckoutId(runningCheckoutTask.checkoutId);
-			setCheckoutFinalized(false);
-		}
-	}, [checkoutId, runningCheckoutTask]);
-
-	useEffect(() => {
-		if (checkoutId && checkoutStatus === null && !runningCheckoutTask) {
-			setCheckoutFinalized(true);
-			setCheckoutId(null);
-		}
-	}, [checkoutId, checkoutStatus, runningCheckoutTask]);
-
-	useEffect(() => {
-		if (!checkoutStatus) return;
-		const logs = [
-			`Image: ${checkoutStatus.imageTag}`,
-			`Repository: ${checkoutStatus.gitUrl}`,
-			`Branch: ${checkoutStatus.gitBranch}`,
-			`Tag: ${checkoutStatus.gitTag || "none"}`,
-			`Enable Submodules: ${checkoutStatus.enableSubmodules ? "true" : "false"}`,
-			`Post Checkout Script: ${
-				checkoutStatus.postCheckoutScript?.trim() ? "configured" : "none"
-			}`,
-			`Build Probe: ${checkoutStatus.dockerBuildProbe}`,
-			"",
-			"===== Dockerfile =====",
-			checkoutStatus.dockerfileTemplate || "",
-			"",
-			"===== docker build stdout =====",
-			checkoutStatus.stdout || "",
-			"",
-			"===== docker build stderr =====",
-			checkoutStatus.stderr || "",
-			checkoutStatus.errorMessage
-				? `\n===== error =====\n${checkoutStatus.errorMessage}`
-				: "",
-		].join("\n");
-		setCheckoutLogs(logs);
-
-		if (checkoutFinalized) return;
-		if (checkoutStatus.status === "completed") {
-			toast.success(
-				scanT(t, "scan.actions.checkoutBuilt", "Checkout image built successfully"),
-			);
-			setCheckoutFinalized(true);
-			void refetchCheckoutImageStatus();
-			refetch();
-		}
-		if (checkoutStatus.status === "failed") {
-			toast.error(scanT(t, "scan.actions.checkoutBuildFailed", "Checkout build failed"));
-			setCheckoutFinalized(true);
-			refetch();
-		}
-	}, [checkoutStatus, checkoutFinalized, refetch, refetchCheckoutImageStatus, t]);
-
 	return (
 		<>
 			<Card className="bg-background">
@@ -358,117 +261,12 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 						/>
 
 						{data?.applicationStatus === "idle" ? (
-							isCheckouting ? (
-								<Button
-									variant="secondary"
-									onClick={() => setCheckoutModalOpen(true)}
-									className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
-								>
-									<Tooltip>
-										<TooltipTrigger asChild>
-											<div className="flex items-center">
-												<PackageSearch className="size-4 mr-1" />
-												{scanT(t, "scan.actions.checkouting", "Checkouting")}
-											</div>
-										</TooltipTrigger>
-										<TooltipPrimitive.Portal>
-											<TooltipContent sideOffset={5} className="z-[60]">
-												<p>
-													{scanT(
-														t,
-														"scan.actions.checkoutLogsTooltip",
-														"Open checkout build logs",
-													)}
-												</p>
-											</TooltipContent>
-										</TooltipPrimitive.Portal>
-									</Tooltip>
-								</Button>
-							) : (
-								<DialogAction
-									title={
-										isCheckouted
-											? scanT(t, "scan.actions.recheckoutTitle", "Recheckout")
-											: scanT(t, "scan.actions.checkoutTitle", "Checkout")
-									}
-									description={
-										isCheckouted
-											? scanT(
-													t,
-													"scan.actions.recheckoutDescription",
-													"Checkout image already exists. Recheckout image?",
-												)
-											: scanT(
-													t,
-													"scan.actions.checkoutDescription",
-													"Generate scan Dockerfile and build a checkout image?",
-												)
-									}
-									type="default"
-									onClick={async () => {
-										setCheckoutLogs("");
-										setCheckoutId(null);
-										setCheckoutFinalized(true);
-										await checkout({
-											applicationId: applicationId,
-										})
-											.then((result) => {
-												setCheckoutId(result.checkoutId);
-												setCheckoutFinalized(false);
-												setCheckoutModalOpen(true);
-											})
-											.catch((error) => {
-												const message =
-													error instanceof Error
-														? error.message
-														: scanT(t, "scan.actions.checkoutFailed", "Checkout failed");
-												setCheckoutLogs(message);
-												setCheckoutFinalized(true);
-												toast.error(
-													scanT(
-														t,
-														"scan.actions.checkoutBuildError",
-														"Error during checkout build",
-													),
-												);
-											});
-									}}
-								>
-									<Button
-										variant="secondary"
-										isLoading={isCheckingOut}
-										className="flex items-center gap-1.5 group focus-visible:ring-2 focus-visible:ring-offset-2"
-									>
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<div className="flex items-center">
-													<PackageSearch className="size-4 mr-1" />
-													{isCheckouted
-														? scanT(t, "scan.actions.recheckout", "Recheckout")
-														: scanT(t, "scan.actions.checkout", "Checkout")}
-												</div>
-											</TooltipTrigger>
-											<TooltipPrimitive.Portal>
-												<TooltipContent sideOffset={5} className="z-[60]">
-													<p>
-														{isCheckouted
-															? scanT(
-																	t,
-																	"scan.actions.recheckoutTooltip",
-																	"Checkout image already exists; click to recheckout",
-																)
-															: scanT(
-																	t,
-																	"scan.actions.checkoutTooltip",
-																	"Generate Dockerfile and build checkout image",
-																)}
-													</p>
-												</TooltipContent>
-											</TooltipPrimitive.Portal>
-										</Tooltip>
-									</Button>
-								</DialogAction>
-							)
+							<CheckoutImageAction
+								target={{ applicationId }}
+								onCheckoutComplete={async () => {
+									await refetch();
+								}}
+							/>
 						) : (
 							<DialogAction
 								title="Stop Application"
@@ -598,18 +396,6 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 					</div>
 				</CardContent>
 			</Card>
-			<CheckoutLogModal
-				open={checkoutModalOpen}
-				onOpenChange={setCheckoutModalOpen}
-				title={scanT(t, "scan.actions.checkoutBuildLogs", "Checkout Build Logs")}
-				description={scanT(
-					t,
-					"scan.actions.checkoutBuildLogsDescription",
-					"Docker build output for scan checkout image",
-				)}
-				logs={checkoutLogs}
-				isLoading={isCheckouting && !checkoutLogs}
-			/>
 			<ShowProviderForm applicationId={applicationId} />
 			<ShowBuildChooseForm applicationId={applicationId} />
 		</>

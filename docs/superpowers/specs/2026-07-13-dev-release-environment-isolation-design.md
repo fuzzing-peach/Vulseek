@@ -39,7 +39,8 @@ Release resources use the `vulseek-release-*` namespace:
 - Redis: `vulseek-redis-release`
 - Traefik: `vulseek-traefik-release`
 - Persistent volumes use release-specific names.
-- Default scan context: `<repository>/vulseek-data-release`
+- Default scan context: `<repository>/vulseek-data-release` (the existing
+  release data directory is renamed in place; its contents are preserved)
 
 The Vulseek application connects to PostgreSQL and Redis by internal Swarm DNS
 name and container port. It must not use the other environment's service name.
@@ -110,4 +111,3 @@ Verification starts both environments concurrently and confirms:
 5. Scan context writes appear only in the selected environment directory.
 6. Stopping either environment leaves all services in the other running.
 7. Help text and deployment documentation no longer reference Docker Compose.
-

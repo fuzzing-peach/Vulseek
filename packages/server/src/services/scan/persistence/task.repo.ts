@@ -14,6 +14,7 @@ import {
 } from "../artifacts/contracts/domain-object.contract";
 import { createShortTaskId } from "../task-id";
 import type { AnalysisResult, TriageResult, VerificationResult } from "../types";
+import { upsertCandidateResultProjectionTx } from "./candidate-result-projection.repo";
 import { readCandidateIdFromTaskInputArtifact } from "./task-artifact-resolver";
 
 const CANDIDATE_PRODUCER_STAGE_NAMES = new Set([
@@ -402,6 +403,165 @@ export const listTasksByScanJobAndStatusesRepo = async (input: {
 		)
 		.orderBy(desc(tasks.updatedAt));
 
+export const listRunningTaskRuntimeMetadataRepo = async (scanJobId: string) =>
+	await db
+		.select({
+			taskId: tasks.taskId,
+			scanJobId: tasks.scanJobId,
+			stageName: tasks.stageName,
+			name: tasks.name,
+			status: tasks.status,
+			containerName: tasks.containerName,
+			threadId: tasks.threadId,
+			agentProfile: tasks.agentProfile,
+			updatedAt: tasks.updatedAt,
+		})
+		.from(tasks)
+		.where(
+			and(
+				eq(tasks.scanJobId, scanJobId),
+				inArray(tasks.status, [
+					"launching",
+					"launched",
+					"starting",
+					"running",
+				]),
+			),
+		)
+		.orderBy(desc(tasks.updatedAt));
+
+export type RunningTaskViewRepoRow = {
+	id: string;
+	taskId: string;
+	title: string;
+	subtitle: string;
+	stage:
+		| "delta_scoping"
+		| "repository_scanning"
+		| "attack_surface_modeling"
+		| "module_scanning"
+		| "function_scanning"
+		| "analyzing"
+		| "criticizing"
+		| "verifying"
+		| "triaging";
+	startedAt: string | null;
+	updatedAt: string;
+};
+
+export const listRunningTaskViewsByScanJobIdRepo = async (
+	scanJobId: string,
+): Promise<RunningTaskViewRepoRow[]> => {
+	const result = await db.execute(sql`
+		SELECT
+			t."taskId",
+			t."name",
+			t."stageName",
+			t."startedAt",
+			t."updatedAt",
+			vc."title" AS "candidateTitle",
+			vc."filePath" AS "candidateFilePath",
+			vc."line" AS "candidateLine",
+			vc."vulnerabilityType" AS "candidateVulnerabilityType",
+			t."input"->>'moduleName' AS "moduleName",
+			t."input"->>'moduleId' AS "moduleId",
+			t."input"->'module'->>'name' AS "moduleObjectName",
+			t."input"->'module'->>'moduleId' AS "moduleObjectId",
+			t."input"->>'targetName' AS "targetName",
+			t."input"->>'targetId' AS "targetId",
+			t."input"->'target'->>'targetName' AS "targetObjectName",
+			t."input"->'target'->>'targetId' AS "targetObjectId",
+			t."input"->>'functionName' AS "functionName",
+			t."input"->>'functionId' AS "functionId",
+			t."input"->'function'->>'functionName' AS "functionObjectName",
+			t."input"->'function'->>'functionId' AS "functionObjectId",
+			t."input"->>'filePath' AS "filePath",
+			t."input"->>'line' AS "line",
+			t."input"->'target'->>'filePath' AS "targetFilePath",
+			t."input"->'target'->>'line' AS "targetLine",
+			t."input"->'function'->>'filePath' AS "functionFilePath",
+			t."input"->'function'->>'line' AS "functionLine",
+			t."input"->'module'->>'name' AS "functionModuleName",
+			t."input"->'target'->>'moduleName' AS "targetModuleName",
+			t."input"->'function'->>'moduleName' AS "functionModuleNameNested"
+		FROM "tasks" t
+		LEFT JOIN "vulnerability_candidates" vc
+			ON vc."scanJobId" = t."scanJobId"
+			AND vc."vulnerabilityCandidateId" = t."vulnerabilityCandidateId"
+		WHERE t."scanJobId" = ${scanJobId}
+			AND t."status" = 'running'
+		ORDER BY t."updatedAt" DESC
+	`);
+
+	return result.map((row) => {
+		const value = row as Record<string, unknown>;
+		const stageName = String(value.stageName || "");
+		const candidateTitle = String(value.candidateTitle || value.name || "");
+		const candidateLocation = [
+			value.candidateFilePath,
+			value.candidateLine,
+		].filter((part) => part !== null && part !== undefined && part !== "").join(":");
+		const candidateSubtitle = [
+			candidateLocation,
+			value.candidateVulnerabilityType,
+		].filter(Boolean).join(" · ") || "-";
+		const first = (...keys: string[]) =>
+			keys.map((key) => value[key]).find((item) => item !== null && item !== undefined && item !== "") ?? null;
+		const location = (filePath: unknown, line: unknown) =>
+			[filePath, line].filter((part) => part !== null && part !== undefined && part !== "").join(":");
+		const stage = (() => {
+			switch (stageName) {
+				case "delta-scope": return "delta_scoping" as const;
+				case "repository-scan": return "repository_scanning" as const;
+				case "attack-surface-model": return "attack_surface_modeling" as const;
+				case "module-scan": return "module_scanning" as const;
+				case "function-scan": return "function_scanning" as const;
+				case "analyze-finding": return "analyzing" as const;
+				case "critique-finding": return "criticizing" as const;
+				case "verify-finding": return "verifying" as const;
+				case "triage-finding": return "triaging" as const;
+				default: return null;
+			}
+		})();
+		if (!stage) {
+			return null;
+		}
+		let title = String(value.name || "");
+		let subtitle = "-";
+		if (stageName === "delta-scope") {
+			title = "Delta Scope";
+			subtitle = "Diff impact function scoping";
+		} else if (stageName === "repository-scan") {
+			title = "Repository Scanner";
+			subtitle = "Repository-wide planner and module partitioning";
+		} else if (stageName === "attack-surface-model") {
+			title = String(first("moduleName") || value.name || "");
+			subtitle = String(first("moduleId") || "-");
+		} else if (stageName === "module-scan") {
+			title = String(first("moduleName", "moduleObjectName") || value.name || "");
+			subtitle = String(first("moduleId", "moduleObjectId") || "-");
+		} else if (stageName === "function-scan") {
+			title = String(first("targetName", "targetId", "targetObjectName", "targetObjectId", "functionName", "functionId", "functionObjectName", "functionObjectId") || value.name || "");
+			subtitle = [
+				first("moduleName", "moduleObjectName", "targetModuleName", "functionModuleName", "functionModuleNameNested"),
+				location(first("filePath", "targetFilePath", "functionFilePath"), first("line", "targetLine", "functionLine")),
+			].filter(Boolean).join(" · ") || "-";
+		} else {
+			title = candidateTitle;
+			subtitle = candidateSubtitle;
+		}
+		return {
+			id: `${stageName}-${String(value.taskId)}`,
+			taskId: String(value.taskId),
+			title,
+			subtitle,
+			stage,
+			startedAt: value.startedAt ? String(value.startedAt) : null,
+			updatedAt: String(value.updatedAt || ""),
+		};
+	}).filter((row): row is RunningTaskViewRepoRow => row !== null);
+};
+
 export const listTaskStatusCountsByScanJobIdRepo = async (scanJobId: string) =>
 	await db
 		.select({
@@ -606,51 +766,45 @@ export const transitionTaskStatusRepo = async (input: {
 			: {}),
 	};
 
-	const updated = hasTokenUsagePatch(input.patch || {})
-		? await db.transaction(async (tx) => {
-				const previous = await tx
-					.select()
-					.from(tasks)
-					.where(
-						and(
-							eq(tasks.taskId, input.taskId),
-							inArray(tasks.status, input.from),
-						),
-					)
-					.limit(1)
-					.then((rows) => rows[0] || null);
-				if (!previous) {
-					return null;
-				}
-				const rows = await tx
-					.update(tasks)
-					.set(patch)
-					.where(
-						and(
-							eq(tasks.taskId, input.taskId),
-							inArray(tasks.status, input.from),
-						),
-					)
-					.returning();
-				const updatedTask = rows[0] || null;
-				if (!updatedTask) {
-					return null;
-				}
-				await applyScanJobTokenUsageDelta(
-					tx,
-					updatedTask.scanJobId,
-					tokenUsageDelta(previous, updatedTask),
-				);
-				return updatedTask;
-			})
-		: await db
-				.update(tasks)
-				.set(patch)
-				.where(
-					and(eq(tasks.taskId, input.taskId), inArray(tasks.status, input.from)),
-				)
-				.returning()
-				.then((rows) => rows[0] || null);
+	const updated = await db.transaction(async (tx) => {
+		const previous = await tx
+			.select()
+			.from(tasks)
+			.where(
+				and(
+					eq(tasks.taskId, input.taskId),
+					inArray(tasks.status, input.from),
+				),
+			)
+			.limit(1)
+			.then((rows) => rows[0] || null);
+		if (!previous) {
+			return null;
+		}
+		const rows = await tx
+			.update(tasks)
+			.set(patch)
+			.where(
+				and(
+					eq(tasks.taskId, input.taskId),
+					inArray(tasks.status, input.from),
+				),
+			)
+			.returning();
+		const updatedTask = rows[0] || null;
+		if (!updatedTask) {
+			return null;
+		}
+		await applyScanJobTokenUsageDelta(
+			tx,
+			updatedTask.scanJobId,
+			tokenUsageDelta(previous, updatedTask),
+		);
+		if (input.to === "completed" || input.to === "exited") {
+			await upsertCandidateResultProjectionTx(tx, updatedTask);
+		}
+		return updatedTask;
+	});
 
 	return updated;
 };

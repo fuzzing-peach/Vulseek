@@ -1464,6 +1464,13 @@
       "when": 1783441000000,
       "tag": "0208_user_username",
       "breakpoints": true
+    },
+    {
+      "idx": 209,
+      "version": "7",
+      "when": 1783442000000,
+      "tag": "0209_candidate_result_projection",
+      "breakpoints": true
     }
   ]
 }

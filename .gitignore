@@ -31,6 +31,9 @@ out/
 dist
 dist.root-owned.*
 .scan-runtime
+/vulseek-data/
+/vulseek-data-dev/
+/vulseek-data-release/
 
 # Local permission-recovery backups
 .node-modules-root-owned-backups/

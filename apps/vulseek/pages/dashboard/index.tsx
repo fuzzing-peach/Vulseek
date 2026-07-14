@@ -14,7 +14,6 @@ import Link from "next/link";
 import {
 	useEffect,
 	useRef,
-	useState,
 	type ComponentType,
 	type ReactElement,
 } from "react";
@@ -69,62 +68,6 @@ const heatmapLevelClass: Record<HomeHeatmapDay["level"], string> = {
 };
 
 const heatmapWeekdayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-type LiveScanSummary = {
-	activeJobCount?: number;
-	runningContainerCount?: number;
-	tokenSnapshot?: {
-		tasks?: Array<{ taskId: string }>;
-	};
-};
-
-const useLiveScanSummary = (enabled: boolean) => {
-	const [summary, setSummary] = useState<LiveScanSummary | null>(null);
-	useEffect(() => {
-		if (!enabled) {
-			setSummary(null);
-			return;
-		}
-		if (typeof window === "undefined") {
-			return;
-		}
-		let ws: WebSocket | null = null;
-		let disposed = false;
-		const connectTimer = window.setTimeout(() => {
-			if (disposed) return;
-			const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-			ws = new WebSocket(
-				`${protocol}//${window.location.host}/dashboard/monitoring/scan-stats`,
-			);
-			ws.onmessage = (event) => {
-				try {
-					const message = JSON.parse(event.data) as {
-						data?: LiveScanSummary;
-					};
-					if (message.data && !disposed) {
-						setSummary(message.data);
-					}
-				} catch {
-					if (!disposed) {
-						setSummary(null);
-					}
-				}
-			};
-			ws.onclose = () => {
-				if (!disposed) setSummary(null);
-			};
-			ws.onerror = () => {
-				if (!disposed) setSummary(null);
-			};
-		}, 0);
-		return () => {
-			disposed = true;
-			window.clearTimeout(connectTimer);
-			ws?.close();
-		};
-	}, [enabled]);
-	return summary;
-};
 
 const StatCard = (props: {
 	title: string;
@@ -212,21 +155,17 @@ const HeatmapCell = ({ day }: { day: HomeHeatmapDay }) => {
 };
 
 const DashboardHome = () => {
-	const { data: overview, isLoading } = api.scan.homeOverview.useQuery(
-		{
-			days: 365,
-		},
-	);
-	const shouldUseLiveSummary = Boolean(overview?.running.jobCount);
-	const liveSummary = useLiveScanSummary(shouldUseLiveSummary);
-	const runningJobCount =
-		liveSummary?.activeJobCount ?? overview?.running.jobCount ?? 0;
-	const runningTaskCount =
-		liveSummary?.tokenSnapshot?.tasks?.length ?? overview?.running.taskCount ?? 0;
-	const runningContainerCount =
-		liveSummary?.runningContainerCount ?? overview?.running.containerCount ?? 0;
+	const { data: summary, isLoading: isSummaryLoading } =
+		api.scan.homeSummary.useQuery();
+	const { data: activity } = api.scan.homeActivity.useQuery({ days: 365 });
+	const { data: workload } = api.scan.homeWorkload.useQuery(undefined, {
+		refetchInterval: 5000,
+	});
+	const runningJobCount = workload?.jobCount ?? 0;
+	const runningTaskCount = workload?.taskCount ?? 0;
+	const runningContainerCount = workload?.containerCount ?? 0;
 	const heatmapDays = buildHomeHeatmapDays({
-		days: overview?.dailyActivity || [],
+		days: activity?.days || [],
 		dayCount: 365,
 	});
 	const heatmapWeeks = groupHomeHeatmapWeeks(heatmapDays);
@@ -281,25 +220,31 @@ const DashboardHome = () => {
 				<div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
 					<StatCard
 						title="Projects"
-						value={isLoading ? "-" : formatNumber(overview?.projectCount)}
+						value={isSummaryLoading ? "-" : formatNumber(summary?.projectCount)}
 						description="Projects in the active organization"
 						icon={Folder}
 					/>
 					<StatCard
 						title="Subjects"
-						value={isLoading ? "-" : formatNumber(overview?.subjectCount)}
+						value={isSummaryLoading ? "-" : formatNumber(summary?.subjectCount)}
 						description="Applications and compose targets"
 						icon={Boxes}
 					/>
 					<StatCard
 						title="Tokens"
-						value={isLoading ? "-" : formatTokensInMillions(overview?.totalTokens)}
+						value={
+							isSummaryLoading ? "-" : formatTokensInMillions(summary?.totalTokens)
+						}
 						description="Total scan token pressure in millions"
 						icon={Zap}
 					/>
 					<StatCard
 						title="Security Issues"
-						value={isLoading ? "-" : formatNumber(overview?.securityIssueCount)}
+						value={
+							isSummaryLoading
+								? "-"
+								: formatNumber(summary?.securityIssueCount)
+						}
 						description="Triage results marked as security issues"
 						icon={ShieldCheck}
 					/>
@@ -352,9 +297,9 @@ const DashboardHome = () => {
 							</CardDescription>
 						</CardHeader>
 						<CardContent>
-							{overview?.running.jobs.length ? (
+							{workload?.jobs.length ? (
 								<div className="space-y-3">
-									{overview.running.jobs.map((job) => (
+									{workload.jobs.map((job) => (
 										<Link
 											key={job.scanJobId}
 											href={job.href}
@@ -516,7 +461,8 @@ export async function getServerSideProps(ctx: GetServerSidePropsContext) {
 	});
 
 	await Promise.all([
-		helpers.scan.homeOverview.prefetch({ days: 365 }),
+			helpers.scan.homeSummary.prefetch(),
+			helpers.scan.homeActivity.prefetch({ days: 365 }),
 		helpers.user.get.prefetch(),
 		helpers.settings.isCloud.prefetch(),
 	]);

@@ -50,12 +50,9 @@ RUN printf '%s\n' 'int main(void){char a[1]; a[0]=0; return 0;}' > /tmp/vulseek-
 
 RUN sed -i 's|http://mirrors.ustc.edu.cn/ubuntu/|https://mirrors.ustc.edu.cn/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
 
-# Rust toolchain for LibAFL fuzzers.
-# LibAFL main currently declares rust-version = "1.89" in crates/libafl/Cargo.toml.
-# The Tsinghua rustup mirror exposes the stable channel; as of 2026-05-15
-# stable resolves to rustc 1.95.0, which satisfies LibAFL's requirement.
 ENV PATH="/root/.cargo/bin:$PATH"
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+RUN --mount=type=cache,id=vulseek-rustup-downloads,target=/root/.rustup/downloads,sharing=locked \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" \
     && mkdir -p "${CARGO_HOME}" \
     && printf '%s\n' \
@@ -70,7 +67,6 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       > "${CARGO_HOME}/config.toml"
 RUN rustc --version && cargo --version
 
-# Node.js (LTS)
 RUN --mount=type=cache,id=vulseek-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=vulseek-apt-lists,target=/var/lib/apt/lists,sharing=locked \
     curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
@@ -78,14 +74,12 @@ RUN --mount=type=cache,id=vulseek-apt-cache,target=/var/cache/apt,sharing=locked
     && node --version \
     && npm --version
 
-# Semgrep CLI
 RUN python3 -m pip config set global.index-url "$PIP_INDEX_URL" \
     && python3 -m pip config set global.trusted-host "$PIP_TRUSTED_HOST"
 RUN --mount=type=cache,id=vulseek-pip-cache,target=/root/.cache/pip,sharing=locked \
     PIPX_BIN_DIR=/usr/local/bin pipx install semgrep \
     && env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy semgrep --version
 
-# Vulseek parsing helpers
 RUN --mount=type=cache,id=vulseek-pip-cache,target=/root/.cache/pip,sharing=locked \
     python3 -m venv /opt/vulseek-venv \
     && /opt/vulseek-venv/bin/pip install --upgrade pip \
@@ -97,8 +91,6 @@ RUN --mount=type=cache,id=vulseek-pip-cache,target=/root/.cache/pip,sharing=lock
 
 ENV PATH="/opt/vulseek-venv/bin:$PATH"
 
-# LLM Agent CLIs
-# Keep Claude non-fatal to avoid blocking build if registry/network fails.
 RUN --mount=type=cache,id=vulseek-npm-cache,target=/root/.npm,sharing=locked \
     npm config set registry https://registry.npmmirror.com \
     && npm config get registry
@@ -131,7 +123,6 @@ RUN --mount=type=cache,id=vulseek-npm-cache,target=/root/.npm,sharing=locked \
     && sandbox-agent install-agent claude
 ENV SANDBOX_AGENT_REQUIRE_PREINSTALL=1
 
-# Serena
 ENV PATH="/root/.local/bin:$PATH" \
     UV_TOOL_BIN_DIR="/usr/local/bin"
 RUN --mount=type=cache,id=vulseek-uv-cache,target=/root/.cache/uv,sharing=locked \
@@ -147,7 +138,6 @@ RUN --mount=type=cache,id=vulseek-uv-cache,target=/root/.cache/uv,sharing=locked
     && sed -i 's#^project_serena_folder_location:.*#project_serena_folder_location: "/scan-context/.serena"#' /root/.serena/serena_config.yml \
     && serena --help >/dev/null
 
-# clangd wrapper: solidlsp hardcodes --background-index; this wrapper strips it and forces --background-index=0
 RUN echo '#!/bin/bash' > /usr/local/bin/clangd-wrapper \
     && echo 'args=()' >> /usr/local/bin/clangd-wrapper \
     && echo 'for arg in "$@"; do' >> /usr/local/bin/clangd-wrapper \
@@ -157,11 +147,13 @@ RUN echo '#!/bin/bash' > /usr/local/bin/clangd-wrapper \
     && echo 'exec /usr/bin/clangd --background-index=0 "${args[@]}"' >> /usr/local/bin/clangd-wrapper \
     && chmod +x /usr/local/bin/clangd-wrapper
 
-# CodeQL CLI
-RUN mkdir -p /opt/codeql \
-    && curl -L "https://github.com/github/codeql-cli-binaries/releases/download/v${CODEQL_VERSION}/codeql-linux64.zip" -o /tmp/codeql.zip \
-    && unzip -q /tmp/codeql.zip -d /opt \
-    && rm -f /tmp/codeql.zip \
+RUN --mount=type=cache,id=vulseek-codeql-downloads,target=/root/.cache/vulseek-codeql,sharing=locked \
+    mkdir -p /opt/codeql \
+    && if [ ! -s "/root/.cache/vulseek-codeql/codeql-linux64-${CODEQL_VERSION}.zip" ]; then \
+      curl -L "https://github.com/github/codeql-cli-binaries/releases/download/v${CODEQL_VERSION}/codeql-linux64.zip" \
+        -o "/root/.cache/vulseek-codeql/codeql-linux64-${CODEQL_VERSION}.zip"; \
+    fi \
+    && unzip -q "/root/.cache/vulseek-codeql/codeql-linux64-${CODEQL_VERSION}.zip" -d /opt \
     && ln -sf /opt/codeql/codeql /usr/local/bin/codeql
 RUN codeql pack download codeql/cpp-all
 
@@ -194,106 +186,6 @@ RUN --mount=type=cache,id=vulseek-cargo-registry,target=/root/.cargo/registry,sh
     && install -m 0755 /tmp/cargo-target/release/codex-acp /tmp/vulseek-codex-acp \
     && test -x /tmp/vulseek-codex-acp
 
-FROM ubuntu:24.04 AS repository-source
-
-ARG GIT_URL="<GIT_URL>"
-ARG GIT_BRANCH="<GIT_BRANCH>"
-ARG GIT_TAG=""
-ARG ENABLE_SUBMODULES="false"
-ARG POST_CHECKOUT_SCRIPT=""
-ARG GIT_DEPTH="10"
-ARG GIT_RETRY_ATTEMPTS="5"
-ARG GIT_RETRY_DELAY_SECONDS="3"
-ARG DEBIAN_FRONTEND=noninteractive
-ARG HTTP_PROXY
-ARG HTTPS_PROXY
-ARG NO_PROXY
-ARG http_proxy
-ARG https_proxy
-ARG no_proxy
-
-ENV HTTP_PROXY=$HTTP_PROXY \
-    HTTPS_PROXY=$HTTPS_PROXY \
-    NO_PROXY=$NO_PROXY \
-    http_proxy=$http_proxy \
-    https_proxy=$https_proxy \
-    no_proxy=$no_proxy
-
-RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.ustc.edu.cn/ubuntu/|g; s|http://security.ubuntu.com/ubuntu/|http://mirrors.ustc.edu.cn/ubuntu/|g' /etc/apt/sources.list.d/ubuntu.sources
-
-RUN rm -f /etc/apt/apt.conf.d/docker-clean \
-    && printf '%s\n' 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
-      > /etc/apt/apt.conf.d/keep-cache
-
-RUN --mount=type=cache,id=vulseek-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=vulseek-apt-lists,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates git \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /workspace
-
-RUN set -eux; \
-    git init repo; \
-    cd repo; \
-    git remote add origin "${GIT_URL}"; \
-    git_retry() { \
-      attempt=1; \
-      while true; do \
-        "$@" && return 0; \
-        rc="$?"; \
-        if [ "$rc" = "2" ] && [ "${1:-}" = "git" ] && [ "${2:-}" = "ls-remote" ]; then \
-          return "$rc"; \
-        fi; \
-        if [ "$attempt" -ge "${GIT_RETRY_ATTEMPTS}" ]; then \
-          return "$rc"; \
-        fi; \
-        sleep_for="$((GIT_RETRY_DELAY_SECONDS * attempt))"; \
-        printf '%s\n' "[checkout] git command failed with exit ${rc}; retrying in ${sleep_for}s (${attempt}/${GIT_RETRY_ATTEMPTS}): $*"; \
-        sleep "${sleep_for}"; \
-        attempt="$((attempt + 1))"; \
-      done; \
-    }; \
-    git_ref_exists() { \
-      git_retry git ls-remote --exit-code "$@" >/dev/null; \
-    }; \
-    if [ -n "${GIT_TAG}" ]; then \
-      printf '%s\n' "[checkout] using explicit tag: ${GIT_TAG}"; \
-      git_retry git fetch --progress --depth=1 origin "refs/tags/${GIT_TAG}:refs/tags/${GIT_TAG}"; \
-      git checkout --detach "refs/tags/${GIT_TAG}"; \
-    elif [ -n "${GIT_BRANCH}" ] && git_ref_exists --heads origin "${GIT_BRANCH}"; then \
-      printf '%s\n' "[checkout] using explicit branch: ${GIT_BRANCH}"; \
-      git_retry git fetch --progress --depth="${GIT_DEPTH}" origin "refs/heads/${GIT_BRANCH}:refs/remotes/origin/${GIT_BRANCH}"; \
-      git checkout -B "${GIT_BRANCH}" "refs/remotes/origin/${GIT_BRANCH}"; \
-    elif [ -n "${GIT_BRANCH}" ] && git_ref_exists --tags origin "${GIT_BRANCH}"; then \
-      printf '%s\n' "[checkout] branch name matched a tag, using tag: ${GIT_BRANCH}"; \
-      git_retry git fetch --progress --depth=1 origin "refs/tags/${GIT_BRANCH}:refs/tags/${GIT_BRANCH}"; \
-      git checkout --detach "refs/tags/${GIT_BRANCH}"; \
-    else \
-      latest_tag="$(git_retry git ls-remote --tags --refs origin 'refs/tags/*' \
-        | awk '{ sub("refs/tags/", "", $2); print $2 }' \
-        | sort -V \
-        | tail -n 1)"; \
-      if [ -n "${latest_tag}" ]; then \
-        printf '%s\n' "[checkout] no explicit ref selected; using latest discovered tag: ${latest_tag}"; \
-        git_retry git fetch --progress --depth=1 origin "refs/tags/${latest_tag}:refs/tags/${latest_tag}"; \
-        git checkout --detach "refs/tags/${latest_tag}"; \
-      else \
-        printf '%s\n' "[checkout] no tags found; using remote HEAD with depth ${GIT_DEPTH}"; \
-        git_retry git fetch --progress --depth="${GIT_DEPTH}" origin HEAD; \
-        git checkout --detach FETCH_HEAD; \
-      fi; \
-    fi; \
-    if [ "${ENABLE_SUBMODULES}" = "true" ]; then \
-      git_retry git submodule update --init --recursive --depth=1; \
-    fi; \
-    if [ -n "${POST_CHECKOUT_SCRIPT}" ]; then \
-      printf '%s\n' "[checkout] running post-checkout script"; \
-      printf '%s\n' "${POST_CHECKOUT_SCRIPT}" > /tmp/vulseek-post-checkout.sh; \
-      bash /tmp/vulseek-post-checkout.sh; \
-      rm -f /tmp/vulseek-post-checkout.sh; \
-    fi
-
 FROM tools AS final
 
 COPY --from=codex-acp-builder /tmp/vulseek-codex-acp /usr/local/bin/vulseek-codex-acp
@@ -301,10 +193,11 @@ RUN install -m 0755 /usr/local/bin/vulseek-codex-acp \
       /root/.local/share/sandbox-agent/bin/agent_processes/codex-acp \
     && test -x /root/.local/share/sandbox-agent/bin/agent_processes/codex-acp
 
+ARG VULSEEK_TOOLS_VERSION
+ARG VULSEEK_TOOLS_BUILT_AT
+LABEL com.fuzzing-peach.vulseek.scan-tools.version="${VULSEEK_TOOLS_VERSION}" \
+      com.fuzzing-peach.vulseek.scan-tools.built-at="${VULSEEK_TOOLS_BUILT_AT}" \
+      com.fuzzing-peach.vulseek.scan-tools.format="1"
+
 WORKDIR /workspace
-
-COPY --from=repository-source /workspace/repo /workspace/repo
-
-WORKDIR /workspace/repo
-
 CMD ["/bin/bash"]

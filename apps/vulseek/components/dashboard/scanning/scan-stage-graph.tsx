@@ -42,7 +42,8 @@ import { Switch } from "@/components/ui/switch";
 import { api, type RouterOutputs } from "@/utils/api";
 import { formatScanStageLabel, scanT } from "./scan-i18n";
 
-type StageGraph = RouterOutputs["scan"]["stageGraph"];
+type StageGraph = RouterOutputs["scan"]["jobPipeline"];
+type QueueCount = RouterOutputs["scan"]["jobQueueCounts"]["queues"][number];
 type StageGraphNode = StageGraph["nodes"][number];
 type RuntimeStageSetting = {
 	disabled?: boolean;
@@ -1336,26 +1337,61 @@ export const FullScanStageGraphPreview = ({
 	);
 };
 
-export const ScanStageGraph = ({ scanJobId }: { scanJobId: string }) => {
+export const ScanStageGraph = ({
+	scanJobId,
+	queueCounts,
+	scanRuntimeSettings,
+}: {
+	scanJobId: string;
+	queueCounts?: QueueCount[];
+	scanRuntimeSettings?: ScanRuntimeSettingsDraft | null;
+}) => {
 	const utils = api.useUtils();
 	const {
 		data: graph,
 		isLoading,
 		error,
-	} = api.scan.stageGraph.useQuery(
+	} = api.scan.jobPipeline.useQuery(
 		{ scanJobId },
-		{ enabled: !!scanJobId, refetchInterval: 1000 },
-	);
-	const { data: scanJob } = api.scan.one.useQuery(
-		{ scanJobId },
-		{ enabled: !!scanJobId, refetchInterval: 1000 },
+		{
+			enabled: !!scanJobId,
+			staleTime: Number.POSITIVE_INFINITY,
+			refetchOnWindowFocus: false,
+		},
 	);
 	const { data: agentProfiles } = api.ai.getAgentProfiles.useQuery();
 	const { mutateAsync: updateRuntimeSettings } =
 		api.scan.updateRuntimeSettings.useMutation();
-	const scanRuntimeSettings =
-		(scanJob as unknown as { scanRuntimeSettings?: ScanRuntimeSettingsDraft })
-			?.scanRuntimeSettings ?? {};
+	const graphWithQueueCounts = useMemo(() => {
+		if (!graph) return graph;
+		const queueByStage = new Map(
+			(queueCounts ?? []).map((queue) => [queue.stageName, queue]),
+		);
+		return {
+			...graph,
+			nodes: graph.nodes.map((node) => {
+				const queue = queueByStage.get(node.stageName);
+				return {
+					...node,
+					counts: queue
+						? {
+								waiting: queue.waitingCount,
+								queued: queue.queuedCount,
+								launching: queue.launchingCount,
+								launched: queue.launchedCount,
+								starting: queue.startingCount,
+								running: queue.runningCount,
+								completed: queue.completedCount,
+								failed: queue.failedCount,
+								exited: queue.exitedCount,
+								total: queue.totalCount,
+								pending: queue.pendingCount,
+							}
+						: emptyStageCounts(),
+				};
+			}),
+		};
+	}, [graph, queueCounts]);
 	const handleStageSettingSave = async (
 		stageName: string,
 		setting: RuntimeStageSetting,
@@ -1372,14 +1408,14 @@ export const ScanStageGraph = ({ scanJobId }: { scanJobId: string }) => {
 			scanRuntimeSettings: nextSettings,
 		});
 		await Promise.all([
-			utils.scan.one.invalidate({ scanJobId }),
-			utils.scan.stageGraph.invalidate({ scanJobId }),
-			utils.scan.statusView.invalidate({ scanJobId }),
+			utils.scan.jobOverview.invalidate({ scanJobId }),
+			utils.scan.jobPipeline.invalidate({ scanJobId }),
+			utils.scan.jobQueueCounts.invalidate({ scanJobId }),
 		]);
 	};
 	return (
 		<ScanStageGraphPanel
-			graph={graph}
+			graph={graphWithQueueCounts}
 			isLoading={isLoading}
 			error={error}
 			scanRuntimeSettings={scanRuntimeSettings}

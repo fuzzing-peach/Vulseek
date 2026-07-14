@@ -153,7 +153,7 @@ lsof -i :23000
 lsof -i :25432
 lsof -i :26379
 
-# 或修改 docker-compose.dev.yml 中的端口映射
+# 或通过 VULSEEK_DEV_PORT、POSTGRES_DEV_PORT、REDIS_DEV_PORT 覆盖默认端口
 ```
 
 ### 服务启动失败
@@ -226,4 +226,3 @@ lsof -i :26379
 **祝开发愉快！** 🎉
 
 如有问题，请查看 [DEVELOPMENT.md](./DEVELOPMENT.md) 或提交 Issue。
-

@@ -8,6 +8,8 @@ import {
 	findCandidateTaskLineage,
 	findCheckoutImageStatus,
 	findCheckoutStatus,
+	findCheckoutToolsBuildStatus,
+	findCheckoutToolsStatus,
 	findComposeById,
 	findRunningCheckoutTask,
 	findScanJobById,
@@ -16,7 +18,7 @@ import {
 	getScanPipelineYaml,
 	findScanJobSandboxAgentSession,
 	findScanJobStageGraph,
-	findScanJobStatusView,
+	findScanJobOrganizationId,
 	findScanJobTerminalTasksPage,
 	findLatestScanEvaluationResult,
 	findScanJobResultSummary,
@@ -26,6 +28,9 @@ import {
 	findVulnerabilityCandidateWithLatestAnalysisResultById,
 	getAgentProfileById,
 	getScanHomeOverview,
+	getScanHomeOverviewActivity,
+	getScanHomeOverviewSummary,
+	getScanHomeOverviewWorkload,
 	listScanEvaluationResults,
 	listCandidateTags,
 	listScanJobDirectory,
@@ -43,6 +48,8 @@ import {
 	startCandidateReviewContainer,
 	startCandidateVerification,
 	startCheckoutScanEnvironment,
+	startCheckoutToolsBuild,
+	canRebuildCheckoutTools,
 	createScanEvaluationResult,
 	scanEvaluationConfigSchema,
 	syncFullScanTasksFromArtifacts,
@@ -67,6 +74,7 @@ import {
 import type { ScanQueueJob } from "@/server/queues/queue-types";
 import { scanEvaluationsQueue, scansQueue } from "@/server/queues/queueSetup";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
+import { jobRuntimeStatusStore } from "../../scan/job-runtime-cache";
 
 const apiFindVulnerabilityCandidatesPageByScanJob = z
 	.object({
@@ -96,6 +104,25 @@ const parseCsvFilter = (value: string) =>
 		.split(",")
 		.map((item) => item.trim())
 		.filter(Boolean);
+
+const authorizeScanJobRuntimeAccess = async (
+	scanJobId: string,
+	activeOrganizationId: string | null | undefined,
+) => {
+	const organizationId = await findScanJobOrganizationId(scanJobId);
+	if (!organizationId) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Invalid scan job target",
+		});
+	}
+	if (organizationId !== activeOrganizationId) {
+		throw new TRPCError({
+			code: "UNAUTHORIZED",
+			message: "You are not authorized to access this scan job",
+		});
+	}
+};
 
 const apiUpdateCandidateMetadata = z.object({
 	vulnerabilityCandidateId: z.string().min(1),
@@ -157,6 +184,47 @@ export const scanRouter = createTRPCRouter({
 		yaml: getScanPipelineYaml(),
 	})),
 
+	homeSummary: protectedProcedure.query(async ({ ctx }) => {
+		if (!ctx.session.activeOrganizationId) {
+			throw new TRPCError({
+				code: "UNAUTHORIZED",
+				message: "No active organization selected",
+			});
+		}
+		return await getScanHomeOverviewSummary(ctx.session.activeOrganizationId);
+	}),
+
+	homeActivity: protectedProcedure
+		.input(
+			z
+				.object({
+					days: z.number().int().min(1).max(366).optional(),
+				})
+				.optional(),
+		)
+		.query(async ({ input, ctx }) => {
+			if (!ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "No active organization selected",
+				});
+			}
+			return await getScanHomeOverviewActivity({
+				organizationId: ctx.session.activeOrganizationId,
+				days: input?.days,
+			});
+		}),
+
+	homeWorkload: protectedProcedure.query(async ({ ctx }) => {
+		if (!ctx.session.activeOrganizationId) {
+			throw new TRPCError({
+				code: "UNAUTHORIZED",
+				message: "No active organization selected",
+			});
+		}
+		return await getScanHomeOverviewWorkload(ctx.session.activeOrganizationId);
+	}),
+
 	homeOverview: protectedProcedure
 		.input(
 			z
@@ -177,6 +245,30 @@ export const scanRouter = createTRPCRouter({
 				days: input?.days,
 			});
 		}),
+
+	checkoutToolsStatus: protectedProcedure.query(async ({ ctx }) =>
+		await findCheckoutToolsStatus(canRebuildCheckoutTools(ctx.user.role)),
+	),
+
+	rebuildCheckoutTools: protectedProcedure.mutation(async ({ ctx }) => {
+		if (!canRebuildCheckoutTools(ctx.user.role)) {
+			throw new TRPCError({
+				code: "UNAUTHORIZED",
+				message: "You are not authorized to rebuild checkout tools",
+			});
+		}
+		const build = await startCheckoutToolsBuild();
+		return {
+			buildId: build.buildId,
+			version: build.version,
+			imageTag: build.imageTag,
+			status: build.status,
+		};
+	}),
+
+	checkoutToolsBuildStatus: protectedProcedure
+		.input(z.object({ buildId: z.string().min(1) }).required())
+		.query(({ input }) => findCheckoutToolsBuildStatus(input.buildId)),
 
 	checkout: protectedProcedure
 		.input(apiCheckoutScanEnvironment)
@@ -1575,34 +1667,44 @@ export const scanRouter = createTRPCRouter({
 			};
 		}),
 
-	statusView: protectedProcedure
+	jobOverview: protectedProcedure
 		.input(apiFindOneScanJob)
 		.query(async ({ input, ctx }) => {
-			const scanJob = await findScanJobById(input.scanJobId);
-			let organizationId: string | undefined;
-			if (scanJob.applicationId) {
-				const application = await findApplicationById(scanJob.applicationId);
-				organizationId = application.environment.project.organizationId;
-			}
-			if (scanJob.composeId) {
-				const compose = await findComposeById(scanJob.composeId);
-				organizationId = compose.environment.project.organizationId;
-			}
-			if (!organizationId) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Invalid scan job target",
-				});
-			}
+			await authorizeScanJobRuntimeAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
+			return await jobRuntimeStatusStore.readOverview(input.scanJobId);
+		}),
 
-			if (organizationId !== ctx.session.activeOrganizationId) {
-				throw new TRPCError({
-					code: "UNAUTHORIZED",
-					message: "You are not authorized to access status for this scan job",
-				});
-			}
+	jobRunningTasks: protectedProcedure
+		.input(apiFindOneScanJob)
+		.query(async ({ input, ctx }) => {
+			await authorizeScanJobRuntimeAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
+			return await jobRuntimeStatusStore.readRunningTasks(input.scanJobId);
+		}),
 
-			return await findScanJobStatusView(input.scanJobId);
+	jobQueueCounts: protectedProcedure
+		.input(apiFindOneScanJob)
+		.query(async ({ input, ctx }) => {
+			await authorizeScanJobRuntimeAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
+			return await jobRuntimeStatusStore.readQueueCounts(input.scanJobId);
+		}),
+
+	jobPipeline: protectedProcedure
+		.input(apiFindOneScanJob)
+		.query(async ({ input, ctx }) => {
+			await authorizeScanJobRuntimeAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
+			return await jobRuntimeStatusStore.readPipeline(input.scanJobId);
 		}),
 
 	terminalTasks: protectedProcedure

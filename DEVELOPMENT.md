@@ -113,11 +113,11 @@ chmod +x dev.sh
 
 ### 启动调试模式
 
-修改 `docker-compose.dev.yml` 中的 CMD，或在容器内运行：
+进入开发服务容器后运行：
 
 ```bash
 # 进入容器
-docker-compose -f docker-compose.dev.yml exec vulseek-dev bash
+./dev.sh shell vulseek
 
 # 使用调试模式启动（容器内的端口仍为 9229，映射到宿主机 29229）
 node --inspect=0.0.0.0:9229 dist/index.js
@@ -201,18 +201,11 @@ docker service rm vulseek-dev
 
 ## ⚙️ 环境变量
 
-开发环境会从 `.env.production` 读取环境变量。你可以创建 `.env.development` 并修改 `docker-compose.dev.yml` 的挂载配置。
+开发环境从 `env.development` 读取环境变量。首次运行 `./dev.sh env` 时会根据 `env.development.example` 创建该文件。
 
 ```bash
-# 复制并修改环境变量
-cp .env.production .env.development
-```
-
-然后修改 `docker-compose.dev.yml`:
-
-```yaml
-volumes:
-  - ./.env.development:/app/.env  # 改为使用开发环境配置
+# 创建或编辑开发环境变量
+./dev.sh env
 ```
 
 ## 🔍 故障排查
@@ -228,24 +221,25 @@ WATCHPACK_POLLING=true
 
 ### 问题：端口已被占用
 
-**解决方案**: 修改 `docker-compose.dev.yml` 中的端口映射：
-```yaml
-ports:
-  - "23001:3000"  # 将主机端口改为 23001
+**解决方案**: 使用开发环境端口变量覆盖默认值：
+```bash
+VULSEEK_DEV_PORT=23001 POSTGRES_DEV_PORT=25433 ./dev.sh start
 ```
 
 ### 问题：node_modules 权限问题
 
 **解决方案**:
 ```bash
-# 删除卷并重新构建
-docker-compose -f docker-compose.dev.yml down -v
-docker-compose -f docker-compose.dev.yml up --build
+# 删除开发环境依赖卷并重新构建
+./dev.sh stop
+docker volume rm vulseek_dev_root_node_modules vulseek_dev_app_node_modules vulseek_dev_server_node_modules
+./dev.sh build
+./dev.sh start
 ```
 
 ### 问题：Docker socket 权限被拒绝
 
-**解决方案**: 确保容器以 privileged 模式运行（已在 docker-compose.dev.yml 中配置）
+**解决方案**: 确保当前用户可以访问 `/var/run/docker.sock`，并确认 `dev.sh` 创建的服务已挂载该 socket。
 
 ## 🎯 生产环境 vs 开发环境
 
@@ -269,4 +263,3 @@ docker-compose -f docker-compose.dev.yml up --build
 ## 🤝 贡献
 
 如果你在开发过程中遇到问题或有改进建议，欢迎提交 Issue 或 Pull Request。
-

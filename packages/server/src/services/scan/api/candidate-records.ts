@@ -21,6 +21,10 @@ import {
 	listTriageResultsByScanJobIdRepo,
 	listVerificationResultsByScanJobIdRepo,
 } from "../persistence/task.repo";
+import {
+	findCandidateProjectionPageRepo,
+	isCandidateProjectionBackfillComplete,
+} from "../persistence/candidate-projection-list.repo";
 import { buildCandidatesWithLatestResults } from "../state/candidate-aggregates";
 import type { Task } from "../types";
 import { resolveTaskRootSegment } from "../stages/full-scan-stage.runtime";
@@ -232,7 +236,7 @@ const resolveHostPathForContainerPath = async (input: {
 	return null;
 };
 
-const enrichCandidateHostPaths = async <T extends { scanJobId: string }>(
+export const enrichCandidateHostPaths = async <T extends { scanJobId: string }>(
 	candidates: T[],
 ) => {
 	const profileRootByScanJobId = new Map<string, string | null>();
@@ -565,7 +569,7 @@ const resolveCandidateLatestResultUpdatedAtMs = (candidate: {
 	return Number.isFinite(createdAtMs) ? createdAtMs : 0;
 };
 
-export const findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId =
+const findVulnerabilityCandidatesPageWithLatestAnalysisResultLegacy =
 	async (input: {
 		scanJobId: string;
 		page: number;
@@ -716,6 +720,31 @@ export const findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId 
 			page,
 			pageSize,
 			totalPages,
+		};
+	};
+
+export const findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId =
+	async (input: {
+		scanJobId: string;
+		page: number;
+		pageSize: number;
+		query?: string;
+		analysisResults?: string[];
+		verifyResults?: string[];
+		triageResults?: string[];
+		sortKey: CandidateListSortKey;
+		sortDirection: CandidateListSortDirection;
+	}) => {
+		if (!(await isCandidateProjectionBackfillComplete())) {
+			return await findVulnerabilityCandidatesPageWithLatestAnalysisResultLegacy(
+				input,
+			);
+		}
+
+		const page = await findCandidateProjectionPageRepo(input);
+		return {
+			...page,
+			items: await enrichCandidateHostPaths(page.items),
 		};
 	};
 

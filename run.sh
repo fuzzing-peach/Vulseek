@@ -20,15 +20,96 @@ RELEASE_TAG="${RELEASE_TAG:-latest}"
 IMAGE_NAME="${IMAGE_REPOSITORY}:${RELEASE_TAG}"
 ENV_FILE="${ENV_FILE:-.env.production}"
 
+VULSEEK_PORT="${VULSEEK_RELEASE_PORT:-33000}"
+POSTGRES_PORT="${POSTGRES_RELEASE_PORT:-35432}"
+REDIS_PORT="${REDIS_RELEASE_PORT:-36379}"
+TRAEFIK_HTTP_PORT="${TRAEFIK_RELEASE_HTTP_PORT:-30080}"
+TRAEFIK_DASHBOARD_PORT="${TRAEFIK_RELEASE_DASHBOARD_PORT:-38080}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CURRENT_DIR="$(pwd -P)"
-DEFAULT_SCAN_CONTEXT_HOST_PATH="${CURRENT_DIR}/vulseek-data"
+DEFAULT_SCAN_CONTEXT_HOST_PATH="${SCRIPT_DIR}/vulseek-data-release"
 SCAN_CONTEXT_HOST_PATH="${VULSEEK_SCAN_CONTEXT_HOST_PATH:-}"
 
 resolve_scan_context_host_path() {
     local configured_path="${SCAN_CONTEXT_HOST_PATH:-${VULSEEK_SCAN_CONTEXT_HOST_PATH:-$DEFAULT_SCAN_CONTEXT_HOST_PATH}}"
     mkdir -p "$configured_path"
     (cd "$configured_path" && pwd -P)
+}
+
+service_exists() {
+    docker service inspect "$1" >/dev/null 2>&1
+}
+
+port_is_listening() {
+    local port="$1"
+    ss -H -ltn 2>/dev/null | awk -v port=":${port}" '$4 ~ port "$" { found=1 } END { exit !found }'
+}
+
+require_available_port() {
+    local port="$1"
+    local service="$2"
+    if ! service_exists "$service" && port_is_listening "$port"; then
+        echo -e "${RED}Port ${port} is already used by another process or service; cannot start ${service}.${NC}"
+        return 1
+    fi
+}
+
+list_environment_services() {
+    docker service ls | awk -v app="$VULSEEK_SERVICE" -v postgres="$POSTGRES_SERVICE" \
+        -v redis="$REDIS_SERVICE" -v traefik="$TRAEFIK_SERVICE" \
+        'NR == 1 || $2 == app || $2 == postgres || $2 == redis || $2 == traefik'
+}
+
+resolve_service_name() {
+    case "${1:-vulseek}" in
+        vulseek|"$VULSEEK_SERVICE") echo "$VULSEEK_SERVICE" ;;
+        postgres|"$POSTGRES_SERVICE") echo "$POSTGRES_SERVICE" ;;
+        redis|"$REDIS_SERVICE") echo "$REDIS_SERVICE" ;;
+        traefik|"$TRAEFIK_SERVICE") echo "$TRAEFIK_SERVICE" ;;
+        *)
+            echo -e "${RED}Unknown release service: $1${NC}" >&2
+            return 1
+            ;;
+    esac
+}
+
+wait_for_service_healthy() {
+    local service="$1"
+    local timeout_seconds="${2:-120}"
+    local elapsed=0
+
+    while [ "$elapsed" -lt "$timeout_seconds" ]; do
+        local task_id
+        task_id=$(docker service ps "$service" --filter desired-state=running -q | head -n1)
+        if [ -n "$task_id" ]; then
+            local container_id
+            container_id=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' "$task_id" 2>/dev/null || true)
+            if [ -n "$container_id" ]; then
+                local health
+                health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id" 2>/dev/null || true)
+                if [ "$health" = "healthy" ] || [ "$health" = "running" ]; then
+                    return 0
+                fi
+                if [ "$health" = "unhealthy" ] || [ "$health" = "exited" ] || [ "$health" = "dead" ]; then
+                    echo -e "${RED}${service} entered ${health} state.${NC}"
+                    return 1
+                fi
+            fi
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+
+    echo -e "${RED}Timed out waiting for ${service} to become healthy.${NC}"
+    return 1
+}
+
+preflight_ports() {
+    require_available_port "$POSTGRES_PORT" "$POSTGRES_SERVICE"
+    require_available_port "$REDIS_PORT" "$REDIS_SERVICE"
+    require_available_port "$VULSEEK_PORT" "$VULSEEK_SERVICE"
+    require_available_port "$TRAEFIK_HTTP_PORT" "$TRAEFIK_SERVICE"
+    require_available_port "$TRAEFIK_DASHBOARD_PORT" "$TRAEFIK_SERVICE"
 }
 
 show_help() {
@@ -52,6 +133,11 @@ show_help() {
     echo "  status      Show service status and URLs"
     echo "  clean       Remove services and release volumes"
     echo "  help        Show this help"
+    echo ""
+    echo "Default ports:"
+    echo "  Vulseek ${VULSEEK_PORT}, PostgreSQL ${POSTGRES_PORT}, Redis ${REDIS_PORT}"
+    echo "  Traefik HTTP ${TRAEFIK_HTTP_PORT}, Dashboard ${TRAEFIK_DASHBOARD_PORT}"
+    echo "  Override them with the corresponding *_RELEASE_PORT variables."
     echo ""
 }
 
@@ -94,10 +180,15 @@ pull_image() {
 }
 
 start_postgres() {
+    if service_exists "$POSTGRES_SERVICE"; then
+        echo -e "${YELLOW}PostgreSQL service already exists${NC}"
+        return 0
+    fi
+    require_available_port "$POSTGRES_PORT" "$POSTGRES_SERVICE"
     docker service create \
         --name "$POSTGRES_SERVICE" \
         --network "$NETWORK_NAME" \
-        --publish published=25432,target=5432,mode=host \
+        --publish published="$POSTGRES_PORT",target=5432,mode=host \
         --env POSTGRES_USER=vulseek \
         --env POSTGRES_PASSWORD=vulseek_release_password \
         --env POSTGRES_DB=vulseek \
@@ -107,24 +198,34 @@ start_postgres() {
         --health-timeout 5s \
         --health-retries 5 \
         --constraint 'node.role==manager' \
-        postgres:16 2>/dev/null || echo -e "${YELLOW}PostgreSQL service already exists${NC}"
+        postgres:16
 }
 
 start_redis() {
+    if service_exists "$REDIS_SERVICE"; then
+        echo -e "${YELLOW}Redis service already exists${NC}"
+        return 0
+    fi
+    require_available_port "$REDIS_PORT" "$REDIS_SERVICE"
     docker service create \
         --name "$REDIS_SERVICE" \
         --network "$NETWORK_NAME" \
-        --publish published=26379,target=6379,mode=host \
+        --publish published="$REDIS_PORT",target=6379,mode=host \
         --mount type=volume,source=redis_release_data,target=/data \
         --health-cmd "redis-cli ping" \
         --health-interval 10s \
         --health-timeout 5s \
         --health-retries 5 \
         --constraint 'node.role==manager' \
-        redis:7 2>/dev/null || echo -e "${YELLOW}Redis service already exists${NC}"
+        redis:7
 }
 
 start_vulseek() {
+    if service_exists "$VULSEEK_SERVICE"; then
+        echo -e "${YELLOW}Vulseek release service already exists${NC}"
+        return 0
+    fi
+    require_available_port "$VULSEEK_PORT" "$VULSEEK_SERVICE"
     check_env_file
 
     local effective_scan_context_host_path
@@ -146,32 +247,38 @@ start_vulseek() {
 
     eval docker service create \
         --name "$VULSEEK_SERVICE" \
-        --network "$NETWORK_NAME" \
-        --publish published=23000,target=3000,mode=host \
+        --network name="$NETWORK_NAME",alias=vulseek-release-login-test \
+        --publish published="$VULSEEK_PORT",target=3000,mode=host \
+        $env_args \
         --env NODE_ENV=production \
         --env RELEASE_TAG="$RELEASE_TAG" \
         --env VULSEEK_IMAGE_REPOSITORY="$IMAGE_REPOSITORY" \
         --env VULSEEK_SERVICE_NAME="$VULSEEK_SERVICE" \
-        --env DATABASE_URL=postgresql://vulseek:vulseek_release_password@"$POSTGRES_SERVICE":5432/vulseek \
-        --env REDIS_URL=redis://"$REDIS_SERVICE":6379 \
         --env VULSEEK_SCAN_CONTEXT_HOST_PATH="${effective_scan_context_host_path}" \
         --env VULSEEK_SCAN_CONTEXT_APP_PATH=/scan-context \
-        $env_args \
+        --env DATABASE_URL=postgresql://vulseek:vulseek_release_password@"$POSTGRES_SERVICE":5432/vulseek \
+        --env REDIS_URL=redis://"$REDIS_SERVICE":6379 \
         --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
         --mount type=bind,source="${effective_scan_context_host_path}",target=/scan-context \
         --mount type=volume,source=vulseek_release_data,target=/etc/vulseek \
         --mount type=volume,source=traefik_release_data,target=/etc/traefik \
         --mount type=volume,source=docker_release_config,target=/root/.docker \
         --constraint "'node.role==manager'" \
-        "$IMAGE_NAME" 2>/dev/null || echo -e "${YELLOW}Vulseek release service already exists${NC}"
+        "$IMAGE_NAME"
 }
 
 start_traefik() {
+    if service_exists "$TRAEFIK_SERVICE"; then
+        echo -e "${YELLOW}Traefik service already exists${NC}"
+        return 0
+    fi
+    require_available_port "$TRAEFIK_HTTP_PORT" "$TRAEFIK_SERVICE"
+    require_available_port "$TRAEFIK_DASHBOARD_PORT" "$TRAEFIK_SERVICE"
     docker service create \
         --name "$TRAEFIK_SERVICE" \
         --network "$NETWORK_NAME" \
-        --publish published=20080,target=80,mode=host \
-        --publish published=28080,target=8080,mode=host \
+        --publish published="$TRAEFIK_HTTP_PORT",target=80,mode=host \
+        --publish published="$TRAEFIK_DASHBOARD_PORT",target=8080,mode=host \
         --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock,readonly \
         --mount type=volume,source=traefik_release_data,target=/etc/traefik \
         --constraint 'node.role==manager' \
@@ -184,15 +291,16 @@ start_traefik() {
         --providers.swarm.network="$NETWORK_NAME" \
         --entrypoints.web.address=:80 \
         --log.level=INFO \
-        --accesslog=true 2>/dev/null || echo -e "${YELLOW}Traefik service already exists${NC}"
+        --accesslog=true
 }
 
 start_all() {
-    if ! check_swarm; then
-        init_swarm
-    fi
+    init_swarm
+    preflight_ports
     start_postgres
+    wait_for_service_healthy "$POSTGRES_SERVICE"
     start_redis
+    wait_for_service_healthy "$REDIS_SERVICE"
     start_vulseek
     start_traefik
     show_status
@@ -211,13 +319,8 @@ restart_vulseek() {
 }
 
 show_logs() {
-    local service_name=${1:-vulseek}
-    case "$service_name" in
-        vulseek) service_name="$VULSEEK_SERVICE" ;;
-        postgres) service_name="$POSTGRES_SERVICE" ;;
-        redis) service_name="$REDIS_SERVICE" ;;
-        traefik) service_name="$TRAEFIK_SERVICE" ;;
-    esac
+    local service_name
+    service_name=$(resolve_service_name "${1:-vulseek}")
 
     local task_id
     task_id=$(docker service ps "$service_name" --filter "desired-state=running" -q | head -n1)
@@ -235,16 +338,17 @@ show_status() {
     local effective_scan_context_host_path
     effective_scan_context_host_path="$(resolve_scan_context_host_path)"
     echo -e "${BLUE}Release image:${NC} ${IMAGE_NAME}"
-    echo -e "${BLUE}Main app:${NC}      http://localhost:23000"
-    echo -e "${BLUE}Traefik:${NC}       http://localhost:28080"
-    echo -e "${BLUE}PostgreSQL:${NC}    localhost:25432"
-    echo -e "${BLUE}Redis:${NC}         localhost:26379"
+    echo -e "${BLUE}Main app:${NC}      http://localhost:${VULSEEK_PORT}"
+    echo -e "${BLUE}Traefik:${NC}       http://localhost:${TRAEFIK_DASHBOARD_PORT}"
+    echo -e "${BLUE}PostgreSQL:${NC}    localhost:${POSTGRES_PORT}"
+    echo -e "${BLUE}Redis:${NC}         localhost:${REDIS_PORT}"
     echo -e "${BLUE}Scan Context:${NC}  ${effective_scan_context_host_path}"
-    docker service ls --filter "name=vulseek-"
+    list_environment_services
 }
 
 clean_all() {
     stop_all
+    docker network rm "$NETWORK_NAME" 2>/dev/null || true
     docker volume rm vulseek_release_data docker_release_config postgres_release_data redis_release_data traefik_release_data 2>/dev/null || true
     echo -e "${GREEN}Release volumes removed${NC}"
 }
@@ -279,7 +383,7 @@ case "${COMMAND:-help}" in
     stop) stop_all ;;
     restart) restart_vulseek ;;
     logs) show_logs "${ARGS[0]}" ;;
-    ps) docker service ls --filter "name=vulseek-" ;;
+    ps) list_environment_services ;;
     status) show_status ;;
     clean) clean_all ;;
     help|--help|-h) show_help ;;

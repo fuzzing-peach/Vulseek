@@ -3,6 +3,7 @@ import {
 	type AnyPgColumn,
 	bigint,
 	boolean,
+	foreignKey,
 	index,
 	integer,
 	jsonb,
@@ -130,6 +131,7 @@ export const tasks = pgTable(
 			.references(() => scanJobs.scanJobId, {
 				onDelete: "cascade",
 			}),
+		vulnerabilityCandidateId: text("vulnerabilityCandidateId"),
 		parentTaskId: text("parentTaskId").references(
 			(): AnyPgColumn => tasks.taskId,
 			{
@@ -180,6 +182,12 @@ export const tasks = pgTable(
 	},
 	(table) => ({
 		scanJobIdx: index("tasks_scan_job_idx").on(table.scanJobId),
+		scanJobCandidateIdx: index("tasks_scan_job_candidate_idx").on(
+			table.scanJobId,
+			table.vulnerabilityCandidateId,
+			table.stageName,
+			table.createdAt,
+		),
 		parentTaskIdx: index("tasks_parent_task_idx").on(table.parentTaskId),
 		forkedFromTaskIdx: index("tasks_forked_from_task_idx").on(
 			table.forkedFromTaskId,
@@ -420,6 +428,92 @@ export const vulnerabilityCandidates = pgTable(
 			table.createdAt,
 		),
 	}),
+);
+
+export const candidateResultProjections = pgTable(
+	"candidate_result_projections",
+	{
+		scanJobId: text("scanJobId")
+			.notNull()
+			.references(() => scanJobs.scanJobId, { onDelete: "cascade" }),
+		vulnerabilityCandidateId: text("vulnerabilityCandidateId").notNull(),
+		analysisTaskId: text("analysisTaskId"),
+		analysisOutput: jsonb("analysisOutput").$type<unknown | null>(),
+		analysisResult: text("analysisResult"),
+		analysisRank: integer("analysisRank"),
+		analysisResultAt: text("analysisResultAt"),
+		verificationTaskId: text("verificationTaskId"),
+		verificationOutput: jsonb("verificationOutput").$type<unknown | null>(),
+		verificationResult: text("verificationResult"),
+		verificationRank: integer("verificationRank"),
+		verificationResultAt: text("verificationResultAt"),
+		triageTaskId: text("triageTaskId"),
+		triageOutput: jsonb("triageOutput").$type<unknown | null>(),
+		triageResult: text("triageResult"),
+		triageRank: integer("triageRank"),
+		triageResultAt: text("triageResultAt"),
+		latestResultAt: text("latestResultAt"),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		pk: primaryKey({
+			columns: [table.scanJobId, table.vulnerabilityCandidateId],
+		}),
+		candidateFk: foreignKey({
+			columns: [table.scanJobId, table.vulnerabilityCandidateId],
+			foreignColumns: [
+				vulnerabilityCandidates.scanJobId,
+				vulnerabilityCandidates.vulnerabilityCandidateId,
+			],
+				name: "candidate_result_projection_candidate_fk",
+		}),
+		scanJobIdx: index("candidate_result_projection_scan_job_idx").on(
+			table.scanJobId,
+		),
+		analysisResultIdx: index("candidate_result_projection_analysis_idx").on(
+			table.scanJobId,
+			table.analysisResult,
+		),
+		verificationResultIdx: index(
+			"candidate_result_projection_verification_idx",
+		).on(table.scanJobId, table.verificationResult),
+		triageResultIdx: index("candidate_result_projection_triage_idx").on(
+			table.scanJobId,
+			table.triageResult,
+		),
+		latestResultIdx: index("candidate_result_projection_latest_idx").on(
+			table.scanJobId,
+			table.latestResultAt,
+		),
+	}),
+);
+
+export const candidateResultProjectionBackfills = pgTable(
+	"candidate_result_projection_backfills",
+	{
+		backfillId: text("backfillId").primaryKey(),
+		status: text("status")
+			.$type<"pending" | "running" | "completed">()
+			.notNull()
+			.default("pending"),
+		processedCount: integer("processedCount").notNull().default(0),
+		skippedCount: integer("skippedCount").notNull().default(0),
+		skippedTasks: jsonb("skippedTasks")
+			.$type<Array<Record<string, string>>>()
+			.notNull()
+			.default([]),
+		errorMessage: text("errorMessage"),
+		startedAt: text("startedAt"),
+		completedAt: text("completedAt"),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
 );
 
 export const scanEvaluateResults = pgTable(

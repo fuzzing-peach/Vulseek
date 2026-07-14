@@ -15,8 +15,8 @@
 - ✅ 安装 Nixpacks、Railpack、Buildpacks 等构建工具
 - ✅ 暴露调试端口 9229
 
-### 2. `docker-compose.dev.yml`
-开发环境编排文件，包含完整的服务栈：
+### 2. `dev.sh`
+开发环境编排入口，使用 Docker Swarm 创建完整服务栈：
 
 #### 服务列表：
 - **postgres** - PostgreSQL 16 数据库
@@ -44,8 +44,7 @@
 - ✅ 数据持久化（使用 Docker 卷）
 - ✅ 与生产环境架构一致
 
-### 3. `dev.sh`
-强大的开发环境管理脚本，提供丰富的命令：
+该脚本同时提供以下管理命令：
 
 #### 基础命令：
 ```bash
@@ -205,7 +204,7 @@ vulseek=# SELECT * FROM users LIMIT 10;
 
 ### 环境变量
 
-关键环境变量（在 `docker-compose.dev.yml` 中配置）：
+关键环境变量（在 `env.development` 中配置）：
 
 ```yaml
 # 开发模式
@@ -268,7 +267,7 @@ lsof -i :23000
 lsof -i :25432
 lsof -i :26379
 
-# 或修改 docker-compose.dev.yml 中的端口映射
+# 或通过对应的 *_DEV_PORT 环境变量覆盖默认端口
 ports:
   - "23001:3000"  # 改为其他端口
 ```
@@ -277,7 +276,7 @@ ports:
 
 **问题**: Docker socket 权限被拒绝
 
-**解决**: 已在 `docker-compose.dev.yml` 中设置 `privileged: true`
+**解决**: 确认当前用户和 `vulseek-dev` 服务可以访问 `/var/run/docker.sock`
 
 ### 3. 热重载不工作
 
@@ -383,4 +382,3 @@ echo $WATCHPACK_POLLING
 **祝你开发愉快！** 🎉
 
 如有任何问题，请查阅相关文档或联系团队成员。
-

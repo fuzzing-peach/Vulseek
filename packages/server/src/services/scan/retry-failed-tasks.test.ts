@@ -5,7 +5,7 @@ import { retryFailedScanJobTasksWithDeps } from "./retry-failed-tasks";
 import type { ScanJob, Task } from "./types";
 
 const makeScanJob = (overrides?: Partial<ScanJob>): ScanJob => ({
-	scanJobId: "scan-job-1",
+		scanJobId: "scan-job-1",
 	title: "full scan",
 	description: "",
 	note: null,
@@ -44,8 +44,9 @@ const makeScanJob = (overrides?: Partial<ScanJob>): ScanJob => ({
 });
 
 const makeTask = (overrides?: Partial<Task>): Task => ({
-	taskId: "task-1",
-	scanJobId: "scan-job-1",
+		taskId: "task-1",
+		scanJobId: "scan-job-1",
+		vulnerabilityCandidateId: null,
 	parentTaskId: null,
 	name: "task",
 	stageName: "identify-target",

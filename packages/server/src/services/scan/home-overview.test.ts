@@ -1,9 +1,54 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	buildHomeOverviewActivity,
 	buildHomeOverviewFromRows,
 	clampHomeOverviewDays,
 } from "./home-overview-aggregate";
+
+test("buildHomeOverviewActivity fills missing dates without loading detail rows", () => {
+	const days = buildHomeOverviewActivity({
+		days: 3,
+		now: new Date("2026-07-13T12:00:00.000Z"),
+		rows: [
+			{
+				date: "2026-07-12",
+				totalTokens: 12,
+				scanJobCount: 1,
+				taskCount: 4,
+				candidateCount: 2,
+				securityIssueCount: 1,
+			},
+		],
+	});
+
+	assert.deepEqual(days, [
+		{
+			date: "2026-07-11",
+			totalTokens: 0,
+			scanJobCount: 0,
+			taskCount: 0,
+			candidateCount: 0,
+			securityIssueCount: 0,
+		},
+		{
+			date: "2026-07-12",
+			totalTokens: 12,
+			scanJobCount: 1,
+			taskCount: 4,
+			candidateCount: 2,
+			securityIssueCount: 1,
+		},
+		{
+			date: "2026-07-13",
+			totalTokens: 0,
+			scanJobCount: 0,
+			taskCount: 0,
+			candidateCount: 0,
+			securityIssueCount: 0,
+		},
+	]);
+});
 
 test("clampHomeOverviewDays defaults and limits the requested range", () => {
 	assert.equal(clampHomeOverviewDays(undefined), 365);

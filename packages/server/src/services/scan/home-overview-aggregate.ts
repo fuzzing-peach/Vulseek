@@ -47,6 +47,15 @@ export type HomeOverview = {
 	dailyActivity: HomeOverviewDailyActivity[];
 };
 
+export type HomeOverviewActivityRow = {
+	date: string;
+	totalTokens: number;
+	scanJobCount: number;
+	taskCount: number;
+	candidateCount: number;
+	securityIssueCount: number;
+};
+
 export type OverviewJobRow = {
 	scanJobId: string;
 	title: string;
@@ -80,6 +89,36 @@ export const clampHomeOverviewDays = (days?: number) => {
 		return 365;
 	}
 	return Math.max(1, Math.min(366, Math.trunc(days as number)));
+};
+
+export const buildHomeOverviewActivity = (input: {
+	rows: HomeOverviewActivityRow[];
+	days: number;
+	now?: Date;
+}) => {
+	const days = clampHomeOverviewDays(input.days);
+	const now = input.now || new Date();
+	const start = new Date(
+		Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+	);
+	start.setUTCDate(start.getUTCDate() - (days - 1));
+	const rowsByDate = new Map(input.rows.map((row) => [row.date, row]));
+
+	return Array.from({ length: days }, (_, offset) => {
+		const date = new Date(start);
+		date.setUTCDate(start.getUTCDate() + offset);
+		const key = formatHomeOverviewDate(date);
+		return (
+			rowsByDate.get(key) || {
+				date: key,
+				totalTokens: 0,
+				scanJobCount: 0,
+				taskCount: 0,
+				candidateCount: 0,
+				securityIssueCount: 0,
+			}
+		);
+	});
 };
 
 export const formatHomeOverviewDate = (date: Date) =>

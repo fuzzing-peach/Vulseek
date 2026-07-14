@@ -817,7 +817,7 @@ export const ShowScanCandidateDetail = ({
 				}),
 				utils.scan.candidates.invalidate({ scanJobId }),
 				utils.scan.one.invalidate({ scanJobId }),
-				utils.scan.statusView.invalidate({ scanJobId }),
+				utils.scan.jobRuntime.invalidate({ scanJobId }),
 				utils.scan.candidateTaskLineage.invalidate({
 					vulnerabilityCandidateId: candidateId,
 					scanJobId,

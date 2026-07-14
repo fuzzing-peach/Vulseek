@@ -358,26 +358,26 @@ export const ShowProjects = () => {
 																</DropdownMenu>
 															) : null}
 															<CardHeader>
-																<CardTitle className="flex items-center justify-between gap-2">
-																	<span className="flex flex-col gap-1.5">
-																		<div className="flex items-center gap-2">
-																			<BookIcon className="size-4 text-muted-foreground" />
-																			<span className="text-base font-medium leading-none">
+																<CardTitle className="flex min-w-0 items-start justify-between gap-2">
+																	<span className="flex min-w-0 flex-1 flex-col gap-1.5">
+																		<span className="flex min-w-0 items-center gap-2">
+																			<BookIcon className="size-4 shrink-0 text-muted-foreground" />
+																			<span className="truncate text-base font-medium leading-5">
 																				{project.name}
 																			</span>
-																		</div>
+																		</span>
 
-																		<span className="text-sm font-medium text-muted-foreground">
+																		<span className="truncate text-sm font-medium text-muted-foreground">
 																			{project.description}
 																		</span>
 																	</span>
-																	<div className="flex self-start space-x-1">
+																	<div className="flex shrink-0 self-start space-x-1">
 																		<DropdownMenu>
 																			<DropdownMenuTrigger asChild>
 																				<Button
 																					variant="ghost"
 																					size="icon"
-																					className="px-2"
+																					className="shrink-0 px-2"
 																				>
 																					<MoreHorizontalIcon className="size-5" />
 																				</Button>

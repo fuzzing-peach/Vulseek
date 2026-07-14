@@ -10,7 +10,11 @@ import { nanoid } from "nanoid";
 import { SandboxAgent } from "sandbox-agent";
 import { Agent, type Dispatcher } from "undici";
 import { getGlobalContainerEnvironmentPairs } from "../utils/docker/utils";
-import { execAsync, execAsyncStream } from "../utils/process/execAsync";
+import {
+	execAsync,
+	execAsyncStream,
+	execFileAsync,
+} from "../utils/process/execAsync";
 import { getAgentProfileById } from "./ai";
 import { findApplicationById } from "./application";
 import { findComposeById } from "./compose";
@@ -34,6 +38,15 @@ import {
 	writeTaskTextArtifact,
 } from "./scan/artifacts/task-artifact-paths";
 import { DEFAULT_DELTA_COMMIT_WINDOW } from "./scan/constants";
+import {
+	buildCheckoutToolsImageTag,
+	buildCheckoutToolsStatus,
+	computeCheckoutToolsVersion,
+	createCheckoutToolsBuildManager,
+	type CheckoutToolsDefinition,
+	type CheckoutToolsImageMetadata,
+} from "./scan/checkout-tools";
+import { sanitizeCodexAcpConfigToml } from "./scan/runtime/codex-config-compat";
 import {
 	findVulnerabilityCandidateByIdAndScanJobIdRepo,
 	findVulnerabilityCandidateByIdRepo,
@@ -64,11 +77,10 @@ import {
 	listCandidateDescendantTasksByProducerTaskIdRepo,
 	listChildTasksByParentTaskIdAndStageRepo,
 	listTaskStatusCountsByScanJobIdRepo,
+	listRunningTaskViewsByScanJobIdRepo,
 	listTasksByScanJobAndStageRepo,
-	listTasksByScanJobAndStatusesRepo,
 	listTasksByScanJobIdRepo,
 	listTerminalTasksPageByScanJobIdRepo,
-	listTriageResultsByScanJobIdRepo,
 	listVerificationResultsByScanJobIdRepo,
 	requeueTaskRepo,
 	resetFailedTaskForRetryRepo,
@@ -326,7 +338,7 @@ type QueuePendingCountView = {
 	title: string;
 	stageName: Task["stageName"];
 	queueName: string;
-	concurrencyLimit: number;
+	concurrencyLimit?: number;
 	waitingCount: number;
 	queuedCount: number;
 	launchingCount: number;
@@ -1187,10 +1199,14 @@ const listQueuePendingCountsByScanJobId = async (
 				title,
 				stageName,
 				queueName: queue.name,
-				concurrencyLimit: Math.max(
-					1,
-					concurrencyLimitByStageName.get(stageName) ?? 1,
-				),
+				...(concurrencyLimitByStageName.size > 0
+					? {
+							concurrencyLimit: Math.max(
+								1,
+								concurrencyLimitByStageName.get(stageName) ?? 1,
+							),
+						}
+					: {}),
 				waitingCount,
 				queuedCount,
 				launchingCount,
@@ -1475,7 +1491,7 @@ const resolveDockerfileAssetPath = async (fileName: string) => {
 };
 
 const resolveScanDockerfileTemplatePath = async () => {
-	return await resolveDockerfileAssetPath("Dockerfile.scan.template");
+	return await resolveDockerfileAssetPath("Dockerfile.scan-checkout.template");
 };
 
 const buildScanDockerfileTemplate = async () => {
@@ -1491,12 +1507,42 @@ const resolveCodexAcpForkPatchPath = async () => {
 	return await resolveDockerfileAssetPath("codex-acp-fork-0.14.0.patch");
 };
 
+const resolveCheckoutToolsDefinition = async () => {
+	const [dockerfilePath, sandboxAgentPatchPath, codexAcpPatchPath] =
+		await Promise.all([
+			resolveDockerfileAssetPath("Dockerfile.scan-tools"),
+			resolveSandboxAgentPatchPath(),
+			resolveCodexAcpForkPatchPath(),
+		]);
+	const [dockerfile, sandboxAgentPatch, codexAcpPatch] = await Promise.all([
+		fs.readFile(dockerfilePath, "utf8"),
+		fs.readFile(sandboxAgentPatchPath, "utf8"),
+		fs.readFile(codexAcpPatchPath, "utf8"),
+	]);
+	const version = computeCheckoutToolsVersion({
+		dockerfile,
+		sandboxAgentPatch,
+		codexAcpPatch,
+	});
+	return {
+		version,
+		imageTag: buildCheckoutToolsImageTag(version),
+		dockerfile,
+		sandboxAgentPatchPath,
+		codexAcpPatchPath,
+	};
+};
+
 type CheckoutStatus = "running" | "completed" | "failed";
 
 type CheckoutTask = {
 	checkoutId: string;
 	status: CheckoutStatus;
+	phase: "waiting_tools" | "building_checkout";
 	imageTag: string;
+	toolsVersion: string;
+	toolsImageTag: string;
+	toolsBuildId: string | null;
 	gitUrl: string;
 	gitBranch: string;
 	gitTag: string;
@@ -1558,6 +1604,135 @@ const resolveCheckoutDockerBuildResourceOptions = () => {
 			"\n",
 	};
 };
+
+const inspectCheckoutToolsImage = async (
+	definition: CheckoutToolsDefinition,
+): Promise<CheckoutToolsImageMetadata | null> => {
+	try {
+		const { stdout } = await execFileAsync("docker", [
+			"image",
+			"inspect",
+			definition.imageTag,
+		]);
+		const inspect = JSON.parse(stdout) as Array<{
+			Id?: string;
+			Created?: string;
+			Config?: { Labels?: Record<string, string> | null };
+		}>;
+		const image = inspect[0];
+		const labels = image?.Config?.Labels;
+		if (
+			!image?.Id ||
+			labels?.["com.fuzzing-peach.vulseek.scan-tools.version"] !==
+				definition.version
+		) {
+			return null;
+		}
+		return {
+			...definition,
+			imageId: image.Id,
+			builtAt:
+				labels["com.fuzzing-peach.vulseek.scan-tools.built-at"] ||
+				image.Created ||
+				"",
+		};
+	} catch {
+		return null;
+	}
+};
+
+const executeCheckoutToolsBuild = async (input: {
+	definition: CheckoutToolsDefinition;
+	builtAt: string;
+	appendStdout: (chunk: string) => void;
+	appendStderr: (chunk: string) => void;
+}) => {
+	const assets = await resolveCheckoutToolsDefinition();
+	if (assets.version !== input.definition.version) {
+		throw new Error("Checkout tools definition changed before build started");
+	}
+	const tempDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "vulseek-scan-tools-"),
+	);
+	const dockerfilePath = path.join(tempDir, "Dockerfile.scan-tools");
+	try {
+		await Promise.all([
+			fs.writeFile(dockerfilePath, assets.dockerfile, "utf8"),
+			fs.copyFile(
+				assets.sandboxAgentPatchPath,
+				path.join(tempDir, "sandbox-agent@0.4.2.patch"),
+			),
+			fs.copyFile(
+				assets.codexAcpPatchPath,
+				path.join(tempDir, "codex-acp-fork-0.14.0.patch"),
+			),
+		]);
+		const args = [
+			"build",
+			"--progress=plain",
+			"-f",
+			dockerfilePath,
+			"-t",
+			input.definition.imageTag,
+			"--build-arg",
+			`VULSEEK_TOOLS_VERSION=${input.definition.version}`,
+			"--build-arg",
+			`VULSEEK_TOOLS_BUILT_AT=${input.builtAt}`,
+		];
+		for (const pair of getGlobalContainerEnvironmentPairs()) {
+			args.push("--build-arg", pair);
+		}
+		args.push(tempDir);
+		input.appendStderr(
+			`[tools] building ${input.definition.imageTag} with BuildKit cache enabled\n`,
+		);
+		await new Promise<void>((resolve, reject) => {
+			const child = spawn("docker", args, {
+				stdio: ["ignore", "pipe", "pipe"],
+				env: { ...process.env, DOCKER_BUILDKIT: "1" },
+			});
+			child.stdout.on("data", (chunk) => input.appendStdout(chunk.toString()));
+			child.stderr.on("data", (chunk) => input.appendStderr(chunk.toString()));
+			child.on("error", reject);
+			child.on("close", (code) => {
+				if (code === 0) resolve();
+				else reject(new Error(`docker tools build failed with code ${code}`));
+			});
+		});
+	} finally {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	}
+};
+
+const checkoutToolsBuildManager = createCheckoutToolsBuildManager({
+	resolveDefinition: resolveCheckoutToolsDefinition,
+	inspectImage: inspectCheckoutToolsImage,
+	executeBuild: executeCheckoutToolsBuild,
+});
+
+export const findCheckoutToolsStatus = async (canRebuild = false) => {
+	const definition = await resolveCheckoutToolsDefinition();
+	const [image, activeBuild, latestBuild] = await Promise.all([
+		inspectCheckoutToolsImage(definition),
+		Promise.resolve(checkoutToolsBuildManager.findActiveBuild()),
+		Promise.resolve(checkoutToolsBuildManager.findLatestBuild()),
+	]);
+	return buildCheckoutToolsStatus({
+		definition,
+		image,
+		activeBuild:
+			activeBuild?.version === definition.version ? activeBuild : null,
+		latestBuild:
+			latestBuild?.version === definition.version ? latestBuild : null,
+		canRebuild,
+	});
+};
+
+export const startCheckoutToolsBuild = async () =>
+	await checkoutToolsBuildManager.startBuild();
+
+export const findCheckoutToolsBuildStatus = (buildId: string) =>
+	checkoutToolsBuildManager.findBuild(buildId);
 
 const sanitizeForImageTag = (value: string) =>
 	value
@@ -1730,7 +1905,10 @@ export const resolveScanGitRepositoryContext = async (
 const resolveCheckoutContext = async (
 	input: typeof apiCheckoutScanEnvironment._type,
 ) => {
-	const dockerfileTemplate = await buildScanDockerfileTemplate();
+	const [dockerfileTemplate, tools] = await Promise.all([
+		buildScanDockerfileTemplate(),
+		resolveCheckoutToolsDefinition(),
+	]);
 	const {
 		imageNameSeed,
 		gitUrl,
@@ -1752,6 +1930,8 @@ const resolveCheckoutContext = async (
 		postCheckoutScript,
 		localPath,
 		dockerfileTemplate,
+		toolsVersion: tools.version,
+		toolsImageTag: tools.imageTag,
 	};
 };
 
@@ -1760,15 +1940,6 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 		path.join(os.tmpdir(), "vulseek-scan-checkout-"),
 	);
 	const dockerfilePath = path.join(tempDir, "Dockerfile.scan");
-	const tempAgentsPath = path.join(tempDir, "agents");
-	const tempSandboxAgentPatchPath = path.join(
-		tempDir,
-		"sandbox-agent@0.4.2.patch",
-	);
-	const tempCodexAcpForkPatchPath = path.join(
-		tempDir,
-		"codex-acp-fork-0.14.0.patch",
-	);
 	const isLocalPath = !!task.localPath;
 	const args = [
 		"build",
@@ -1777,6 +1948,8 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 		dockerfilePath,
 		"-t",
 		task.imageTag,
+		"--build-arg",
+		`VULSEEK_TOOLS_IMAGE=${task.toolsImageTag}`,
 		...(isLocalPath
 			? ["--build-arg", `POST_CHECKOUT_SCRIPT=${task.postCheckoutScript}`]
 			: [
@@ -1784,6 +1957,8 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 					`GIT_URL=${task.gitUrl}`,
 					"--build-arg",
 					`GIT_BRANCH=${task.gitBranch}`,
+					"--build-arg",
+					`GIT_TAG=${task.gitTag}`,
 					"--build-arg",
 					`ENABLE_SUBMODULES=${task.enableSubmodules ? "true" : "false"}`,
 					"--build-arg",
@@ -1797,6 +1972,36 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 	args.push(tempDir);
 
 	try {
+		const toolsDefinition = {
+			version: task.toolsVersion,
+			imageTag: task.toolsImageTag,
+		};
+		const existingToolsImage =
+			await inspectCheckoutToolsImage(toolsDefinition);
+		if (!existingToolsImage) {
+			task.phase = "waiting_tools";
+			task.stderr = appendLog(
+				task.stderr,
+				`[checkout] waiting for tools image ${task.toolsImageTag}\n`,
+			);
+			const toolsBuild = await checkoutToolsBuildManager.startBuild();
+			task.toolsBuildId = toolsBuild.buildId;
+			const completedToolsBuild = await checkoutToolsBuildManager.waitForBuild(
+				toolsBuild.buildId,
+			);
+			if (completedToolsBuild.status !== "completed") {
+				throw new Error(
+					completedToolsBuild.errorMessage ||
+						"Checkout tools image build failed",
+				);
+			}
+			if (!(await inspectCheckoutToolsImage(toolsDefinition))) {
+				throw new Error(
+					`Checkout tools image ${task.toolsImageTag} is missing after build`,
+				);
+			}
+		}
+		task.phase = "building_checkout";
 		const buildResourceOptions = resolveCheckoutDockerBuildResourceOptions();
 		if (task.postCheckoutScript.trim()) {
 			const latest = checkoutTasks.get(task.checkoutId);
@@ -1817,20 +2022,6 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 				);
 			}
 		}
-		const agentsDir = await resolveAgentsDirectory();
-		await fs.mkdir(tempAgentsPath, { recursive: true });
-		if (agentsDir) {
-			await fs.cp(agentsDir, tempAgentsPath, { recursive: true });
-		}
-		await fs.copyFile(
-			await resolveSandboxAgentPatchPath(),
-			tempSandboxAgentPatchPath,
-		);
-		await fs.copyFile(
-			await resolveCodexAcpForkPatchPath(),
-			tempCodexAcpForkPatchPath,
-		);
-
 		let dockerfileContent = task.dockerfileTemplate;
 		if (isLocalPath && task.localPath) {
 			// Pre-copy the local directory into tempDir/repo so it's in the build context
@@ -1838,7 +2029,7 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 			await fs.cp(task.localPath, repoDir, { recursive: true });
 
 			// Replace the repository-source stage to use COPY instead of git clone
-			const localRepositorySourceStage = `FROM ubuntu:24.04 AS repository-source
+			const localRepositorySourceStage = `FROM \${VULSEEK_TOOLS_IMAGE} AS repository-source
 
 ARG POST_CHECKOUT_SCRIPT=""
 
@@ -1853,9 +2044,9 @@ RUN if [ -n "\${POST_CHECKOUT_SCRIPT}" ]; then \\
       rm -f /tmp/vulseek-post-checkout.sh; \\
     fi`;
 
-			// Replace everything from "FROM ubuntu:24.04 AS repository-source" up to the next "FROM"
+			// Replace the repository source stage up to the final tools image stage.
 			dockerfileContent = dockerfileContent.replace(
-				/FROM ubuntu:24\.04 AS repository-source[\s\S]*?(?=FROM )/,
+				/FROM \$\{VULSEEK_TOOLS_IMAGE\} AS repository-source[\s\S]*?(?=FROM )/,
 				`${localRepositorySourceStage}\n\n`,
 			);
 		}
@@ -1948,7 +2139,11 @@ export const startCheckoutScanEnvironment = async (
 	const task: CheckoutTask = {
 		checkoutId,
 		status: "running",
+		phase: "waiting_tools",
 		imageTag: context.imageTag,
+		toolsVersion: context.toolsVersion,
+		toolsImageTag: context.toolsImageTag,
+		toolsBuildId: null,
 		gitUrl: context.gitUrl,
 		gitBranch: context.gitBranch,
 		gitTag: context.gitTag,
@@ -1968,6 +2163,9 @@ export const startCheckoutScanEnvironment = async (
 		checkoutId,
 		status: task.status,
 		imageTag: task.imageTag,
+		phase: task.phase,
+		toolsVersion: task.toolsVersion,
+		toolsBuildId: task.toolsBuildId,
 		gitUrl: task.gitUrl,
 		gitBranch: task.gitBranch,
 		gitTag: task.gitTag,
@@ -2161,7 +2359,9 @@ const withCodexProfileRuntimeConfig = (
 
 	return joinTomlBlocks(
 		profileConfig,
-		stripProfileControlledCodexConfigToml(configToml),
+		sanitizeCodexAcpConfigToml(
+			stripProfileControlledCodexConfigToml(configToml),
+		),
 	);
 };
 
@@ -4582,28 +4782,6 @@ const deriveRuntimeLiveActionFromMessages = async (
 	return activeActions.at(-1) || null;
 };
 
-const deriveCandidateAnalysisRuntimeLiveAction = async (
-	scanJobId: string,
-	candidateId: string,
-): Promise<ScanRuntimeLiveAction | null> => {
-	const messages = await readCandidateAnalysisAppServerMessages(
-		scanJobId,
-		candidateId,
-	);
-	return deriveRuntimeLiveActionFromMessages(messages);
-};
-
-const deriveCandidateVerifierRuntimeLiveAction = async (
-	scanJobId: string,
-	candidateId: string,
-): Promise<ScanRuntimeLiveAction | null> => {
-	const messages = await readCandidateVerifierAppServerMessages(
-		scanJobId,
-		candidateId,
-	);
-	return deriveRuntimeLiveActionFromMessages(messages);
-};
-
 const deriveCandidateExecutionState = async (input: {
 	producerTaskId: string;
 	vulnerabilityCandidateId: string;
@@ -4622,295 +4800,26 @@ const deriveCandidateExecutionState = async (input: {
 		})),
 	);
 
-export const findScanJobStatusView = async (scanJobId: string) => {
-	const [
-		scanJob,
-		candidates,
-		analysisResultsList,
-		verificationResultsList,
-		triageResultsList,
-		runningTasks,
-		taskStatusCounts,
-	] = await Promise.all([
-		findScanJobByIdRepo(scanJobId),
-		findVulnerabilityCandidatesByScanJobIdRepo(scanJobId),
-		listAnalysisResultsByScanJobIdRepo(scanJobId),
-		listVerificationResultsByScanJobIdRepo(scanJobId),
-		listTriageResultsByScanJobIdRepo(scanJobId),
-		listTasksByScanJobAndStatusesRepo({
-			scanJobId,
-			statuses: ["running"],
-		}),
-		listTaskStatusCountsByScanJobIdRepo(scanJobId),
-	]);
+export const findScanJobRunningTasks = async (scanJobId: string) =>
+	(
+		await listRunningTaskViewsByScanJobIdRepo(scanJobId)
+	).sort(compareInProgressTaskView);
 
-	const statusPipelineContext = await buildFullScanPipelineContext(scanJobId);
-	const statusPipeline =
-		statusPipelineContext.scanJob.scanType === "delta"
-			? buildDeltaScanPipeline(statusPipelineContext)
-			: buildFullScanPipeline(statusPipelineContext);
-	const concurrencyLimitByStageName = new Map<Task["stageName"], number>();
-	await Promise.all(
-		statusPipeline.stages.map(async (stage) => {
-			concurrencyLimitByStageName.set(
-				stage.id as Task["stageName"],
-				Math.max(
-					1,
-					(await stage.getDesiredConcurrency?.(statusPipelineContext)) ?? 1,
-				),
-			);
-		}),
-	);
-	const queuePendingCounts = await listQueuePendingCountsByScanJobId(
+export const findScanJobQueueCounts = async (scanJobId: string) => {
+	const scanJob = await findScanJobByIdRepo(scanJobId);
+	const pipelineDefinitions = resolveScanJobPipelineDefinitions(scanJob);
+	const pipeline =
+		scanJob.scanType === "delta"
+			? pipelineDefinitions.pipelines.delta
+			: pipelineDefinitions.pipelines.full;
+	const taskStatusCounts = await listTaskStatusCountsByScanJobIdRepo(scanJobId);
+	return await listQueuePendingCountsByScanJobId(
 		scanJobId,
 		taskStatusCounts,
-		concurrencyLimitByStageName,
-		statusPipeline.stages.map((stage) => stage.id),
+		new Map(),
+		pipeline.stageIds,
 	);
-
-	const latestAnalysisResultByCandidateId = new Map<string, AnalysisResult>();
-	for (const analysisResult of analysisResultsList) {
-		if (
-			!latestAnalysisResultByCandidateId.has(
-				analysisResult.vulnerabilityCandidateId,
-			)
-		) {
-			latestAnalysisResultByCandidateId.set(
-				analysisResult.vulnerabilityCandidateId,
-				analysisResult,
-			);
-		}
-	}
-
-	const latestVerificationResultByCandidateId = new Map<
-		string,
-		VerificationResult
-	>();
-	for (const verificationResult of verificationResultsList) {
-		if (
-			!latestVerificationResultByCandidateId.has(
-				verificationResult.vulnerabilityCandidateId,
-			)
-		) {
-			latestVerificationResultByCandidateId.set(
-				verificationResult.vulnerabilityCandidateId,
-				verificationResult,
-			);
-		}
-	}
-
-	const latestTriageResultByCandidateId = new Map<string, TriageResult>();
-	for (const triageResult of triageResultsList) {
-		if (
-			!latestTriageResultByCandidateId.has(
-				triageResult.vulnerabilityCandidateId,
-			)
-		) {
-			latestTriageResultByCandidateId.set(
-				triageResult.vulnerabilityCandidateId,
-				triageResult,
-			);
-		}
-	}
-
-	const candidateExecutionStateById = new Map<
-		string,
-		CandidateTaskExecutionState
-	>(
-		await Promise.all(
-			candidates.map(async (candidate) =>
-				[
-				candidate.vulnerabilityCandidateId,
-				await deriveCandidateExecutionState({
-					producerTaskId: candidate.producerTaskId,
-					vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-				}),
-				] as const,
-			),
-		),
-	);
-
-	const analysisLikelyOrConfirmedCount = candidates.filter((candidate) => {
-		const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
-			candidate.vulnerabilityCandidateId,
-		);
-		return (
-			latestAnalysisResult?.result === "real_vulnerability" ||
-			latestAnalysisResult?.result === "likely_vulnerability"
-		);
-	}).length;
-
-	const verifiedZeroDayCount = candidates.filter((candidate) => {
-		const latestVerificationResult = latestVerificationResultByCandidateId.get(
-			candidate.vulnerabilityCandidateId,
-		);
-		return (
-			latestVerificationResult?.result === "true" ||
-			latestVerificationResult?.result === "likely"
-		);
-	}).length;
-	const analysisCompletedCount = candidates.filter((candidate) =>
-		latestAnalysisResultByCandidateId.has(candidate.vulnerabilityCandidateId),
-	).length;
-	const failedAnalysisCount = candidates.filter(
-		(candidate) => {
-			const executionState = candidateExecutionStateById.get(
-				candidate.vulnerabilityCandidateId,
-			);
-			return (
-				!latestAnalysisResultByCandidateId.has(
-					candidate.vulnerabilityCandidateId,
-				) &&
-				executionState?.latestStage === "analyzing" &&
-				executionState.latestTask?.status === "failed"
-			);
-		},
-	).length;
-	const verificationEligibleCount = analysisLikelyOrConfirmedCount;
-	const verificationCompletedCount = candidates.filter((candidate) =>
-		latestVerificationResultByCandidateId.has(
-			candidate.vulnerabilityCandidateId,
-		),
-	).length;
-	const triageCompletedCount = candidates.filter((candidate) =>
-		latestTriageResultByCandidateId.has(candidate.vulnerabilityCandidateId),
-	).length;
-	const failedVerificationCount = candidates.filter(
-		(candidate) => {
-			const executionState = candidateExecutionStateById.get(
-				candidate.vulnerabilityCandidateId,
-			);
-			return (
-				verificationEligibleCount > 0 &&
-				!latestVerificationResultByCandidateId.has(
-					candidate.vulnerabilityCandidateId,
-				) &&
-				executionState?.latestStage === "verifying" &&
-				executionState.latestTask?.status === "failed"
-			);
-		},
-	).length;
-	const analysisQueuedCount = candidates.filter(
-		(candidate) => {
-			const executionState = candidateExecutionStateById.get(
-				candidate.vulnerabilityCandidateId,
-			);
-			return (
-				!latestAnalysisResultByCandidateId.has(
-					candidate.vulnerabilityCandidateId,
-				) &&
-				!executionState?.activeTask &&
-				!(
-					executionState?.latestStage === "analyzing" &&
-					executionState.latestTask?.status === "failed"
-				)
-			);
-		},
-	).length;
-	const verificationQueuedCount = candidates.filter(
-		(candidate) => {
-			const executionState = candidateExecutionStateById.get(
-				candidate.vulnerabilityCandidateId,
-			);
-			const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
-				candidate.vulnerabilityCandidateId,
-			);
-			return (
-				(latestAnalysisResult?.result === "real_vulnerability" ||
-					latestAnalysisResult?.result === "likely_vulnerability") &&
-				!latestVerificationResultByCandidateId.has(
-					candidate.vulnerabilityCandidateId,
-				) &&
-				!executionState?.activeTask &&
-				!(
-					executionState?.latestStage === "verifying" &&
-					executionState.latestTask?.status === "failed"
-				)
-			);
-		},
-	).length;
-	const inProgressCandidates = await Promise.all(
-		candidates
-			.filter(
-				(candidate) =>
-					Boolean(
-						candidateExecutionStateById.get(candidate.vulnerabilityCandidateId)
-							?.activeTask,
-					),
-			)
-			.map(async (candidate) => {
-				const executionState = candidateExecutionStateById.get(
-					candidate.vulnerabilityCandidateId,
-				);
-				const candidateStage = executionState?.activeStage || "analyzing";
-				const candidateRuntimeLiveAction =
-					candidateStage === "verifying"
-						? await deriveCandidateVerifierRuntimeLiveAction(
-								scanJobId,
-								candidate.vulnerabilityCandidateId,
-							)
-						: await deriveCandidateAnalysisRuntimeLiveAction(
-								scanJobId,
-								candidate.vulnerabilityCandidateId,
-							);
-				const resolvedActionType =
-					candidateRuntimeLiveAction?.actionType || "other";
-				const resolvedActionText =
-					candidateRuntimeLiveAction?.actionText &&
-					candidateRuntimeLiveAction.actionText !== "-"
-						? candidateRuntimeLiveAction.actionText
-						: "-";
-
-				return {
-					taskId: executionState?.activeTask?.taskId || "",
-					vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-					title: candidate.title,
-					filePath: candidate.filePath,
-					line: candidate.line,
-					stage: candidateStage,
-					actionType: resolvedActionType,
-					actionText: resolvedActionText,
-					updatedAt: candidate.updatedAt,
-				};
-			}),
-	);
-
-	const inProgressTasks = runningTasks
-		.map(buildInProgressTaskView)
-		.filter((task): task is InProgressTaskView => Boolean(task))
-		.sort(compareInProgressTaskView);
-
-	return {
-		scan: {
-			scanJobId: scanJob.scanJobId,
-			status: scanJob.status,
-			repositoryTaskStatus: scanJob.repositoryTaskStatus,
-		},
-		summary: {
-			totalCandidates: candidates.length,
-			analysisCompletedCandidates: analysisCompletedCount,
-			analysisFailedCandidates: failedAnalysisCount,
-			analysisLikelyOrConfirmedCandidates: analysisLikelyOrConfirmedCount,
-			analysisQueuedCandidates: analysisQueuedCount,
-			verificationEligibleCandidates: verificationEligibleCount,
-			verificationCompletedCandidates: verificationCompletedCount,
-			verificationFailedCandidates: failedVerificationCount,
-			verificationQueuedCandidates: verificationQueuedCount,
-			verifiedZeroDayCandidates: verifiedZeroDayCount,
-			triageCompletedCandidates: triageCompletedCount,
-			moduleTasksTotal: scanJob.moduleTasksTotal,
-			moduleTasksCompleted: scanJob.moduleTasksCompleted,
-			moduleTasksFailed: scanJob.moduleTasksFailed,
-			functionTasksTotal: scanJob.functionTasksTotal,
-			functionTasksCompleted: scanJob.functionTasksCompleted,
-			functionTasksFailed: scanJob.functionTasksFailed,
-		},
-		inProgressTasks,
-		queuePendingCounts,
-		inProgressCandidates,
-	};
 };
-
 const SCAN_TASK_VIEW_STAGE_TO_STAGE_NAME: Record<string, Task["stageName"]> = {
 	delta_scoping: SCAN_STAGE_IDS.deltaScope,
 	repository_scanning: SCAN_STAGE_IDS.repositoryScan,
@@ -5161,7 +5070,11 @@ export const findFullScanStageGraph = async (
 	};
 };
 
-export const findScanJobStageGraph = async (scanJobId: string) => {
+export const findScanJobStageGraph = async (
+	scanJobId: string,
+	options?: { includeQueue?: boolean },
+) => {
+	const includeQueue = options?.includeQueue ?? true;
 	const context = await buildFullScanPipelineContext(scanJobId);
 	const pipeline =
 		context.scanJob.scanType === "delta"
@@ -5176,13 +5089,14 @@ export const findScanJobStageGraph = async (scanJobId: string) => {
 		})),
 		rootStageName: pipeline.stages[0]?.id,
 	});
-	const taskStatusCounts = await listTaskStatusCountsByScanJobIdRepo(scanJobId);
-	const queuePendingCounts = await listQueuePendingCountsByScanJobId(
-		scanJobId,
-		taskStatusCounts,
-		new Map<Task["stageName"], number>(),
-		pipeline.stages.map((stage) => stage.id),
-	);
+	const queuePendingCounts = includeQueue
+		? await listQueuePendingCountsByScanJobId(
+				scanJobId,
+				await listTaskStatusCountsByScanJobIdRepo(scanJobId),
+				new Map<Task["stageName"], number>(),
+				pipeline.stages.map((stage) => stage.id),
+			)
+		: [];
 	const queueByStageName = new Map(
 		queuePendingCounts.map((queue) => [queue.stageName, queue]),
 	);
@@ -5253,6 +5167,9 @@ export const findScanJobStageGraph = async (scanJobId: string) => {
 		})),
 	};
 };
+
+export const findScanJobPipeline = async (scanJobId: string) =>
+	await findScanJobStageGraph(scanJobId, { includeQueue: false });
 
 const extractTextValue = (value: unknown): string | null => {
 	if (typeof value === "string") {
@@ -5673,8 +5590,12 @@ const runSandboxAgentHeadlessTurnInContainer = async (input: {
 	const session: any = await client.createSession({
 		agent: input.provider,
 		cwd: input.cwd,
-		model: input.model || undefined,
-		thoughtLevel: input.thinkingLevel || undefined,
+		...(input.provider === "codex"
+			? {}
+			: {
+					model: input.model || undefined,
+					thoughtLevel: input.thinkingLevel || undefined,
+				}),
 		mode: input.provider === "codex" ? "full-access" : undefined,
 	} as never);
 

@@ -40,6 +40,8 @@ import {
 	transitionTaskStatusRepo,
 	updateTaskRepo,
 } from "../persistence/task.repo";
+import { CANDIDATE_RESULT_STAGE_NAMES } from "../persistence/candidate-result-projection.repo";
+import { readCandidateIdFromTaskInputArtifact } from "../persistence/task-artifact-resolver";
 import { buildKnownQueueJobIdsForTask } from "../queue-job-ids";
 import { removeContainer } from "../runtime/run-single-turn-agent";
 import {
@@ -1863,7 +1865,16 @@ const prepareStageSuccess = async <
 			? (null as TOutput)
 			: await stage.validateOutput(stageCtx, input, rawOutput)
 		: await defaultValidateOutput<TOutput>(stage.id, rawOutput);
-	await updateTaskDefault(stageCtx.taskId, { output });
+	const vulnerabilityCandidateId =
+		currentTask && CANDIDATE_RESULT_STAGE_NAMES.includes(stage.id as never)
+			? await readCandidateIdFromTaskInputArtifact(currentTask)
+			: null;
+	await updateTaskDefault(stageCtx.taskId, {
+		output,
+		...(vulnerabilityCandidateId
+			? { vulnerabilityCandidateId }
+			: {}),
+	});
 	if (isCandidateProducerStage(stage.id)) {
 		await syncVulnerabilityCandidatesFromProducerTask(stageCtx.taskId);
 	}

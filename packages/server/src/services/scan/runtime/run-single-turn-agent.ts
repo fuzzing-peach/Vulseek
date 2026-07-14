@@ -16,6 +16,7 @@ import {
 } from "./runtime-files";
 import { installRuntimeSkillsInContainer } from "./runtime-skills";
 import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "./sandbox-agent-shared";
+import { sanitizeCodexAcpConfigToml } from "./codex-config-compat";
 import { findTaskByIdRepo, updateTaskRepo } from "../persistence/task.repo";
 import { findStageLaneRuntimeByTaskIdRepo } from "../persistence/stage-lane-runtime.repo";
 import {
@@ -215,7 +216,9 @@ const withCodexProfileRuntimeConfig = (
 
 	return joinTomlBlocks(
 		profileConfig,
-		stripProfileControlledCodexConfigToml(configToml),
+		sanitizeCodexAcpConfigToml(
+			stripProfileControlledCodexConfigToml(configToml),
+		),
 	);
 };
 
@@ -2385,8 +2388,12 @@ const createNewSession = async (client, input) =>
   await client.createSession({
     agent: input.provider,
     cwd: input.cwd,
-    model: input.model || undefined,
-    thoughtLevel: input.thinkingLevel || undefined,
+    ...(input.provider === "codex"
+      ? {}
+      : {
+          model: input.model || undefined,
+          thoughtLevel: input.thinkingLevel || undefined,
+        }),
     mode: input.provider === "codex" ? "full-access" : undefined,
   });
 
@@ -2430,8 +2437,12 @@ const forkParentSessionAsChild = async (client, input) => {
     agent: input.provider,
     agentSessionId: parentAgentSessionId,
     cwd: input.cwd,
-    model: resolveForkSessionModel(input),
-    thoughtLevel: input.thinkingLevel || undefined,
+    ...(input.provider === "codex"
+      ? {}
+      : {
+          model: resolveForkSessionModel(input),
+          thoughtLevel: input.thinkingLevel || undefined,
+        }),
     mode: input.provider === "codex" ? "full-access" : undefined,
   });
   await appendDriverLog(

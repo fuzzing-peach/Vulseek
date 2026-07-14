@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
 	closeConnection: vi.fn(),
 	ensureLegacyDrizzleBaseline: vi.fn(),
 	migrate: vi.fn(),
+	backfillCandidateResultProjections: vi.fn(),
 }));
 
 vi.mock("postgres", () => ({
@@ -22,6 +23,14 @@ vi.mock("@/server/db/legacy-drizzle-baseline", () => ({
 	ensureLegacyDrizzleBaseline: mocks.ensureLegacyDrizzleBaseline,
 }));
 
+vi.mock(
+	"@vulseek/server/services/scan/persistence/candidate-result-projection-backfill",
+	() => ({
+		backfillCandidateResultProjections:
+			mocks.backfillCandidateResultProjections,
+	}),
+);
+
 import { migration } from "@/server/db/migration";
 
 describe("migration", () => {
@@ -32,9 +41,29 @@ describe("migration", () => {
 	it("rethrows the original migration error and closes the connection", async () => {
 		const error = new Error("migration failed");
 		mocks.ensureLegacyDrizzleBaseline.mockResolvedValue(undefined);
+		mocks.backfillCandidateResultProjections.mockResolvedValue({
+			processedCount: 0,
+			skippedCount: 0,
+			skippedTasks: [],
+		});
 		mocks.migrate.mockRejectedValue(error);
 
 		await expect(migration()).rejects.toBe(error);
+		expect(mocks.closeConnection).toHaveBeenCalledTimes(1);
+	});
+
+	it("runs projection backfill after the SQL migrations", async () => {
+		mocks.ensureLegacyDrizzleBaseline.mockResolvedValue(undefined);
+		mocks.migrate.mockResolvedValue(undefined);
+		mocks.backfillCandidateResultProjections.mockResolvedValue({
+			processedCount: 2,
+			skippedCount: 1,
+			skippedTasks: [],
+		});
+
+		await migration();
+
+		expect(mocks.backfillCandidateResultProjections).toHaveBeenCalledTimes(1);
 		expect(mocks.closeConnection).toHaveBeenCalledTimes(1);
 	});
 });

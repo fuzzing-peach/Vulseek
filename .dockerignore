@@ -19,6 +19,9 @@ dist
 # Runtime and debugging artifacts
 apps/vulseek/.docker
 apps/vulseek/.docker/**
+/vulseek-data/
+/vulseek-data-dev/
+/vulseek-data-release/
 **/.scan-runtime
 **/core
 *.log

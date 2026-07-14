@@ -76,7 +76,7 @@ const listCandidateMetadataByIds = async (
 	);
 };
 
-const toCandidateRecord = (
+export const toCandidateRecord = (
 	row: typeof vulnerabilityCandidates.$inferSelect,
 	metadata?: typeof candidateMetadata.$inferSelect,
 ): VulnerabilityCandidate => ({

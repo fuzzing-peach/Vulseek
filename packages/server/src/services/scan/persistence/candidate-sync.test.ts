@@ -8,7 +8,8 @@ import type { Task } from "../types";
 
 const makeProducerTask = (overrides?: Partial<Task>): Task => ({
 	taskId: "producer-1",
-	scanJobId: "scan-job-1",
+		scanJobId: "scan-job-1",
+		vulnerabilityCandidateId: null,
 	parentTaskId: null,
 	name: "Scan Target",
 	stageName: "scan-target",

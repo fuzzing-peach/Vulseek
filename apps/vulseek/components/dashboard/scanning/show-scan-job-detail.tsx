@@ -46,7 +46,10 @@ import {
 	LiveTaskTextButton,
 } from "@/components/dashboard/scanning/live-task-activity";
 import { ScanMonitoring } from "@/components/dashboard/scanning/scan-monitoring";
-import { ScanStageGraph } from "@/components/dashboard/scanning/scan-stage-graph";
+import {
+	ScanStageGraph,
+	type ScanRuntimeSettingsDraft,
+} from "@/components/dashboard/scanning/scan-stage-graph";
 import { useSandboxAgentActivities } from "@/components/dashboard/scanning/use-sandbox-agent-activity";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
@@ -1407,11 +1410,23 @@ export const ShowScanJobDetail = ({
 			? serviceData.evaluateConfig
 			: { agentProfileId: "", groundTruthPath: "" };
 
-	const { data: scanJob, isLoading: isLoadingJob } = api.scan.one.useQuery(
+	const {
+		data: scanJob,
+		isLoading: isLoadingJob,
+		error: jobOverviewError,
+	} = api.scan.jobOverview.useQuery(
 		{ scanJobId },
-		{ enabled: !!scanJobId, refetchInterval: 1000 },
+		{
+			enabled: !!scanJobId,
+			refetchInterval: (data) =>
+				data?.status === "finished" ||
+				data?.status === "failed" ||
+				data?.status === "canceled"
+					? false
+					: 10_000,
+		},
 	);
-	const shouldLoadStatusView =
+	const shouldLoadJobRuntime =
 		activeTab === "overview" || activeTab === "tasks";
 	const shouldLoadJobActivities = activeTab === "tasks";
 	const {
@@ -1432,6 +1447,11 @@ export const ShowScanJobDetail = ({
 		},
 		{
 			enabled: !!scanJobId && activeTab === "candidates",
+			refetchInterval:
+				activeTab === "candidates" && scanJob?.status !== "finished" &&
+					scanJob?.status !== "failed" && scanJob?.status !== "canceled"
+					? 20_000
+					: false,
 			// No keepPreviousData: show correct data only. Use isFetchingCandidates
 			// to render a dim overlay instead of replacing the table on filter change.
 		},
@@ -1444,12 +1464,40 @@ export const ShowScanJobDetail = ({
 		candidatesLastRef.current = candidatesData;
 	}
 	const candidates = candidatesLastRef.current;
-	const { data: statusView, error: statusViewError } =
-		api.scan.statusView.useQuery(
+	const { data: runningTasksData, error: runningTasksError } =
+		api.scan.jobRunningTasks.useQuery(
 			{ scanJobId },
 			{
-				enabled: !!scanJobId && shouldLoadStatusView,
-				refetchInterval: shouldLoadStatusView ? 1000 : false,
+				enabled: !!scanJobId && shouldLoadJobRuntime,
+				refetchInterval:
+					shouldLoadJobRuntime &&
+					scanJob?.status !== "finished" &&
+					scanJob?.status !== "failed" &&
+					scanJob?.status !== "canceled"
+						? 5000
+						: false,
+			},
+		);
+	const { data: queueCountsData, error: queueCountsError } =
+		api.scan.jobQueueCounts.useQuery(
+			{ scanJobId },
+			{
+				enabled: !!scanJobId && shouldLoadJobRuntime,
+				refetchInterval:
+					shouldLoadJobRuntime &&
+					scanJob?.status !== "finished" &&
+					scanJob?.status !== "failed" &&
+					scanJob?.status !== "canceled"
+						? 5000
+						: false,
+			},
+		);
+	const { data: jobPipeline } = api.scan.jobPipeline.useQuery(
+			{ scanJobId },
+			{
+				enabled: !!scanJobId && shouldLoadJobRuntime,
+				staleTime: Number.POSITIVE_INFINITY,
+				refetchOnWindowFocus: false,
 			},
 		);
 	const { data: resultSummary, isLoading: isLoadingResultSummary } =
@@ -1457,7 +1505,13 @@ export const ShowScanJobDetail = ({
 			{ scanJobId },
 			{
 				enabled: !!scanJobId && activeTab === "overview",
-				refetchInterval: activeTab === "overview" ? 2000 : false,
+				refetchInterval:
+					activeTab === "overview" &&
+					scanJob?.status !== "finished" &&
+					scanJob?.status !== "failed" &&
+					scanJob?.status !== "canceled"
+						? 10_000
+						: false,
 			},
 		);
 	const { data: latestEvaluation, isLoading: isLoadingLatestEvaluation } =
@@ -1481,7 +1535,13 @@ export const ShowScanJobDetail = ({
 			},
 			{
 				enabled: !!scanJobId && activeTab === "tasks",
-				refetchInterval: activeTab === "tasks" ? 1000 : false,
+				refetchInterval:
+					activeTab === "tasks" &&
+					scanJob?.status !== "finished" &&
+					scanJob?.status !== "failed" &&
+					scanJob?.status !== "canceled"
+						? 10_000
+						: false,
 				keepPreviousData: true,
 			},
 		);
@@ -1515,7 +1575,7 @@ export const ShowScanJobDetail = ({
 		{ scanJobId },
 		{
 			enabled: !!scanJobId && activeTab === "files",
-			refetchInterval: activeTab === "files" ? 4000 : false,
+				refetchInterval: activeTab === "files" ? 4000 : false,
 		},
 	);
 
@@ -1546,8 +1606,9 @@ export const ShowScanJobDetail = ({
 		serviceType === "application" && Boolean(scanJob?.applicationId);
 	const refreshScanJobViews = async () => {
 		await Promise.all([
-			utils.scan.one.invalidate({ scanJobId }),
-			utils.scan.statusView.invalidate({ scanJobId }),
+			utils.scan.jobOverview.invalidate({ scanJobId }),
+			utils.scan.jobRunningTasks.invalidate({ scanJobId }),
+			utils.scan.jobQueueCounts.invalidate({ scanJobId }),
 			utils.scan.resultSummary.invalidate({ scanJobId }),
 			utils.scan.latestEvaluation.invalidate({ scanJobId }),
 			utils.scan.candidates.invalidate({ scanJobId }),
@@ -1654,7 +1715,9 @@ export const ShowScanJobDetail = ({
 		currentCandidateListStateSerialized,
 		router,
 	]);
-	const queuePendingCounts = statusView?.queuePendingCounts ?? [];
+	const queuePendingCounts = queueCountsData?.queues ?? [];
+	const jobRuntimeError = runningTasksError ?? queueCountsError;
+	const hasJobRuntime = Boolean(runningTasksData && queueCountsData);
 	const getQueueTaskMetrics = (queue: (typeof queuePendingCounts)[number]) => {
 		const queued =
 			(queue.queuedCount ?? queue.pendingCount ?? 0) +
@@ -1682,7 +1745,7 @@ export const ShowScanJobDetail = ({
 		};
 	};
 	const sortedInProgressTasks = useMemo(() => {
-		return [...(statusView?.inProgressTasks || [])].sort((left, right) => {
+		return [...(runningTasksData?.tasks || [])].sort((left, right) => {
 			const stageRankDiff =
 				(RUNNING_TASK_STAGE_ORDER[left.stage] ?? Number.MAX_SAFE_INTEGER) -
 				(RUNNING_TASK_STAGE_ORDER[right.stage] ?? Number.MAX_SAFE_INTEGER);
@@ -1691,7 +1754,7 @@ export const ShowScanJobDetail = ({
 			}
 			return right.updatedAt.localeCompare(left.updatedAt);
 		});
-	}, [statusView?.inProgressTasks]);
+	}, [runningTasksData?.tasks]);
 	const taskStageOptions = useMemo(() => {
 		const seen = new Set<string>();
 		const addStage = (stage?: string | null) => {
@@ -1880,8 +1943,9 @@ export const ShowScanJobDetail = ({
 				scanT(t, "scan.candidates.analysisRequeued", "Analysis requeued"),
 			);
 			await Promise.all([
-				utils.scan.one.invalidate({ scanJobId }),
-				utils.scan.statusView.invalidate({ scanJobId }),
+				utils.scan.jobOverview.invalidate({ scanJobId }),
+				utils.scan.jobRunningTasks.invalidate({ scanJobId }),
+				utils.scan.jobQueueCounts.invalidate({ scanJobId }),
 				utils.scan.candidates.invalidate({ scanJobId }),
 			]);
 			await router.push(
@@ -1949,8 +2013,9 @@ export const ShowScanJobDetail = ({
 				}),
 			);
 			await Promise.all([
-				utils.scan.one.invalidate({ scanJobId }),
-				utils.scan.statusView.invalidate({ scanJobId }),
+				utils.scan.jobOverview.invalidate({ scanJobId }),
+				utils.scan.jobRunningTasks.invalidate({ scanJobId }),
+				utils.scan.jobQueueCounts.invalidate({ scanJobId }),
 			]);
 		} catch (error) {
 			toast.error(
@@ -2037,8 +2102,9 @@ export const ShowScanJobDetail = ({
 				);
 			}
 			await Promise.all([
-				utils.scan.one.invalidate({ scanJobId }),
-				utils.scan.statusView.invalidate({ scanJobId }),
+				utils.scan.jobOverview.invalidate({ scanJobId }),
+				utils.scan.jobRunningTasks.invalidate({ scanJobId }),
+				utils.scan.jobQueueCounts.invalidate({ scanJobId }),
 				utils.scan.terminalTasks.invalidate(),
 			]);
 		} finally {
@@ -2121,7 +2187,7 @@ export const ShowScanJobDetail = ({
 		verifyFilters.length > 0 ||
 		triageFilters.length > 0;
 	const hasAnyCandidates =
-		(statusView?.summary.totalCandidates ?? candidates?.total ?? 0) > 0;
+		(candidates?.total ?? 0) > 0;
 	const hasFinishedTaskFilters =
 		taskSearchQuery.trim().length > 0 ||
 		finishedTaskStageFilter !== "all" ||
@@ -2799,7 +2865,13 @@ export const ShowScanJobDetail = ({
 											</div>
 										)}
 									</div>
-									<ScanStageGraph scanJobId={scanJobId} />
+									<ScanStageGraph
+										scanJobId={scanJobId}
+										queueCounts={queuePendingCounts}
+										scanRuntimeSettings={
+											scanJob?.scanRuntimeSettings as ScanRuntimeSettingsDraft | null
+										}
+									/>
 									<Card className="bg-background">
 										<CardHeader>
 											<CardTitle className="text-xl">
@@ -3000,7 +3072,7 @@ export const ShowScanJobDetail = ({
 															});
 															toast.success(scanT(t, "scan.job.noteSaved", "Note saved"));
 															await Promise.all([
-																utils.scan.one.invalidate({ scanJobId }),
+												utils.scan.jobOverview.invalidate({ scanJobId }),
 																serviceType === "application"
 																	? utils.scan.allByApplication.invalidate({
 																			applicationId: serviceId,
@@ -4119,7 +4191,7 @@ export const ShowScanJobDetail = ({
 										</div>
 									</div>
 									<div className="overflow-x-auto">
-										{statusViewError ? (
+										{jobRuntimeError ? (
 											<div className="px-4 py-6 text-sm text-destructive">
 												{scanT(
 													t,
@@ -4127,7 +4199,7 @@ export const ShowScanJobDetail = ({
 													"加载队列状态失败。",
 												)}
 											</div>
-										) : !statusView ? (
+										) : !hasJobRuntime ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
 												{scanT(
 													t,
@@ -4215,7 +4287,7 @@ export const ShowScanJobDetail = ({
 											)}
 										</div>
 									</div>
-									{statusView && sortedInProgressTasks.length > 0 ? (
+									{hasJobRuntime && sortedInProgressTasks.length > 0 ? (
 										<div className="flex flex-col gap-3 border-b px-4 py-3 text-sm xl:flex-row xl:items-center xl:justify-between">
 											<div className="grid min-w-0 flex-1 grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_180px]">
 												<div className="relative">
@@ -4327,7 +4399,7 @@ export const ShowScanJobDetail = ({
 										</div>
 									) : null}
 									<div className="overflow-x-auto">
-										{!statusView || sortedInProgressTasks.length === 0 ? (
+										{!hasJobRuntime || sortedInProgressTasks.length === 0 ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
 												{scanT(t, "scan.tasks.noRunning", "暂无运行中阶段任务")}
 											</div>

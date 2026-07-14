@@ -76,7 +76,7 @@ An alternative dev workflow runs the whole stack (Vulseek, Postgres, Redis, Trae
 ./dev.sh stop                # Tear down
 ```
 
-`run.sh` is the equivalent manager for the released GHCR image (`vulseek-*-release` services). Both scripts default the scan sandbox host mount to `./vulseek-data` (override with `VULSEEK_SCAN_CONTEXT_HOST_PATH`).
+`run.sh` is the equivalent manager for the released GHCR image (`vulseek-*-release` services). Development defaults the scan sandbox host mount to `./vulseek-data-dev`; release uses `./vulseek-data-release`. Override either with `VULSEEK_SCAN_CONTEXT_HOST_PATH`.
 
 ## Architecture
 

@@ -16,6 +16,7 @@ import { findScanJobByIdRepo } from "./persistence/scan-job.repo";
 import { findVulnerabilityCandidateByIdRepo } from "./persistence/candidate.repo";
 import {
 	findTaskByIdRepo,
+	listRunningTaskRuntimeMetadataRepo,
 	listTasksByScanJobAndStatusesRepo,
 	listTasksByScanJobAndStageRepo,
 } from "./persistence/task.repo";
@@ -353,8 +354,21 @@ export const findSandboxAgentTaskRuntimeByTaskId = async (
 	return null;
 };
 
+type SandboxAgentTaskRuntimeSource = Pick<
+	Task,
+	| "taskId"
+	| "scanJobId"
+	| "stageName"
+	| "name"
+	| "status"
+	| "containerName"
+	| "threadId"
+	| "agentProfile"
+	| "updatedAt"
+>;
+
 const buildSandboxAgentTaskRuntime = async (
-	task: Task,
+	task: SandboxAgentTaskRuntimeSource,
 ): Promise<SandboxAgentTaskRuntime> => {
 	const baseDir = await resolveScanJobBaseDir(task.scanJobId);
 	const runtimeDir = resolveScanStageTaskRuntimeDir(
@@ -410,10 +424,7 @@ const buildSandboxAgentTaskRuntime = async (
 export const findRunningSandboxAgentTaskRuntimesByScanJobId = async (
 	scanJobId: string,
 ): Promise<SandboxAgentTaskRuntime[]> => {
-	const runningTasks = await listTasksByScanJobAndStatusesRepo({
-		scanJobId,
-		statuses: ["running"],
-	});
+	const runningTasks = await listRunningTaskRuntimeMetadataRepo(scanJobId);
 	return await Promise.all(runningTasks.map(buildSandboxAgentTaskRuntime));
 };
 
@@ -476,6 +487,77 @@ export const readTaskCurrentTokenUsage = async (
 	} catch {
 		return { totalTokens: 0, cachedReadTokens: 0 };
 	}
+};
+
+type IncrementalTokenUsageState = {
+	offset: number;
+	carry: string;
+	totalTokens: number;
+	cachedReadTokens: number;
+};
+
+export const createIncrementalTaskTokenUsageReader = () => {
+	const states = new Map<string, IncrementalTokenUsageState>();
+
+	const read = async (jsonlPath: string) => {
+		const previous = states.get(jsonlPath) || {
+			offset: 0,
+			carry: "",
+			totalTokens: 0,
+			cachedReadTokens: 0,
+		};
+		try {
+			const handle = await fs.open(jsonlPath, "r");
+			try {
+				const stat = await handle.stat();
+				if (stat.size < previous.offset) {
+					previous.offset = 0;
+					previous.carry = "";
+					previous.totalTokens = 0;
+					previous.cachedReadTokens = 0;
+				}
+				const bytesToRead = stat.size - previous.offset;
+				if (bytesToRead > 0) {
+					const buffer = Buffer.alloc(bytesToRead);
+					await handle.read(buffer, 0, bytesToRead, previous.offset);
+					previous.offset = stat.size;
+					const lines = `${previous.carry}${buffer.toString("utf8")}`.split("\n");
+					previous.carry = lines.pop() || "";
+					for (const rawLine of lines) {
+						const trimmed = rawLine.trim();
+						if (!trimmed) continue;
+						try {
+							const usage = getUsageUpdateCumulativeTokens(
+								getEventUpdate(JSON.parse(trimmed)),
+							);
+							if (!usage) continue;
+							previous.totalTokens = usage.used;
+							if (usage.cachedReadTokens !== null) {
+								previous.cachedReadTokens = usage.cachedReadTokens;
+							}
+						} catch {}
+					}
+				}
+			} finally {
+				await handle.close();
+			}
+		} catch {}
+		states.set(jsonlPath, previous);
+		return {
+			totalTokens: previous.totalTokens,
+			cachedReadTokens: previous.cachedReadTokens,
+		};
+	};
+
+	const clear = (jsonlPath?: string) => {
+		if (jsonlPath) {
+			states.delete(jsonlPath);
+		} else {
+			states.clear();
+		}
+	};
+
+	return { read, clear };
 };
 
 export const findCandidateSandboxAgentSession = async (input: {

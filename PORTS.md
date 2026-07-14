@@ -16,6 +16,16 @@
 | **traefik** | 20080 | → | 80 | HTTP 反向代理 | http://localhost:20080 |
 | **traefik** | 28080 | → | 8080 | Traefik Dashboard | http://localhost:28080 |
 
+Release 环境使用独立的 `3xxxx` 端口：
+
+| 服务 | 宿主机端口 | 容器端口 | 覆盖变量 |
+|------|-----------:|---------:|----------|
+| **vulseek-release** | 33000 | 3000 | `VULSEEK_RELEASE_PORT` |
+| **postgres-release** | 35432 | 5432 | `POSTGRES_RELEASE_PORT` |
+| **redis-release** | 36379 | 6379 | `REDIS_RELEASE_PORT` |
+| **traefik-release HTTP** | 30080 | 80 | `TRAEFIK_RELEASE_HTTP_PORT` |
+| **traefik-release Dashboard** | 38080 | 8080 | `TRAEFIK_RELEASE_DASHBOARD_PORT` |
+
 ## 🔍 端口说明
 
 ### 主应用 (23000)
@@ -68,32 +78,21 @@
 
 ## 🔧 修改端口
 
-如果端口冲突，可以修改 `docker-compose.dev.yml`:
+如果端口冲突，可以在运行 `dev.sh` 时覆盖环境变量：
 
-```yaml
-services:
-  vulseek-dev:
-    ports:
-      - "23001:3000"  # 改为 23001
-      - "29230:9229"  # 改为 29230
-      - "25556:5555"  # 改为 25556
-  
-  postgres:
-    ports:
-      - "25433:5432"  # 改为 25433
-  
-  redis:
-    ports:
-      - "26380:6379"  # 改为 26380
-  
-  traefik:
-    ports:
-      - "20081:80"    # 改为 20081
-      - "28081:8080"  # 改为 28081
+```bash
+VULSEEK_DEV_PORT=23001 \
+POSTGRES_DEV_PORT=25433 \
+REDIS_DEV_PORT=26380 \
+TRAEFIK_DEV_HTTP_PORT=20081 \
+TRAEFIK_DEV_DASHBOARD_PORT=28081 \
+NODE_DEBUG_DEV_PORT=29230 \
+DRIZZLE_STUDIO_DEV_PORT=25556 \
+./dev.sh start
 ```
 
 **注意**: 修改端口后需要：
-1. 重启容器: `./dev.sh restart`
+1. 停止后使用相同的环境变量重新启动: `./dev.sh stop && ./dev.sh start`
 2. 更新环境变量中的连接字符串
 3. 更新 VS Code 调试配置
 
@@ -195,4 +194,3 @@ redis-cli -p 26379
 ---
 
 **提示**: 使用 `./dev.sh status` 可以随时查看所有服务的端口和访问地址。
-
