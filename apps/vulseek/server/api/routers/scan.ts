@@ -603,10 +603,13 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 
-			return await updateScanJobRuntimeSettings(
+			const updated = await updateScanJobRuntimeSettings(
 				input.scanJobId,
 				input.scanRuntimeSettings,
 			);
+			jobRuntimeStatusStore.invalidateOverview(input.scanJobId);
+			jobRuntimeStatusStore.invalidatePipeline(input.scanJobId);
+			return updated;
 		}),
 
 	updatePipelineDefinitionSnapshot: protectedProcedure
@@ -636,10 +639,12 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 
-			return await updateScanJobPipelineDefinitionSnapshot(
+			const updated = await updateScanJobPipelineDefinitionSnapshot(
 				input.scanJobId,
 				input.scanPipelineDefinitionSnapshot,
 			);
+			jobRuntimeStatusStore.invalidatePipeline(input.scanJobId);
+			return updated;
 		}),
 
 	cancel: protectedProcedure
@@ -1570,10 +1575,10 @@ export const scanRouter = createTRPCRouter({
 		.input(
 			z.object({
 				stage: z.enum([
-					"delta_scoping",
-					"repository_scanning",
-					"module_scanning",
-					"function_scanning",
+					"delta-scope",
+					"repository-profile",
+					"identify-target",
+					"scan-target",
 				]),
 				taskId: z.string().min(1),
 			}),
@@ -1620,7 +1625,7 @@ export const scanRouter = createTRPCRouter({
 		.input(
 			z.object({
 				vulnerabilityCandidateId: z.string().min(1),
-				stage: z.enum(["analyzing", "verifying"]),
+				stage: z.enum(["analyze-finding", "verify-finding"]),
 			}),
 		)
 		.query(async ({ input, ctx }) => {

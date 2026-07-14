@@ -12,11 +12,11 @@ to:
 
 The new full-scan pipeline uses three explicit agent roles:
 
-1. `repository-scanner`
-2. `module-scanner`
-3. `function-scanner`
+1. `repository-profile`
+2. `identify-target`
+3. `scan-target`
 
-Only `function-scanner` emits final `candidate` events.
+Only `scan-target` emits final `candidate` events.
 
 The first two layers write scan result files that become shared context for the next layer.
 
@@ -34,7 +34,7 @@ The first two layers write scan result files that become shared context for the 
 
 ### Stage 1: Repository Scan
 
-Vulseek starts one `repository-scanner`.
+Vulseek starts one `repository-profile`.
 
 Responsibilities:
 
@@ -53,7 +53,7 @@ Outputs:
 
 ### Stage 2: Module Scan
 
-Vulseek reads `module_plan.json` and starts one `module-scanner` per module.
+Vulseek reads `module_plan.json` and starts one `identify-target` per module.
 
 Responsibilities:
 
@@ -71,7 +71,7 @@ Outputs per module:
 
 ### Stage 3: Function Scan
 
-Vulseek reads every `function_plan.json` and starts one `function-scanner` per function task.
+Vulseek reads every `function_plan.json` and starts one `scan-target` per function task.
 
 Responsibilities:
 
@@ -87,7 +87,7 @@ Outputs per function:
 
 ## Agent Responsibilities
 
-### `repository-scanner`
+### `repository-profile`
 
 Must produce a repository-wide view, not final findings.
 
@@ -104,7 +104,7 @@ It should answer:
 
 It must not emit final candidates.
 
-### `module-scanner`
+### `identify-target`
 
 Must produce a module-wide view, not final findings.
 
@@ -120,7 +120,7 @@ It should answer:
 
 It must not emit final candidates.
 
-### `function-scanner`
+### `scan-target`
 
 Must inspect one function task at a time.
 
@@ -262,7 +262,7 @@ Vulseek should enrich the stored candidate record with:
 - `scanJobId`
 - `moduleName`
 - `functionName`
-- `sourceStage = function-scanner`
+- `sourceStage = scan-target`
 
 ## Queue Model
 
@@ -307,11 +307,11 @@ The exact values can be tuned later.
 Full-scan job status should become:
 
 1. `queued`
-2. `repository_scanning`
-3. `module_scanning`
-4. `function_scanning`
-5. `analyzing`
-6. `verifying`
+2. `repository-profile`
+3. `identify-target`
+4. `scan-target`
+5. `analyze-finding`
+6. `verify-finding`
 7. `completed`
 8. `failed`
 
@@ -332,9 +332,9 @@ Recommended progress counters:
 
 Every scanner task runs in a fresh container:
 
-- repository-scanner container
-- module-scanner container
-- function-scanner container
+- repository-profile container
+- identify-target container
+- scan-target container
 
 Common rules:
 
@@ -376,12 +376,12 @@ Mitigation:
 
 - restrict scope to runtime code first
 - skip docs, tests, examples, generated files by default
-- allow module-scanner to omit clearly irrelevant functions
+- allow identify-target to omit clearly irrelevant functions
 - add configurable limits later if needed
 
 ### 2. Weak Function Context
 
-A function-scanner can become too local.
+A scan-target can become too local.
 
 Mitigation:
 
@@ -403,12 +403,12 @@ Mitigation:
 
 ### Phase 1
 
-Replace LLM internal spawn with programmatic `repository-scanner` and `module-scanner`.
+Replace LLM internal spawn with programmatic `repository-profile` and `identify-target`.
 
 Deliverables:
 
-- `repository-scanner` prompt/skill
-- `module-scanner` prompt/skill
+- `repository-profile` prompt/skill
+- `identify-target` prompt/skill
 - repository task runner
 - module task runner
 - `repository_scan.*`
@@ -420,12 +420,12 @@ At this phase, function scanning can still be stubbed or limited.
 
 ### Phase 2
 
-Introduce programmatic `function-scanner`.
+Introduce programmatic `scan-target`.
 
 Deliverables:
 
 - function task runner
-- `function-scanner` prompt/skill
+- `scan-target` prompt/skill
 - queue creation from `function_plan.json`
 - function-level artifacts
 - function-level candidate event ingestion
@@ -469,7 +469,7 @@ Old full-scan behavior does not need dedicated regression coverage here.
 - reject malformed function plans
 
 3. candidate event ingestion
-- function-scanner candidate event creates DB candidates correctly
+- scan-target candidate event creates DB candidates correctly
 - malformed event is rejected with debug logging
 
 4. queue transitions
@@ -479,14 +479,14 @@ Old full-scan behavior does not need dedicated regression coverage here.
 
 ### Integration Tests
 
-1. repository-scanner end-to-end
+1. repository-profile end-to-end
 - run one full-scan job
 - verify `repository_scan.md/json` and `module_plan.json` are written
 
-2. module-scanner end-to-end
+2. identify-target end-to-end
 - verify one module task writes `module_scan.md/json` and `function_plan.json`
 
-3. function-scanner end-to-end
+3. scan-target end-to-end
 - verify one function task emits candidate event
 - verify candidate is stored and visible in UI/API
 
@@ -514,7 +514,7 @@ Old full-scan behavior does not need dedicated regression coverage here.
 - module artifacts
 - function artifacts
 
-3. candidates update while function-scanners emit events
+3. candidates update while scan-targets emit events
 
 ## Recommended Initial File Layout
 
@@ -541,7 +541,7 @@ projects/<Project>/profiles/<Profile>/jobs/<ScanJobId>/
 
 Implement phase 1 first:
 
-1. add `repository-scanner` skill
-2. add `module-scanner` skill
+1. add `repository-profile` skill
+2. add `identify-target` skill
 3. replace LLM internal full-scan subagent spawning with Vulseek-driven repository/module task orchestration
 4. make `function_plan.json` the boundary between phase 1 and phase 2

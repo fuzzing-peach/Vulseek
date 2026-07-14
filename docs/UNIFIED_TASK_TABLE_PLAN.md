@@ -155,9 +155,9 @@ Recommended values:
 
 Current expected values:
 
-- `RepositoryScanningStage`
-- `ModuleScanningStage`
-- `FunctionScanningStage`
+- `RepositoryProfileStage`
+- `IdentifyTargetStage`
+- `ScanTargetStage`
 - `AnalysisStage`
 - `VerifyingStage`
 
@@ -427,14 +427,14 @@ Reason:
 
 ### Artifact path fields
 
-- `repositoryScanMdPath`
-- `repositoryScanJsonPath`
+- `repositoryProfileMdPath`
+- `repositoryProfileJsonPath`
 - `modulePlanJsonPath`
-- `moduleScanMdPath`
-- `moduleScanJsonPath`
+- `identifyTargetMdPath`
+- `identifyTargetJsonPath`
 - `functionPlanJsonPath`
-- `functionScanMdPath`
-- `functionScanJsonPath`
+- `scanTargetMdPath`
+- `scanTargetJsonPath`
 - `reportPath`
 - `issueDraftPath`
 - `pocPath`
@@ -518,21 +518,21 @@ Columns could be:
 ### `scan_repository_tasks`
 
 - maps into one `tasks` row
-- `stageName = RepositoryScanningStage`
+- `stageName = RepositoryProfileStage`
 - `name = Repository Scan`
 - `parentTaskId = null`
 
 ### `scan_module_tasks`
 
 - maps into one `tasks` row
-- `stageName = ModuleScanningStage`
+- `stageName = IdentifyTargetStage`
 - `name = moduleName`
 - `parentTaskId = repository task id`
 
 ### `scan_function_tasks`
 
 - maps into one `tasks` row
-- `stageName = FunctionScanningStage`
+- `stageName = ScanTargetStage`
 - `name = functionName`
 - `parentTaskId = owning module task`
 

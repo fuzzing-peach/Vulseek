@@ -24,7 +24,7 @@ import {
 	type StageContext,
 } from "./full-scan-stage.runtime";
 
-export type CandidateVerificationStageInput = {
+export type VerifyFindingStageInput = {
 	scanJob: ScanJob;
 	repositoryPath: string;
 	modulePath: string;
@@ -33,14 +33,14 @@ export type CandidateVerificationStageInput = {
 	analysisResultPath: string;
 };
 
-export type CandidateVerificationStageOutput = Verification;
+export type VerifyFindingStageOutput = Verification;
 
 type VerificationStageContext = StageContext & {
 	executionContext?: unknown;
 };
 
-const buildCandidateVerificationPrompt = (
-	stageInput: CandidateVerificationStageInput,
+const buildVerifyFindingPrompt = (
+	stageInput: VerifyFindingStageInput,
 	input: {
 		analysisResult: FinalAnalysis;
 		candidate: Candidate;
@@ -51,7 +51,7 @@ const buildCandidateVerificationPrompt = (
 ) => {
 	const { analysisResult, candidate } = input;
 
-	return renderPromptTemplate(new URL("./verify.prompt.md", import.meta.url), {
+	return renderPromptTemplate(new URL("./verify-finding.prompt.md", import.meta.url), {
 		taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
 		scanJobId: stageInput.scanJob.scanJobId,
 		candidateId: candidate.id,
@@ -76,9 +76,9 @@ const buildCandidateVerificationPrompt = (
 	});
 };
 
-const executeCandidateVerificationStage = async (
+const executeVerifyFindingStage = async (
 	ctx: StageContext,
-	stageInput: CandidateVerificationStageInput,
+	stageInput: VerifyFindingStageInput,
 	outputSchema?: StructuredOutputSchemaSource,
 ) => {
 	const scanJob = stageInput.scanJob;
@@ -100,7 +100,7 @@ const executeCandidateVerificationStage = async (
 	});
 	const reportPath = `${runtime.taskStageRootInContainer}/01_verify_report.md`;
 
-	const fallbackPrompt = buildCandidateVerificationPrompt(stageInput, {
+	const fallbackPrompt = buildVerifyFindingPrompt(stageInput, {
 		analysisResult,
 		candidate,
 		taskDirContainer: runtime.taskStageRootInContainer,
@@ -137,7 +137,7 @@ const executeCandidateVerificationStage = async (
 	});
 };
 
-export const createVerifyingStageDefinition = <
+export const createVerifyFindingStageDefinition = <
 	TPipelineContext extends PipelineContext & {
 		executionContext?: unknown;
 	},
@@ -148,11 +148,11 @@ export const createVerifyingStageDefinition = <
 	persistent?: boolean;
 	reuseContainer?: boolean;
 	outputSchema?: StructuredOutputSchemaSource;
-	queue?: StageQueueBinding<TPipelineContext, CandidateVerificationStageInput>;
+	queue?: StageQueueBinding<TPipelineContext, VerifyFindingStageInput>;
 }): StageDefinition<
 	TPipelineContext,
-	CandidateVerificationStageInput,
-	CandidateVerificationStageOutput,
+	VerifyFindingStageInput,
+	VerifyFindingStageOutput,
 	VerificationStageContext
 > =>
 	createStageDefinition({
@@ -181,7 +181,7 @@ export const createVerifyingStageDefinition = <
 		run: async (ctx, stageInput) => ({
 			completion: "deferred",
 			threadId: (
-				await executeCandidateVerificationStage(
+				await executeVerifyFindingStage(
 					ctx as unknown as StageContext,
 					stageInput,
 					input.outputSchema,

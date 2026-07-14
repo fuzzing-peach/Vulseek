@@ -1,17 +1,17 @@
 ---
-name: analyze
+name: analyze-finding
 description: Analyze a vulnerability candidate in depth, establish reachability and constraints, decide whether critic review is needed, and prepare final analysis for verification.
 ---
 
 Analyze a given vulnerability candidate in depth and decide whether it is a real vulnerability, under what trigger conditions it can be reached, and which evidence is still missing.
 
-# Analyze
+# Analyze Finding
 
 Use this skill when Vulseek asks an analysis agent to investigate one specific `VulnerabilityCandidate` in depth.
 
 ## Coordinator Decision Loop
 
-In the analysis-critic workflow, this skill is a coordinator. The
+In the analyze-finding and critique-finding workflow, this skill is a coordinator. The
 analysis agent decides which result type the current turn needs. The stage
 prompt defines the exact schema and route markers for each decision.
 

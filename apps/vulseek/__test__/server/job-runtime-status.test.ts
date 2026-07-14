@@ -37,6 +37,21 @@ describe("JobRuntimeStatus store", () => {
 		store.dispose();
 	});
 
+	it("reloads a pipeline after its snapshot is invalidated", async () => {
+		const loaders = createLoaders();
+		const store = createJobRuntimeStatusStore({ loaders });
+
+		await store.readPipeline("job-1");
+		await store.readPipeline("job-1");
+		expect(loaders.loadPipeline).toHaveBeenCalledTimes(1);
+
+		store.invalidatePipeline("job-1");
+		await store.readPipeline("job-1");
+
+		expect(loaders.loadPipeline).toHaveBeenCalledTimes(2);
+		store.dispose();
+	});
+
 	it("refreshes running tasks and queues on the shared runtime interval", async () => {
 		vi.useFakeTimers();
 		const loaders = createLoaders();

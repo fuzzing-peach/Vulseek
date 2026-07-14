@@ -3,46 +3,67 @@ type SnapshotSlot<T> = {
 	updatedAt: string | null;
 	lastError: string | null;
 	inFlight: Promise<void> | null;
+	version: number;
 };
 
-export type JobRuntimeLoaders = {
-	loadOverview: () => Promise<unknown>;
-	loadRunningTasks: () => Promise<unknown>;
-	loadQueueCounts: () => Promise<unknown>;
-	loadPipeline: () => Promise<unknown>;
+export type JobRuntimeLoaders<
+	TOverview = unknown,
+	TRunningTasks = unknown,
+	TQueueCounts = unknown,
+	TPipeline = unknown,
+> = {
+	loadOverview: () => Promise<TOverview>;
+	loadRunningTasks: () => Promise<TRunningTasks>;
+	loadQueueCounts: () => Promise<TQueueCounts>;
+	loadPipeline: () => Promise<TPipeline>;
 };
 
-export type JobRuntimeStatusStoreOptions = {
-	loaders?: JobRuntimeLoaders;
-	createLoaders?: (jobId: string) => JobRuntimeLoaders;
+export type JobRuntimeStatusStoreOptions<
+	TOverview,
+	TRunningTasks,
+	TQueueCounts,
+	TPipeline,
+> = {
+	loaders?: JobRuntimeLoaders<
+		TOverview,
+		TRunningTasks,
+		TQueueCounts,
+		TPipeline
+	>;
+	createLoaders?: (
+		jobId: string,
+	) => JobRuntimeLoaders<TOverview, TRunningTasks, TQueueCounts, TPipeline>;
 	overviewIntervalMs?: number;
 	runtimeIntervalMs?: number;
 	idleStopMs?: number;
 	idleEvictionMs?: number;
 	cleanupIntervalMs?: number;
 	maxEntries?: number;
-	isTerminal?: (data: unknown) => boolean;
+	isTerminal?: (data: TOverview | null) => boolean;
 };
 
-type JobRuntimeEntry = {
+type JobRuntimeEntry<TOverview, TRunningTasks, TQueueCounts, TPipeline> = {
 	jobId: string;
-	overview: SnapshotSlot<unknown>;
-	runningTasks: SnapshotSlot<unknown>;
-	queueCounts: SnapshotSlot<unknown>;
-	pipeline: SnapshotSlot<unknown>;
+	overview: SnapshotSlot<TOverview>;
+	runningTasks: SnapshotSlot<TRunningTasks>;
+	queueCounts: SnapshotSlot<TQueueCounts>;
+	pipeline: SnapshotSlot<TPipeline>;
 	lastAccessAt: number;
 	overviewTimer: ReturnType<typeof setInterval> | null;
 	runtimeTimer: ReturnType<typeof setInterval> | null;
 };
 
-const createSlot = (): SnapshotSlot<unknown> => ({
+const createSlot = <T>(): SnapshotSlot<T> => ({
 	data: null,
 	updatedAt: null,
 	lastError: null,
 	inFlight: null,
+	version: 0,
 });
 
-const createEntry = (jobId: string): JobRuntimeEntry => ({
+const createEntry = <TOverview, TRunningTasks, TQueueCounts, TPipeline>(
+	jobId: string,
+): JobRuntimeEntry<TOverview, TRunningTasks, TQueueCounts, TPipeline> => ({
 	jobId,
 	overview: createSlot(),
 	runningTasks: createSlot(),
@@ -56,8 +77,18 @@ const createEntry = (jobId: string): JobRuntimeEntry => ({
 const errorMessage = (error: unknown) =>
 	error instanceof Error ? error.message : String(error);
 
-export const createJobRuntimeStatusStore = (
-	options: JobRuntimeStatusStoreOptions,
+export const createJobRuntimeStatusStore = <
+	TOverview,
+	TRunningTasks,
+	TQueueCounts,
+	TPipeline,
+>(
+	options: JobRuntimeStatusStoreOptions<
+		TOverview,
+		TRunningTasks,
+		TQueueCounts,
+		TPipeline
+	>,
 ) => {
 	const overviewIntervalMs = options.overviewIntervalMs ?? 10_000;
 	const runtimeIntervalMs = options.runtimeIntervalMs ?? 5_000;
@@ -70,16 +101,22 @@ export const createJobRuntimeStatusStore = (
 		if (!loaders) throw new Error("Job runtime loaders are not configured");
 		return loaders;
 	};
-	const entries = new Map<string, JobRuntimeEntry>();
+	type RuntimeEntry = JobRuntimeEntry<
+		TOverview,
+		TRunningTasks,
+		TQueueCounts,
+		TPipeline
+	>;
+	const entries = new Map<string, RuntimeEntry>();
 
-	const stopTimers = (entry: JobRuntimeEntry) => {
+	const stopTimers = (entry: RuntimeEntry) => {
 		if (entry.overviewTimer) clearInterval(entry.overviewTimer);
 		if (entry.runtimeTimer) clearInterval(entry.runtimeTimer);
 		entry.overviewTimer = null;
 		entry.runtimeTimer = null;
 	};
 
-	const isIdle = (entry: JobRuntimeEntry) =>
+	const isIdle = (entry: RuntimeEntry) =>
 		Date.now() - entry.lastAccessAt >= idleStopMs;
 
 	const refresh = async <T>(
@@ -88,33 +125,36 @@ export const createJobRuntimeStatusStore = (
 	) => {
 		if (slot.inFlight) return slot.inFlight;
 
+		const version = slot.version;
 		const inFlight = loader()
 			.then((data) => {
+				if (slot.version !== version) return;
 				slot.data = data;
 				slot.updatedAt = new Date().toISOString();
 				slot.lastError = null;
 			})
 			.catch((error) => {
+				if (slot.version !== version) return;
 				slot.lastError = errorMessage(error);
 				if (!slot.data) throw error;
 			})
 			.finally(() => {
-				slot.inFlight = null;
+				if (slot.inFlight === inFlight) slot.inFlight = null;
 			});
 		slot.inFlight = inFlight;
 		return inFlight;
 	};
 
-	const refreshIfLoaded = async (
-		entry: JobRuntimeEntry,
-		slot: SnapshotSlot<unknown>,
-		loader: () => Promise<unknown>,
+	const refreshIfLoaded = async <T>(
+		entry: RuntimeEntry,
+		slot: SnapshotSlot<T>,
+		loader: () => Promise<T>,
 	) => {
 		if (!slot.data || isIdle(entry)) return;
 		await refresh(slot, loader).catch(() => {});
 	};
 
-	const startOverviewTimer = (entry: JobRuntimeEntry) => {
+	const startOverviewTimer = (entry: RuntimeEntry) => {
 		if (entry.overviewTimer) return;
 		entry.overviewTimer = setInterval(() => {
 			if (isIdle(entry)) {
@@ -126,23 +166,15 @@ export const createJobRuntimeStatusStore = (
 				await refreshIfLoaded(entry, entry.overview, loaders.loadOverview);
 				if (!options.isTerminal?.(entry.overview.data)) return;
 				await Promise.all([
-					refreshIfLoaded(
-						entry,
-						entry.runningTasks,
-						loaders.loadRunningTasks,
-					),
-					refreshIfLoaded(
-						entry,
-						entry.queueCounts,
-						loaders.loadQueueCounts,
-					),
+					refreshIfLoaded(entry, entry.runningTasks, loaders.loadRunningTasks),
+					refreshIfLoaded(entry, entry.queueCounts, loaders.loadQueueCounts),
 				]);
 				stopTimers(entry);
 			})();
 		}, overviewIntervalMs);
 	};
 
-	const startRuntimeTimer = (entry: JobRuntimeEntry) => {
+	const startRuntimeTimer = (entry: RuntimeEntry) => {
 		if (entry.runtimeTimer) return;
 		entry.runtimeTimer = setInterval(() => {
 			if (isIdle(entry)) {
@@ -151,16 +183,8 @@ export const createJobRuntimeStatusStore = (
 			}
 			const loaders = getLoaders(entry.jobId);
 			void Promise.all([
-				refreshIfLoaded(
-					entry,
-					entry.runningTasks,
-					loaders.loadRunningTasks,
-				),
-				refreshIfLoaded(
-					entry,
-					entry.queueCounts,
-					loaders.loadQueueCounts,
-				),
+				refreshIfLoaded(entry, entry.runningTasks, loaders.loadRunningTasks),
+				refreshIfLoaded(entry, entry.queueCounts, loaders.loadQueueCounts),
 			]);
 		}, runtimeIntervalMs);
 	};
@@ -175,7 +199,7 @@ export const createJobRuntimeStatusStore = (
 		}
 		while (entries.size > maxEntries) {
 			const oldest = [...entries.entries()].sort(
-			([, left], [, right]) => left.lastAccessAt - right.lastAccessAt,
+				([, left], [, right]) => left.lastAccessAt - right.lastAccessAt,
 			)[0];
 			if (!oldest) break;
 			stopTimers(oldest[1]);
@@ -191,7 +215,9 @@ export const createJobRuntimeStatusStore = (
 	const getEntry = (jobId: string) => {
 		let entry = entries.get(jobId);
 		if (!entry) {
-			entry = createEntry(jobId);
+			entry = createEntry<TOverview, TRunningTasks, TQueueCounts, TPipeline>(
+				jobId,
+			);
 			entries.set(jobId, entry);
 			evictIfNeeded();
 		}
@@ -201,30 +227,70 @@ export const createJobRuntimeStatusStore = (
 
 	const readSlot = async <T>(
 		jobId: string,
-		slotName: "overview" | "runningTasks" | "queueCounts" | "pipeline",
+		slot: SnapshotSlot<T>,
 		loader: () => Promise<T>,
-		startTimer?: (entry: JobRuntimeEntry) => void,
+		startTimer?: (entry: RuntimeEntry) => void,
 	) => {
 		const entry = getEntry(jobId);
 		startTimer?.(entry);
-		const slot = entry[slotName] as SnapshotSlot<T>;
-		const loaderKey = `load${slotName[0]?.toUpperCase()}${slotName.slice(1)}` as keyof JobRuntimeLoaders;
-		const resolvedLoader = loader ?? (getLoaders(jobId)[loaderKey] as () => Promise<T>);
 		if (!slot.data) {
-			await refresh(slot, resolvedLoader);
+			await refresh(slot, loader);
 		}
 		return slot.data as T;
 	};
 
+	const invalidateSlot = (
+		jobId: string,
+		slotName: "overview" | "runningTasks" | "queueCounts" | "pipeline",
+	) => {
+		const entry = entries.get(jobId);
+		if (!entry) return;
+		const slot = entry[slotName];
+		slot.version += 1;
+		slot.data = null;
+		slot.updatedAt = null;
+		slot.lastError = null;
+		slot.inFlight = null;
+	};
+
 	return {
-		readOverview: <T>(jobId: string, loader?: () => Promise<T>) =>
-			readSlot(jobId, "overview", loader, startOverviewTimer),
-		readRunningTasks: <T>(jobId: string, loader?: () => Promise<T>) =>
-			readSlot(jobId, "runningTasks", loader, startRuntimeTimer),
-		readQueueCounts: <T>(jobId: string, loader?: () => Promise<T>) =>
-			readSlot(jobId, "queueCounts", loader, startRuntimeTimer),
-		readPipeline: <T>(jobId: string, loader?: () => Promise<T>) =>
-			readSlot(jobId, "pipeline", loader),
+		readOverview: (jobId: string) => {
+			const entry = getEntry(jobId);
+			return readSlot(
+				jobId,
+				entry.overview,
+				getLoaders(jobId).loadOverview,
+				startOverviewTimer,
+			);
+		},
+		readRunningTasks: (jobId: string) => {
+			const entry = getEntry(jobId);
+			return readSlot(
+				jobId,
+				entry.runningTasks,
+				getLoaders(jobId).loadRunningTasks,
+				startRuntimeTimer,
+			);
+		},
+		readQueueCounts: (jobId: string) => {
+			const entry = getEntry(jobId);
+			return readSlot(
+				jobId,
+				entry.queueCounts,
+				getLoaders(jobId).loadQueueCounts,
+				startRuntimeTimer,
+			);
+		},
+		readPipeline: (jobId: string) => {
+			const entry = getEntry(jobId);
+			return readSlot(
+				jobId,
+				entry.pipeline,
+				getLoaders(jobId).loadPipeline,
+			);
+		},
+		invalidateOverview: (jobId: string) => invalidateSlot(jobId, "overview"),
+		invalidatePipeline: (jobId: string) => invalidateSlot(jobId, "pipeline"),
 		dispose: () => {
 			clearInterval(cleanupTimer);
 			for (const entry of entries.values()) stopTimers(entry);

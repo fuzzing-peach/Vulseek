@@ -101,9 +101,9 @@ The primary replacement targets are:
 
 The current business entrypoints that should remain, but switch to the new runtime, are:
 
-- `runRepositoryScannerInContainer`
-- `runModuleScannerTaskInContainer`
-- `runFunctionScannerTaskInContainer`
+- `runRepositoryProfileInContainer`
+- `runIdentifyTargetTaskInContainer`
+- `runScanTargetTaskInContainer`
 - `runCandidateAnalysisAgentInContainer`
 - `runCandidateVerifierInContainer`
 
@@ -255,7 +255,7 @@ Success criteria:
 
 Replace the runtime inside:
 
-- `runRepositoryScannerInContainer`
+- `runRepositoryProfileInContainer`
 
 Keep unchanged:
 
@@ -273,8 +273,8 @@ Success criteria:
 
 Replace the runtime inside:
 
-- `runModuleScannerTaskInContainer`
-- `runFunctionScannerTaskInContainer`
+- `runIdentifyTargetTaskInContainer`
+- `runScanTargetTaskInContainer`
 
 Keep unchanged:
 

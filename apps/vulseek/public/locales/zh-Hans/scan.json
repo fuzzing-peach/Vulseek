@@ -491,7 +491,7 @@
   "scan.task.rerunCreated": "已创建重跑阶段任务 {{id}}",
   "scan.task.openAria": "打开阶段任务 {{title}}",
   "scan.tasks.deltaScopeSubtitle": "增量 diff 影响函数定位",
-  "scan.tasks.repositoryScannerSubtitle": "仓库级规划和模块拆分",
+  "scan.tasks.repositoryProfileSubtitle": "仓库级规划和模块拆分",
   "scanType": {
     "full": "全量扫描"
   },

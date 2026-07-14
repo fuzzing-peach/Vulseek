@@ -22,9 +22,9 @@ The current implementation is centered in [packages/server/src/services/scan.ts]
 
 - `runScanJobInContainer()`
 - `runProgrammaticFullScan()`
-- `runRepositoryScannerInContainer()`
-- `runModuleScannerTaskInContainer()`
-- `runFunctionScannerTaskInContainer()`
+- `runRepositoryProfileInContainer()`
+- `runIdentifyTargetTaskInContainer()`
+- `runScanTargetTaskInContainer()`
 - `runSingleTurnAgentInContainer()`
 - `runSandboxAgentHeadlessTurnInContainer()`
 
@@ -48,7 +48,7 @@ The effective flow today is:
 2. Worker sets scan job status to `scanning`.
 3. Worker calls `runScanJobInContainer()`.
 4. Full scan enters `runProgrammaticFullScan()`.
-5. If repository scan has not completed, `runRepositoryScannerInContainer()` is called.
+5. If repository scan has not completed, `runRepositoryProfileInContainer()` is called.
 6. Repository scan calls `runSingleTurnAgentInContainer()`.
 7. `runSingleTurnAgentInContainer()` does all runtime setup:
    - `docker run`
@@ -63,12 +63,12 @@ The effective flow today is:
    - `repository_scan.json`
    - `module_plan.json`
 9. Server reads `module_plan.json` and creates `scan_module_tasks`.
-10. Module tasks are queued and processed by `runModuleScannerTaskInContainer()`.
+10. Module tasks are queued and processed by `runIdentifyTargetTaskInContainer()`.
 11. Module scan is expected to write:
    - `module_scan.json`
    - `function_plan.json`
 12. Server reads `function_plan.json` and creates `scan_function_tasks`.
-13. Function tasks are queued and processed by `runFunctionScannerTaskInContainer()`.
+13. Function tasks are queued and processed by `runScanTargetTaskInContainer()`.
 14. Function scan is expected to write `function_result.json`.
 15. Candidate analysis and verification continue later.
 
@@ -182,25 +182,25 @@ packages/server/src/services/scan/
     readers.ts
     validators.ts
     contracts/
-      repository-scan.contract.ts
+      repository-profile.contract.ts
       module-plan.contract.ts
-      module-scan.contract.ts
+      identify-target.contract.ts
       function-plan.contract.ts
       function-result.contract.ts
 
   prompts/
-    repository-scanner.prompt.ts
-    module-scanner.prompt.ts
-    function-scanner.prompt.ts
+    repository-profile.prompt.ts
+    identify-target.prompt.ts
+    scan-target.prompt.ts
 
   repository/
     prepare-repository.ts
     repository-state.ts
 
   stages/
-    repository-scan.stage.ts
-    module-scan.stage.ts
-    function-scan.stage.ts
+    repository-profile.stage.ts
+    identify-target.stage.ts
+    scan-target.stage.ts
 
   pipeline/
     pipeline-runner.ts
@@ -210,8 +210,8 @@ packages/server/src/services/scan/
 
   persistence/
     scan-job.repo.ts
-    scan-module-task.repo.ts
-    scan-function-task.repo.ts
+    identify-target-task.repo.ts
+    scan-target-task.repo.ts
     candidate.repo.ts
 ```
 
@@ -260,9 +260,9 @@ Each contract should define:
 
 Examples:
 
-- `repository-scan.contract.ts`
+- `repository-profile.contract.ts`
 - `module-plan.contract.ts`
-- `module-scan.contract.ts`
+- `identify-target.contract.ts`
 - `function-plan.contract.ts`
 - `function-result.contract.ts`
 - `analysis-result.contract.ts`
@@ -371,7 +371,7 @@ This layer should own all state transitions.
 Instead of calling low-level update functions from many places, the pipeline should call explicit transitions such as:
 
 - `job.startScanning(scanJobId)`
-- `job.enterPhase(scanJobId, "repository_scanning")`
+- `job.enterPhase(scanJobId, "repository-profile")`
 - `job.fail(scanJobId, error)`
 - `analysisTask.start(candidateId)`
 - `analysisTask.complete(candidateId, output)`
@@ -479,9 +479,9 @@ Goal:
 
 Move prompt construction into:
 
-- `prompts/repository-scanner.prompt.ts`
-- `prompts/module-scanner.prompt.ts`
-- `prompts/function-scanner.prompt.ts`
+- `prompts/repository-profile.prompt.ts`
+- `prompts/identify-target.prompt.ts`
+- `prompts/scan-target.prompt.ts`
 
 This is low risk and makes later stage extraction cleaner.
 
@@ -567,7 +567,7 @@ If implementation begins now, the highest-value first patch is:
 
 1. Create `packages/server/src/services/scan/runtime/`
 2. Extract runtime helpers out of `scan.ts`
-3. Create `artifacts/contracts/repository-scan.contract.ts`
+3. Create `artifacts/contracts/repository-profile.contract.ts`
 4. Validate `repository_scan.json` and `module_plan.json` immediately after repository stage execution
 5. Fail repository stage early when contract validation fails
 

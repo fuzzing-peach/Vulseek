@@ -2,14 +2,14 @@ import { SCAN_PIPELINE_DEFINITIONS } from "./pipeline/scan-pipeline-definitions"
 
 const EXPECTED_SCAN_STAGE_KEYS = [
 	"deltaScope",
-	"repositoryScan",
-	"moduleScan",
+	"repositoryProfile",
+	"identifyTarget",
 	"attackSurfaceModel",
-	"functionScan",
-	"analysis",
-	"analysisCritic",
-	"verification",
-	"triage",
+	"scanTarget",
+	"analyzeFinding",
+	"critiqueFinding",
+	"verifyFinding",
+	"triageFinding",
 ] as const;
 
 type RequiredScanStageMetadata = Record<

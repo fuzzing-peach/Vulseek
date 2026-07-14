@@ -70,37 +70,37 @@ const getTaskStageLabel = (t: ScanTranslation, stage?: string | null) => {
 	if (
 		stage === "Delta Scope" ||
 		stage === "delta-scope" ||
-		stage === "delta_scoping"
+		stage === "delta-scope"
 	) {
 		return formatScanStageLabel(t, "delta-scope");
 	}
 	if (
-		stage === "repository_scanning"
+		stage === "repository-profile"
 	) {
 		return formatScanStageLabel(t, "repository-profile");
 	}
 	if (
-		stage === "module_scanning"
+		stage === "identify-target"
 	) {
 		return formatScanStageLabel(t, "identify-target");
 	}
 	if (
-		stage === "function_scanning"
+		stage === "scan-target"
 	) {
 		return formatScanStageLabel(t, "scan-target");
 	}
-	if (stage === "analyzing") {
+	if (stage === "analyze-finding") {
 		return formatScanStageLabel(t, "analyze-finding");
 	}
 	if (
-		stage === "criticizing"
+		stage === "critique-finding"
 	) {
 		return formatScanStageLabel(t, "critique-finding");
 	}
-	if (stage === "verifying") {
+	if (stage === "verify-finding") {
 		return formatScanStageLabel(t, "verify-finding");
 	}
-	if (stage === "triaging") {
+	if (stage === "triage-finding") {
 		return formatScanStageLabel(t, "triage-finding");
 	}
 	return formatScanStageLabel(t, stage);
@@ -532,7 +532,9 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 			await Promise.all([
 				utils.scan.task.invalidate({ taskId, scanJobId }),
 				utils.scan.one.invalidate({ scanJobId }),
-				utils.scan.jobRuntime.invalidate({ scanJobId }),
+				utils.scan.jobOverview.invalidate({ scanJobId }),
+				utils.scan.jobRunningTasks.invalidate({ scanJobId }),
+				utils.scan.jobQueueCounts.invalidate({ scanJobId }),
 				utils.scan.listTaskDirectory.invalidate({ taskId, scanJobId }),
 			]);
 		} catch (error) {

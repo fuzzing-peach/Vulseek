@@ -50,6 +50,7 @@ import {
 	ScanStageGraph,
 	type ScanRuntimeSettingsDraft,
 } from "@/components/dashboard/scanning/scan-stage-graph";
+import { buildTaskQueueMetrics } from "@/components/dashboard/scanning/task-queue-metrics";
 import { useSandboxAgentActivities } from "@/components/dashboard/scanning/use-sandbox-agent-activity";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
@@ -637,43 +638,43 @@ const getTaskStageLabel = (t: ScanTranslation, stage?: string) => {
 	if (
 		stage === "Delta Scope" ||
 		stage === "delta-scope" ||
-		stage === "delta_scoping"
+		stage === "delta-scope"
 	) {
 		return formatScanStageLabel(t, "delta-scope");
 	}
 	if (
-		stage === "repository_scanning"
+		stage === "repository-profile"
 	) {
 		return formatScanStageLabel(t, "repository-profile");
 	}
 	if (
 		stage === "attack-surface-model" ||
-		stage === "attack_surface_modeling"
+		stage === "attack-surface-model"
 	) {
 		return formatScanStageLabel(t, "attack-surface-model");
 	}
 	if (
-		stage === "module_scanning"
+		stage === "identify-target"
 	) {
 		return formatScanStageLabel(t, "identify-target");
 	}
 	if (
-		stage === "function_scanning"
+		stage === "scan-target"
 	) {
 		return formatScanStageLabel(t, "scan-target");
 	}
-	if (stage === "analyzing") {
+	if (stage === "analyze-finding") {
 		return formatScanStageLabel(t, "analyze-finding");
 	}
 	if (
-		stage === "criticizing"
+		stage === "critique-finding"
 	) {
 		return formatScanStageLabel(t, "critique-finding");
 	}
-	if (stage === "verifying") {
+	if (stage === "verify-finding") {
 		return formatScanStageLabel(t, "verify-finding");
 	}
-	if (stage === "triaging") {
+	if (stage === "triage-finding") {
 		return formatScanStageLabel(t, "triage-finding");
 	}
 	return formatScanStageLabel(t, stage);
@@ -736,7 +737,7 @@ const localizeTaskListText = (
 	if (text === "Repository-wide planner and module partitioning") {
 		return scanT(
 			t,
-			"scan.tasks.repositoryScannerSubtitle",
+			"scan.tasks.repositoryProfileSubtitle",
 			"仓库级规划和模块拆分",
 		);
 	}
@@ -759,27 +760,27 @@ const getTaskListDisplay = (
 };
 
 const RUNNING_TASK_STAGE_ORDER: Record<string, number> = {
-	delta_scoping: 0,
-	repository_scanning: 1,
-	attack_surface_modeling: 2,
-	module_scanning: 3,
-	function_scanning: 4,
-	analyzing: 5,
-	criticizing: 6,
-	verifying: 7,
-	triaging: 8,
+	"delta-scope": 0,
+	"repository-profile": 1,
+	"attack-surface-model": 2,
+	"identify-target": 3,
+	"scan-target": 4,
+	"analyze-finding": 5,
+	"critique-finding": 6,
+	"verify-finding": 7,
+	"triage-finding": 8,
 };
 
 const TASK_STAGE_OPTION_BY_STAGE_NAME: Record<string, string> = {
-	"delta-scope": "delta_scoping",
-	"repository-profile": "repository_scanning",
-	"attack-surface-model": "attack_surface_modeling",
-	"identify-target": "module_scanning",
-	"scan-target": "function_scanning",
-	"analyze-finding": "analyzing",
-	"critique-finding": "criticizing",
-	"verify-finding": "verifying",
-	"triage-finding": "triaging",
+	"delta-scope": "delta-scope",
+	"repository-profile": "repository-profile",
+	"attack-surface-model": "attack-surface-model",
+	"identify-target": "identify-target",
+	"scan-target": "scan-target",
+	"analyze-finding": "analyze-finding",
+	"critique-finding": "critique-finding",
+	"verify-finding": "verify-finding",
+	"triage-finding": "triage-finding",
 };
 
 const normalizeTaskStageOption = (stage?: string | null) => {
@@ -1718,29 +1719,33 @@ export const ShowScanJobDetail = ({
 	const queuePendingCounts = queueCountsData?.queues ?? [];
 	const jobRuntimeError = runningTasksError ?? queueCountsError;
 	const hasJobRuntime = Boolean(runningTasksData && queueCountsData);
+	const pipelineConcurrencyByStage = useMemo(
+		() =>
+			new Map(
+				(jobPipeline?.nodes ?? []).map((node) => [
+					node.stageName,
+					node.concurrencyLimit,
+				]),
+			),
+		[jobPipeline?.nodes],
+	);
 	const getQueueTaskMetrics = (queue: (typeof queuePendingCounts)[number]) => {
-		const queued =
-			(queue.queuedCount ?? queue.pendingCount ?? 0) +
-			(queue.launchingCount ?? 0) +
-			(queue.launchedCount ?? 0);
-		const running = (queue.runningCount ?? 0) + (queue.startingCount ?? 0);
-		const done = queue.completedCount + (queue.exitedCount ?? 0);
-		const concurrencyLimit = Math.max(
-			1,
-			Number(
-				(queue as { concurrencyLimit?: number | null }).concurrencyLimit ?? 1,
-			) || 1,
+		const metrics = buildTaskQueueMetrics(
+			queue,
+			pipelineConcurrencyByStage.get(queue.stageName),
 		);
 		return {
-			queued,
-			running,
-			done,
-			concurrencyLimit,
+			...metrics,
 			title: scanT(
 				t,
 				"scan.tasks.queueMetrics",
 				"排队 {{queued}}，运行 {{running}} / {{limit}}，完成 {{done}}",
-				{ queued, running, limit: concurrencyLimit, done },
+				{
+					queued: metrics.queued,
+					running: metrics.running,
+					limit: metrics.concurrencyLimit,
+					done: metrics.done,
+				},
 			),
 		};
 	};
@@ -4212,19 +4217,19 @@ export const ShowScanJobDetail = ({
 												{scanT(t, "scan.tasks.noQueues", "暂无阶段任务队列")}
 											</div>
 										) : (
-											<table className="w-full text-sm">
+											<table className="w-full min-w-[720px] table-fixed text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
-														<th className="w-[46%] px-4 py-3 font-medium">
+													<th className="w-[30%] px-4 py-3 font-medium">
 															{scanT(t, "scan.tasks.queue", "队列")}
 														</th>
-														<th className="w-[18%] px-4 py-3 text-right font-medium">
+													<th className="w-[20%] px-4 py-3 text-right font-medium">
 															{scanT(t, "scan.status.queued", "排队中")}
 														</th>
-														<th className="w-[18%] px-4 py-3 text-right font-medium">
+													<th className="w-[30%] px-4 py-3 text-right font-medium">
 															{scanT(t, "scan.status.running", "运行中")}
 														</th>
-														<th className="w-[18%] px-4 py-3 text-right font-medium">
+													<th className="w-[20%] px-4 py-3 text-right font-medium">
 															{scanT(t, "scan.tasks.done", "完成")}
 														</th>
 													</tr>
@@ -4237,11 +4242,11 @@ export const ShowScanJobDetail = ({
 																key={queue.id}
 																className="border-b last:border-b-0"
 															>
-																<td className="w-[46%] px-4 py-3 align-top font-medium">
+														<td className="w-[30%] px-4 py-3 align-top font-medium">
 																	{formatScanStageLabel(t, queue.stageName || queue.title)}
 																</td>
 																<td
-																	className="w-[18%] px-4 py-3 text-right align-top"
+															className="w-[20%] px-4 py-3 text-right align-top"
 																	title={metrics.title}
 																>
 																	<span className="tabular-nums">
@@ -4249,7 +4254,7 @@ export const ShowScanJobDetail = ({
 																	</span>
 																</td>
 																<td
-																	className="w-[18%] px-4 py-3 text-right align-top"
+															className="w-[30%] px-4 py-3 text-right align-top"
 																	title={metrics.title}
 																>
 																	<RunningCapacityBars
@@ -4258,7 +4263,7 @@ export const ShowScanJobDetail = ({
 																	/>
 																</td>
 																<td
-																	className="w-[18%] px-4 py-3 text-right align-top"
+															className="w-[20%] px-4 py-3 text-right align-top"
 																	title={metrics.title}
 																>
 																	<span className="tabular-nums">
@@ -4408,29 +4413,35 @@ export const ShowScanJobDetail = ({
 												{scanT(t, "scan.tasks.noMatching", "没有匹配的阶段任务")}
 											</div>
 										) : (
-											<table className="w-full text-sm">
+											<table className="w-full min-w-[900px] table-fixed text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
-														<th className="w-[22%] px-4 py-3 font-medium">
-															{scanT(t, "scan.monitoring.task", "阶段任务")}
-														</th>
-														<th className="w-[10%] px-4 py-3 font-medium">
+														<th className="w-[190px] whitespace-nowrap px-4 py-3 font-medium">
 															{scanT(t, "scan.field.stage", "阶段")}
 														</th>
-														<th className="w-[10%] px-4 py-3 font-medium">
+													<th className="w-[38%] px-4 py-3 font-medium">
+															{scanT(t, "scan.monitoring.task", "阶段任务")}
+														</th>
+													<th className="w-[110px] whitespace-nowrap px-4 py-3 font-medium">
 															{scanT(t, "scan.field.runtime", "运行时长")}
 														</th>
-														<th className="w-[48%] px-4 py-3 font-medium">
+													<th className="px-4 py-3 font-medium">
 															{scanT(t, "scan.tasks.currentActivity", "当前活动")}
 														</th>
-														<th className="w-[10%] px-4 py-3 font-medium">
+													<th className="w-[120px] whitespace-nowrap px-4 py-3 font-medium">
 															{scanT(t, "scan.tasks.actions", "操作")}
 														</th>
 													</tr>
 												</thead>
 												<tbody>
-													{runningTaskPagination.items.map((task) => {
-														const displayTask = getTaskListDisplay(t, task);
+											{runningTaskPagination.items.map((task) => {
+												const taskName = String(task.taskName || "").trim();
+												const runningTaskTitle =
+													taskName ||
+													localizeTaskListText(t, task.title) ||
+													"-";
+												const runningTaskSubtitle =
+													localizeTaskListText(t, task.subtitle) || "-";
 														return (
 															<tr
 															key={task.id}
@@ -4439,7 +4450,7 @@ export const ShowScanJobDetail = ({
 																t,
 																"scan.task.openAria",
 																"打开阶段任务 {{title}}",
-																{ title: displayTask.title },
+														{ title: runningTaskTitle },
 															)}
 															onClick={(event) =>
 																handleTaskRowClick(event, task.taskId)
@@ -4449,24 +4460,24 @@ export const ShowScanJobDetail = ({
 															}
 															className="cursor-pointer border-b transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none last:border-b-0"
 														>
-															<td className="w-[22%] px-4 py-3 align-top">
-																<div className="line-clamp-2 font-medium">
-																	{displayTask.title}
-																</div>
-																<div className="text-xs text-muted-foreground break-all">
-																	{displayTask.subtitle}
-																</div>
-															</td>
-															<td className="w-[10%] px-4 py-3 align-top capitalize">
+															<td
+																className="w-[190px] whitespace-nowrap px-4 py-3 align-top capitalize"
+																title={getTaskStageLabel(t, task.stage)}
+															>
 																{getTaskStageLabel(t, task.stage)}
 															</td>
-															<td className="w-[10%] whitespace-nowrap px-4 py-3 align-top tabular-nums">
+													<td className="w-[38%] min-w-0 whitespace-normal px-4 py-3 align-top">
+														<div className="line-clamp-2 font-medium">
+															{runningTaskTitle}
+														</div>
+															</td>
+														<td className="w-[110px] whitespace-nowrap px-4 py-3 align-top tabular-nums">
 																{formatTaskRuntime(
 																	task.startedAt,
 																	runtimeNowMs,
 																)}
 															</td>
-															<td className="w-[48%] px-4 py-3 align-top">
+														<td className="px-4 py-3 align-top">
 																<LiveTaskActivityBadge
 																	activity={
 																		activitiesByTaskId[task.taskId] ||
@@ -4475,17 +4486,18 @@ export const ShowScanJobDetail = ({
 																	isConnected={activityConnectedTaskIds.has(
 																		task.taskId,
 																	)}
+																	noWrap
 																/>
 															</td>
 															<td
-																className="w-[10%] px-4 py-3 align-top"
+														className="w-[120px] whitespace-nowrap px-4 py-3 align-top"
 																data-task-row-action
 															>
 																<div className="flex items-center gap-2">
-																	<LiveTaskActivityButton
-																		taskId={task.taskId}
-																		title={displayTask.title}
-																		subtitle={displayTask.subtitle}
+														<LiveTaskActivityButton
+															taskId={task.taskId}
+															title={runningTaskTitle}
+															subtitle={runningTaskSubtitle}
 																		activity={
 																			activitiesByTaskId[task.taskId] ||
 																			idleSandboxAgentActivity
@@ -4494,10 +4506,10 @@ export const ShowScanJobDetail = ({
 																		size="icon"
 																		iconOnly
 																	/>
-																	<LiveTaskTextButton
-																		taskId={task.taskId}
-																		title={displayTask.title}
-																		subtitle={displayTask.subtitle}
+														<LiveTaskTextButton
+															taskId={task.taskId}
+															title={runningTaskTitle}
+															subtitle={runningTaskSubtitle}
 																		variant="outline"
 																		size="icon"
 																		iconOnly
@@ -4716,10 +4728,10 @@ export const ShowScanJobDetail = ({
 												{scanT(t, "scan.tasks.noMatching", "没有匹配的阶段任务")}
 											</div>
 										) : (
-											<table className="w-full text-sm">
+											<table className="w-full min-w-[1000px] table-fixed text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
-														<th className="w-12 px-4 py-3 font-medium">
+													<th className="w-[52px] px-4 py-3 font-medium">
 															<Checkbox
 																aria-label={scanT(
 																	t,
@@ -4740,25 +4752,22 @@ export const ShowScanJobDetail = ({
 																}
 															/>
 														</th>
-														<th className="w-[21%] px-4 py-3 font-medium">
-															{scanT(t, "scan.monitoring.task", "阶段任务")}
-														</th>
-														<th className="w-[9%] px-4 py-3 font-medium">
+													<th className="w-[170px] px-4 py-3 font-medium">
 															{scanT(t, "scan.field.stage", "阶段")}
 														</th>
-														<th className="w-[9%] px-4 py-3 font-medium">
+													<th className="px-4 py-3 font-medium">
+															{scanT(t, "scan.monitoring.task", "阶段任务")}
+														</th>
+													<th className="w-[120px] px-4 py-3 font-medium">
 															{scanT(t, "scan.field.status", "状态")}
 														</th>
-														<th className="w-[11%] px-4 py-3 font-medium">
+													<th className="w-[160px] px-4 py-3 font-medium">
 															{scanT(t, "scan.field.started", "开始时间")}
 														</th>
-														<th className="w-[11%] px-4 py-3 font-medium">
+													<th className="w-[160px] px-4 py-3 font-medium">
 															{scanT(t, "scan.field.completed", "完成时间")}
 														</th>
-														<th className="w-[29%] px-4 py-3 font-medium">
-															{scanT(t, "scan.task.tabs.details", "详情")}
-														</th>
-														<th className="w-[8%] px-4 py-3 font-medium">
+													<th className="w-[88px] px-4 py-3 font-medium">
 															{scanT(t, "scan.tasks.actions", "操作")}
 														</th>
 													</tr>
@@ -4771,12 +4780,13 @@ export const ShowScanJobDetail = ({
 														const isRerunningTask =
 															rerunningTaskId === task.taskId ||
 															bulkRerunningTaskIds.has(task.taskId);
-															const isSelectedFinishedTask =
-																selectedFinishedTaskIds.has(task.taskId);
-															const displayTask = getTaskListDisplay(t, task);
-															return (
-																// biome-ignore lint/a11y/useSemanticElements: the whole table row is an existing navigation target with nested row actions.
-																<tr
+														const isSelectedFinishedTask =
+															selectedFinishedTaskIds.has(task.taskId);
+														const finishedTaskTitle =
+															localizeTaskListText(t, task.title) || "-";
+														return (
+															// biome-ignore lint/a11y/useSemanticElements: the whole table row is an existing navigation target with nested row actions.
+															<tr
 																key={task.id}
 																role="link"
 																tabIndex={0}
@@ -4784,7 +4794,7 @@ export const ShowScanJobDetail = ({
 																	t,
 																	"scan.task.openAria",
 																	"打开阶段任务 {{title}}",
-																	{ title: displayTask.title },
+																	{ title: finishedTaskTitle },
 																)}
 																onClick={() =>
 																	void router.push(
@@ -4796,13 +4806,13 @@ export const ShowScanJobDetail = ({
 																}
 																className="cursor-pointer border-b transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none last:border-b-0"
 															>
-																<td className="w-12 px-4 py-3 align-top">
+														<td className="w-[52px] px-4 py-3 align-top">
 																	<Checkbox
 																		aria-label={scanT(
 																			t,
 																			"scan.tasks.selectFinishedAria",
 																			"Select task {{title}}",
-																			{ title: displayTask.title },
+																			{ title: finishedTaskTitle },
 																		)}
 																		checked={isSelectedFinishedTask}
 																		disabled={
@@ -4815,18 +4825,15 @@ export const ShowScanJobDetail = ({
 																		}
 																	/>
 																</td>
-																<td className="w-[21%] px-4 py-3 align-top">
-																	<div className="line-clamp-2 font-medium">
-																		{displayTask.title}
-																	</div>
-																	<div className="text-xs text-muted-foreground break-all">
-																		{displayTask.subtitle}
-																	</div>
-																</td>
-																<td className="w-[9%] px-4 py-3 align-top capitalize">
+														<td className="w-[170px] px-4 py-3 align-top capitalize">
 																	{getTaskStageLabel(t, task.stage)}
 																</td>
-																<td className="w-[9%] px-4 py-3 align-top">
+														<td className="min-w-0 px-4 py-3 align-top">
+																	<div className="line-clamp-2 font-medium">
+																		{finishedTaskTitle}
+																	</div>
+																</td>
+														<td className="w-[120px] px-4 py-3 align-top">
 																	<Badge
 																		variant="outline"
 																		className={getTaskStatusBadgeClassName(
@@ -4836,26 +4843,21 @@ export const ShowScanJobDetail = ({
 																		{getTaskStatusLabel(t, task.status)}
 																	</Badge>
 																</td>
-																<td className="w-[11%] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
+														<td className="w-[160px] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
 																	{task.startedAt ? (
 																		<DateTooltip date={task.startedAt} />
 																	) : (
 																		"-"
 																	)}
 																</td>
-																<td className="w-[11%] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
+														<td className="w-[160px] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
 																	{task.completedAt ? (
 																		<DateTooltip date={task.completedAt} />
 																	) : (
 																		"-"
 																	)}
 																</td>
-																<td className="w-[29%] px-4 py-3 align-top text-xs text-muted-foreground">
-																	<div className="line-clamp-3 break-words">
-																		{task.errorMessage || "-"}
-																	</div>
-																</td>
-																<td className="w-[8%] px-4 py-3 align-top">
+														<td className="w-[88px] px-4 py-3 align-top">
 																	<div className="flex items-center gap-2">
 																		<Button
 																			type="button"

@@ -1,7 +1,7 @@
 import { execAsync } from "../../../utils/process/execAsync";
 import {
 	repositoryModuleSchema,
-	repositoryScanManifestSchema,
+	repositoryProfileManifestSchema,
 	repositorySchema,
 } from "../artifacts/contracts/domain-object.contract";
 import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";
@@ -14,14 +14,14 @@ import {
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
 import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
-import { buildRepositoryScannerPrompt } from "../prompts/repository-scanner.prompt";
+import { buildRepositoryProfilePrompt } from "../prompts/repository-profile.prompt";
 import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import {
 	prepareRepositoryForScanInContainer,
 	type PreparedRepositoryState,
 } from "../repository/prepare-repository";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
-import type { RepositoryScanManifest, ScanJob } from "../types";
+import type { RepositoryProfileManifest, ScanJob } from "../types";
 import {
 	launchAgentStageRuntime,
 	resolveAgentStageRuntime,
@@ -34,23 +34,23 @@ import {
 	type StageContext,
 } from "./full-scan-stage.runtime";
 
-export type RepositoryScanningStageInput = null;
+export type RepositoryProfileStageInput = null;
 
-export type RepositoryScanningStageOutput = RepositoryScanManifest;
+export type RepositoryProfileStageOutput = RepositoryProfileManifest;
 
 const validateRepositoryStageOutput = async (
 	ctx: StageContext,
 	rawOutput: string,
-): Promise<RepositoryScanningStageOutput> => {
+): Promise<RepositoryProfileStageOutput> => {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(rawOutput);
 	} catch (error) {
 		throw new Error(
-			`Repository scan returned invalid JSON output: ${error instanceof Error ? error.message : "unknown error"}`,
+			`Repository profile returned invalid JSON output: ${error instanceof Error ? error.message : "unknown error"}`,
 		);
 	}
-	const manifest = repositoryScanManifestSchema.parse(parsed);
+	const manifest = repositoryProfileManifestSchema.parse(parsed);
 	const taskDir = await ctx.taskDir();
 	try {
 		repositorySchema.parse(
@@ -69,15 +69,15 @@ const validateRepositoryStageOutput = async (
 		}
 	} catch (error) {
 		throw new Error(
-			`Repository scan artifact validation failed: ${error instanceof Error ? error.message : "unknown error"}`,
+			`Repository profile artifact validation failed: ${error instanceof Error ? error.message : "unknown error"}`,
 		);
 	}
 	return manifest;
 };
 
-const executeRepositoryScanStage = async (
+const executeRepositoryProfileStage = async (
 	ctx: StageContext,
-	_stageInput: RepositoryScanningStageInput,
+	_stageInput: RepositoryProfileStageInput,
 	outputSchema?: StructuredOutputSchemaSource,
 ) => {
 	const pipelineScanJob = (ctx as StageContext & { scanJob?: ScanJob }).scanJob;
@@ -113,7 +113,7 @@ const executeRepositoryScanStage = async (
 		repositoryStateJson.stdout,
 	) as PreparedRepositoryState;
 
-	const fallbackPrompt = buildRepositoryScannerPrompt({
+	const fallbackPrompt = buildRepositoryProfilePrompt({
 			repositoryRoot,
 			repositoryState,
 			repositoryStatePath: `${repositoryRoot}/00_repository_state.json`,
@@ -160,14 +160,14 @@ const executeRepositoryScanStage = async (
 				agentInstruction,
 				repositoryStatePath: `${repositoryRoot}/00_repository_state.json`,
 			}),
-		outputSchema: outputSchema ?? repositoryScanManifestSchema,
+		outputSchema: outputSchema ?? repositoryProfileManifestSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
 	});
 };
 
-const launchRepositoryScanStage = async (ctx: StageContext) => {
+const launchRepositoryProfileStage = async (ctx: StageContext) => {
 	const pipelineScanJob = (ctx as StageContext & { scanJob?: ScanJob }).scanJob;
 	if (!pipelineScanJob) {
 		throw new Error("Repository stage requires scanJob in pipeline context");
@@ -194,7 +194,7 @@ const launchRepositoryScanStage = async (ctx: StageContext) => {
 	});
 };
 
-export const createRepositoryScanningStageDefinition = <
+export const createRepositoryProfileStageDefinition = <
 	TPipelineContext extends PipelineContext,
 >(input: {
 	id: string;
@@ -203,11 +203,11 @@ export const createRepositoryScanningStageDefinition = <
 	persistent?: boolean;
 	reuseContainer?: boolean;
 	outputSchema?: StructuredOutputSchemaSource;
-	queue?: StageQueueBinding<TPipelineContext, RepositoryScanningStageInput>;
+	queue?: StageQueueBinding<TPipelineContext, RepositoryProfileStageInput>;
 }): StageDefinition<
 	TPipelineContext,
-	RepositoryScanningStageInput,
-	RepositoryScanningStageOutput,
+	RepositoryProfileStageInput,
+	RepositoryProfileStageOutput,
 	StageContext
 > =>
 	createStageDefinition({
@@ -220,10 +220,10 @@ export const createRepositoryScanningStageDefinition = <
 		getDesiredConcurrency: async (ctx) =>
 			await resolveStageConcurrencySetting(ctx.scanJobId, input.id, () => 1),
 		launch: async (ctx) => {
-			await launchRepositoryScanStage(ctx as unknown as StageContext);
+			await launchRepositoryProfileStage(ctx as unknown as StageContext);
 		},
 		run: async (ctx, stageInput) => {
-			const result = await executeRepositoryScanStage(
+			const result = await executeRepositoryProfileStage(
 				ctx as unknown as StageContext,
 				stageInput,
 				input.outputSchema,

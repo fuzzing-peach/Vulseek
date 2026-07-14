@@ -5,10 +5,10 @@ import {
 import { expect, test } from "vitest";
 
 test("classifyCandidateTaskStage maps analysis and verification stage names", () => {
-	expect(classifyCandidateTaskStage("analyze-finding")).toBe("analyzing");
-	expect(classifyCandidateTaskStage("critique-finding")).toBe("analyzing");
-	expect(classifyCandidateTaskStage("verify-finding")).toBe("verifying");
-	expect(classifyCandidateTaskStage("triage-finding")).toBe("verifying");
+	expect(classifyCandidateTaskStage("analyze-finding")).toBe("analysis");
+	expect(classifyCandidateTaskStage("critique-finding")).toBe("analysis");
+	expect(classifyCandidateTaskStage("verify-finding")).toBe("verification");
+	expect(classifyCandidateTaskStage("triage-finding")).toBe("verification");
 	expect(classifyCandidateTaskStage("scan-target")).toBeNull();
 });
 
@@ -28,7 +28,7 @@ test("deriveCandidateTaskExecutionState prefers active verification work over ol
 		},
 	]);
 
-	expect(state.activeStage).toBe("verifying");
+	expect(state.activePhase).toBe("verification");
 	expect(state.activeTask?.taskId).toBe("verification-1");
 	expect(state.latestTask?.taskId).toBe("verification-1");
 	expect(state.isTerminal).toBe(false);
@@ -45,8 +45,8 @@ test("deriveCandidateTaskExecutionState treats completed analysis as rerunnable 
 		},
 	]);
 
-	expect(state.activeStage).toBeNull();
-	expect(state.latestStage).toBe("analyzing");
+	expect(state.activePhase).toBeNull();
+	expect(state.latestPhase).toBe("analysis");
 	expect(state.latestTask?.status).toBe("completed");
 	expect(state.isTerminal).toBe(true);
 	expect(state.canRerunAnalysis).toBe(true);
@@ -68,8 +68,8 @@ test("deriveCandidateTaskExecutionState treats failed verification as terminal v
 		},
 	]);
 
-	expect(state.activeStage).toBeNull();
-	expect(state.latestStage).toBe("verifying");
+	expect(state.activePhase).toBeNull();
+	expect(state.latestPhase).toBe("verification");
 	expect(state.latestTask?.taskId).toBe("verification-1");
 	expect(state.isTerminal).toBe(true);
 	expect(state.canRerunAnalysis).toBe(true);

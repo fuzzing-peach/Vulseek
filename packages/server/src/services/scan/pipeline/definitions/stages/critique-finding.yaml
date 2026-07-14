@@ -1,5 +1,5 @@
 critique-finding:
-  key: analysisCritic
+  key: critiqueFinding
   name: Critique Finding
   role: analysis
   group: review
@@ -14,8 +14,8 @@ critique-finding:
     nullableOutput: false
     cwd: /workspace/repo
     skills: [critique-finding]
-    promptFile: criticize.prompt.md
+    promptFile: critique-finding.prompt.md
   inputSchema:
-    $ref: "#/schemas/AnalysisCriticStageInput"
+    $ref: "#/schemas/CritiqueFindingStageInput"
   outputSchema:
     $ref: "#/schemas/CriticResponse"

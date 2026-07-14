@@ -53,7 +53,7 @@ schemas:
         type: string
 stages:
   repository-profile:
-    key: repositoryScan
+    key: repositoryProfile
     name: Repository Profile
     role: scan
     group: full-scan
@@ -74,7 +74,7 @@ stages:
     outputSchema:
       $ref: "#/schemas/RepositoryProfileOutput"
   scan-target:
-    key: functionScan
+    key: scanTarget
     name: Scan Target
     role: scan
     group: full-scan
@@ -157,8 +157,8 @@ pipelines:
 		"scan-target",
 		"analyze-finding",
 	]);
-	assert.equal(definitions.stageMetadata.repositoryScan?.id, "repository-profile");
-	assert.equal(definitions.stageMetadata.functionScan?.id, "scan-target");
+	assert.equal(definitions.stageMetadata.repositoryProfile?.id, "repository-profile");
+	assert.equal(definitions.stageMetadata.scanTarget?.id, "scan-target");
 	assert.equal(definitions.stageMetadata.analysis?.name, "Analyze Finding");
 	assert.equal(definitions.pipelines.full.rootStageId, "repository-profile");
 	assert.deepEqual(definitions.pipelines.delta.stageIds, [
@@ -211,7 +211,7 @@ test("parseScanPipelineDefinitionsFromYaml rejects invalid topology", () => {
 			parseScanPipelineDefinitionsFromYaml(`
 stages:
   repository-profile:
-    key: repositoryScan
+    key: repositoryProfile
     name: Repository Profile
     role: scan
     group: full-scan
@@ -244,7 +244,7 @@ test("parseScanPipelineDefinitionsFromYaml requires concurrency", () => {
 			parseScanPipelineDefinitionsFromYaml(`
 stages:
   repository-profile:
-    key: repositoryScan
+    key: repositoryProfile
     name: Repository Profile
     role: scan
     group: full-scan
@@ -274,7 +274,7 @@ test("parseScanPipelineDefinitionsFromYaml rejects unknown schema references", (
 			parseScanPipelineDefinitionsFromYaml(`
 stages:
   repository-profile:
-    key: repositoryScan
+    key: repositoryProfile
     name: Repository Profile
     role: scan
     group: full-scan
@@ -404,14 +404,14 @@ test("validatePipelineRegistryCoverage rejects missing stage and edge implementa
 	const definitions = parseScanPipelineDefinitionsFromYaml(`
 stages:
   repository-profile:
-    key: repositoryScan
+    key: repositoryProfile
     name: Repository Profile
     role: scan
     group: full-scan
     concurrency: 1
     disableable: false
   scan-target:
-    key: functionScan
+    key: scanTarget
     name: Scan Target
     role: scan
     group: full-scan

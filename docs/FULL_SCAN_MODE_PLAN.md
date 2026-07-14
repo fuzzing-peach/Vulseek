@@ -271,7 +271,7 @@ subagent 遍历模块中的每个函数，快速判断其是否安全敏感。
 关键字段：
 
 - `scanType = full`
-- `status = queued | scanning | analyzing | verifying | completed | failed`
+- `status = queued | scanning | analysis | verification | completed | failed`
 - `commitSha`
 - `targetRef`
 - `targetTag`

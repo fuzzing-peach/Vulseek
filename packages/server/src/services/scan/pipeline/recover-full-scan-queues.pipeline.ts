@@ -29,16 +29,16 @@ export const recoverFullScanQueuesPipeline = async <
 >(input: {
 	loadJobs: () => Promise<Job[]>;
 	loadScanJob: (scanJobId: string) => Promise<ScanJob>;
-	enqueueRepositoryScanWork: (scanJobId: string) => Promise<unknown>;
+	enqueueRepositoryProfileWork: (scanJobId: string) => Promise<unknown>;
 	loadModuleTasks: (scanJobId: string) => Promise<ModuleTask[]>;
 	loadFunctionTasksByModuleTaskId: (
 		moduleTaskId: string,
 	) => Promise<FunctionTask[]>;
-	enqueueModuleScanWork: (
+	enqueueIdentifyTargetWork: (
 		scanJobId: string,
 		moduleTaskId: string,
 	) => Promise<unknown>;
-	enqueueFunctionScanWork: (
+	enqueueScanTargetWork: (
 		scanJobId: string,
 		functionTaskId: string,
 	) => Promise<unknown>;
@@ -82,7 +82,7 @@ export const recoverFullScanQueuesPipeline = async <
 		}
 
 		if (job.repositoryTaskStatus === "pending") {
-			await input.enqueueRepositoryScanWork(job.scanJobId);
+			await input.enqueueRepositoryProfileWork(job.scanJobId);
 			repositoryTasksEnqueued += 1;
 		}
 
@@ -90,7 +90,7 @@ export const recoverFullScanQueuesPipeline = async <
 			const moduleTasks = await input.loadModuleTasks(job.scanJobId);
 			for (const moduleTask of moduleTasks) {
 				if (moduleTask.status === "pending") {
-					await input.enqueueModuleScanWork(
+					await input.enqueueIdentifyTargetWork(
 						job.scanJobId,
 						moduleTask.taskId,
 					);
@@ -106,7 +106,7 @@ export const recoverFullScanQueuesPipeline = async <
 							if (functionTask.status !== "pending") {
 								continue;
 							}
-							await input.enqueueFunctionScanWork(
+							await input.enqueueScanTargetWork(
 								job.scanJobId,
 								functionTask.taskId,
 						);

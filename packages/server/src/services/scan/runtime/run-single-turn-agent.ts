@@ -42,15 +42,13 @@ const RUNTIME_CUSTOM_SKILLS = [
 	"delta-scope",
 	"full-scan",
 	"full-scan-subagent",
-	"scan-repository",
+	"repository-profile",
 	"attack-surface-model",
 	"identify-target",
 	"scan-target",
-	"scan-module",
-	"scan-function",
-	"analyze",
-	"criticize",
-	"verify",
+	"analyze-finding",
+	"critique-finding",
+	"verify-finding",
 	"search-registries",
 	"tree-sitter",
 ] as const;
@@ -588,13 +586,13 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 	const target = isApplicationJob
 		? await findApplicationById(scanJob.applicationId as string)
 		: await findComposeById(scanJob.composeId as string);
-	const repositoryScanAgentProfileId =
+	const repositoryProfileAgentProfileId =
 		getRuntimeStageSetting(
 			scanJob.scanRuntimeSettings,
-			SCAN_STAGE_IDS.repositoryScan,
+			SCAN_STAGE_IDS.repositoryProfile,
 		).agentProfileId || null;
-	const scanAgentProfile = repositoryScanAgentProfileId
-		? await getAgentProfileById(repositoryScanAgentProfileId).catch(() => null)
+	const scanAgentProfile = repositoryProfileAgentProfileId
+		? await getAgentProfileById(repositoryProfileAgentProfileId).catch(() => null)
 		: null;
 
 	const appName = target.appName;

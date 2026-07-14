@@ -1,5 +1,5 @@
 verify-finding:
-  key: verification
+  key: verifyFinding
   name: Verify Finding
   role: verification
   group: review
@@ -14,8 +14,8 @@ verify-finding:
     nullableOutput: false
     cwd: /workspace/repo
     skills: [verify-finding]
-    promptFile: verify.prompt.md
+    promptFile: verify-finding.prompt.md
   inputSchema:
-    $ref: "#/schemas/CandidateVerificationStageInput"
+    $ref: "#/schemas/VerifyFindingStageInput"
   outputSchema:
     $ref: "#/schemas/Verification"

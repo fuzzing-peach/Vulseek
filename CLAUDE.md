@@ -189,7 +189,7 @@ delta:                                                     delta-scope ─(fanOu
 | `verify-finding` | ✓ | Final verification of the critic-approved analysis |
 | `triage-finding` | ✗ | Classify, score (CVSS, EPSS), and prioritize verified findings |
 
-Older stage names (`module-scan`, `function-scan`, `repository-scan`, `analysis-critic`, `candidate-*`) still exist as `.stage.ts` files/tests in `packages/server/src/services/scan/stages/` but are superseded by the YAML-driven `repository-profile`/`scan-target`/`analyze-finding`/`critique-finding`/`triage-finding` stages above — check `pipeline/definitions/pipelines/*.yaml` for what's actually wired into a given pipeline before assuming a `.stage.ts` file is live.
+Stage IDs are canonical across YAML definitions, task records, queues, APIs, and UI. Do not add aliases for retired stage names.
 
 ### Agent Runtime Architecture
 
@@ -203,7 +203,7 @@ Each AI-powered stage runs an agent inside a **Docker sandbox container**:
 
 ### Agent Skills
 
-Agent skill definitions live in `agents/skills/<name>/SKILL.md` (plus reference/workflow docs for some, e.g. `codeql/references/`, `codeql/workflows/`). Referenced by stage YAML (`skills:` list) and passed into the sandbox container. Includes: `delta-scope`, `scan-repository`, `attack-surface-model`, `identify-target`, `scan-target`, `scan-function`, `scan-module`, `analyze`, `criticize`, `verify`, `full-scan`, `full-scan-subagent`, `delta-scan`, plus tool-specific skills `codeql`, `semgrep`, `tree-sitter`, `libafl`, `build-fuzzer`, `run-fuzzer`, `address-sanitizer`, `coverage-analysis`, `search-registries`. Note some stage YAML `skills:` entries (e.g. `repository-profile`, `analyze-finding`, `critique-finding`, `verify-finding`, `triage-finding`) reference skill names that don't yet have a matching directory here — this is mid-refactor from the YAML pipeline rewrite, check for drift before relying on a skill existing.
+Agent skill definitions live in `agents/skills/<name>/SKILL.md` (plus reference/workflow docs for some, e.g. `codeql/references/`, `codeql/workflows/`). Referenced by stage YAML (`skills:` list) and passed into the sandbox container. Stage skills include `delta-scope`, `repository-profile`, `attack-surface-model`, `identify-target`, `scan-target`, `analyze-finding`, `critique-finding`, and `verify-finding`. Shared skills include `full-scan`, `full-scan-subagent`, `delta-scan`, `codeql`, `semgrep`, `tree-sitter`, `libafl`, `build-fuzzer`, `run-fuzzer`, `address-sanitizer`, `coverage-analysis`, and `search-registries`.
 
 ### Candidate Management
 

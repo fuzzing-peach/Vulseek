@@ -1,4 +1,4 @@
-import { analysisSchema } from "../artifacts/contracts/domain-object.contract";
+import { triageSchema } from "../artifacts/contracts/domain-object.contract";
 import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";
 import { bindTaskRuntimeRepo } from "../persistence/task.repo";
 import {
@@ -10,7 +10,14 @@ import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-sch
 import { renderPromptTemplate } from "../prompts/prompt-template";
 import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
-import type { Candidate, ScanJob } from "../types";
+import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "../runtime/sandbox-agent-shared";
+import type {
+	Candidate,
+	FinalAnalysis,
+	ScanJob,
+	Triage,
+	Verification,
+} from "../types";
 import {
 	launchAgentStageRuntime,
 	resolveAgentStageRuntime,
@@ -23,76 +30,93 @@ import {
 	type StageContext,
 } from "./full-scan-stage.runtime";
 
-export type CandidateAnalysisStageInput = {
+export type TriageFindingStageInput = {
 	scanJob: ScanJob;
 	repositoryPath: string;
 	modulePath: string;
 	functionPath: string;
 	candidatePath: string;
-	analysisReportTemplatePath?: string | null;
-	feedbackPath?: string | null;
+	analysisResultPath: string;
+	verifyResultPath: string;
 };
 
-export type CandidateAnalysisStageOutput = unknown;
+export type TriageFindingStageOutput = Triage;
 
-type AnalysisStageContext = StageContext & {
+type TriageStageContext = StageContext & {
 	executionContext?: unknown;
 };
 
-export const buildCandidateAnalysisPrompt = (
-	stageInput: CandidateAnalysisStageInput,
+const buildTriageFindingPrompt = (
+	stageInput: TriageFindingStageInput,
 	input: {
+		analysisResult: FinalAnalysis;
+		verifyResult: Verification;
 		candidate: Candidate;
-		reportPath: string;
 		taskDirContainer: string;
+		reportPath: string;
 		taskId: string;
 	},
 ) => {
-	const { scanJob } = stageInput;
+	const { analysisResult, verifyResult, candidate } = input;
 
-	return renderPromptTemplate(new URL("./analyze.prompt.md", import.meta.url), {
+	return renderPromptTemplate(new URL("./triage-finding.prompt.md", import.meta.url), {
 		taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
-		scanJobId: scanJob.scanJobId,
-		candidateId: input.candidate.id,
-		candidateTitle: input.candidate.title,
-		candidateDescription: input.candidate.description || "-",
-		candidateFile: input.candidate.filePath || "-",
-		candidateLine:
-			typeof input.candidate.line === "number" ? input.candidate.line : "-",
-		taskDir: input.taskDirContainer,
-		reportPath: input.reportPath,
+		scanJobId: stageInput.scanJob.scanJobId,
+		candidateId: candidate.id,
+		candidateTitle: candidate.title,
+		candidateDescription: candidate.description || "-",
+		candidateFile: candidate.filePath || "-",
+		candidateLine: typeof candidate.line === "number" ? candidate.line : "-",
+		analysisResult: analysisResult.result,
+		analysisSummary: analysisResult.summary || "-",
+		verifyResult: verifyResult.result,
+		verifySummary: verifyResult.summary || "-",
 		repositoryJsonPath: stageInput.repositoryPath,
 		moduleJsonPath: stageInput.modulePath,
 		functionJsonPath: stageInput.functionPath,
 		candidateJsonPath: stageInput.candidatePath,
-		analysisReportTemplatePath:
-			stageInput.analysisReportTemplatePath || "none",
-		feedbackJsonPath: stageInput.feedbackPath || "none",
+		analysisResultJsonPath: stageInput.analysisResultPath,
+		verifyResultJsonPath: stageInput.verifyResultPath,
+		taskDir: input.taskDirContainer,
+		reportPath: input.reportPath,
 		taskId: input.taskId,
 	});
 };
 
-const executeCandidateAnalysisStage = async (
+const executeTriageFindingStage = async (
 	ctx: StageContext,
-	stageInput: CandidateAnalysisStageInput,
+	stageInput: TriageFindingStageInput,
 	outputSchema?: StructuredOutputSchemaSource,
 ) => {
 	const scanJob = stageInput.scanJob;
 	const taskStageDirPath = await ctx.taskDir();
-	const candidate = await readTaskJsonArtifact<Candidate>({
-		taskDir: taskStageDirPath,
-		containerPath: stageInput.candidatePath,
-	});
+	const [candidate, analysisResult, verifyResult] = await Promise.all([
+		readTaskJsonArtifact<Candidate>({
+			taskDir: taskStageDirPath,
+			containerPath: stageInput.candidatePath,
+		}),
+		readTaskJsonArtifact<FinalAnalysis>({
+			taskDir: taskStageDirPath,
+			containerPath: stageInput.analysisResultPath,
+		}),
+		readTaskJsonArtifact<Verification>({
+			taskDir: taskStageDirPath,
+			containerPath: stageInput.verifyResultPath,
+		}),
+	]);
 	const runtime = await resolveAgentStageRuntime({
 		ctx,
 		containerNameParts: [candidate.id.slice(0, 8)],
+		codexHomeName: ".codex-triage-finding",
 	});
-	const reportPath = `${runtime.taskStageRootInContainer}/01_report.md`;
+	const reportPath = `${runtime.taskStageRootInContainer}/01_triage_report.md`;
 
-	const fallbackPrompt = buildCandidateAnalysisPrompt(stageInput, {
+	const fallbackPrompt = buildTriageFindingPrompt(stageInput, {
+		analysisResult,
+		verifyResult,
 		candidate,
-		reportPath,
 		taskDirContainer: runtime.taskStageRootInContainer,
+		reportPath,
 		taskId: ctx.taskId,
 	});
 
@@ -112,20 +136,20 @@ const executeCandidateAnalysisStage = async (
 		groupedPersistent: ctx.groupedPersistent,
 		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
+		runtimeFileNames: SANDBOX_AGENT_RUNTIME_FILE_NAMES,
 		cwd: await resolveStageRuntimeCwd(ctx),
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
 		prompt: await resolveStageRuntimePrompt(ctx, fallbackPrompt),
-		outputSchema: outputSchema ?? analysisSchema,
-		routeOutputSchemas: ctx.routeOutputSchemas,
+		outputSchema: outputSchema ?? triageSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });
 		},
 	});
 };
 
-export const createAnalysisStageDefinition = <
+export const createTriageFindingStageDefinition = <
 	TPipelineContext extends PipelineContext & {
 		executionContext?: unknown;
 	},
@@ -136,12 +160,12 @@ export const createAnalysisStageDefinition = <
 	persistent?: boolean;
 	reuseContainer?: boolean;
 	outputSchema?: StructuredOutputSchemaSource;
-	queue?: StageQueueBinding<TPipelineContext, CandidateAnalysisStageInput>;
+	queue?: StageQueueBinding<TPipelineContext, TriageFindingStageInput>;
 }): StageDefinition<
 	TPipelineContext,
-	CandidateAnalysisStageInput,
-	CandidateAnalysisStageOutput,
-	AnalysisStageContext
+	TriageFindingStageInput,
+	TriageFindingStageOutput,
+	TriageStageContext
 > =>
 	createStageDefinition({
 		id: input.id,
@@ -151,7 +175,7 @@ export const createAnalysisStageDefinition = <
 		reuseContainer: input.reuseContainer,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
-			await resolveStageConcurrencySetting(ctx.scanJobId, input.id, () => 2),
+			await resolveStageConcurrencySetting(ctx.scanJobId, input.id, () => 1),
 		launch: async (ctx, stageInput) => {
 			const taskStageDirPath = await (ctx as unknown as StageContext).taskDir();
 			const candidate = await readTaskJsonArtifact<Candidate>({
@@ -162,12 +186,14 @@ export const createAnalysisStageDefinition = <
 				ctx: ctx as unknown as StageContext,
 				scanJob: stageInput.scanJob,
 				containerNameParts: [candidate.id.slice(0, 8)],
+				codexHomeName: ".codex-triage-finding",
+				runtimeFileNames: SANDBOX_AGENT_RUNTIME_FILE_NAMES,
 			});
 		},
 		run: async (ctx, stageInput) => ({
 			completion: "deferred",
 			threadId: (
-				await executeCandidateAnalysisStage(
+				await executeTriageFindingStage(
 					ctx as unknown as StageContext,
 					stageInput,
 					input.outputSchema,

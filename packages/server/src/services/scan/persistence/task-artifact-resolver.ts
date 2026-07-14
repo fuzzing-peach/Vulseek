@@ -121,6 +121,10 @@ export const readTaskJsonArtifactForTask = async <T = unknown>(
 export const readCandidateIdFromTaskInputArtifact = async (
 	task: TaskRecord,
 ) => {
+	if (task.vulnerabilityCandidateId) {
+		return task.vulnerabilityCandidateId;
+	}
+
 	const input = asRecord(task.input);
 	const directCandidate = asRecord(input?.candidate);
 	const directCandidateId = readString(directCandidate, "id");
@@ -149,8 +153,25 @@ export const readCandidateIdFromTaskInputArtifact = async (
 	try {
 		const candidate = await readTaskJsonArtifactForTask(task, candidatePath);
 		const parsed = candidateSchema.safeParse(candidate);
-		return parsed.success ? parsed.data.id : null;
-	} catch {
+		if (!parsed.success) {
+			console.warn("Candidate task input artifact failed schema validation", {
+			taskId: task.taskId,
+			scanJobId: task.scanJobId,
+			stageName: task.stageName,
+			candidatePath,
+			issues: parsed.error.issues,
+		});
+			return null;
+		}
+		return parsed.data.id;
+	} catch (error) {
+		console.warn("Failed to resolve candidate ID from task input artifact", {
+			taskId: task.taskId,
+			scanJobId: task.scanJobId,
+			stageName: task.stageName,
+			candidatePath,
+			error: error instanceof Error ? error.message : String(error),
+		});
 		return null;
 	}
 };

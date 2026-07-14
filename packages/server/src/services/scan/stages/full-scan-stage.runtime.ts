@@ -55,11 +55,11 @@ const resolveStageAgentKindFromStageName = (
 	stageName: string,
 ): StageAgentKind => {
 	switch (stageName) {
-		case SCAN_STAGE_IDS.analysis:
-		case SCAN_STAGE_IDS.analysisCritic:
+		case SCAN_STAGE_IDS.analyzeFinding:
+		case SCAN_STAGE_IDS.critiqueFinding:
 			return "analysis";
-		case SCAN_STAGE_IDS.verification:
-		case SCAN_STAGE_IDS.triage:
+		case SCAN_STAGE_IDS.verifyFinding:
+		case SCAN_STAGE_IDS.triageFinding:
 			return "verification";
 		default:
 			return "scan";
@@ -70,21 +70,21 @@ const resolveStageContainerPrefix = (stageName: string) => {
 	switch (stageName) {
 		case SCAN_STAGE_IDS.deltaScope:
 			return "delta-scope";
-		case SCAN_STAGE_IDS.repositoryScan:
+		case SCAN_STAGE_IDS.repositoryProfile:
 			return "repository-profile";
 		case SCAN_STAGE_IDS.attackSurfaceModel:
 			return "attack-surface-model";
-		case SCAN_STAGE_IDS.moduleScan:
+		case SCAN_STAGE_IDS.identifyTarget:
 			return "identify-target";
-		case SCAN_STAGE_IDS.functionScan:
+		case SCAN_STAGE_IDS.scanTarget:
 			return "scan-target";
-		case SCAN_STAGE_IDS.analysis:
+		case SCAN_STAGE_IDS.analyzeFinding:
 			return "analyze-finding";
-		case SCAN_STAGE_IDS.analysisCritic:
+		case SCAN_STAGE_IDS.critiqueFinding:
 			return "critique-finding";
-		case SCAN_STAGE_IDS.verification:
+		case SCAN_STAGE_IDS.verifyFinding:
 			return "verify-finding";
-		case SCAN_STAGE_IDS.triage:
+		case SCAN_STAGE_IDS.triageFinding:
 			return "triage-finding";
 		default:
 			return sanitizeContainerNamePart(stageName);
@@ -345,7 +345,7 @@ export const isFullScanStageActive = async (
 		stageName,
 	);
 	if (
-		stageName === SCAN_STAGE_IDS.repositoryScan ||
+		stageName === SCAN_STAGE_IDS.repositoryProfile ||
 		stageName === SCAN_STAGE_IDS.deltaScope
 	) {
 		return true;
@@ -370,8 +370,8 @@ export const resolveRepositoryArtifactsDir = async (input: {
 		"jobs",
 		input.scanJobId,
 		resolveTaskRootSegment(
-			SCAN_STAGE_IDS.repositoryScan,
-			"repository-scanning",
+			SCAN_STAGE_IDS.repositoryProfile,
+			"repository-profile",
 			input.scanJobId,
 		),
 	);
@@ -391,8 +391,8 @@ export const resolveRepositoryStageRuntime = async (input: {
 		"jobs",
 		input.scanJobId,
 		resolveTaskRootSegment(
-			SCAN_STAGE_IDS.repositoryScan,
-			"repository-scanning",
+			SCAN_STAGE_IDS.repositoryProfile,
+			"repository-profile",
 			input.scanJobId,
 		),
 	);

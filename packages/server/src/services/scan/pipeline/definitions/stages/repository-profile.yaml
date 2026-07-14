@@ -1,5 +1,5 @@
 repository-profile:
-  key: repositoryScan
+  key: repositoryProfile
   name: Repository Profile
   role: scan
   group: full-scan
@@ -14,8 +14,8 @@ repository-profile:
     nullableOutput: false
     cwd: /workspace/repo
     skills: [repository-profile]
-    promptFile: scan-repository.prompt.md
+    promptFile: repository-profile.prompt.md
   inputSchema:
     $ref: "#/schemas/NullStageInput"
   outputSchema:
-    $ref: "#/schemas/RepositoryScanManifest"
+    $ref: "#/schemas/RepositoryProfileManifest"

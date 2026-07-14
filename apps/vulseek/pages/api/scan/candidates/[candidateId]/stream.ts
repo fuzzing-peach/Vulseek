@@ -78,8 +78,12 @@ export default async function handler(
 		);
 	};
 	const executionState = await deriveExecutionState();
+	let activePhase =
+		executionState.activePhase || executionState.latestPhase || "analysis";
 	let activeStage =
-		executionState.activeStage || executionState.latestStage || "analyzing";
+		executionState.activeTask?.stageName ||
+		executionState.latestTask?.stageName ||
+		"analyze-finding";
 
 	res.writeHead(200, {
 		"Content-Type": "text/event-stream",
@@ -90,7 +94,7 @@ export default async function handler(
 	res.flushHeaders?.();
 
 	const textPath =
-		activeStage === "verifying"
+		activePhase === "verification"
 			? await getCandidateVerifierAppServerTextPath(
 					scanJob.scanJobId,
 					candidate.vulnerabilityCandidateId,
@@ -143,10 +147,14 @@ export default async function handler(
 	const statusPoll = setInterval(async () => {
 		try {
 			const latestExecutionState = await deriveExecutionState();
+			activePhase =
+				latestExecutionState.activePhase ||
+				latestExecutionState.latestPhase ||
+				"analysis";
 			activeStage =
-				latestExecutionState.activeStage ||
-				latestExecutionState.latestStage ||
-				"analyzing";
+				latestExecutionState.activeTask?.stageName ||
+				latestExecutionState.latestTask?.stageName ||
+				"analyze-finding";
 
 			if (!latestExecutionState.activeTask && latestExecutionState.latestTask) {
 				sendEvent(res, "done", {

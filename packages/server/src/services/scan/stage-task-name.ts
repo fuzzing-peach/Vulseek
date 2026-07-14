@@ -6,9 +6,9 @@ export const resolveStageTaskName = <TInput>(
 		(input as Record<string, unknown> | null | undefined) || undefined;
 	switch (stageName) {
 		case "delta-scope":
-			return "delta-scoping";
+			return "delta-scope";
 		case "repository-profile":
-			return "repository-profiling";
+			return "repository-profile";
 		case "attack-surface-model":
 			return typeof record?.moduleName === "string"
 				? record.moduleName
@@ -47,7 +47,7 @@ export const resolveStageTaskName = <TInput>(
 				"title" in record.candidate &&
 				typeof record.candidate.title === "string"
 				? record.candidate.title
-				: "candidate-analysis";
+				: stageName;
 		case "verify-finding":
 			return typeof record?.analysisResult === "object" &&
 				record.analysisResult &&
@@ -57,14 +57,14 @@ export const resolveStageTaskName = <TInput>(
 				"title" in record.analysisResult.candidate &&
 				typeof record.analysisResult.candidate.title === "string"
 				? record.analysisResult.candidate.title
-				: "candidate-verification";
+				: "verify-finding";
 		case "triage-finding":
 			return typeof record?.candidate === "object" &&
 				record.candidate &&
 				"title" in record.candidate &&
 				typeof record.candidate.title === "string"
 				? record.candidate.title
-				: "candidate-triage";
+				: "triage-finding";
 		default:
 			return stageName;
 	}

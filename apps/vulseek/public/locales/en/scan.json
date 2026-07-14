@@ -491,7 +491,7 @@
   "scan.task.rerunCreated": "Created rerun task {{id}}",
   "scan.task.openAria": "Open task {{title}}",
   "scan.tasks.deltaScopeSubtitle": "Diff impact function scoping",
-  "scan.tasks.repositoryScannerSubtitle": "Repository-wide planner and module partitioning",
+  "scan.tasks.repositoryProfileSubtitle": "Repository-wide planner and module partitioning",
   "scanType": {
     "full": "Full Scan"
   },

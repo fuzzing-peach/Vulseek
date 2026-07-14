@@ -1,6 +1,6 @@
-AnalysisCriticStageInput:
+CritiqueFindingStageInput:
   allOf:
-    - $ref: "#/schemas/CandidateAnalysisStageInput"
+    - $ref: "#/schemas/AnalyzeFindingStageInput"
     - type: object
       required: [draftAnalysisPath, analysisFingerprint]
       properties:

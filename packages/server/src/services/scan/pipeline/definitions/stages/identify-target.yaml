@@ -1,5 +1,5 @@
 identify-target:
-  key: moduleScan
+  key: identifyTarget
   name: Identify Target
   role: scan
   group: full-scan

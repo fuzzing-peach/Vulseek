@@ -50,7 +50,7 @@ const sendEvent = (
 };
 
 const resolveStage = (value: string | string[] | undefined) =>
-	value === "verifying" ? "verifying" : "analyzing";
+	value === "verify-finding" ? "verify-finding" : "analyze-finding";
 
 export default async function handler(
 	req: NextApiRequest,
@@ -119,7 +119,7 @@ export default async function handler(
 	};
 
 	const filePath =
-		requestedStage === "verifying"
+		requestedStage === "verify-finding"
 			? await getCandidateVerifierAppServerJsonlPath(
 					scanJob.scanJobId,
 					candidate.vulnerabilityCandidateId,
@@ -198,10 +198,7 @@ export default async function handler(
 			if (!executionState.activeTask && executionState.latestTask) {
 				sendEvent(res, "done", {
 					status: executionState.latestTask.status,
-					stage:
-						executionState.latestStage ||
-						executionState.activeStage ||
-						requestedStage,
+					stage: executionState.latestTask.stageName || requestedStage,
 				});
 				cleanup();
 				res.end();

@@ -13,6 +13,11 @@ import {
 	verificationSchema,
 } from "../artifacts/contracts/domain-object.contract";
 import { createShortTaskId } from "../task-id";
+import {
+	mapRunningTaskStage,
+	type RunningTaskStage,
+	RUNNING_TASK_VIEW_STATUSES,
+} from "../running-task-stage";
 import type { AnalysisResult, TriageResult, VerificationResult } from "../types";
 import { upsertCandidateResultProjectionTx } from "./candidate-result-projection.repo";
 import { readCandidateIdFromTaskInputArtifact } from "./task-artifact-resolver";
@@ -225,6 +230,7 @@ const buildTriageTaskResultView = async (
 export const createTaskRepo = async (input: {
 	taskId?: string;
 	scanJobId: string;
+	vulnerabilityCandidateId?: string | null;
 	parentTaskId?: string | null;
 	name: string;
 	stageName: string;
@@ -263,6 +269,8 @@ export const createTaskRepo = async (input: {
 				.values({
 					taskId: input.taskId || createShortTaskId(),
 					scanJobId: input.scanJobId,
+					vulnerabilityCandidateId:
+						input.vulnerabilityCandidateId ?? null,
 					parentTaskId: input.parentTaskId ?? null,
 					name: input.name,
 					stageName: input.stageName,
@@ -433,18 +441,10 @@ export const listRunningTaskRuntimeMetadataRepo = async (scanJobId: string) =>
 export type RunningTaskViewRepoRow = {
 	id: string;
 	taskId: string;
+	taskName: string;
 	title: string;
 	subtitle: string;
-	stage:
-		| "delta_scoping"
-		| "repository_scanning"
-		| "attack_surface_modeling"
-		| "module_scanning"
-		| "function_scanning"
-		| "analyzing"
-		| "criticizing"
-		| "verifying"
-		| "triaging";
+	stage: RunningTaskStage;
 	startedAt: string | null;
 	updatedAt: string;
 };
@@ -452,6 +452,9 @@ export type RunningTaskViewRepoRow = {
 export const listRunningTaskViewsByScanJobIdRepo = async (
 	scanJobId: string,
 ): Promise<RunningTaskViewRepoRow[]> => {
+	const activeStatuses = RUNNING_TASK_VIEW_STATUSES.map(
+		(status) => sql`${status}`,
+	);
 	const result = await db.execute(sql`
 		SELECT
 			t."taskId",
@@ -489,7 +492,7 @@ export const listRunningTaskViewsByScanJobIdRepo = async (
 			ON vc."scanJobId" = t."scanJobId"
 			AND vc."vulnerabilityCandidateId" = t."vulnerabilityCandidateId"
 		WHERE t."scanJobId" = ${scanJobId}
-			AND t."status" = 'running'
+			AND t."status" IN (${sql.join(activeStatuses, sql`, `)})
 		ORDER BY t."updatedAt" DESC
 	`);
 
@@ -509,20 +512,7 @@ export const listRunningTaskViewsByScanJobIdRepo = async (
 			keys.map((key) => value[key]).find((item) => item !== null && item !== undefined && item !== "") ?? null;
 		const location = (filePath: unknown, line: unknown) =>
 			[filePath, line].filter((part) => part !== null && part !== undefined && part !== "").join(":");
-		const stage = (() => {
-			switch (stageName) {
-				case "delta-scope": return "delta_scoping" as const;
-				case "repository-scan": return "repository_scanning" as const;
-				case "attack-surface-model": return "attack_surface_modeling" as const;
-				case "module-scan": return "module_scanning" as const;
-				case "function-scan": return "function_scanning" as const;
-				case "analyze-finding": return "analyzing" as const;
-				case "critique-finding": return "criticizing" as const;
-				case "verify-finding": return "verifying" as const;
-				case "triage-finding": return "triaging" as const;
-				default: return null;
-			}
-		})();
+		const stage = mapRunningTaskStage(stageName);
 		if (!stage) {
 			return null;
 		}
@@ -531,16 +521,16 @@ export const listRunningTaskViewsByScanJobIdRepo = async (
 		if (stageName === "delta-scope") {
 			title = "Delta Scope";
 			subtitle = "Diff impact function scoping";
-		} else if (stageName === "repository-scan") {
-			title = "Repository Scanner";
+		} else if (stageName === "repository-profile") {
+			title = "Repository Profile";
 			subtitle = "Repository-wide planner and module partitioning";
 		} else if (stageName === "attack-surface-model") {
 			title = String(first("moduleName") || value.name || "");
 			subtitle = String(first("moduleId") || "-");
-		} else if (stageName === "module-scan") {
+		} else if (stageName === "identify-target") {
 			title = String(first("moduleName", "moduleObjectName") || value.name || "");
 			subtitle = String(first("moduleId", "moduleObjectId") || "-");
-		} else if (stageName === "function-scan") {
+		} else if (stageName === "scan-target") {
 			title = String(first("targetName", "targetId", "targetObjectName", "targetObjectId", "functionName", "functionId", "functionObjectName", "functionObjectId") || value.name || "");
 			subtitle = [
 				first("moduleName", "moduleObjectName", "targetModuleName", "functionModuleName", "functionModuleNameNested"),
@@ -553,6 +543,7 @@ export const listRunningTaskViewsByScanJobIdRepo = async (
 		return {
 			id: `${stageName}-${String(value.taskId)}`,
 			taskId: String(value.taskId),
+			taskName: String(value.name || ""),
 			title,
 			subtitle,
 			stage,

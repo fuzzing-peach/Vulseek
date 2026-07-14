@@ -5,14 +5,14 @@ type SandboxAgentSessionMetadata = {
 	taskId: string;
 	scanJobId: string;
 	taskKind:
-		| "delta_scoping"
-		| "repository_scanning"
-		| "module_scanning"
-		| "function_scanning"
-		| "analyzing"
-		| "criticizing"
-		| "verifying"
-		| "triaging";
+		| "delta-scope"
+		| "repository-profile"
+		| "identify-target"
+		| "scan-target"
+		| "analyze-finding"
+		| "critique-finding"
+		| "verify-finding"
+		| "triage-finding";
 	containerName?: string | null;
 	baseUrl?: string | null;
 	provider?: "codex" | "claude";

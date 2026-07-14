@@ -1,4 +1,4 @@
-CandidateTriageStageInput:
+TriageFindingStageInput:
   type: object
   required:
     - scanJob

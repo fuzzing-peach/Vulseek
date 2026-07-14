@@ -19,12 +19,16 @@ dist
 # Runtime and debugging artifacts
 apps/vulseek/.docker
 apps/vulseek/.docker/**
-/vulseek-data/
-/vulseek-data-dev/
-/vulseek-data-release/
+vulseek-data
+vulseek-data/**
+vulseek-data-dev
+vulseek-data-dev/**
+vulseek-data-release
+vulseek-data-release/**
 **/.scan-runtime
 **/core
 *.log
+local_credentials.txt
 
 # Local-only third-party checkout
 third_party/raptor

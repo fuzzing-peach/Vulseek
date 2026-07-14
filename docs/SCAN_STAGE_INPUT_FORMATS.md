@@ -17,17 +17,17 @@ It does **not** describe older conceptual schemas or the skill prompt prose. It 
   - execution/runtime helpers needed to run the agent and persist artifacts
 - Current code still names these types `*StageDeps`, but semantically they are stage input objects.
 
-## 1. RepositoryScanningStage
+## 1. RepositoryProfileStage
 
 Source:
 
 - `packages/server/src/services/scan.ts`
-- `packages/server/src/services/scan/stages/repository-scan.stage.ts`
+- `packages/server/src/services/scan/stages/repository-profile.stage.ts`
 
 Current shape:
 
 ```ts
-type RepositoryScanningStageInput = {
+type RepositoryProfileStageInput = {
   taskId: string;
   scanJob: ScanJob;
   executionContext: {
@@ -72,17 +72,17 @@ Field notes:
 - `validateArtifacts`: validates `repository_scan.*` and `module_plan.json`
 - `syncScanModuleTasksFromPlanFile`: persists downstream module tasks from `module_plan.json`
 
-## 2. ModuleScanningStage
+## 2. IdentifyTargetStage
 
 Source:
 
 - `packages/server/src/services/scan.ts`
-- `packages/server/src/services/scan/stages/module-scan.stage.ts`
+- `packages/server/src/services/scan/stages/identify-target.stage.ts`
 
 Current shape:
 
 ```ts
-type ModuleScanningStageInput = {
+type IdentifyTargetStageInput = {
   taskId: string;
   module: ScanModuleTask & {
     scanJob: ScanJob;
@@ -129,17 +129,17 @@ Field notes:
 - `ensureFunctionPlan`: currently server-side fallback gate for missing function plan
 - `syncFunctionTasksFromPlanFile`: persists downstream function tasks from `function_plan.json`
 
-## 3. FunctionScanningStage
+## 3. ScanTargetStage
 
 Source:
 
 - `packages/server/src/services/scan.ts`
-- `packages/server/src/services/scan/stages/function-scan.stage.ts`
+- `packages/server/src/services/scan/stages/scan-target.stage.ts`
 
 Current shape:
 
 ```ts
-type FunctionScanningStageInput = {
+type ScanTargetStageInput = {
   taskId: string;
   function: ScanFunctionTask & {
     scanJob: ScanJob;
@@ -187,7 +187,7 @@ Field notes:
 Source:
 
 - `packages/server/src/services/scan.ts`
-- `packages/server/src/services/scan/stages/candidate-analysis.stage.ts`
+- `packages/server/src/services/scan/stages/analyze-finding.stage.ts`
 
 Current shape:
 
@@ -216,7 +216,7 @@ type AnalysisStageInput = {
   }) => Promise<string>;
   runAnalysisAgent: (input: {
     vulnerabilityCandidateId: string;
-    stage: "analyzing";
+    phase: "analysis";
     prompt: string;
   }) => Promise<unknown>;
 };
@@ -234,7 +234,7 @@ Field notes:
 Source:
 
 - `packages/server/src/services/scan.ts`
-- `packages/server/src/services/scan/stages/candidate-verification.stage.ts`
+- `packages/server/src/services/scan/stages/verify-finding.stage.ts`
 
 Current shape:
 
@@ -292,9 +292,9 @@ Field notes:
 
 | Stage | Primary business object | `taskId` source | Has joined upstream context | Has container/runtime execution fields |
 | --- | --- | --- | --- | --- |
-| `RepositoryScanningStage` | `scanJob` | `repositoryTaskId` | no nested join beyond `scanJob` | yes |
-| `ModuleScanningStage` | `module` | `scanModuleTaskId` | `module.scanJob` | yes |
-| `FunctionScanningStage` | `function` | `scanFunctionTaskId` | `function.module.scanJob` | yes |
+| `RepositoryProfileStage` | `scanJob` | `repositoryTaskId` | no nested join beyond `scanJob` | yes |
+| `IdentifyTargetStage` | `module` | `scanModuleTaskId` | `module.scanJob` | yes |
+| `ScanTargetStage` | `function` | `scanFunctionTaskId` | `function.module.scanJob` | yes |
 | `AnalysisStage` | `candidate` | `candidateAnalysisTaskId` fallback candidate id | `candidate.function.module.scanJob` | no direct container fields |
 | `VerifyingStage` | `analysisResult` | `candidateVerificationTaskId` fallback candidate id | `analysisResult.candidate.function.module.scanJob` | no direct container fields |
 

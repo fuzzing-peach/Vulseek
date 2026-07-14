@@ -104,7 +104,7 @@ export const buildEffectiveDisabledStageSet = (input: {
 }) => {
 	const settings = normalizeScanRuntimeSettings(input.settings);
 	const stageNames = input.stageNames ?? FULL_SCAN_STAGE_IDS;
-	const rootStageName = input.rootStageName ?? SCAN_STAGE_IDS.repositoryScan;
+	const rootStageName = input.rootStageName ?? SCAN_STAGE_IDS.repositoryProfile;
 	const explicitDisabled = new Set(
 		Object.entries(settings.stages ?? {})
 			.filter(([, setting]) => setting.disabled === true)

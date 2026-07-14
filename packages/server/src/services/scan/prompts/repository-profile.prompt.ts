@@ -9,7 +9,7 @@ export type PreparedRepositoryStateForPrompt = {
 	resolvedTargetSha: string;
 };
 
-export const buildRepositoryScannerPrompt = (input: {
+export const buildRepositoryProfilePrompt = (input: {
 	repository: {
 		name: string;
 		id: string;
@@ -20,7 +20,7 @@ export const buildRepositoryScannerPrompt = (input: {
 	agentProvider: string;
 	thinkingLevel?: string | null;
 }) => {
-	return renderPromptTemplate(new URL("./scan-repository.prompt.md", import.meta.url), {
+	return renderPromptTemplate(new URL("./repository-profile.prompt.md", import.meta.url), {
 		taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
 		repositoryId: input.repository.id,
 		repositoryName: input.repository.name,

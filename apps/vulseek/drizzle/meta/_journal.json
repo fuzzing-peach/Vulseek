@@ -1471,6 +1471,20 @@
       "when": 1783442000000,
       "tag": "0209_candidate_result_projection",
       "breakpoints": true
+    },
+    {
+      "idx": 210,
+      "version": "7",
+      "when": 1783443000000,
+      "tag": "0210_canonical_scan_stage_names",
+      "breakpoints": true
+    },
+    {
+      "idx": 211,
+      "version": "7",
+      "when": 1783444000000,
+      "tag": "0211_canonical_scan_prompt_files",
+      "breakpoints": true
     }
   ]
 }

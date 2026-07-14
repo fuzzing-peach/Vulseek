@@ -12,7 +12,7 @@ const makeDefinitions = (concurrency: number): ScanPipelineDefinitions => ({
 	stages: [
 		{
 			id: "scan-target",
-			key: "functionScan",
+			key: "scanTarget",
 			name: "Scan Target",
 			role: "scan",
 			group: "scan",
@@ -38,10 +38,10 @@ const makeDefinitions = (concurrency: number): ScanPipelineDefinitions => ({
 		},
 	],
 	stageMetadata: {
-		functionScan: { id: "scan-target", name: "Scan Target" },
+		scanTarget: { id: "scan-target", name: "Scan Target" },
 	},
 	stageMetadataById: {
-		"scan-target": { key: "functionScan", id: "scan-target", name: "Scan Target" },
+		"scan-target": { key: "scanTarget", id: "scan-target", name: "Scan Target" },
 	},
 	stageSettings: {
 		scanTarget: {

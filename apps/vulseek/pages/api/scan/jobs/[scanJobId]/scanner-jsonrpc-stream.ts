@@ -3,8 +3,8 @@ import {
 	findComposeById,
 	findScanJobById,
 	findTaskById,
-	getFunctionScannerAppServerJsonlPath,
-	getModuleScannerAppServerJsonlPath,
+	getScanTargetAppServerJsonlPath,
+	getIdentifyTargetAppServerJsonlPath,
 	getScanJobAppServerJsonlPath,
 	validateRequest,
 } from "@vulseek/server";
@@ -50,14 +50,14 @@ const sendEvent = (
 
 const resolveScannerStage = (
 	value: string | string[] | undefined,
-): "repository_scanning" | "module_scanning" | "function_scanning" | null => {
-	if (value === "repository_scanning") {
+): "repository-profile" | "identify-target" | "scan-target" | null => {
+	if (value === "repository-profile") {
 		return value;
 	}
-	if (value === "module_scanning") {
+	if (value === "identify-target") {
 		return value;
 	}
-	if (value === "function_scanning") {
+	if (value === "scan-target") {
 		return value;
 	}
 	return null;
@@ -121,7 +121,7 @@ export default async function handler(
 	let moduleId: string | null = null;
 	let functionId: string | null = null;
 
-	if (requestedStage === "module_scanning") {
+	if (requestedStage === "identify-target") {
 		scanModuleTaskId =
 			typeof req.query.scanModuleTaskId === "string"
 				? req.query.scanModuleTaskId
@@ -144,13 +144,13 @@ export default async function handler(
 			res.status(404).json({ message: "Module task metadata not found" });
 			return;
 		}
-		filePath = await getModuleScannerAppServerJsonlPath(
+		filePath = await getIdentifyTargetAppServerJsonlPath(
 			scanJobId,
 			moduleId,
 		);
 	}
 
-	if (requestedStage === "function_scanning") {
+	if (requestedStage === "scan-target") {
 		producerTaskId =
 			typeof req.query.producerTaskId === "string"
 				? req.query.producerTaskId
@@ -178,7 +178,7 @@ export default async function handler(
 			res.status(404).json({ message: "Function task metadata not found" });
 			return;
 		}
-		filePath = await getFunctionScannerAppServerJsonlPath(
+		filePath = await getScanTargetAppServerJsonlPath(
 			scanJobId,
 			moduleId,
 			functionId,
@@ -255,7 +255,7 @@ export default async function handler(
 
 	const statusPoll = setInterval(async () => {
 		try {
-			if (requestedStage === "repository_scanning") {
+			if (requestedStage === "repository-profile") {
 				const latestScanJob = await findScanJobById(scanJobId);
 				if (latestScanJob.repositoryTaskStatus !== "running") {
 					sendEvent(res, "done", {
@@ -268,7 +268,7 @@ export default async function handler(
 				return;
 			}
 
-			if (requestedStage === "module_scanning" && scanModuleTaskId) {
+			if (requestedStage === "identify-target" && scanModuleTaskId) {
 				const latestTask = await findTaskById(scanModuleTaskId).catch(() => null);
 				if (!latestTask || latestTask.status !== "running") {
 					sendEvent(res, "done", {
@@ -283,7 +283,7 @@ export default async function handler(
 				return;
 			}
 
-			if (requestedStage === "function_scanning" && producerTaskId) {
+			if (requestedStage === "scan-target" && producerTaskId) {
 				const latestTask = await findTaskById(producerTaskId).catch(() => null);
 				if (!latestTask || latestTask.status !== "running") {
 					sendEvent(res, "done", {

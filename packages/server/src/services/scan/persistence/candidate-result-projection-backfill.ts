@@ -12,7 +12,7 @@ import {
 	validateCandidateResultOutput,
 } from "./candidate-result-projection.repo";
 
-const BACKFILL_ID = "v1";
+const BACKFILL_ID = "v2";
 
 type SkippedTask = {
 	taskId: string;
@@ -37,18 +37,31 @@ const updateBackfill = async (patch: {
 };
 
 export const backfillCandidateResultProjections = async () => {
+	await db
+		.insert(candidateResultProjectionBackfills)
+		.values({
+			backfillId: BACKFILL_ID,
+			status: "pending",
+			updatedAt: new Date().toISOString(),
+		})
+		.onConflictDoNothing();
 	const marker = await db
 		.select()
 		.from(candidateResultProjectionBackfills)
 		.where(eq(candidateResultProjectionBackfills.backfillId, BACKFILL_ID))
 		.limit(1)
 		.then((rows) => rows[0] || null);
-	if (!marker || marker.status === "completed") {
+	if (marker?.status === "completed") {
 		return {
-			processedCount: marker?.processedCount ?? 0,
-			skippedCount: marker?.skippedCount ?? 0,
-			skippedTasks: marker?.skippedTasks ?? [],
+			processedCount: marker.processedCount,
+			skippedCount: marker.skippedCount,
+			skippedTasks: marker.skippedTasks,
 		};
+	}
+	if (!marker) {
+		throw new Error(
+			`Candidate result projection backfill ${BACKFILL_ID} is missing`,
+		);
 	}
 
 	const startedAt = new Date().toISOString();

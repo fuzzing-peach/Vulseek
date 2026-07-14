@@ -214,14 +214,14 @@ export type SandboxAgentTaskRuntime = {
 	scanJobId: string;
 	stageName: string;
 	taskKind:
-		| "delta_scoping"
-		| "repository_scanning"
-		| "module_scanning"
-		| "function_scanning"
-		| "analyzing"
-		| "criticizing"
-		| "verifying"
-		| "triaging";
+		| "delta-scope"
+		| "repository-profile"
+		| "identify-target"
+		| "scan-target"
+		| "analyze-finding"
+		| "critique-finding"
+		| "verify-finding"
+		| "triage-finding";
 	status: string;
 	containerName: string | null;
 	sessionId: string | null;
@@ -247,17 +247,17 @@ const inspectContainerIpAddress = async (containerName: string) => {
 
 const resolveScannerTaskSession = async (input: {
 	stage:
-		| "delta_scoping"
-		| "repository_scanning"
-		| "module_scanning"
-		| "function_scanning";
+		| "delta-scope"
+		| "repository-profile"
+		| "identify-target"
+		| "scan-target";
 	taskId: string;
 }) => {
 	const task = await findTaskByIdRepo(input.taskId).catch(() => null);
 	if (!task) {
 		if (
-			input.stage !== "repository_scanning" &&
-			input.stage !== "delta_scoping"
+			input.stage !== "repository-profile" &&
+			input.stage !== "delta-scope"
 		) {
 			return null;
 		}
@@ -290,10 +290,10 @@ const resolveScannerTaskSession = async (input: {
 
 export const findScanJobSandboxAgentSession = async (input: {
 	stage:
-		| "delta_scoping"
-		| "repository_scanning"
-		| "module_scanning"
-		| "function_scanning";
+		| "delta-scope"
+		| "repository-profile"
+		| "identify-target"
+		| "scan-target";
 	taskId: string;
 }): Promise<SandboxAgentLiveSession | null> => {
 	const task = await resolveScannerTaskSession(input);
@@ -377,32 +377,32 @@ const buildSandboxAgentTaskRuntime = async (
 		task.name,
 		task.taskId,
 	);
-	let taskKind: SandboxAgentTaskRuntime["taskKind"] = "repository_scanning";
+	let taskKind: SandboxAgentTaskRuntime["taskKind"] = "repository-profile";
 
 	switch (task.stageName) {
 		case "delta-scope":
-			taskKind = "delta_scoping";
+			taskKind = "delta-scope";
 			break;
 		case "repository-profile":
-			taskKind = "repository_scanning";
+			taskKind = "repository-profile";
 			break;
 		case "identify-target":
-			taskKind = "module_scanning";
+			taskKind = "identify-target";
 			break;
 		case "scan-target":
-			taskKind = "function_scanning";
+			taskKind = "scan-target";
 			break;
 		case "analyze-finding":
-			taskKind = "analyzing";
+			taskKind = "analyze-finding";
 			break;
 		case "critique-finding":
-			taskKind = "criticizing";
+			taskKind = "critique-finding";
 			break;
 		case "verify-finding":
-			taskKind = "verifying";
+			taskKind = "verify-finding";
 			break;
 		case "triage-finding":
-			taskKind = "triaging";
+			taskKind = "triage-finding";
 			break;
 	}
 
@@ -562,11 +562,10 @@ export const createIncrementalTaskTokenUsageReader = () => {
 
 export const findCandidateSandboxAgentSession = async (input: {
 	candidateId: string;
-	stage: "analyzing" | "verifying";
+	stage: "analyze-finding" | "verify-finding";
 }): Promise<SandboxAgentLiveSession | null> => {
 	const candidate = await findVulnerabilityCandidateByIdRepo(input.candidateId);
-	const stageName =
-		input.stage === "verifying" ? "verify-finding" : "analyze-finding";
+	const stageName = input.stage;
 	const task = (
 		await listTasksByScanJobAndStageRepo({
 			scanJobId: candidate.scanJobId,

@@ -1,5 +1,5 @@
 analyze-finding:
-  key: analysis
+  key: analyzeFinding
   name: Analyze Finding
   role: analysis
   group: review
@@ -14,8 +14,8 @@ analyze-finding:
     nullableOutput: false
     cwd: /workspace/repo
     skills: [analyze-finding]
-    promptFile: analyze.prompt.md
+    promptFile: analyze-finding.prompt.md
   inputSchema:
-    $ref: "#/schemas/CandidateAnalysisStageInput"
+    $ref: "#/schemas/AnalyzeFindingStageInput"
   outputSchema:
     $ref: "#/schemas/Analysis"

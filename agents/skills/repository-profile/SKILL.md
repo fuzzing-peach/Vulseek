@@ -1,9 +1,9 @@
 ---
-name: scan-repository
+name: repository-profile
 description: Build repository context and split the repository into downstream vulnerability-mining modules.
 ---
 
-# Scan Repository
+# Repository Profile
 
 ## Purpose
 

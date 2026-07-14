@@ -1,9 +1,9 @@
 ---
-name: verify
+name: verify-finding
 description: Sanity-check a critic-approved vulnerability analysis by confirming whether its factual claims, code paths, symbols, data-flow descriptions, trigger conditions, and preconditions exist or basically hold. Do not decide security impact, exploitability, CVSS, EPSS, or issue-report readiness.
 ---
 
-# Verify
+# Verify Finding
 
 Use this skill when Vulseek launches the Verify stage for a candidate whose final analysis result is already available.
 

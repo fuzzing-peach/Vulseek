@@ -15,10 +15,10 @@ const TERMINAL_TASK_STATUSES = new Set([
 
 export const classifyCandidateTaskStage = (stageName: string) => {
 	if (stageName === "analyze-finding" || stageName === "critique-finding") {
-		return "analyzing" as const;
+		return "analysis" as const;
 	}
 	if (stageName === "verify-finding" || stageName === "triage-finding") {
-		return "verifying" as const;
+		return "verification" as const;
 	}
 	return null;
 };
@@ -33,8 +33,8 @@ export type CandidateTaskStateTask = {
 export type CandidateTaskExecutionState = {
 	latestTask: CandidateTaskStateTask | null;
 	activeTask: CandidateTaskStateTask | null;
-	activeStage: "analyzing" | "verifying" | null;
-	latestStage: "analyzing" | "verifying" | null;
+	activePhase: "analysis" | "verification" | null;
+	latestPhase: "analysis" | "verification" | null;
 	isTerminal: boolean;
 	canRerunAnalysis: boolean;
 };
@@ -48,18 +48,18 @@ export const deriveCandidateTaskExecutionState = (
 	const latestTask = sortedTasks[0] || null;
 	const activeTask =
 		sortedTasks.find((task) => ACTIVE_TASK_STATUSES.has(task.status)) || null;
-	const activeStage = activeTask
+	const activePhase = activeTask
 		? classifyCandidateTaskStage(activeTask.stageName)
 		: null;
-	const latestStage = latestTask
+	const latestPhase = latestTask
 		? classifyCandidateTaskStage(latestTask.stageName)
 		: null;
 
 	return {
 		latestTask,
 		activeTask,
-		activeStage,
-		latestStage,
+		activePhase,
+		latestPhase,
 		isTerminal: latestTask
 			? TERMINAL_TASK_STATUSES.has(latestTask.status)
 			: false,

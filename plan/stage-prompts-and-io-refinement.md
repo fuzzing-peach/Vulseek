@@ -29,7 +29,7 @@ Analysis -> Verification
   - prompt 只要求 agent 填写对应 stage 负责的字段，避免把关键证据散落在 prose 中。
   - prompt 文案可以直接替换现有实现，不需要为旧提示词保留兼容或 fallback；兼容边界只保留在输入输出 schema、route、artifact 和 pipeline contract 上。
 
-- `RepositoryScanningStage`：
+- `RepositoryProfileStage`：
   - 仍以划分 repository-level security modules 为核心目的，但模块不是代码目录的互斥分片。
   - 每个 module 表达一种安全分析视角：独立的威胁模型、攻击面、安全边界、入口、关键状态和危险 sink 组合。
   - 允许模块重叠：同一个文件、函数、协议层、解析器或状态机可以出现在多个 module 中，只要它在不同攻击路径或信任边界下承担不同安全角色。
@@ -37,7 +37,7 @@ Analysis -> Verification
   - 每个 module 的 `files` / `entryPoints` / `trustBoundaries` / `attackSurfaces` 要说明为什么这些元素共同构成一个安全模块，而不是仅按目录或组件 ownership 拆分。
   - 目标是给后续 module/function scan 提供类似 Raptor `context-map.json` 的全局背景，同时保留安全模块划分，帮助后续 stages 针对不同威胁模型分别枚举函数和 candidate。
 
-- `ModuleScanningStage`：
+- `IdentifyTargetStage`：
   - 从 module function enumeration 升级为 module security model analyzer。
   - 目标不是单纯列出函数，而是分析当前 module 的安全边界、攻击面、威胁模型、入口、关键状态、危险 sink 和主要漏洞类型。
   - 输入的 module 可能与其他 module 共享文件或函数；本 stage 只围绕当前 module 的威胁模型、攻击面、入口和安全边界选择函数，不要求去重到全局唯一 ownership。
@@ -46,7 +46,7 @@ Analysis -> Verification
   - 每个 function 还要说明它和当前 module 安全模型的关系：它是入口、解析/规范化、认证/授权、状态更新、边界检查、资源管理、加解密/证书处理、危险 sink、错误处理，还是反证/低优先级函数。
   - 目标是让 function stage 知道为什么扫这个函数、它对应哪个攻击面或安全边界、可能关联什么漏洞类型，以及它在攻击路径中的可能位置。
 
-- `FunctionScanningStage`：
+- `ScanTargetStage`：
   - 对应 Raptor Stage A 的 one-shot candidate formation。
   - Candidate 输出增加 claim、rootCauseKey、evidence、attackerControl、affectedSink、preconditions、quickDisproofAttempt、needsFuzzing、needsManualAnalysis。
   - `needsFuzzing` 不只表示“需要动态证据证明漏洞”，也可以表示“代码路径、状态机、解析逻辑或输入空间过于复杂，静态审计无法可靠覆盖，需要 fuzz 辅助探索可达路径和异常状态”。

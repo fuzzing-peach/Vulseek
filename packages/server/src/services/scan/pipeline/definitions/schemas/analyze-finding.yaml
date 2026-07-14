@@ -1,4 +1,4 @@
-CandidateAnalysisStageInput:
+AnalyzeFindingStageInput:
   type: object
   required: [scanJob, repositoryPath, modulePath, functionPath, candidatePath]
   properties:

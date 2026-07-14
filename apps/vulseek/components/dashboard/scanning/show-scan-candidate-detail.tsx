@@ -147,16 +147,6 @@ type CandidateTaskLineageTask = {
 	relation: "repository" | "module" | "function" | "candidate";
 };
 
-const classifyCandidateTaskStage = (stageName?: string | null) => {
-	if (stageName === "analyze-finding" || stageName === "critique-finding") {
-		return "analyzing" as const;
-	}
-	if (stageName === "verify-finding" || stageName === "triage-finding") {
-		return "verifying" as const;
-	}
-	return null;
-};
-
 const getTaskStageLabel = (t: ScanTranslation, stage?: string | null) => {
 	if (stage === "delta-scope") {
 		return formatScanStageLabel(t, "delta-scope");
@@ -721,17 +711,15 @@ export const ShowScanCandidateDetail = ({
 		return {
 			latestTask,
 			activeTask,
-			activeStage: classifyCandidateTaskStage(activeTask?.stageName),
-			latestStage: classifyCandidateTaskStage(latestTask?.stageName),
 			canRerunAnalysis: latestTask
 				? RERUNNABLE_CANDIDATE_TASK_STATUSES.has(latestTask.status)
 				: false,
 		};
 	}, [candidateLineage?.tasks]);
 	const candidateStreamStage =
-		candidateExecutionState.activeStage ||
-		candidateExecutionState.latestStage ||
-		"analyzing";
+		candidateExecutionState.activeTask?.stageName ||
+		candidateExecutionState.latestTask?.stageName ||
+		"analyze-finding";
 	const candidateTaskId = candidateExecutionState.activeTask?.taskId || "";
 	const { messages: liveJsonRpcMessages } = useSandboxAgentSession({
 		taskId: candidateTaskId,
@@ -817,7 +805,9 @@ export const ShowScanCandidateDetail = ({
 				}),
 				utils.scan.candidates.invalidate({ scanJobId }),
 				utils.scan.one.invalidate({ scanJobId }),
-				utils.scan.jobRuntime.invalidate({ scanJobId }),
+				utils.scan.jobOverview.invalidate({ scanJobId }),
+				utils.scan.jobRunningTasks.invalidate({ scanJobId }),
+				utils.scan.jobQueueCounts.invalidate({ scanJobId }),
 				utils.scan.candidateTaskLineage.invalidate({
 					vulnerabilityCandidateId: candidateId,
 					scanJobId,
@@ -994,7 +984,8 @@ export const ShowScanCandidateDetail = ({
 									isLoading={verifyCandidateMutation.isLoading}
 									disabled={
 										verifyCandidateMutation.isLoading ||
-										candidateExecutionState.activeStage === "verifying"
+										candidateExecutionState.activeTask?.stageName ===
+											"verify-finding"
 									}
 									onClick={async () => {
 										try {

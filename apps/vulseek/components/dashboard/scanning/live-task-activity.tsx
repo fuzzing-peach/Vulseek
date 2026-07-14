@@ -211,10 +211,12 @@ export const LiveTaskActivityBadge = ({
 	taskId,
 	activity,
 	isConnected,
+	noWrap = false,
 }: {
 	taskId?: string;
 	activity?: SandboxAgentActivity;
 	isConnected?: boolean;
+	noWrap?: boolean;
 }) => {
 	const { t } = useTranslation("scan");
 	const liveActivity = useSandboxAgentActivity({
@@ -226,12 +228,21 @@ export const LiveTaskActivityBadge = ({
 
 	return (
 		<div className="min-w-0 flex-1">
-			<div className="flex flex-wrap items-center gap-2">
+			<div
+				className={
+					noWrap
+						? "flex min-w-0 flex-nowrap items-center gap-2 overflow-hidden"
+						: "flex flex-wrap items-center gap-2"
+				}
+			>
 				{resolvedIsConnected ? (
 					<span
 						title={scanT(t, "scan.activity.live", "Live")}
-						className="size-1.5 shrink-0 rounded-full bg-emerald-500"
-					/>
+						className="relative flex h-2 w-2 shrink-0"
+					>
+						<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+						<span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+					</span>
 				) : null}
 				<Badge
 					variant="outline"

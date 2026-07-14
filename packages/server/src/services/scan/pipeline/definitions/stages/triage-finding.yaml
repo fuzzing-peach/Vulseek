@@ -1,5 +1,5 @@
 triage-finding:
-  key: triage
+  key: triageFinding
   name: Triage Finding
   role: verification
   group: review
@@ -14,8 +14,8 @@ triage-finding:
     nullableOutput: false
     cwd: /workspace/repo
     skills: [triage-finding]
-    promptFile: triage.prompt.md
+    promptFile: triage-finding.prompt.md
   inputSchema:
-    $ref: "#/schemas/CandidateTriageStageInput"
+    $ref: "#/schemas/TriageFindingStageInput"
   outputSchema:
     $ref: "#/schemas/Triage"

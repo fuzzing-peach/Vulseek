@@ -1,4 +1,4 @@
-CandidateVerificationStageInput:
+VerifyFindingStageInput:
   type: object
   required:
     - scanJob

@@ -155,8 +155,8 @@ type RepositoryTaskMeta = {
   attempt: number;
   containerName: string | null;
   threadId: string | null;
-  repositoryScanMdPath: string | null;
-  repositoryScanJsonPath: string | null;
+  repositoryProfileMdPath: string | null;
+  repositoryProfileJsonPath: string | null;
   modulePlanJsonPath: string | null;
   startedAt: string | null;
   completedAt: string | null;
@@ -219,8 +219,8 @@ type ModuleTaskMeta = {
   attempt: number;
   containerName: string | null;
   threadId: string | null;
-  moduleScanMdPath: string | null;
-  moduleScanJsonPath: string | null;
+  identifyTargetMdPath: string | null;
+  identifyTargetJsonPath: string | null;
   functionPlanJsonPath: string | null;
   startedAt: string | null;
   completedAt: string | null;
@@ -281,8 +281,8 @@ type FunctionTaskMeta = {
   attempt: number;
   containerName: string | null;
   threadId: string | null;
-  functionScanMdPath: string | null;
-  functionScanJsonPath: string | null;
+  scanTargetMdPath: string | null;
+  scanTargetJsonPath: string | null;
   startedAt: string | null;
   completedAt: string | null;
   errorMessage: string | null;
@@ -552,7 +552,7 @@ For each object family:
 
 ### Repository
 
-- replace generic `repositoryScanSchema = z.record(...)`
+- replace generic `repositoryProfileSchema = z.record(...)`
 - define canonical `repositorySchema`
 - persist its fields into `scan_repository_tasks` result columns, or into a dedicated JSONB/result payload column if you prefer
 

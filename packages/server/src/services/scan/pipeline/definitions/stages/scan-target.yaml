@@ -1,5 +1,5 @@
 scan-target:
-  key: functionScan
+  key: scanTarget
   name: Scan Target
   role: scan
   group: full-scan

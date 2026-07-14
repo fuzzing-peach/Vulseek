@@ -31,7 +31,7 @@ test("resolveStageTaskName uses candidate title for analysis-adjacent stages", (
 });
 
 test("resolveStageTaskName uses a stable delta scope root task name", () => {
-	assert.equal(resolveStageTaskName("delta-scope", null), "delta-scoping");
+	assert.equal(resolveStageTaskName("delta-scope", null), "delta-scope");
 });
 
 test("resolveStageTaskName appends vulnerability class focus", () => {

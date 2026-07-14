@@ -252,7 +252,7 @@ export const moduleSchema = z
 
 export const repositoryModuleSchema = moduleSchema;
 
-export const repositoryScanManifestSchema = z.object({
+export const repositoryProfileManifestSchema = z.object({
 	repository: artifactPathOf(repositorySchema),
 	modules: artifactPathListOf(repositoryModuleSchema),
 });
@@ -263,11 +263,6 @@ export const deltaScopeManifestSchema = z
 		functions: artifactPathListOf(functionSchema),
 	})
 	.strict();
-
-export const moduleScanManifestSchema = z.object({
-	module: artifactPathOf(moduleSchema),
-	functions: artifactPathListOf(functionSchema),
-});
 
 export const identifyTargetManifestSchema = z
 	.object({
@@ -332,11 +327,9 @@ export const candidateSchema = z.object({
 	needsManualAnalysis: z.boolean(),
 });
 
-export const functionScanManifestSchema = z.object({
+export const scanTargetManifestSchema = z.object({
 	candidates: artifactPathListOf(candidateSchema),
 });
-
-export const scanTargetManifestSchema = functionScanManifestSchema;
 
 export const analysisSchema = z.object({
 	id: z.string().min(1),
@@ -437,13 +430,12 @@ export const triageSchema = z.object({
 });
 
 export type Repository = z.infer<typeof repositorySchema>;
-export type RepositoryScanManifest = z.infer<
-	typeof repositoryScanManifestSchema
+export type RepositoryProfileManifest = z.infer<
+	typeof repositoryProfileManifestSchema
 >;
 export type DeltaScopeManifest = z.infer<typeof deltaScopeManifestSchema>;
 export type RepositoryModule = z.infer<typeof repositoryModuleSchema>;
 export type Module = z.infer<typeof moduleSchema>;
-export type ModuleScanManifest = z.infer<typeof moduleScanManifestSchema>;
 export type Target = z.infer<typeof targetSchema>;
 export type IdentifyTargetManifest = z.infer<typeof identifyTargetManifestSchema>;
 export type ModuleThreatModel = z.infer<typeof moduleThreatModelSchema>;
@@ -453,7 +445,6 @@ export type ModuleThreatModelManifest = z.infer<
 export type Function = z.infer<typeof functionSchema>;
 export type Evidence = z.infer<typeof evidenceSchema>;
 export type Candidate = z.infer<typeof candidateSchema>;
-export type FunctionScanManifest = z.infer<typeof functionScanManifestSchema>;
 export type ScanTargetManifest = z.infer<typeof scanTargetManifestSchema>;
 export type Analysis = z.infer<typeof analysisSchema>;
 export type CriticResponse = z.infer<typeof criticResponseSchema>;

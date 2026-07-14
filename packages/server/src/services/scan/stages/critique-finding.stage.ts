@@ -17,29 +17,29 @@ import {
 	resolveStageRuntimeCwd,
 	resolveStageRuntimePrompt,
 } from "./agent-stage-runtime";
-import type { CandidateAnalysisStageInput } from "./candidate-analysis.stage";
+import type { AnalyzeFindingStageInput } from "./analyze-finding.stage";
 import {
 	type PipelineContext,
 	resolveStageConcurrencySetting,
 	type StageContext,
 } from "./full-scan-stage.runtime";
 
-export type AnalysisCriticStageInput = CandidateAnalysisStageInput & {
+export type CritiqueFindingStageInput = AnalyzeFindingStageInput & {
 	draftAnalysisPath: string;
 	analysisFingerprint: string;
 };
 
-export type AnalysisCriticStageOutput = unknown;
+export type CritiqueFindingStageOutput = unknown;
 
-const buildAnalysisCriticPrompt = (
-	input: AnalysisCriticStageInput,
+const buildCritiqueFindingPrompt = (
+	input: CritiqueFindingStageInput,
 	paths: {
 		candidate: Candidate;
 		taskDirContainer: string;
 		taskId: string;
 	},
 ) =>
-	renderPromptTemplate(new URL("./criticize.prompt.md", import.meta.url), {
+	renderPromptTemplate(new URL("./critique-finding.prompt.md", import.meta.url), {
 		taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
 		candidateId: paths.candidate.id,
 		candidateTitle: paths.candidate.title,
@@ -50,9 +50,9 @@ const buildAnalysisCriticPrompt = (
 		taskId: paths.taskId,
 	});
 
-const executeAnalysisCriticStage = async (
+const executeCritiqueFindingStage = async (
 	ctx: StageContext,
-	stageInput: AnalysisCriticStageInput,
+	stageInput: CritiqueFindingStageInput,
 	outputSchema?: StructuredOutputSchemaSource,
 ) => {
 	const taskStageDirPath = await ctx.taskDir();
@@ -63,10 +63,10 @@ const executeAnalysisCriticStage = async (
 	const runtime = await resolveAgentStageRuntime({
 		ctx,
 		containerNameParts: [candidate.id.slice(0, 8)],
-		codexHomeName: ".codex-analysis-critic",
+		codexHomeName: ".codex-critique-finding",
 	});
 
-	const fallbackPrompt = buildAnalysisCriticPrompt(stageInput, {
+	const fallbackPrompt = buildCritiqueFindingPrompt(stageInput, {
 		candidate,
 		taskDirContainer: runtime.taskStageRootInContainer,
 		taskId: ctx.taskId,
@@ -101,7 +101,7 @@ const executeAnalysisCriticStage = async (
 	});
 };
 
-export const createAnalysisCriticStageDefinition = <
+export const createCritiqueFindingStageDefinition = <
 	TPipelineContext extends PipelineContext,
 >(input: {
 	id: string;
@@ -110,11 +110,11 @@ export const createAnalysisCriticStageDefinition = <
 	persistent?: boolean;
 	reuseContainer?: boolean;
 	outputSchema?: StructuredOutputSchemaSource;
-	queue?: StageQueueBinding<TPipelineContext, AnalysisCriticStageInput>;
+	queue?: StageQueueBinding<TPipelineContext, CritiqueFindingStageInput>;
 }): StageDefinition<
 	TPipelineContext,
-	AnalysisCriticStageInput,
-	AnalysisCriticStageOutput,
+	CritiqueFindingStageInput,
+	CritiqueFindingStageOutput,
 	StageContext
 > =>
 	createStageDefinition({
@@ -136,13 +136,13 @@ export const createAnalysisCriticStageDefinition = <
 				ctx: ctx as unknown as StageContext,
 				scanJob: stageInput.scanJob,
 				containerNameParts: [candidate.id.slice(0, 8)],
-				codexHomeName: ".codex-analysis-critic",
+				codexHomeName: ".codex-critique-finding",
 			});
 		},
 		run: async (ctx, stageInput) => ({
 			completion: "deferred",
 			threadId: (
-				await executeAnalysisCriticStage(
+				await executeCritiqueFindingStage(
 					ctx as unknown as StageContext,
 					stageInput,
 					input.outputSchema,

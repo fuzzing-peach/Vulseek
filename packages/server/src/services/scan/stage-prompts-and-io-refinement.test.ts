@@ -6,20 +6,16 @@ import { fileURLToPath } from "node:url";
 import {
 	candidateSchema,
 	deltaScopeManifestSchema,
-	functionScanManifestSchema,
-	moduleScanManifestSchema,
 	moduleSchema,
 	repositoryModuleSchema,
-	repositoryScanManifestSchema,
+	repositoryProfileManifestSchema,
 	scanTargetManifestSchema,
 	targetSchema,
 	triageSchema,
 	verificationSchema,
 } from "./artifacts/contracts/domain-object.contract";
-import { buildFunctionScannerPrompt } from "./prompts/function-scanner.prompt";
 import { buildDeltaScopePrompt } from "./prompts/delta-scope.prompt";
-import { buildModuleScannerPrompt } from "./prompts/module-scanner.prompt";
-import { buildRepositoryScannerPrompt } from "./prompts/repository-scanner.prompt";
+import { buildRepositoryProfilePrompt } from "./prompts/repository-profile.prompt";
 import { buildScanTargetPrompt } from "./prompts/scan-target.prompt";
 import { createJsonSchemaContract } from "./pipeline/scan-pipeline-schema-contracts";
 import { buildStructuredOutputPromptSuffix } from "./runtime/structured-output-schema";
@@ -165,8 +161,8 @@ test("refined schemas keep module artifacts concise and require function context
 	);
 });
 
-test("repository, module, and function prompts stay concise while delegating detail to skills", () => {
-	const repositoryPrompt = buildRepositoryScannerPrompt({
+test("repository profile and scan target prompts stay concise while delegating detail to skills", () => {
+	const repositoryPrompt = buildRepositoryProfilePrompt({
 		repository: { id: "repo", name: "wolfSSL" },
 		repositoryRoot: "/workspace/repo",
 		repositoryState: {
@@ -179,55 +175,19 @@ test("repository, module, and function prompts stay concise while delegating det
 		repositoryStatePath: "/task/00_repository_state.json",
 		agentProvider: "codex",
 	});
-	assert.match(repositoryPrompt, /scan-repository skill/);
+	assert.match(repositoryPrompt, /repository-profile skill/);
 	assert.match(repositoryPrompt, /entryPoints, trustBoundaries, attackSurfaces, vulnerabilityThemes, and runtimeComponents/);
 	assert.match(repositoryPrompt, /Produce at least 4 modules/);
 	assert.match(repositoryPrompt, /Large repositories may produce more than 20 modules/);
 	assert.doesNotMatch(repositoryPrompt, /attackerControlledInputs/);
 	assert.doesNotMatch(repositoryPrompt, /dangerousSinks/);
 
-	const repositorySkill = readSkillSource("scan-repository");
+	const repositorySkill = readSkillSource("repository-profile");
 	assert.match(repositorySkill, /downstream generic vulnerability mining/i);
 	assert.match(repositorySkill, /runtime and security-relevant boundaries/i);
 	assert.match(repositorySkill, /HTTP, RPC, CLI, webhook, queue, worker/i);
 	assert.doesNotMatch(repositorySkill, /securityModel/);
 	assert.doesNotMatch(repositorySkill, /dangerousSinks/);
-
-	const modulePrompt = buildModuleScannerPrompt({
-		scanJobId: "job",
-		moduleId: "tls-parser",
-		moduleName: "TLS Parser",
-		repositoryJsonPath: "/task/inputs/repository.json",
-		moduleJsonPath: "/task/inputs/module.json",
-	});
-	assert.match(modulePrompt, /scan-module skill/);
-	assert.match(modulePrompt, /canonical module object/);
-	assert.doesNotMatch(modulePrompt, /sourceToSinkHint/);
-
-	const moduleSkill = readSkillSource("scan-module");
-	assert.match(moduleSkill, /function-level scan tasks/);
-	assert.match(moduleSkill, /tree-sitter extracted symbol identity/i);
-	assert.match(moduleSkill, /Required Noise-Exclusion Pass/i);
-	assert.match(moduleSkill, /A module is not an exclusive ownership partition/i);
-
-	const functionPrompt = buildFunctionScannerPrompt({
-		scanJobId: "job",
-		moduleId: "tls-parser",
-		moduleName: "TLS Parser",
-		functionId: "parse_record",
-		functionName: "parse_record",
-		repositoryJsonPath: "/task/inputs/repository.json",
-		moduleJsonPath: "/task/inputs/module.json",
-		functionJsonPath: "/task/inputs/function.json",
-	});
-	assert.match(functionPrompt, /scan-function skill/);
-	assert.match(functionPrompt, /candidates/);
-	assert.doesNotMatch(functionPrompt, /needsFuzzing/);
-
-	const functionSkill = readSkillSource("scan-function");
-	assert.match(functionSkill, /Mark fuzzing as needed/);
-	assert.match(functionSkill, /complex normalization/);
-	assert.match(functionSkill, /local code evidence/i);
 
 	const scanTargetPrompt = buildScanTargetPrompt({
 		scanJobId: "job",
@@ -313,14 +273,14 @@ test("delta scope prompt and schema stay limited to repository and functions", (
 
 test("stage boundary manifests use task artifact paths instead of object lists", () => {
 	assert.equal(
-		repositoryScanManifestSchema.safeParse({
+		repositoryProfileManifestSchema.safeParse({
 			repository: "/task/repository.json",
 			modules: ["/task/modules/tls.json"],
 		}).success,
 		true,
 	);
 	assert.equal(
-		repositoryScanManifestSchema.safeParse({
+		repositoryProfileManifestSchema.safeParse({
 			repository: "/task/repository.json",
 			modules: [
 				{
@@ -333,26 +293,13 @@ test("stage boundary manifests use task artifact paths instead of object lists",
 		false,
 	);
 	assert.equal(
-		moduleScanManifestSchema.safeParse({
-			module: "/task/module.json",
-			functions: ["/task/functions/wolfSSL_connect.json"],
-		}).success,
-		true,
-	);
-	assert.equal(
-		functionScanManifestSchema.safeParse({
-			candidates: ["/task/candidates/c1.json"],
-		}).success,
-		true,
-	);
-	assert.equal(
 		scanTargetManifestSchema.safeParse({
 			candidates: ["/task/candidates/c1.json"],
 		}).success,
 		true,
 	);
 	assert.equal(
-		functionScanManifestSchema.safeParse({
+		scanTargetManifestSchema.safeParse({
 			candidates: ["candidates/c1.json"],
 		}).success,
 		false,
@@ -389,7 +336,7 @@ test("stage boundary manifests use task artifact paths instead of object lists",
 
 test("structured output prompts include annotated task artifact schemas", () => {
 	const suffix = buildStructuredOutputPromptSuffix(
-		repositoryScanManifestSchema,
+		repositoryProfileManifestSchema,
 		"/task/output.schema.json",
 		"/task/output.json",
 	);
@@ -412,19 +359,8 @@ test("structured output prompts include annotated task artifact schemas", () => 
 	assert.doesNotMatch(suffix, /"functionName"/);
 	assert.doesNotMatch(suffix, /"sourceToSinkHint"/);
 
-	const moduleSuffix = buildStructuredOutputPromptSuffix(
-		moduleScanManifestSchema,
-		"/task/output.schema.json",
-		"/task/output.json",
-	);
-	assert.match(moduleSuffix, /"entryPoints"/);
-	assert.match(moduleSuffix, /"trustBoundaries"/);
-	assert.match(moduleSuffix, /"attackSurfaces"/);
-	assert.match(moduleSuffix, /"vulnerabilityThemes"/);
-	assert.match(moduleSuffix, /"runtimeComponents"/);
-
 	const persistentSuffix = buildStructuredOutputPromptSuffix(
-		functionScanManifestSchema,
+		scanTargetManifestSchema,
 		"/task/output.schema.json",
 		"/task/output.json",
 		undefined,
@@ -434,7 +370,7 @@ test("structured output prompts include annotated task artifact schemas", () => 
 	assert.doesNotMatch(persistentSuffix, /Set exit to true/);
 
 	const analysisExitSuffix = buildStructuredOutputPromptSuffix(
-		functionScanManifestSchema,
+		scanTargetManifestSchema,
 		"/task/output.schema.json",
 		"/task/output.json",
 		undefined,
@@ -480,19 +416,19 @@ test("structured output prompts include YAML JSON Schema contract artifact schem
 });
 
 test("analysis prompt removes fuzz routing", () => {
-	const analysisPromptTemplate = readStagePromptTemplate("analyze.prompt.md");
+	const analysisPromptTemplate = readStagePromptTemplate("analyze-finding.prompt.md");
 	assert.match(analysisPromptTemplate, /Analyze Finding/);
 	assert.doesNotMatch(analysisPromptTemplate, /build_fuzzer/);
 	assert.match(analysisPromptTemplate, /verification/);
 	assert.match(analysisPromptTemplate, /Do not request fuzzer construction/);
 
-	const deepAnalysisSkill = readSkillSource("analyze");
-	assert.match(deepAnalysisSkill, /analysis-critic workflow/);
+	const deepAnalysisSkill = readSkillSource("analyze-finding");
+	assert.match(deepAnalysisSkill, /analyze-finding and critique-finding workflow/);
 	assert.match(deepAnalysisSkill, /does not route to fuzzer construction/);
 });
 
 test("verification is a three-value sanity check and triage owns security classification", () => {
-	const verificationPromptTemplate = readStagePromptTemplate("verify.prompt.md");
+	const verificationPromptTemplate = readStagePromptTemplate("verify-finding.prompt.md");
 	assert.match(
 		verificationPromptTemplate,
 		/Set result to the JSON string "true", "likely", or "false"\./,

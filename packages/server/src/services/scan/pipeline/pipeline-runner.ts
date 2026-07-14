@@ -75,6 +75,10 @@ import {
 	type StageQueueScope,
 } from "./stage-definition";
 import { validateStructuredOutputSchemaSource } from "./scan-pipeline-schema-contracts";
+import {
+	buildPipelineTaskUpdatePatch,
+	type PipelineTaskUpdate,
+} from "./task-update-patch";
 
 type PipelineRefreshContext = {
 	refreshPipelineState?: () => Promise<void>;
@@ -390,54 +394,9 @@ const copyPersistentLaneArtifactsToTaskDir = async (ctx: StageContext) => {
 
 const updateTaskDefault = async (
 	taskId: string,
-	patch: {
-		status?:
-			| "pending"
-			| "launching"
-			| "launched"
-			| "starting"
-			| "running"
-			| "completed"
-			| "failed"
-			| "exited"
-			| "canceled";
-		errorMessage?: string;
-		exitReason?: "agent_exit" | "leader_exit" | null;
-		exitNote?: string | null;
-		containerName?: string;
-		threadId?: string;
-		output?: unknown;
-	},
+	patch: PipelineTaskUpdate,
 ) => {
-	const taskPatch = {
-		...(patch.containerName ? { containerName: patch.containerName } : {}),
-		...(patch.threadId ? { threadId: patch.threadId } : {}),
-		...(patch.output !== undefined ? { output: patch.output } : {}),
-		...(patch.status
-			? {
-					status: patch.status,
-					errorMessage: patch.errorMessage,
-					exitReason: patch.exitReason,
-					exitNote: patch.exitNote,
-					...(patch.status === "launching" ||
-					patch.status === "launched" ||
-					patch.status === "starting" ||
-					patch.status === "running"
-						? {
-								startedAt: new Date().toISOString(),
-								completedAt: null,
-							}
-						: {}),
-					...(patch.status === "completed" ||
-					patch.status === "failed" ||
-					patch.status === "exited" ||
-					patch.status === "canceled"
-						? { completedAt: new Date().toISOString() }
-						: {}),
-				}
-			: {}),
-	};
-	await updateTaskRepo(taskId, taskPatch);
+	await updateTaskRepo(taskId, buildPipelineTaskUpdatePatch(patch));
 };
 
 const sleep = async (ms: number) =>
@@ -1247,7 +1206,7 @@ const createStageContextForTask = async <
 		reuseContainer: stageReuseContainer,
 		nullableOutput: stageNullableOutput,
 		groupedPersistent,
-		allowAgentExit: task.stageName === SCAN_STAGE_IDS.analysis,
+		allowAgentExit: task.stageName === SCAN_STAGE_IDS.analyzeFinding,
 		containerIndex: laneRuntime?.laneIndex ?? task.containerIndex ?? null,
 		laneIndex: laneRuntime?.laneIndex ?? null,
 		laneThreadId: laneRuntime?.threadId ?? null,
@@ -1607,7 +1566,7 @@ const resolveStageTaskId = (
 	const pipelineScanJob = (ctx as PipelineScanJobContext).scanJob;
 	if (pipelineScanJob?.scanJobId) {
 		if (
-			stageName === SCAN_STAGE_IDS.repositoryScan ||
+			stageName === SCAN_STAGE_IDS.repositoryProfile ||
 			stageName === SCAN_STAGE_IDS.deltaScope
 		) {
 			return pipelineScanJob.repositoryTaskId || pipelineScanJob.scanJobId;
@@ -1662,7 +1621,7 @@ const createTaskStageContext = async <
 		nullableOutput: stageNullableOutput,
 		groupedPersistent: taskRuntime?.groupedPersistent ?? false,
 		allowAgentExit:
-			taskRuntime?.allowAgentExit ?? stage.id === SCAN_STAGE_IDS.analysis,
+			taskRuntime?.allowAgentExit ?? stage.id === SCAN_STAGE_IDS.analyzeFinding,
 		containerIndex:
 			taskRuntime?.containerIndex ?? taskRuntime?.laneRuntime?.laneIndex ?? null,
 		laneIndex: taskRuntime?.laneRuntime?.laneIndex ?? null,
@@ -2722,7 +2681,7 @@ const launchStageExecution = async <
 			),
 			taskName: launched.name,
 			groupedPersistent: Boolean(laneRuntime && group),
-			allowAgentExit: stageState.stageName === SCAN_STAGE_IDS.analysis,
+			allowAgentExit: stageState.stageName === SCAN_STAGE_IDS.analyzeFinding,
 		},
 	);
 	logLaunchTiming("create_stage_context", stepStartedAt, {

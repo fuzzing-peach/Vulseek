@@ -16,7 +16,7 @@ Do not perform exploitability analysis.
 Do not verify findings.
 Do not write module artifacts.
 
-The downstream `scan-function` stage will decide whether candidate findings exist.
+The downstream `scan-target` stage will decide whether candidate findings exist.
 
 ## Inputs
 

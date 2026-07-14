@@ -1,9 +1,9 @@
 ---
-name: criticize
+name: critique-finding
 description: Critique a draft vulnerability analysis, try to refute reachability and evidence, and decide whether the analysis is convincing.
 ---
 
-# Criticize
+# Critique Finding
 
 Critique a draft vulnerability analysis and decide whether it withstands adversarial review.
 

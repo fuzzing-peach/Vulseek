@@ -18,9 +18,9 @@
   - 展示、graph node label、用户可见错误文案优先使用 `stage.name`。
 
 - 使用以下固定 stage 映射：
-  - `RepositoryScanningStage` -> `id: "repository-scan"`, `name: "Scan Repository"`
-  - `ModuleScanningStage` -> `id: "module-scan"`, `name: "Scan Module"`
-  - `FunctionScanningStage` -> `id: "function-scan"`, `name: "Scan Function"`
+  - `RepositoryProfileStage` -> `id: "repository-profile"`, `name: "Scan Repository"`
+  - `IdentifyTargetStage` -> `id: "identify-target"`, `name: "Scan Module"`
+  - `ScanTargetStage` -> `id: "scan-target"`, `name: "Scan Function"`
   - `AnalysisStage` -> `id: "analyze"`, `name: "Analyze"`
   - `FuzzBuildStage` -> `id: "build-fuzzer"`, `name: "Build Fuzzer"`
   - `FuzzRunStage` -> `id: "run-fuzzer"`, `name: "Run Fuzzer"`

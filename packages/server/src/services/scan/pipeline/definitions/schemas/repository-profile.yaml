@@ -1,4 +1,4 @@
-RepositoryScanManifest:
+RepositoryProfileManifest:
   type: object
   required: [repository, modules]
   properties:

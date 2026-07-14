@@ -59,28 +59,28 @@ No `VULSEEK_*` marker is part of the runtime protocol.
 
 ## Current Stage Mapping
 
-- `RepositoryScanningStage` uses `repository-scanner`.
-- `ModuleScanningStage` uses `module-scanner` and `tree-sitter`.
-- `FunctionScanningStage` uses `function-scanner`.
+- `RepositoryProfileStage` uses `repository-profile`.
+- `IdentifyTargetStage` uses `identify-target` and `tree-sitter`.
+- `ScanTargetStage` uses `scan-target`.
 - `AnalysisStage` uses `deep-analysis`.
 - `FuzzBuildStage` uses `libafl-build`, with `libafl` and
   `address-sanitizer` as helper skills.
 - `FuzzRunStage` uses `libafl-fuzz`, with `coverage-analysis` as a helper skill.
-- `AnalysisCriticStage` uses `analysis-critic`.
+- `AnalysisCriticStage` uses `critique-finding`.
 - `VerifyingStage` uses `verify`.
 
 ## Scanner Layer Notes
 
-`repository-scanner` owns repository intelligence, structure modeling, external
+`repository-profile` owns repository intelligence, structure modeling, external
 code down-ranking, module planning, and Serena initialization. The repository
 stage prompt owns repository ref/commit inputs, the minimum module-count
 constraint, schema validation, and lane exit.
 
-`module-scanner` owns module interpretation and function prioritization. Function
+`identify-target` owns module interpretation and function prioritization. Function
 inventory must come from the `tree-sitter` skill. The module stage prompt owns
 the canonical module object requirement and lane exit.
 
-`function-scanner` owns concrete candidate discovery for one function. The
+`scan-target` owns concrete candidate discovery for one function. The
 function stage prompt owns the `{ "candidates": [] }` result shape and canonical
 candidate schema.
 
@@ -99,7 +99,7 @@ builds, and build artifacts. The fuzz build stage prompt owns the
 feedback, and triggering-input judgment. The fuzz run stage prompt owns the
 budget input and route back to `analysis`.
 
-`analysis-critic` owns adversarial review and convinced/objected standards. The
+`critique-finding` owns adversarial review and convinced/objected standards. The
 critic stage prompt owns the draft-analysis input, analysis fingerprint, and
 route back to `analysis`.
 
