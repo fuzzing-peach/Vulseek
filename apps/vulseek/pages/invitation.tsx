@@ -123,7 +123,7 @@ const Invitation = ({
 
 	const onSubmit = async (values: Register) => {
 		try {
-			const { error } = await authClient.signUp.email({
+			const registration = {
 				email: values.email,
 				password: values.password,
 				name: values.name,
@@ -133,7 +133,8 @@ const Invitation = ({
 						"x-vulseek-token": token,
 					},
 				},
-			});
+			};
+			const { error } = await authClient.signUp.email(registration);
 
 			if (error) {
 				toast.error(error.message);

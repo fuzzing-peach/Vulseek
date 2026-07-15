@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
-	findSandboxAgentTaskRuntimeByTaskId,
+	findAgentTaskRuntimeByTaskId,
 	findScanJobOrganizationId,
 	validateRequest,
 } from "@vulseek/server";
@@ -102,7 +102,8 @@ const extractCoverage = (data: Record<string, unknown>) => {
 		Number.isFinite(signalParts[1]) && signalParts[1] !== undefined
 			? signalParts[1]
 			: undefined;
-	const edgesHit = asNumber(data.edgesHit ?? coverage?.edgesHit) ?? signalEdgesHit;
+	const edgesHit =
+		asNumber(data.edgesHit ?? coverage?.edgesHit) ?? signalEdgesHit;
 	const edgesTotal =
 		asNumber(data.edgesTotal ?? coverage?.edgesTotal) ?? signalEdgesTotal;
 	const edgeCoveragePercent = asNumber(
@@ -156,7 +157,9 @@ const toFuzzProgressRecord = (
 				asNumber(data.runTimeMs) ??
 				(() => {
 					const runtimeSeconds = asNumber(data.runtimeSeconds);
-					return runtimeSeconds === undefined ? undefined : runtimeSeconds * 1000;
+					return runtimeSeconds === undefined
+						? undefined
+						: runtimeSeconds * 1000;
 				})(),
 			runTimePretty: asString(data.runTimePretty),
 			totalExecs: asNumber(data.totalExecs ?? data.executions ?? data.execs),
@@ -214,7 +217,7 @@ export default async function handler(
 
 	const [{ user, session }, runtime] = await Promise.all([
 		validateRequest(req),
-		findSandboxAgentTaskRuntimeByTaskId(taskId),
+		findAgentTaskRuntimeByTaskId(taskId),
 	]);
 	if (!user || !session) {
 		res.status(401).json({ message: "Unauthorized" });
@@ -231,8 +234,7 @@ export default async function handler(
 		return;
 	}
 
-	const runtimeDir = path.dirname(runtime.jsonlPath);
-	const progressPath = path.join(runtimeDir, FUZZ_PROGRESS_FILE_NAME);
+	const progressPath = path.join(runtime.runtimeDir, FUZZ_PROGRESS_FILE_NAME);
 
 	res.writeHead(200, {
 		"Content-Type": "text/event-stream",
@@ -270,10 +272,7 @@ export default async function handler(
 	const buffer = getFileStreamBuffer(progressPath);
 	const snapshot = await buffer.getSnapshot();
 	const snapshotParseState: ParseState = { nextLine: 0, pending: "" };
-	const snapshotRecords = parseJsonlLines(
-		snapshot.content,
-		snapshotParseState,
-	);
+	const snapshotRecords = parseJsonlLines(snapshot.content, snapshotParseState);
 	sendEvent(res, "snapshot", {
 		metadata,
 		records: snapshotRecords,
@@ -340,7 +339,7 @@ export default async function handler(
 
 	statusPoll = setInterval(async () => {
 		try {
-			const latest = await findSandboxAgentTaskRuntimeByTaskId(taskId);
+			const latest = await findAgentTaskRuntimeByTaskId(taskId);
 			if (!latest || !ACTIVE_TASK_STATUSES.has(latest.status)) {
 				sendEvent(res, "done", {
 					status: latest?.status || "missing",

@@ -94,20 +94,8 @@ ENV PATH="/opt/vulseek-venv/bin:$PATH"
 RUN --mount=type=cache,id=vulseek-npm-cache,target=/root/.npm,sharing=locked \
     npm config set registry https://registry.npmmirror.com \
     && npm config get registry
-COPY sandbox-agent@0.4.2.patch /tmp/vulseek-sandbox-agent.patch
 RUN --mount=type=cache,id=vulseek-npm-cache,target=/root/.npm,sharing=locked \
     npm install -g @anthropic-ai/claude-code || true
-RUN --mount=type=cache,id=vulseek-npm-cache,target=/root/.npm,sharing=locked \
-    npm install -g sandbox-agent@0.4.2 \
-    && patch -d "$(npm root -g)/sandbox-agent" -p1 < /tmp/vulseek-sandbox-agent.patch \
-    && grep -R "async loadSession(" "$(npm root -g)/sandbox-agent/dist" >/dev/null \
-    && grep -R "async forkSession(" "$(npm root -g)/sandbox-agent/dist" >/dev/null \
-    && grep -R "session/close" "$(npm root -g)/sandbox-agent/dist" >/dev/null \
-    && grep -R "this.unbindSession(localSessionId, agentSessionId)" "$(npm root -g)/sandbox-agent/dist" >/dev/null \
-    && rm -f /tmp/vulseek-sandbox-agent.patch
-RUN --mount=type=cache,id=vulseek-npm-cache,target=/root/.npm,sharing=locked \
-    npm install -g @sandbox-agent/cli@0.4.x \
-    && sandbox-agent --help >/dev/null
 RUN --mount=type=cache,id=vulseek-npm-cache,target=/root/.npm,sharing=locked \
     npm install -g skills@1.5.10 \
     && command -v skills >/dev/null \
@@ -116,12 +104,27 @@ RUN --mount=type=cache,id=vulseek-npm-cache,target=/root/.npm,sharing=locked \
 RUN --mount=type=cache,id=vulseek-npm-cache,target=/root/.npm,sharing=locked \
     npm install -g @openai/codex \
     && codex --version
+
+COPY codex-acp-fork-1.1.2.patch /tmp/vulseek-codex-acp-fork.patch
 RUN --mount=type=cache,id=vulseek-npm-cache,target=/root/.npm,sharing=locked \
     npm config set registry https://registry.npmjs.org \
     && npm config get registry \
-    && sandbox-agent install-agent codex \
-    && sandbox-agent install-agent claude
-ENV SANDBOX_AGENT_REQUIRE_PREINSTALL=1
+    && npm install --prefix /opt/vulseek-acp \
+      @agentclientprotocol/sdk@1.2.1 \
+      @agentclientprotocol/codex-acp@1.1.2 \
+      @agentclientprotocol/claude-agent-acp@0.59.0 \
+    && patch -d /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp \
+      -p1 < /tmp/vulseek-codex-acp-fork.patch \
+    && grep -F 'fork: {}' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
+    && grep -F 'method: "thread/fork"' /opt/vulseek-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js >/dev/null \
+    && rm -f /tmp/vulseek-codex-acp-fork.patch
+COPY vulseek-acp-driver.mjs agent-events.mjs /opt/vulseek-acp/
+RUN chmod 0755 /opt/vulseek-acp/vulseek-acp-driver.mjs \
+    && node --check /opt/vulseek-acp/vulseek-acp-driver.mjs \
+    && node --check /opt/vulseek-acp/agent-events.mjs \
+    && /opt/vulseek-acp/node_modules/.bin/codex-acp --help >/dev/null \
+    && /opt/vulseek-acp/node_modules/.bin/claude-agent-acp --help >/dev/null
+ENV PATH="/opt/vulseek-acp/node_modules/.bin:$PATH"
 
 ENV PATH="/root/.local/bin:$PATH" \
     UV_TOOL_BIN_DIR="/usr/local/bin"
@@ -157,46 +160,14 @@ RUN --mount=type=cache,id=vulseek-codeql-downloads,target=/root/.cache/vulseek-c
     && ln -sf /opt/codeql/codeql /usr/local/bin/codeql
 RUN codeql pack download codeql/cpp-all
 
-FROM tools AS codex-acp-builder
-
-ARG CODEX_ACP_REPO="https://github.com/zed-industries/codex-acp.git"
-ARG CODEX_ACP_REF="156cb0da12f6c7b1c697f90b5f22d5e14be31165"
-
-COPY codex-acp-fork-0.14.0.patch /tmp/vulseek-codex-acp-fork.patch
-RUN --mount=type=cache,id=vulseek-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=vulseek-apt-lists,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
-      libssl-dev libcap-dev protobuf-compiler
-RUN --mount=type=cache,id=vulseek-cargo-registry,target=/root/.cargo/registry,sharing=locked \
-    --mount=type=cache,id=vulseek-cargo-git,target=/root/.cargo/git,sharing=locked \
-    --mount=type=cache,id=vulseek-codex-acp-target,target=/tmp/cargo-target,sharing=locked \
-    --mount=type=cache,id=vulseek-codex-acp-git,target=/tmp/codex-acp-git,sharing=locked \
-    if [ ! -d /tmp/codex-acp-git/mirror.git ]; then \
-      git clone --mirror "${CODEX_ACP_REPO}" /tmp/codex-acp-git/mirror.git; \
-    else \
-      git -C /tmp/codex-acp-git/mirror.git remote set-url origin "${CODEX_ACP_REPO}" \
-      && git -C /tmp/codex-acp-git/mirror.git fetch --prune origin; \
-    fi \
-    && git clone /tmp/codex-acp-git/mirror.git /tmp/codex-acp \
-    && cd /tmp/codex-acp \
-    && git checkout "${CODEX_ACP_REF}" \
-    && rm -f rust-toolchain.toml \
-    && patch -p1 < /tmp/vulseek-codex-acp-fork.patch \
-    && CARGO_TARGET_DIR=/tmp/cargo-target cargo build --release --bin codex-acp \
-    && install -m 0755 /tmp/cargo-target/release/codex-acp /tmp/vulseek-codex-acp \
-    && test -x /tmp/vulseek-codex-acp
-
 FROM tools AS final
-
-COPY --from=codex-acp-builder /tmp/vulseek-codex-acp /usr/local/bin/vulseek-codex-acp
-RUN install -m 0755 /usr/local/bin/vulseek-codex-acp \
-      /root/.local/share/sandbox-agent/bin/agent_processes/codex-acp \
-    && test -x /root/.local/share/sandbox-agent/bin/agent_processes/codex-acp
 
 ARG VULSEEK_TOOLS_VERSION
 ARG VULSEEK_TOOLS_BUILT_AT
+ARG VULSEEK_TOOLS_VARIANT
 LABEL com.fuzzing-peach.vulseek.scan-tools.version="${VULSEEK_TOOLS_VERSION}" \
       com.fuzzing-peach.vulseek.scan-tools.built-at="${VULSEEK_TOOLS_BUILT_AT}" \
+      com.fuzzing-peach.vulseek.scan-tools.variant="${VULSEEK_TOOLS_VARIANT}" \
       com.fuzzing-peach.vulseek.scan-tools.format="1"
 
 WORKDIR /workspace

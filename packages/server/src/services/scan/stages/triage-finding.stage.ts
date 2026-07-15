@@ -1,16 +1,15 @@
 import { triageSchema } from "../artifacts/contracts/domain-object.contract";
 import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";
 import { bindTaskRuntimeRepo } from "../persistence/task.repo";
+import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import {
 	createStageDefinition,
 	type StageDefinition,
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
-import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { renderPromptTemplate } from "../prompts/prompt-template";
 import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
-import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "../runtime/sandbox-agent-shared";
 import type {
 	Candidate,
 	FinalAnalysis,
@@ -59,28 +58,31 @@ const buildTriageFindingPrompt = (
 ) => {
 	const { analysisResult, verifyResult, candidate } = input;
 
-	return renderPromptTemplate(new URL("./triage-finding.prompt.md", import.meta.url), {
-		taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
-		scanJobId: stageInput.scanJob.scanJobId,
-		candidateId: candidate.id,
-		candidateTitle: candidate.title,
-		candidateDescription: candidate.description || "-",
-		candidateFile: candidate.filePath || "-",
-		candidateLine: typeof candidate.line === "number" ? candidate.line : "-",
-		analysisResult: analysisResult.result,
-		analysisSummary: analysisResult.summary || "-",
-		verifyResult: verifyResult.result,
-		verifySummary: verifyResult.summary || "-",
-		repositoryJsonPath: stageInput.repositoryPath,
-		moduleJsonPath: stageInput.modulePath,
-		functionJsonPath: stageInput.functionPath,
-		candidateJsonPath: stageInput.candidatePath,
-		analysisResultJsonPath: stageInput.analysisResultPath,
-		verifyResultJsonPath: stageInput.verifyResultPath,
-		taskDir: input.taskDirContainer,
-		reportPath: input.reportPath,
-		taskId: input.taskId,
-	});
+	return renderPromptTemplate(
+		new URL("./triage-finding.prompt.md", import.meta.url),
+		{
+			taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
+			scanJobId: stageInput.scanJob.scanJobId,
+			candidateId: candidate.id,
+			candidateTitle: candidate.title,
+			candidateDescription: candidate.description || "-",
+			candidateFile: candidate.filePath || "-",
+			candidateLine: typeof candidate.line === "number" ? candidate.line : "-",
+			analysisResult: analysisResult.result,
+			analysisSummary: analysisResult.summary || "-",
+			verifyResult: verifyResult.result,
+			verifySummary: verifyResult.summary || "-",
+			repositoryJsonPath: stageInput.repositoryPath,
+			moduleJsonPath: stageInput.modulePath,
+			functionJsonPath: stageInput.functionPath,
+			candidateJsonPath: stageInput.candidatePath,
+			analysisResultJsonPath: stageInput.analysisResultPath,
+			verifyResultJsonPath: stageInput.verifyResultPath,
+			taskDir: input.taskDirContainer,
+			reportPath: input.reportPath,
+			taskId: input.taskId,
+		},
+	);
 };
 
 const executeTriageFindingStage = async (
@@ -136,7 +138,6 @@ const executeTriageFindingStage = async (
 		groupedPersistent: ctx.groupedPersistent,
 		allowAgentExit: ctx.allowAgentExit,
 		laneThreadId: ctx.laneThreadId,
-		runtimeFileNames: SANDBOX_AGENT_RUNTIME_FILE_NAMES,
 		cwd: await resolveStageRuntimeCwd(ctx),
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
@@ -187,7 +188,6 @@ export const createTriageFindingStageDefinition = <
 				scanJob: stageInput.scanJob,
 				containerNameParts: [candidate.id.slice(0, 8)],
 				codexHomeName: ".codex-triage-finding",
-				runtimeFileNames: SANDBOX_AGENT_RUNTIME_FILE_NAMES,
 			});
 		},
 		run: async (ctx, stageInput) => ({

@@ -1,0 +1,73 @@
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -25645,6 +25645,17 @@
+       additionalDirectories
+     };
+   }
++  async forkSession(request) {
++    const additionalDirectories = readAdditionalDirectories(request.cwd, request.additionalDirectories, request._meta);
++    await this.refreshSkills(request.cwd, additionalDirectories);
++    const response = await this.codexClient.threadFork({
++      config: await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers ?? []),
++      cwd: request.cwd,
++      modelProvider: await this.getResumeModelProvider(),
++      threadId: request.sessionId
++    });
++    return response.thread.id;
++  }
+   async loadSession(request, onSubscribed) {
+     const additionalDirectories = readAdditionalDirectories(request.cwd, request.additionalDirectories, request._meta);
+     await this.refreshSkills(request.cwd, additionalDirectories);
+@@ -27763,6 +27774,7 @@
+         },
+         sessionCapabilities: {
+           resume: {},
++          fork: {},
+           list: {},
+           close: {},
+           delete: {},
+@@ -28023,6 +28035,27 @@
+       ...this.createSessionConfigOptionsResponse(this.getSessionState(sessionId))
+     };
+   }
++  async forkSession(params) {
++    logger.log("Forking session...", { sessionId: params.sessionId });
++    await this.checkAuthorization();
++    const forkedSessionId = await this.runWithProcessCheck(() => this.codexAcpClient.forkSession(params));
++    const [sessionId, modelState, modeState] = await this.getOrCreateSession({
++      ...params,
++      sessionId: forkedSessionId
++    });
++    logger.log("Session forked", {
++      parentSessionId: params.sessionId,
++      sessionId,
++      modelId: modelState.currentModelId,
++      availableModelCount: modelState.availableModels.length
++    });
++    return {
++      sessionId,
++      models: modelState,
++      modes: modeState,
++      ...this.createSessionConfigOptionsResponse(this.getSessionState(sessionId))
++    };
++  }
+   async listSessions(params) {
+     logger.log("Listing sessions...", { cwd: params.cwd, cursor: params.cursor });
+     await this.checkAuthorization();
+@@ -29431,6 +29464,9 @@
+   async threadResume(params) {
+     return await this.sendRequest({ method: "thread/resume", params });
+   }
++  async threadFork(params) {
++    return await this.sendRequest({ method: "thread/fork", params });
++  }
+   async threadList(params) {
+     return await this.sendRequest({ method: "thread/list", params });
+   }
+@@ -30053,5 +30089,5 @@
+         codexAcpServer = null;
+       }
+     });
+-  }).onRequest(methods.agent.initialize, (ctx) => getAgent().initialize(ctx.params)).onRequest(methods.agent.session.new, (ctx) => getAgent().newSession(ctx.params)).onRequest(methods.agent.session.load, (ctx) => getAgent().loadSession(ctx.params)).onRequest(methods.agent.session.list, (ctx) => getAgent().listSessions(ctx.params)).onRequest(methods.agent.session.delete, (ctx) => getAgent().deleteSession(ctx.params)).onRequest(methods.agent.session.resume, (ctx) => getAgent().resumeSession(ctx.params)).onRequest(methods.agent.session.close, (ctx) => getAgent().closeSession(ctx.params)).onRequest(methods.agent.session.setMode, (ctx) => getAgent().setSessionMode(ctx.params)).onRequest(methods.agent.session.setConfigOption, (ctx) => getAgent().setSessionConfigOption(ctx.params)).onRequest(methods.agent.authenticate, (ctx) => getAgent().authenticate(ctx.params)).onRequest(methods.agent.logout, (ctx) => getAgent().logout(ctx.params)).onRequest(methods.agent.session.prompt, (ctx) => getAgent().prompt(ctx.params, ctx.signal)).onNotification(methods.agent.session.cancel, (ctx) => getAgent().cancel(ctx.params)).onRequest("authentication/status", emptyExtensionParamsParser, (ctx) => getAgent().extMethod("authentication/status", ctx.params)).onRequest("authentication/logout", emptyExtensionParamsParser, (ctx) => getAgent().extMethod("authentication/logout", ctx.params)).onRequest(LEGACY_SET_SESSION_MODEL_METHOD, legacySetSessionModelParamsParser, (ctx) => getAgent().extMethod(LEGACY_SET_SESSION_MODEL_METHOD, ctx.params)).connect(acpJsonStream);
++  }).onRequest(methods.agent.initialize, (ctx) => getAgent().initialize(ctx.params)).onRequest(methods.agent.session.new, (ctx) => getAgent().newSession(ctx.params)).onRequest(methods.agent.session.load, (ctx) => getAgent().loadSession(ctx.params)).onRequest(methods.agent.session.list, (ctx) => getAgent().listSessions(ctx.params)).onRequest(methods.agent.session.delete, (ctx) => getAgent().deleteSession(ctx.params)).onRequest(methods.agent.session.resume, (ctx) => getAgent().resumeSession(ctx.params)).onRequest(methods.agent.session.fork, (ctx) => getAgent().forkSession(ctx.params)).onRequest(methods.agent.session.close, (ctx) => getAgent().closeSession(ctx.params)).onRequest(methods.agent.session.setMode, (ctx) => getAgent().setSessionMode(ctx.params)).onRequest(methods.agent.session.setConfigOption, (ctx) => getAgent().setSessionConfigOption(ctx.params)).onRequest(methods.agent.authenticate, (ctx) => getAgent().authenticate(ctx.params)).onRequest(methods.agent.logout, (ctx) => getAgent().logout(ctx.params)).onRequest(methods.agent.session.prompt, (ctx) => getAgent().prompt(ctx.params, ctx.signal)).onNotification(methods.agent.session.cancel, (ctx) => getAgent().cancel(ctx.params)).onRequest("authentication/status", emptyExtensionParamsParser, (ctx) => getAgent().extMethod("authentication/status", ctx.params)).onRequest("authentication/logout", emptyExtensionParamsParser, (ctx) => getAgent().extMethod("authentication/logout", ctx.params)).onRequest(LEGACY_SET_SESSION_MODEL_METHOD, legacySetSessionModelParamsParser, (ctx) => getAgent().extMethod(LEGACY_SET_SESSION_MODEL_METHOD, ctx.params)).connect(acpJsonStream);
+ }

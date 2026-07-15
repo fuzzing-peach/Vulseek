@@ -9,7 +9,7 @@ const nextConfig = {
 	typescript: {
 		ignoreBuildErrors: true,
 	},
-	transpilePackages: ["@vulseek/server"],
+	transpilePackages: ["@vulseek/server", "claude-replay"],
 	/**
 	 * If you are using `appDir` then you must comment the below `i18n` config out.
 	 *

@@ -57,6 +57,7 @@ const baseAdmin: User = {
 	banned: true,
 	banReason: "",
 	email: "",
+	username: "admin",
 	expirationDate: "",
 	id: "",
 	isRegistered: false,

@@ -275,7 +275,10 @@ Dev mode (`pnpm run server:script`): imports resolve to `src/`. Production: reso
 
 ### Patched Dependencies
 
-`sandbox-agent@0.4.2` patch at `packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch`.
+The scan-tools image installs the official ACP SDK and agent adapters. Codex fork
+support is added by
+`packages/server/src/services/dockerfiles/codex-acp-fork-1.1.2.patch` while the
+upstream adapter does not expose `session/fork`.
 
 ## Development Setup
 

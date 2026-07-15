@@ -5,12 +5,16 @@ const MAX_BUILD_LOG_CHARS = 400_000;
 
 export type CheckoutToolsDefinitionInputs = {
 	dockerfile: string;
-	sandboxAgentPatch: string;
 	codexAcpPatch: string;
+	acpDriver: string;
+	agentEvents: string;
 };
+
+export type CheckoutToolsImageVariant = "dev" | "release";
 
 export type CheckoutToolsDefinition = {
 	version: string;
+	variant: CheckoutToolsImageVariant;
 	imageTag: string;
 };
 
@@ -64,8 +68,30 @@ export const computeCheckoutToolsVersion = (
 	return hash.digest("hex");
 };
 
-export const buildCheckoutToolsImageTag = (version: string) =>
-	`vulseek-scan-tools:${version.slice(0, 16)}`;
+export const resolveCheckoutToolsImageVariant = (
+	environment: Readonly<Record<string, string | undefined>> = process.env,
+): CheckoutToolsImageVariant => {
+	const configured = environment.VULSEEK_TOOLS_IMAGE_VARIANT?.trim();
+	if (configured) {
+		if (configured === "dev" || configured === "release") return configured;
+		throw new Error("VULSEEK_TOOLS_IMAGE_VARIANT must be dev or release");
+	}
+	return environment.NODE_ENV === "production" ? "release" : "dev";
+};
+
+export const buildCheckoutToolsImageTag = (
+	version: string,
+	variant: CheckoutToolsImageVariant,
+) => `vulseek-scan-tools-${variant}:${version.slice(0, 16)}`;
+
+export const matchesCheckoutToolsImageLabels = (
+	definition: Pick<CheckoutToolsDefinition, "version" | "variant">,
+	labels: Record<string, string> | null | undefined,
+) =>
+	labels?.["com.fuzzing-peach.vulseek.scan-tools.version"] ===
+		definition.version &&
+	labels?.["com.fuzzing-peach.vulseek.scan-tools.variant"] ===
+		definition.variant;
 
 export const canRebuildCheckoutTools = (role: "owner" | "admin" | "member") =>
 	role === "owner" || role === "admin";

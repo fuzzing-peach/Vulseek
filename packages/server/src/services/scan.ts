@@ -3,12 +3,10 @@ import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { apiCheckoutScanEnvironment } from "@vulseek/server/db/schema";
 import { TRPCError } from "@trpc/server";
+import type { apiCheckoutScanEnvironment } from "@vulseek/server/db/schema";
 import { Queue } from "bullmq";
 import { nanoid } from "nanoid";
-import { SandboxAgent } from "sandbox-agent";
-import { Agent, type Dispatcher } from "undici";
 import { getGlobalContainerEnvironmentPairs } from "../utils/docker/utils";
 import {
 	execAsync,
@@ -18,6 +16,8 @@ import {
 import { getAgentProfileById } from "./ai";
 import { findApplicationById } from "./application";
 import { findComposeById } from "./compose";
+import { buildTaskAgentProfileSnapshot } from "./scan/agent-profile-snapshot";
+import { findCandidateTaskLineage } from "./scan/api/candidate-records";
 import {
 	type Analysis,
 	analysisFeedbackEnvelopeSchema,
@@ -28,8 +28,8 @@ import {
 	type FinalAnalysis,
 	finalAnalysisSchema,
 	targetKindSchema,
-	verificationSchema,
 	type Verification,
+	verificationSchema,
 } from "./scan/artifacts/contracts/domain-object.contract";
 import {
 	copyTaskJsonArtifact,
@@ -37,23 +37,22 @@ import {
 	writeTaskJsonArtifact,
 	writeTaskTextArtifact,
 } from "./scan/artifacts/task-artifact-paths";
-import { DEFAULT_DELTA_COMMIT_WINDOW } from "./scan/constants";
 import {
 	buildCheckoutToolsImageTag,
 	buildCheckoutToolsStatus,
-	computeCheckoutToolsVersion,
-	createCheckoutToolsBuildManager,
 	type CheckoutToolsDefinition,
 	type CheckoutToolsImageMetadata,
+	computeCheckoutToolsVersion,
+	createCheckoutToolsBuildManager,
+	matchesCheckoutToolsImageLabels,
+	resolveCheckoutToolsImageVariant,
 } from "./scan/checkout-tools";
-import { sanitizeCodexAcpConfigToml } from "./scan/runtime/codex-config-compat";
+import { DEFAULT_DELTA_COMMIT_WINDOW } from "./scan/constants";
 import {
 	findVulnerabilityCandidateByIdAndScanJobIdRepo,
 	findVulnerabilityCandidateByIdRepo,
 	findVulnerabilityCandidatesByScanJobIdRepo,
 } from "./scan/persistence/candidate.repo";
-import { findCandidateTaskLineage } from "./scan/api/candidate-records";
-import { readTaskJsonArtifactForTask } from "./scan/persistence/task-artifact-resolver";
 import {
 	findScanJobByIdRepo,
 	listUnfinishedScanJobsRepo,
@@ -63,8 +62,8 @@ import {
 } from "./scan/persistence/scan-job.repo";
 import {
 	findStageGroupInstanceByIdRepo,
-	listStageLaneRuntimesByScanJobIdRepo,
 	listStageGroupInstancesByScanJobIdRepo,
+	listStageLaneRuntimesByScanJobIdRepo,
 	resetStageLaneRuntimesByScanJobIdRepo,
 } from "./scan/persistence/stage-lane-runtime.repo";
 import {
@@ -76,8 +75,8 @@ import {
 	listAnalysisResultsByScanJobIdRepo,
 	listCandidateDescendantTasksByProducerTaskIdRepo,
 	listChildTasksByParentTaskIdAndStageRepo,
-	listTaskStatusCountsByScanJobIdRepo,
 	listRunningTaskViewsByScanJobIdRepo,
+	listTaskStatusCountsByScanJobIdRepo,
 	listTasksByScanJobAndStageRepo,
 	listTasksByScanJobIdRepo,
 	listTerminalTasksPageByScanJobIdRepo,
@@ -87,6 +86,7 @@ import {
 	updateTaskRepo,
 	updateTaskStatusRepo,
 } from "./scan/persistence/task.repo";
+import { readTaskJsonArtifactForTask } from "./scan/persistence/task-artifact-resolver";
 import type {
 	AnyStageDefinition,
 	PipelineDefinition,
@@ -96,24 +96,25 @@ import {
 	createPipelineDefinition,
 	createPipelineEdge,
 } from "./scan/pipeline/pipeline-definition";
-import { createStageRuntimeConfig } from "./scan/pipeline/scan-stage-runtime-config";
 import {
-	SCAN_PIPELINE_DEFINITIONS,
+	runPipeline,
+	startPipelineRuntime,
+	stopPipelineRuntimesForScanJob,
+} from "./scan/pipeline/pipeline-runner";
+import {
+	normalizeLegacyVerificationSchema,
 	readScanPipelineDefinitionsYaml,
-	validatePipelineRegistryCoverage,
-	type ScanPipelineDefinitions,
+	SCAN_PIPELINE_DEFINITIONS,
 	type ScanPipelineConfig,
+	type ScanPipelineDefinitions,
+	validatePipelineRegistryCoverage,
 } from "./scan/pipeline/scan-pipeline-definitions";
 import { transformPipelineEdgeInput } from "./scan/pipeline/scan-pipeline-edge-transform";
 import {
 	createJsonSchemaContract,
 	type StructuredOutputSchemaSource,
 } from "./scan/pipeline/scan-pipeline-schema-contracts";
-import {
-	runPipeline,
-	startPipelineRuntime,
-	stopPipelineRuntimesForScanJob,
-} from "./scan/pipeline/pipeline-runner";
+import { createStageRuntimeConfig } from "./scan/pipeline/scan-stage-runtime-config";
 import {
 	createStageQueueBinding,
 	type StageDefinition,
@@ -122,12 +123,11 @@ import {
 	buildKnownQueueJobIdsForTask,
 	buildQueueTaskJobId,
 } from "./scan/queue-job-ids";
-import { buildTaskAgentProfileSnapshot } from "./scan/agent-profile-snapshot";
 import {
 	isRetryableTaskStageName,
 	retryFailedScanJobTasksWithDeps,
 } from "./scan/retry-failed-tasks";
-import { SANDBOX_AGENT_RUNTIME_FILE_NAMES } from "./scan/runtime/sandbox-agent-shared";
+import { sanitizeCodexAcpConfigToml } from "./scan/runtime/codex-config-compat";
 import {
 	buildEffectiveDisabledStageSet,
 	getRuntimeStageConcurrency,
@@ -135,36 +135,28 @@ import {
 } from "./scan/runtime-settings";
 import { SCAN_STAGE_IDS, SCAN_STAGE_METADATA } from "./scan/stage-metadata";
 import {
-	type CritiqueFindingStageInput,
-	createCritiqueFindingStageDefinition,
-} from "./scan/stages/critique-finding.stage";
-import {
-	createAttackSurfaceModelStageDefinition,
-	type AttackSurfaceModelStageInput,
-} from "./scan/stages/attack-surface-model.stage";
-import {
 	type AnalyzeFindingStageInput,
-	type AnalyzeFindingStageOutput,
 	createAnalyzeFindingStageDefinition,
 } from "./scan/stages/analyze-finding.stage";
 import {
-	type TriageFindingStageInput,
-	createTriageFindingStageDefinition,
-} from "./scan/stages/triage-finding.stage";
+	type AttackSurfaceModelStageInput,
+	createAttackSurfaceModelStageDefinition,
+} from "./scan/stages/attack-surface-model.stage";
 import {
-	type VerifyFindingStageInput,
-	createVerifyFindingStageDefinition,
-} from "./scan/stages/verify-finding.stage";
+	type CritiqueFindingStageInput,
+	createCritiqueFindingStageDefinition,
+} from "./scan/stages/critique-finding.stage";
+import { createDeltaScopeStageDefinition } from "./scan/stages/delta-scope.stage";
+import type {
+	PipelineContext,
+	StageAgentKind,
+} from "./scan/stages/full-scan-stage.runtime";
 import {
 	resolveScanProfileConcurrencySettingsFromTarget,
 	resolveStageAgentProfile,
 	resolveStageAgentProfileFromTarget,
 	resolveTaskRootSegment,
 	resolveTaskRuntimeDirForTask,
-} from "./scan/stages/full-scan-stage.runtime";
-import type {
-	PipelineContext,
-	StageAgentKind,
 } from "./scan/stages/full-scan-stage.runtime";
 import {
 	createIdentifyTargetStageDefinition,
@@ -175,18 +167,23 @@ import {
 	normalizeLikelyVulnerabilityClasses,
 } from "./scan/stages/normalize-likely-vulnerability-classes";
 import {
+	createRepositoryProfileStageDefinition,
+	type RepositoryProfileStageInput,
+	type RepositoryProfileStageOutput,
+} from "./scan/stages/repository-profile.stage";
+import {
 	createScanTargetStageDefinition,
 	type ScanTargetStageInput,
 	type ScanTargetStageOutput,
 } from "./scan/stages/scan-target.stage";
 import {
-	createDeltaScopeStageDefinition,
-} from "./scan/stages/delta-scope.stage";
+	createTriageFindingStageDefinition,
+	type TriageFindingStageInput,
+} from "./scan/stages/triage-finding.stage";
 import {
-	createRepositoryProfileStageDefinition,
-	type RepositoryProfileStageInput,
-	type RepositoryProfileStageOutput,
-} from "./scan/stages/repository-profile.stage";
+	createVerifyFindingStageDefinition,
+	type VerifyFindingStageInput,
+} from "./scan/stages/verify-finding.stage";
 import {
 	type CandidateTaskExecutionState,
 	deriveCandidateTaskExecutionState,
@@ -203,14 +200,12 @@ import type {
 	ModuleThreatModel as CanonicalModuleThreatModel,
 	Repository as CanonicalRepository,
 	RepositoryModule as CanonicalRepositoryModule,
-	ScanJob,
 	Target as CanonicalTarget,
+	ScanJob,
 	Task,
-	TriageResult,
 	VerificationResult,
 } from "./scan/types";
 
-const ACP_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
 const PREINSTALLED_TOOL_SKILLS = [] as const;
 const RUNTIME_CUSTOM_SKILLS = [
 	"codeql",
@@ -229,41 +224,6 @@ const RUNTIME_CUSTOM_SKILLS = [
 	"search-registries",
 	"tree-sitter",
 ] as const;
-
-type JsonRpcMessage = {
-	id?: number | string;
-	method?: string;
-	params?: Record<string, unknown>;
-	result?: Record<string, unknown>;
-	error?: {
-		code?: number;
-		message?: string;
-		data?: unknown;
-	};
-};
-
-type JsonRpcMessageWithLine = {
-	line: number;
-	timestamp?: string;
-	message: JsonRpcMessage;
-};
-
-type SandboxAgentSessionEvent = {
-	id?: string;
-	eventIndex?: number;
-	sessionId?: string;
-	createdAt?: string;
-	connectionId?: string;
-	sender?: string;
-	payload?: unknown;
-};
-
-type ScanRuntimeLiveAction = {
-	itemId: string;
-	itemType: string;
-	actionType: string;
-	actionText: string;
-};
 
 type UnifiedModuleTaskView = {
 	taskId: string;
@@ -397,25 +357,6 @@ type ScanStageQueueKind =
 	| "critique-finding"
 	| "verify-finding"
 	| "triage-finding";
-
-type RequestInitWithDispatcher = RequestInit & {
-	dispatcher?: Dispatcher;
-};
-
-const acpHttpDispatcher = new Agent({
-	headersTimeout: ACP_HTTP_TIMEOUT_MS,
-	bodyTimeout: ACP_HTTP_TIMEOUT_MS,
-});
-
-const sandboxAgentFetch: typeof fetch = async (input, init) => {
-	const nextInit: RequestInitWithDispatcher = {
-		...(init || {}),
-		dispatcher:
-			(init as RequestInitWithDispatcher | undefined)?.dispatcher ||
-			acpHttpDispatcher,
-	};
-	return fetch(input, nextInit);
-};
 
 const buildAnalysisFingerprint = (value: unknown) =>
 	crypto.createHash("sha1").update(JSON.stringify(value)).digest("hex");
@@ -610,73 +551,6 @@ const sleep = async (ms: number) =>
 	await new Promise<void>((resolve) => {
 		setTimeout(resolve, ms);
 	});
-
-const SANDBOX_AGENT_PROMPT_TIMEOUT_MS = 30 * 60 * 1000;
-
-const extractNamedString = (value: unknown, keys: string[]): string | null => {
-	if (!value || typeof value !== "object") {
-		return null;
-	}
-
-	const record = value as Record<string, unknown>;
-	for (const key of keys) {
-		if (typeof record[key] === "string") {
-			return record[key] as string;
-		}
-	}
-
-	return null;
-};
-
-const extractTurnErrorMessage = (value: unknown): string | null => {
-	if (!value || typeof value !== "object") {
-		return null;
-	}
-
-	const record = value as Record<string, unknown>;
-	const directMessage = extractNamedString(record.error, ["message"]);
-	if (directMessage) {
-		return directMessage;
-	}
-
-	return extractNamedString(value, ["message", "additionalDetails"]);
-};
-
-const withTimeout = async <T>(
-	promise: Promise<T>,
-	timeoutMs: number,
-	errorFactory: () => Error,
-): Promise<T> =>
-	await new Promise<T>((resolve, reject) => {
-		const timer = setTimeout(() => {
-			reject(errorFactory());
-		}, timeoutMs);
-
-		promise.then(
-			(value) => {
-				clearTimeout(timer);
-				resolve(value);
-			},
-			(error) => {
-				clearTimeout(timer);
-				reject(error);
-			},
-		);
-	});
-
-const isPromptPayloadSchemaError = (error: unknown) => {
-	if (!(error instanceof Error)) {
-		return false;
-	}
-
-	const message = error.message.toLowerCase();
-	return (
-		(message.includes("invalid") ||
-			message.includes("schema") ||
-			message.includes("string")) &&
-		!message.includes("timed out")
-	);
-};
 
 const asTaskRecord = (value: unknown): Record<string, unknown> | null =>
 	value && typeof value === "object"
@@ -1084,7 +958,7 @@ const listQueuePendingCountsByScanJobId = async (
 					title: SCAN_STAGE_METADATA.repositoryProfile.name,
 					stageName: SCAN_STAGE_IDS.repositoryProfile,
 					queue: getRepositoryProfileQueue(scanJobId),
-		},
+				},
 		{
 			id: "attack-surface-model",
 			title: SCAN_STAGE_METADATA.attackSurfaceModel.name,
@@ -1489,37 +1363,63 @@ const buildScanDockerfileTemplate = async () => {
 	return await fs.readFile(templatePath, "utf-8");
 };
 
-const resolveSandboxAgentPatchPath = async () => {
-	return await resolveDockerfileAssetPath("sandbox-agent@0.4.2.patch");
+const resolveCodexAcpForkPatchPath = async () => {
+	return await resolveDockerfileAssetPath("codex-acp-fork-1.1.2.patch");
 };
 
-const resolveCodexAcpForkPatchPath = async () => {
-	return await resolveDockerfileAssetPath("codex-acp-fork-0.14.0.patch");
+const resolveAgentEventsPath = async () => {
+	const candidates = [
+		path.resolve(process.cwd(), "vendor/claude-replay/src/agent-events.mjs"),
+		path.resolve(
+			process.cwd(),
+			"../../vendor/claude-replay/src/agent-events.mjs",
+		),
+		path.resolve(
+			process.cwd(),
+			"node_modules/claude-replay/src/agent-events.mjs",
+		),
+		"/app/vendor/claude-replay/src/agent-events.mjs",
+		"/app/node_modules/claude-replay/src/agent-events.mjs",
+	];
+	for (const candidate of candidates) {
+		try {
+			if ((await fs.stat(candidate)).isFile()) return candidate;
+		} catch {}
+	}
+	throw new Error("Unable to locate claude-replay agent-events.mjs");
 };
 
 const resolveCheckoutToolsDefinition = async () => {
-	const [dockerfilePath, sandboxAgentPatchPath, codexAcpPatchPath] =
+	const [dockerfilePath, codexAcpPatchPath, acpDriverPath, agentEventsPath] =
 		await Promise.all([
 			resolveDockerfileAssetPath("Dockerfile.scan-tools"),
-			resolveSandboxAgentPatchPath(),
 			resolveCodexAcpForkPatchPath(),
+			resolveDockerfileAssetPath("vulseek-acp-driver.mjs"),
+			resolveAgentEventsPath(),
 		]);
-	const [dockerfile, sandboxAgentPatch, codexAcpPatch] = await Promise.all([
-		fs.readFile(dockerfilePath, "utf8"),
-		fs.readFile(sandboxAgentPatchPath, "utf8"),
-		fs.readFile(codexAcpPatchPath, "utf8"),
-	]);
+	const [dockerfile, codexAcpPatch, acpDriver, agentEvents] = await Promise.all(
+		[
+			fs.readFile(dockerfilePath, "utf8"),
+			fs.readFile(codexAcpPatchPath, "utf8"),
+			fs.readFile(acpDriverPath, "utf8"),
+			fs.readFile(agentEventsPath, "utf8"),
+		],
+	);
 	const version = computeCheckoutToolsVersion({
 		dockerfile,
-		sandboxAgentPatch,
 		codexAcpPatch,
+		acpDriver,
+		agentEvents,
 	});
+	const variant = resolveCheckoutToolsImageVariant();
 	return {
 		version,
-		imageTag: buildCheckoutToolsImageTag(version),
+		variant,
+		imageTag: buildCheckoutToolsImageTag(version, variant),
 		dockerfile,
-		sandboxAgentPatchPath,
 		codexAcpPatchPath,
+		acpDriverPath,
+		agentEventsPath,
 	};
 };
 
@@ -1531,6 +1431,7 @@ type CheckoutTask = {
 	phase: "waiting_tools" | "building_checkout";
 	imageTag: string;
 	toolsVersion: string;
+	toolsVariant: CheckoutToolsDefinition["variant"];
 	toolsImageTag: string;
 	toolsBuildId: string | null;
 	gitUrl: string;
@@ -1611,18 +1512,14 @@ const inspectCheckoutToolsImage = async (
 		}>;
 		const image = inspect[0];
 		const labels = image?.Config?.Labels;
-		if (
-			!image?.Id ||
-			labels?.["com.fuzzing-peach.vulseek.scan-tools.version"] !==
-				definition.version
-		) {
+		if (!image?.Id || !matchesCheckoutToolsImageLabels(definition, labels)) {
 			return null;
 		}
 		return {
 			...definition,
 			imageId: image.Id,
 			builtAt:
-				labels["com.fuzzing-peach.vulseek.scan-tools.built-at"] ||
+				labels?.["com.fuzzing-peach.vulseek.scan-tools.built-at"] ||
 				image.Created ||
 				"",
 		};
@@ -1649,12 +1546,16 @@ const executeCheckoutToolsBuild = async (input: {
 		await Promise.all([
 			fs.writeFile(dockerfilePath, assets.dockerfile, "utf8"),
 			fs.copyFile(
-				assets.sandboxAgentPatchPath,
-				path.join(tempDir, "sandbox-agent@0.4.2.patch"),
+				assets.codexAcpPatchPath,
+				path.join(tempDir, "codex-acp-fork-1.1.2.patch"),
 			),
 			fs.copyFile(
-				assets.codexAcpPatchPath,
-				path.join(tempDir, "codex-acp-fork-0.14.0.patch"),
+				assets.acpDriverPath,
+				path.join(tempDir, "vulseek-acp-driver.mjs"),
+			),
+			fs.copyFile(
+				assets.agentEventsPath,
+				path.join(tempDir, "agent-events.mjs"),
 			),
 		]);
 		const args = [
@@ -1668,6 +1569,8 @@ const executeCheckoutToolsBuild = async (input: {
 			`VULSEEK_TOOLS_VERSION=${input.definition.version}`,
 			"--build-arg",
 			`VULSEEK_TOOLS_BUILT_AT=${input.builtAt}`,
+			"--build-arg",
+			`VULSEEK_TOOLS_VARIANT=${input.definition.variant}`,
 		];
 		for (const pair of getGlobalContainerEnvironmentPairs()) {
 			args.push("--build-arg", pair);
@@ -1907,8 +1810,7 @@ const resolveCheckoutContext = async (
 		enableSubmodules,
 		postCheckoutScript,
 		localPath,
-	} =
-		await resolveScanGitRepositoryContext(input);
+	} = await resolveScanGitRepositoryContext(input);
 
 	const imageTag = `vulseek-scan-${sanitizeForImageTag(imageNameSeed)}:latest`;
 	return {
@@ -1921,6 +1823,7 @@ const resolveCheckoutContext = async (
 		localPath,
 		dockerfileTemplate,
 		toolsVersion: tools.version,
+		toolsVariant: tools.variant,
 		toolsImageTag: tools.imageTag,
 	};
 };
@@ -1964,10 +1867,10 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 	try {
 		const toolsDefinition = {
 			version: task.toolsVersion,
+			variant: task.toolsVariant,
 			imageTag: task.toolsImageTag,
 		};
-		const existingToolsImage =
-			await inspectCheckoutToolsImage(toolsDefinition);
+		const existingToolsImage = await inspectCheckoutToolsImage(toolsDefinition);
 		if (!existingToolsImage) {
 			task.phase = "waiting_tools";
 			task.stderr = appendLog(
@@ -2076,23 +1979,25 @@ RUN if [ -n "\${POST_CHECKOUT_SCRIPT}" ]; then \\
 				const t = checkoutTasks.get(task.checkoutId);
 				if (t) t.stderr = appendLog(t.stderr, text);
 			};
-			appendToTask("[checkout] copying local repo into image via docker run...\n");
+			appendToTask(
+				"[checkout] copying local repo into image via docker run...\n",
+			);
 			try {
-					await execAsyncStream(
-						`docker run --name ${tempName} -v ${task.localPath}:/tmp/localrepo:ro ${task.imageTag} bash -c "` +
-							"cp -a /tmp/localrepo/. /workspace/repo/ && " +
-							"cd /workspace/repo && " +
-							"git config --global --add safe.directory /workspace/repo && " +
-							"if [ ! -d .git ]; then " +
-							"  git init && " +
-							`  git config user.email 'local@vulseek' && ` +
-							`  git config user.name 'Local Source' && ` +
-							"  git add -A && " +
-							`  git commit -m 'local source snapshot' --allow-empty; ` +
-							"fi && " +
-							`echo '[checkout] local copy complete'"`,
-						appendToTask,
-					);
+				await execAsyncStream(
+					`docker run --name ${tempName} -v ${task.localPath}:/tmp/localrepo:ro ${task.imageTag} bash -c "` +
+						"cp -a /tmp/localrepo/. /workspace/repo/ && " +
+						"cd /workspace/repo && " +
+						"git config --global --add safe.directory /workspace/repo && " +
+						"if [ ! -d .git ]; then " +
+						"  git init && " +
+						`  git config user.email 'local@vulseek' && ` +
+						`  git config user.name 'Local Source' && ` +
+						"  git add -A && " +
+						`  git commit -m 'local source snapshot' --allow-empty; ` +
+						"fi && " +
+						`echo '[checkout] local copy complete'"`,
+					appendToTask,
+				);
 				appendToTask("[checkout] committing image...\n");
 				await execAsyncStream(
 					`docker commit ${tempName} ${task.imageTag}`,
@@ -2132,6 +2037,7 @@ export const startCheckoutScanEnvironment = async (
 		phase: "waiting_tools",
 		imageTag: context.imageTag,
 		toolsVersion: context.toolsVersion,
+		toolsVariant: context.toolsVariant,
 		toolsImageTag: context.toolsImageTag,
 		toolsBuildId: null,
 		gitUrl: context.gitUrl,
@@ -2459,13 +2365,13 @@ const buildClaudeEnvPairs = (agentProfile: AgentProfileLike) => {
 					`ANTHROPIC_AUTH_TOKEN=${agentProfile.apiKey}`,
 				]
 			: []),
-			`ANTHROPIC_MODEL=${agentProfile.model}`,
-			`ANTHROPIC_DEFAULT_SONNET_MODEL=${agentProfile.model}`,
-			`ANTHROPIC_DEFAULT_OPUS_MODEL=${agentProfile.model}`,
-			`ANTHROPIC_DEFAULT_HAIKU_MODEL=${agentProfile.model}`,
-			"CLAUDE_CODE_ENTRYPOINT=vulseek",
-			...parseAgentProfileEnvPairs(agentProfile),
-		];
+		`ANTHROPIC_MODEL=${agentProfile.model}`,
+		`ANTHROPIC_DEFAULT_SONNET_MODEL=${agentProfile.model}`,
+		`ANTHROPIC_DEFAULT_OPUS_MODEL=${agentProfile.model}`,
+		`ANTHROPIC_DEFAULT_HAIKU_MODEL=${agentProfile.model}`,
+		"CLAUDE_CODE_ENTRYPOINT=vulseek",
+		...parseAgentProfileEnvPairs(agentProfile),
+	];
 	return envPairs;
 };
 
@@ -2516,10 +2422,12 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 		? await findApplicationById(scanJob.applicationId as string)
 		: await findComposeById(scanJob.composeId as string);
 	const repositoryProfileAgentProfileId =
-		target.scanStageSettings?.[SCAN_STAGE_IDS.repositoryProfile]?.agentProfileId ||
-		null;
+		target.scanStageSettings?.[SCAN_STAGE_IDS.repositoryProfile]
+			?.agentProfileId || null;
 	const scanAgentProfile = repositoryProfileAgentProfileId
-		? await getAgentProfileById(repositoryProfileAgentProfileId).catch(() => null)
+		? await getAgentProfileById(repositoryProfileAgentProfileId).catch(
+				() => null,
+			)
 		: null;
 
 	const appName = target.appName;
@@ -2829,124 +2737,6 @@ const resolveCandidateTaskRuntimeDir = async (
 	});
 };
 
-export const getScanJobAppServerJsonlPath = async (scanJobId: string) =>
-	path.join(
-		await resolveScanJobArtifactsDir(scanJobId),
-		"app-server-messages.jsonl",
-	);
-
-export const getScanJobAppServerTextPath = (scanJobId: string) =>
-	path.join(resolveScanJobScanningRuntimeDir(scanJobId), "app-server-text.log");
-
-export const getScanJobAppServerStderrPath = (scanJobId: string) =>
-	path.join(
-		resolveScanJobScanningRuntimeDir(scanJobId),
-		"app-server-stderr.log",
-	);
-
-export const getCandidateAnalysisAppServerJsonlPath = async (
-	scanJobId: string,
-	candidateId: string,
-) => {
-	const runtimeDir = await resolveCandidateTaskRuntimeDir(
-		scanJobId,
-		candidateId,
-		SCAN_STAGE_IDS.analyzeFinding,
-	);
-	return runtimeDir
-		? path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl)
-		: null;
-};
-
-export const getCandidateAnalysisAppServerTextPath = (
-	scanJobId: string,
-	candidateId: string,
-) =>
-	resolveCandidateTaskRuntimeDir(
-		scanJobId,
-		candidateId,
-		SCAN_STAGE_IDS.analyzeFinding,
-	).then((runtimeDir) =>
-		runtimeDir
-			? path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.text)
-			: null,
-	);
-
-export const getCandidateAnalysisAppServerStderrPath = (
-	scanJobId: string,
-	candidateId: string,
-) =>
-	resolveCandidateTaskRuntimeDir(
-		scanJobId,
-		candidateId,
-		SCAN_STAGE_IDS.analyzeFinding,
-	).then((runtimeDir) =>
-		runtimeDir
-			? path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.stderr)
-			: null,
-	);
-
-export const getCandidateVerifierAppServerJsonlPath = async (
-	scanJobId: string,
-	candidateId: string,
-) => {
-	const runtimeDir = await resolveCandidateTaskRuntimeDir(
-		scanJobId,
-		candidateId,
-		SCAN_STAGE_IDS.verifyFinding,
-	);
-	return runtimeDir
-		? path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl)
-		: null;
-};
-
-export const getCandidateVerifierAppServerTextPath = (
-	scanJobId: string,
-	candidateId: string,
-) =>
-	resolveCandidateTaskRuntimeDir(
-		scanJobId,
-		candidateId,
-		SCAN_STAGE_IDS.verifyFinding,
-	).then((runtimeDir) =>
-		runtimeDir
-			? path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.text)
-			: null,
-	);
-
-export const getCandidateVerifierAppServerStderrPath = (
-	scanJobId: string,
-	candidateId: string,
-) =>
-	resolveCandidateTaskRuntimeDir(
-		scanJobId,
-		candidateId,
-		SCAN_STAGE_IDS.verifyFinding,
-	).then((runtimeDir) =>
-		runtimeDir
-			? path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.stderr)
-			: null,
-	);
-
-export const getIdentifyTargetAppServerJsonlPath = async (
-	scanJobId: string,
-	moduleId: string,
-) =>
-	path.join(
-		await resolveModuleArtifactsDir(scanJobId, moduleId),
-		"app-server-messages.jsonl",
-	);
-
-export const getScanTargetAppServerJsonlPath = async (
-	scanJobId: string,
-	moduleId: string,
-	functionId: string,
-) =>
-	path.join(
-		await resolveFunctionArtifactsDir(scanJobId, moduleId, functionId),
-		"app-server-messages.jsonl",
-	);
-
 const resolveScanJobTargetIdentity = async (scanJob: ScanJob) => {
 	if (scanJob.applicationId) {
 		const application = await findApplicationById(scanJob.applicationId);
@@ -3058,70 +2848,6 @@ const resolveLiveScanJobArtifactsDir = (input: {
 		input.scanJobId,
 		"scanning",
 	);
-
-const initializeRuntimeFiles = async (input: {
-	runtimeDir: string;
-	jsonlPath: string;
-	textPath: string;
-	stderrPath: string;
-}) => {
-	await fs.mkdir(input.runtimeDir, { recursive: true });
-	await Promise.all([
-		fs.writeFile(input.jsonlPath, "", "utf-8"),
-		fs.writeFile(input.textPath, "", "utf-8"),
-		fs.writeFile(input.stderrPath, "", "utf-8"),
-	]);
-};
-
-const initializeCodexRuntimeMetadataFiles = async (input: {
-	cursorPath: string;
-	statePath: string;
-}) => {
-	await Promise.all([
-		fs.writeFile(
-			input.cursorPath,
-			JSON.stringify(createEmptyCodexRuntimeCursorState()),
-			"utf-8",
-		),
-		fs.writeFile(input.statePath, "{}", "utf-8"),
-	]);
-};
-
-const initializeRuntimeFilesInContainer = async (input: {
-	containerName: string;
-	runtimeDirInContainer: string;
-	jsonlFileName: string;
-	textFileName: string;
-	stderrFileName: string;
-}) => {
-	await execAsync(
-		`docker exec ${input.containerName} bash -lc "mkdir -p '${input.runtimeDirInContainer}' && : > '${input.runtimeDirInContainer}/${input.jsonlFileName}' && : > '${input.runtimeDirInContainer}/${input.textFileName}' && : > '${input.runtimeDirInContainer}/${input.stderrFileName}'"`,
-	);
-};
-
-const initializeCodexRuntimeMetadataFilesInContainer = async (input: {
-	containerName: string;
-	runtimeDirInContainer: string;
-	cursorFileName: string;
-	stateFileName: string;
-}) => {
-	await writeContainerFile(
-		input.containerName,
-		path.posix.join(input.runtimeDirInContainer, input.cursorFileName),
-		JSON.stringify(createEmptyCodexRuntimeCursorState()),
-	);
-	await execAsync(
-		`docker exec ${input.containerName} bash -lc "mkdir -p '${input.runtimeDirInContainer}' && : > '${input.runtimeDirInContainer}/${input.stateFileName}'"`,
-	);
-};
-
-const resetScanRuntimeFiles = async (scanJobId: string) => {
-	const runtimeDir = await resolveScanJobArtifactsDir(scanJobId);
-	const jsonlPath = path.join(runtimeDir, "app-server-messages.jsonl");
-	const textPath = path.join(runtimeDir, "app-server-text.log");
-	const stderrPath = path.join(runtimeDir, "app-server-stderr.log");
-	await initializeRuntimeFiles({ runtimeDir, jsonlPath, textPath, stderrPath });
-};
 
 const resolveScanJobBrowsableRoot = async (scanJobId: string) => {
 	const scanJob = await findScanJobByIdRepo(scanJobId);
@@ -3387,9 +3113,9 @@ const installRuntimeSkillsInContainer = async (
 			.map((skillName) => `--skill '${escapeSingleQuotes(skillName)}'`)
 			.join(" ");
 
-			await execAsync(
-				`docker exec ${containerName} bash -lc "mkdir -p /workspace/repo/.agents && cd /workspace/repo && skills add '${containerRepoRoot}' ${skillFlags} -a claude-code -a codex --copy -y"`,
-			);
+		await execAsync(
+			`docker exec ${containerName} bash -lc "mkdir -p /workspace/repo/.agents && cd /workspace/repo && skills add '${containerRepoRoot}' ${skillFlags} -a claude-code -a codex --copy -y"`,
+		);
 
 		return copiedSkills;
 	} finally {
@@ -3838,940 +3564,6 @@ export const readCandidateFileContent = async (input: {
 	};
 };
 
-const appendScanRuntimeFile = async (filePath: string, chunk: string) => {
-	if (!chunk) return;
-	await fs.appendFile(filePath, chunk, "utf-8");
-};
-
-const formatJsonRpcRuntimeMessage = (
-	message: JsonRpcMessage,
-	timestamp?: string,
-) =>
-	`${JSON.stringify({
-		timestamp: timestamp || new Date().toISOString(),
-		message,
-	})}\n`;
-
-const isJsonRpcLikeMessage = (value: unknown): value is JsonRpcMessage => {
-	if (!value || typeof value !== "object") {
-		return false;
-	}
-
-	const record = value as Record<string, unknown>;
-	return (
-		typeof record.method === "string" || "result" in record || "error" in record
-	);
-};
-
-const buildSandboxAgentTextDeltaMessage = (
-	itemId: string,
-	text: string,
-	method:
-		| "item/agentMessage/delta"
-		| "item/reasoning/textDelta"
-		| "item/plan/delta"
-		| "item/commandExecution/outputDelta" = "item/agentMessage/delta",
-): JsonRpcMessage => {
-	if (method === "item/plan/delta") {
-		return {
-			method,
-			params: {
-				delta: text,
-			},
-		};
-	}
-
-	if (method === "item/reasoning/textDelta") {
-		return {
-			method,
-			params: {
-				itemId,
-				textDelta: text,
-			},
-		};
-	}
-
-	if (method === "item/commandExecution/outputDelta") {
-		return {
-			method,
-			params: {
-				itemId,
-				outputDelta: text,
-			},
-		};
-	}
-
-	return {
-		method,
-		params: {
-			itemId,
-			delta: text,
-		},
-	};
-};
-
-const normalizeSandboxAgentPayloadToJsonRpc = (input: {
-	payload: unknown;
-	fallbackItemId: string;
-}): {
-	messages: JsonRpcMessage[];
-} => {
-	if (isJsonRpcLikeMessage(input.payload)) {
-		const message = input.payload;
-		return {
-			messages: [message],
-		};
-	}
-
-	const payloadRecord = asRecord(input.payload) || {};
-	const universalType = asString(payloadRecord.type) || "";
-	const universalData = asRecord(payloadRecord.data);
-	if (universalType) {
-		switch (universalType) {
-			case "turn.started":
-				return {
-					messages: [{ method: "turn/started", params: universalData || {} }],
-				};
-			case "turn.ended":
-				return {
-					messages: [
-						{
-							method: "turn/completed",
-							params: universalData || {
-								turn: "completed",
-							},
-						},
-					],
-				};
-			case "item.delta": {
-				const delta = asRecord(universalData?.delta) || universalData || {};
-				const text = extractTextValue(delta) || "";
-				if (!text) {
-					return { messages: [] };
-				}
-				const deltaType = asString(delta.type) || "";
-				const itemId =
-					asString(universalData?.item_id) ||
-					asString(universalData?.itemId) ||
-					input.fallbackItemId;
-				if (/reason/i.test(deltaType)) {
-					return {
-						messages: [
-							buildSandboxAgentTextDeltaMessage(
-								itemId,
-								text,
-								"item/reasoning/textDelta",
-							),
-						],
-					};
-				}
-				if (/plan/i.test(deltaType)) {
-					return {
-						messages: [
-							buildSandboxAgentTextDeltaMessage(
-								itemId,
-								text,
-								"item/plan/delta",
-							),
-						],
-					};
-				}
-				if (/tool|command/i.test(deltaType)) {
-					return {
-						messages: [
-							buildSandboxAgentTextDeltaMessage(
-								itemId,
-								text,
-								"item/commandExecution/outputDelta",
-							),
-						],
-					};
-				}
-				return {
-					messages: [buildSandboxAgentTextDeltaMessage(itemId, text)],
-				};
-			}
-			case "item.completed": {
-				const item = asRecord(universalData?.item) || universalData || {};
-				const text = extractTextValue(item) || "";
-				return {
-					messages: text
-						? [
-								{
-									method: "item/completed",
-									params: {
-										item: {
-											id:
-												asString(item.item_id) ||
-												asString(item.id) ||
-												input.fallbackItemId,
-											type: "agentMessage",
-											text,
-										},
-									},
-								},
-							]
-						: [],
-				};
-			}
-			case "error":
-				return {
-					messages: [
-						{
-							method: "error",
-							params: {
-								error: universalData || payloadRecord,
-							},
-						},
-					],
-				};
-			default: {
-				const text = extractTextValue(universalData) || "";
-				if (!text) {
-					return { messages: [] };
-				}
-				return {
-					messages: [
-						buildSandboxAgentTextDeltaMessage(input.fallbackItemId, text),
-					],
-				};
-			}
-		}
-	}
-
-	const update =
-		asRecord(payloadRecord.sessionUpdate) ||
-		asRecord(payloadRecord.update) ||
-		payloadRecord;
-	const updateType = asString(update.type) || asString(update.kind) || "";
-
-	switch (updateType) {
-		case "turn_started":
-		case "turn.started":
-			return {
-				messages: [{ method: "turn/started", params: update }],
-			};
-		case "turn_ended":
-		case "turn_completed":
-		case "turn.ended":
-			return {
-				messages: [{ method: "turn/completed", params: update }],
-			};
-		case "agent_thought_chunk":
-			return {
-				messages: [
-					buildSandboxAgentTextDeltaMessage(
-						input.fallbackItemId,
-						extractTextValue(update) || "",
-						"item/reasoning/textDelta",
-					),
-				].filter((message) => Boolean(extractTextValue(message.params))),
-			};
-		case "tool_call":
-		case "tool_call_update": {
-			const updateStatus = (asString(update.status) || "").toLowerCase();
-			const toolCallErrorMessage =
-				extractTurnErrorMessage(update) ||
-				extractTurnErrorMessage(asRecord(update.rawOutput)) ||
-				extractTurnErrorMessage(asRecord(update.content));
-			if (
-				updateStatus === "failed" ||
-				updateStatus === "error" ||
-				asBoolean(update.isError)
-			) {
-				return {
-					messages: [
-						{
-							method: "error",
-							params: {
-								error: {
-									message:
-										toolCallErrorMessage ||
-										`${asString(update.title) || asString(update.name) || "Tool call"} failed`,
-								},
-							},
-						},
-					],
-				};
-			}
-			const text =
-				extractTextValue(update) ||
-				asString(update.title) ||
-				asString(update.name) ||
-				"";
-			return text
-				? {
-						messages: [
-							buildSandboxAgentTextDeltaMessage(
-								input.fallbackItemId,
-								text,
-								"item/commandExecution/outputDelta",
-							),
-						],
-					}
-				: { messages: [] };
-		}
-		case "plan_chunk":
-			return {
-				messages: [
-					buildSandboxAgentTextDeltaMessage(
-						input.fallbackItemId,
-						extractTextValue(update) || "",
-						"item/plan/delta",
-					),
-				].filter((message) => Boolean(extractTextValue(message.params))),
-			};
-		case "error":
-			return {
-				messages: [
-					{
-						method: "error",
-						params: {
-							error: update,
-						},
-					},
-				],
-			};
-		default: {
-			const text = extractTextValue(update) || "";
-			if (!text) {
-				return { messages: [] };
-			}
-			return {
-				messages: [
-					buildSandboxAgentTextDeltaMessage(input.fallbackItemId, text),
-				],
-			};
-		}
-	}
-};
-
-const parseJsonRpcMessageLine = (
-	raw: string,
-): { timestamp?: string; message: JsonRpcMessage } => {
-	const parsed = JSON.parse(raw) as unknown;
-	if (
-		parsed &&
-		typeof parsed === "object" &&
-		"payload" in parsed &&
-		(parsed as Record<string, unknown>).payload &&
-		typeof (parsed as Record<string, unknown>).payload === "object"
-	) {
-		const eventRecord = parsed as Record<string, unknown>;
-		const payloadRecord =
-			(eventRecord.payload as Record<string, unknown> | null) || null;
-		const sessionUpdate =
-			payloadRecord && typeof payloadRecord.sessionUpdate === "string"
-				? payloadRecord.sessionUpdate
-				: "";
-		return {
-			timestamp:
-				typeof eventRecord.createdAt === "string"
-					? eventRecord.createdAt
-					: undefined,
-			message: {
-				method:
-					sessionUpdate === "tool_call" || sessionUpdate === "tool_call_update"
-						? "item/started"
-						: "session/update",
-				params:
-					sessionUpdate === "tool_call" || sessionUpdate === "tool_call_update"
-						? {
-								item: {
-									id:
-										typeof payloadRecord?.toolCallId === "string"
-											? payloadRecord.toolCallId
-											: typeof payloadRecord?.itemId === "string"
-												? payloadRecord.itemId
-												: "sandbox-agent",
-									type: "dynamicToolCall",
-									tool:
-										typeof payloadRecord?.title === "string"
-											? payloadRecord.title
-											: typeof payloadRecord?.tool === "string"
-												? payloadRecord.tool
-												: "tool",
-									rawInput: payloadRecord?.rawInput,
-									status: payloadRecord?.status,
-								},
-							}
-						: {
-								update: payloadRecord,
-								content: payloadRecord?.content,
-								text:
-									payloadRecord?.content &&
-									typeof payloadRecord.content === "object"
-										? (payloadRecord.content as Record<string, unknown>).text
-										: undefined,
-							},
-			},
-		};
-	}
-	if (
-		parsed &&
-		typeof parsed === "object" &&
-		"message" in parsed &&
-		(parsed as Record<string, unknown>).message &&
-		typeof (parsed as Record<string, unknown>).message === "object"
-	) {
-		return {
-			timestamp: asString((parsed as Record<string, unknown>).timestamp),
-			message: (parsed as Record<string, unknown>).message as JsonRpcMessage,
-		};
-	}
-
-	return {
-		message: parsed as JsonRpcMessage,
-	};
-};
-
-const parseJsonRpcMessagesWithLineNumbers = (
-	file: string,
-): JsonRpcMessageWithLine[] =>
-	file
-		.split("\n")
-		.map((line, index) => ({ raw: line.trim(), line: index + 1 }))
-		.filter((entry) => Boolean(entry.raw))
-		.map((entry) => {
-			const parsed = parseJsonRpcMessageLine(entry.raw);
-			return {
-				line: entry.line,
-				timestamp: parsed.timestamp,
-				message: parsed.message,
-			};
-		});
-
-const STATUS_VIEW_STREAM_MAX_MESSAGES = 160;
-const STATUS_VIEW_STREAM_TAIL_MAX_BYTES = 512 * 1024;
-
-const readJsonRpcMessagesWithLineNumbersTail = async (
-	filePath: string,
-	options?: {
-		maxMessages?: number;
-		maxBytes?: number;
-	},
-): Promise<JsonRpcMessageWithLine[]> => {
-	const maxMessages = Math.max(
-		1,
-		options?.maxMessages ?? STATUS_VIEW_STREAM_MAX_MESSAGES,
-	);
-	const maxBytes = Math.max(
-		4096,
-		options?.maxBytes ?? STATUS_VIEW_STREAM_TAIL_MAX_BYTES,
-	);
-
-	try {
-		const stat = await fs.stat(filePath);
-		const readFrom = Math.max(0, stat.size - maxBytes);
-		const handle = await fs.open(filePath, "r");
-		try {
-			const length = stat.size - readFrom;
-			if (length <= 0) {
-				return [];
-			}
-
-			const buffer = Buffer.alloc(length);
-			await handle.read(buffer, 0, length, readFrom);
-			let content = buffer.toString("utf-8");
-			if (readFrom > 0) {
-				const firstNewlineIndex = content.indexOf("\n");
-				content =
-					firstNewlineIndex >= 0 ? content.slice(firstNewlineIndex + 1) : "";
-			}
-
-			return parseJsonRpcMessagesWithLineNumbers(content).slice(-maxMessages);
-		} finally {
-			await handle.close();
-		}
-	} catch {
-		return [];
-	}
-};
-
-type CodexRuntimeArtifacts = {
-	jsonlPath: string;
-	textPath: string;
-	stderrPath: string;
-	cursorPath: string;
-	statePath: string;
-	jsonlFileName: string;
-	textFileName: string;
-	stderrFileName: string;
-	cursorFileName: string;
-	stateFileName: string;
-};
-
-type CodexRuntimeCursorState = {
-	offset: number;
-	line: number;
-	agentMessageBuffers: Record<string, string>;
-};
-
-const createCodexRuntimeArtifacts = (input: {
-	runtimeDir: string;
-	jsonlFileName: string;
-	textFileName: string;
-	stderrFileName: string;
-}) => {
-	const runtimeBase = input.jsonlFileName.replace(/\.jsonl$/i, "");
-	return {
-		jsonlPath: path.join(input.runtimeDir, input.jsonlFileName),
-		textPath: path.join(input.runtimeDir, input.textFileName),
-		stderrPath: path.join(input.runtimeDir, input.stderrFileName),
-		cursorPath: path.join(input.runtimeDir, `.${runtimeBase}-cursor.json`),
-		statePath: path.join(input.runtimeDir, `.${runtimeBase}-state.json`),
-		jsonlFileName: input.jsonlFileName,
-		textFileName: input.textFileName,
-		stderrFileName: input.stderrFileName,
-		cursorFileName: `.${runtimeBase}-cursor.json`,
-		stateFileName: `.${runtimeBase}-state.json`,
-	} satisfies CodexRuntimeArtifacts;
-};
-
-const createEmptyCodexRuntimeCursorState = (): CodexRuntimeCursorState => ({
-	offset: 0,
-	line: 0,
-	agentMessageBuffers: {},
-});
-
-const readCandidateAnalysisAppServerMessagesWithLineNumbers = async (
-	scanJobId: string,
-	candidateId: string,
-): Promise<JsonRpcMessageWithLine[]> => {
-	try {
-		const runtimeDir = await resolveCandidateTaskRuntimeDir(
-			scanJobId,
-			candidateId,
-			SCAN_STAGE_IDS.analyzeFinding,
-		);
-		if (!runtimeDir) {
-			return [];
-		}
-		const file = await fs.readFile(
-			path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl),
-			"utf-8",
-		);
-		return parseJsonRpcMessagesWithLineNumbers(file);
-	} catch {
-		return [];
-	}
-};
-
-const readCandidateAnalysisAppServerMessages = async (
-	scanJobId: string,
-	candidateId: string,
-): Promise<JsonRpcMessage[]> =>
-	(
-		await readCandidateAnalysisAppServerMessagesWithLineNumbers(
-			scanJobId,
-			candidateId,
-		)
-	).map((entry) => entry.message);
-
-const readCandidateVerifierAppServerMessagesWithLineNumbers = async (
-	scanJobId: string,
-	candidateId: string,
-): Promise<JsonRpcMessageWithLine[]> => {
-	try {
-		const runtimeDir = await resolveCandidateTaskRuntimeDir(
-			scanJobId,
-			candidateId,
-			SCAN_STAGE_IDS.verifyFinding,
-		);
-		if (!runtimeDir) {
-			return [];
-		}
-		const file = await fs.readFile(
-			path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl),
-			"utf-8",
-		);
-		return parseJsonRpcMessagesWithLineNumbers(file);
-	} catch {
-		return [];
-	}
-};
-
-const readCandidateVerifierAppServerMessages = async (
-	scanJobId: string,
-	candidateId: string,
-): Promise<JsonRpcMessage[]> =>
-	(
-		await readCandidateVerifierAppServerMessagesWithLineNumbers(
-			scanJobId,
-			candidateId,
-		)
-	).map((entry) => entry.message);
-
-const readIdentifyTargetAppServerMessagesWithLineNumbers = async (
-	scanJobId: string,
-	moduleId: string,
-): Promise<JsonRpcMessageWithLine[]> => {
-	try {
-		const file = await fs.readFile(
-			path.join(
-				await resolveModuleArtifactsDir(scanJobId, moduleId),
-				"app-server-messages.jsonl",
-			),
-			"utf-8",
-		);
-		return parseJsonRpcMessagesWithLineNumbers(file);
-	} catch {
-		return [];
-	}
-};
-
-const readScanTargetAppServerMessagesWithLineNumbers = async (
-	scanJobId: string,
-	moduleId: string,
-	functionId: string,
-): Promise<JsonRpcMessageWithLine[]> => {
-	try {
-		const file = await fs.readFile(
-			path.join(
-				await resolveFunctionArtifactsDir(scanJobId, moduleId, functionId),
-				"app-server-messages.jsonl",
-			),
-			"utf-8",
-		);
-		return parseJsonRpcMessagesWithLineNumbers(file);
-	} catch {
-		return [];
-	}
-};
-
-const readScanJobAppServerMessagesTailWithLineNumbers = async (
-	scanJobId: string,
-): Promise<JsonRpcMessageWithLine[]> =>
-	readJsonRpcMessagesWithLineNumbersTail(
-		path.join(
-			await resolveScanJobArtifactsDir(scanJobId),
-			"app-server-messages.jsonl",
-		),
-	);
-
-const readCandidateAnalysisAppServerMessagesTailWithLineNumbers = async (
-	scanJobId: string,
-	candidateId: string,
-): Promise<JsonRpcMessageWithLine[]> => {
-	const runtimeDir = await resolveCandidateTaskRuntimeDir(
-		scanJobId,
-		candidateId,
-		SCAN_STAGE_IDS.analyzeFinding,
-	);
-	if (!runtimeDir) {
-		return [];
-	}
-	return await readJsonRpcMessagesWithLineNumbersTail(
-		path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl),
-	);
-};
-
-const readCandidateVerifierAppServerMessagesTailWithLineNumbers = async (
-	scanJobId: string,
-	candidateId: string,
-): Promise<JsonRpcMessageWithLine[]> => {
-	const runtimeDir = await resolveCandidateTaskRuntimeDir(
-		scanJobId,
-		candidateId,
-		SCAN_STAGE_IDS.verifyFinding,
-	);
-	if (!runtimeDir) {
-		return [];
-	}
-	return await readJsonRpcMessagesWithLineNumbersTail(
-		path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl),
-	);
-};
-
-const readIdentifyTargetAppServerMessagesTailWithLineNumbers = async (
-	scanJobId: string,
-	moduleId: string,
-): Promise<JsonRpcMessageWithLine[]> =>
-	readJsonRpcMessagesWithLineNumbersTail(
-		path.join(
-			await resolveModuleArtifactsDir(scanJobId, moduleId),
-			"app-server-messages.jsonl",
-		),
-	);
-
-const readScanTargetAppServerMessagesTailWithLineNumbers = async (
-	scanJobId: string,
-	moduleId: string,
-	functionId: string,
-): Promise<JsonRpcMessageWithLine[]> =>
-	readJsonRpcMessagesWithLineNumbersTail(
-		path.join(
-			await resolveFunctionArtifactsDir(scanJobId, moduleId, functionId),
-			"app-server-messages.jsonl",
-		),
-	);
-
-export const readScanJobAppServerText = async (scanJobId: string) => {
-	try {
-		return await fs.readFile(
-			path.join(
-				await resolveScanJobArtifactsDir(scanJobId),
-				"app-server-text.log",
-			),
-			"utf-8",
-		);
-	} catch {
-		return "";
-	}
-};
-
-export const readCandidateAnalysisAppServerText = async (
-	scanJobId: string,
-	candidateId: string,
-) => {
-	try {
-		const runtimeDir = await resolveCandidateTaskRuntimeDir(
-			scanJobId,
-			candidateId,
-			SCAN_STAGE_IDS.analyzeFinding,
-		);
-		if (!runtimeDir) {
-			return "";
-		}
-		return await fs.readFile(
-			path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.text),
-			"utf-8",
-		);
-	} catch {
-		return "";
-	}
-};
-
-export const readCandidateVerifierAppServerText = async (
-	scanJobId: string,
-	candidateId: string,
-) => {
-	try {
-		const runtimeDir = await resolveCandidateTaskRuntimeDir(
-			scanJobId,
-			candidateId,
-			SCAN_STAGE_IDS.verifyFinding,
-		);
-		if (!runtimeDir) {
-			return "";
-		}
-		return await fs.readFile(
-			path.join(runtimeDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.text),
-			"utf-8",
-		);
-	} catch {
-		return "";
-	}
-};
-
-export const readIdentifyTargetAppServerText = async (
-	scanJobId: string,
-	moduleId: string,
-) => {
-	try {
-		return await fs.readFile(
-			path.join(
-				await resolveModuleArtifactsDir(scanJobId, moduleId),
-				"app-server-text.log",
-			),
-			"utf-8",
-		);
-	} catch {
-		return "";
-	}
-};
-
-export const readScanTargetAppServerText = async (
-	scanJobId: string,
-	moduleId: string,
-	functionId: string,
-) => {
-	try {
-		return await fs.readFile(
-			path.join(
-				await resolveFunctionArtifactsDir(scanJobId, moduleId, functionId),
-				"app-server-text.log",
-			),
-			"utf-8",
-		);
-	} catch {
-		return "";
-	}
-};
-
-const asRecord = (value: unknown) =>
-	value && typeof value === "object"
-		? (value as Record<string, unknown>)
-		: undefined;
-
-const asString = (value: unknown) =>
-	typeof value === "string" && value ? value : undefined;
-
-const asBoolean = (value: unknown) => {
-	if (typeof value === "boolean") {
-		return value;
-	}
-	if (typeof value === "string") {
-		if (value === "true") {
-			return true;
-		}
-		if (value === "false") {
-			return false;
-		}
-	}
-	return undefined;
-};
-
-const formatActionText = (value: string | undefined, fallback = "-") => {
-	if (!value) {
-		return fallback;
-	}
-
-	const trimmed = value.trim();
-	return trimmed || fallback;
-};
-
-const deriveActionFromItem = (
-	item: Record<string, unknown>,
-	itemTextById: Map<string, string>,
-): ScanRuntimeLiveAction | null => {
-	const itemId = asString(item.id);
-	const itemType = asString(item.type);
-	if (!itemId || !itemType) {
-		return null;
-	}
-
-	if (itemType === "commandExecution") {
-		const command = asString(item.command);
-		const cwd = asString(item.cwd);
-		return {
-			itemId,
-			itemType,
-			actionType: "command executing",
-			actionText: formatActionText(
-				command ? `${command}${cwd ? ` [cwd: ${cwd}]` : ""}` : cwd,
-			),
-		};
-	}
-
-	if (itemType === "reasoning") {
-		const content = itemTextById.get(itemId);
-		return {
-			itemId,
-			itemType,
-			actionType: "reasoning",
-			actionText: formatActionText(content, "Reasoning"),
-		};
-	}
-
-	if (itemType === "fileChange") {
-		const content = itemTextById.get(itemId);
-		return {
-			itemId,
-			itemType,
-			actionType: "other",
-			actionText: formatActionText(content, "Applying file changes"),
-		};
-	}
-
-	if (itemType === "mcpToolCall") {
-		const server = asString(item.server) || "mcp";
-		const tool = asString(item.tool) || "tool";
-		return {
-			itemId,
-			itemType,
-			actionType: "other",
-			actionText: `${server}:${tool}`,
-		};
-	}
-
-	if (itemType === "dynamicToolCall") {
-		const tool = asString(item.tool) || "tool";
-		return {
-			itemId,
-			itemType,
-			actionType: "other",
-			actionText: tool,
-		};
-	}
-
-	if (itemType === "collabAgentToolCall") {
-		const tool = asString(item.tool) || "collab";
-		const prompt = asString(item.prompt);
-		return {
-			itemId,
-			itemType,
-			actionType: "other",
-			actionText: formatActionText(prompt ? `${tool}: ${prompt}` : tool, tool),
-		};
-	}
-
-	return null;
-};
-
-const deriveRuntimeLiveActionFromMessages = async (
-	messages: JsonRpcMessage[],
-): Promise<ScanRuntimeLiveAction | null> => {
-	if (messages.length === 0) {
-		return null;
-	}
-
-	const activeItems = new Map<string, Record<string, unknown>>();
-	const itemTextById = new Map<string, string>();
-
-	for (const message of messages) {
-		const params = asRecord(message.params) || {};
-
-		if (
-			message.method === "item/started" ||
-			message.method === "item/completed"
-		) {
-			const item = asRecord(params.item);
-			const itemId = asString(item?.id);
-			if (!item || !itemId) {
-				continue;
-			}
-
-			if (message.method === "item/started") {
-				activeItems.set(itemId, item);
-			} else {
-				activeItems.delete(itemId);
-			}
-			continue;
-		}
-
-		if (
-			message.method === "item/reasoning/textDelta" ||
-			message.method === "item/commandExecution/outputDelta" ||
-			message.method === "item/fileChange/outputDelta"
-		) {
-			const itemId = asString(params.itemId);
-			const delta = asString(params.delta);
-			if (itemId && delta) {
-				itemTextById.set(itemId, `${itemTextById.get(itemId) || ""}${delta}`);
-			}
-			continue;
-		}
-
-		if (message.method === "item/commandExecution/terminalInteraction") {
-			const itemId = asString(params.itemId);
-			const stdin = asString(params.stdin);
-			if (itemId && stdin) {
-				itemTextById.set(
-					itemId,
-					formatActionText(`terminal input: ${stdin}`, "terminal input"),
-				);
-			}
-		}
-	}
-
-	const activeActions = Array.from(activeItems.values())
-		.map((item) => deriveActionFromItem(item, itemTextById))
-		.filter(Boolean) as ScanRuntimeLiveAction[];
-
-	return activeActions.at(-1) || null;
-};
-
 const deriveCandidateExecutionState = async (input: {
 	producerTaskId: string;
 	vulnerabilityCandidateId: string;
@@ -4791,9 +3583,9 @@ const deriveCandidateExecutionState = async (input: {
 	);
 
 export const findScanJobRunningTasks = async (scanJobId: string) =>
-	(
-		await listRunningTaskViewsByScanJobIdRepo(scanJobId)
-	).sort(compareInProgressTaskView);
+	(await listRunningTaskViewsByScanJobIdRepo(scanJobId)).sort(
+		compareInProgressTaskView,
+	);
 
 export const findScanJobQueueCounts = async (scanJobId: string) => {
 	const scanJob = await findScanJobByIdRepo(scanJobId);
@@ -4995,10 +3787,7 @@ export const findFullScanStageGraph = async (
 ) => {
 	const settings =
 		await resolveScanProfileConcurrencySettingsFromTarget(target);
-	const scanType =
-		target.scanType === "delta"
-			? "delta"
-			: "full";
+	const scanType = target.scanType === "delta" ? "delta" : "full";
 	const pipeline =
 		scanType === "delta"
 			? SCAN_PIPELINE_DEFINITIONS.pipelines.delta
@@ -5161,108 +3950,30 @@ export const findScanJobStageGraph = async (
 export const findScanJobPipeline = async (scanJobId: string) =>
 	await findScanJobStageGraph(scanJobId, { includeQueue: false });
 
-const extractTextValue = (value: unknown): string | null => {
-	if (typeof value === "string") {
-		return value;
-	}
-
-	if (!value || typeof value !== "object") {
-		return null;
-	}
-
-	const record = value as Record<string, unknown>;
-	const preferredKeys = [
-		"delta",
-		"text",
-		"textDelta",
-		"outputDelta",
-		"stdout",
-		"stderr",
-		"content",
-	];
-
-	for (const key of preferredKeys) {
-		const nested = extractTextValue(record[key]);
-		if (nested) {
-			return nested;
-		}
-	}
-
-	for (const nested of Object.values(record)) {
-		const extracted = extractTextValue(nested);
-		if (extracted) {
-			return extracted;
-		}
-	}
-
-	return null;
-};
-
-const renderJsonRpcMessage = (message: JsonRpcMessage) => {
-	if (message.error?.message) {
-		return `\n[jsonrpc error] ${message.error.message}\n`;
-	}
-
-	if (!message.method) {
-		return "";
-	}
-
-	const text = extractTextValue(message.params);
-	switch (message.method) {
-		case "turn/started":
-			return "\n[turn started]\n";
-		case "turn/completed": {
-			const status =
-				extractTextValue(
-					(message.params as Record<string, unknown> | undefined)?.turn,
-				) ||
-				extractTextValue(message.params) ||
-				"completed";
-			return `\n[turn ${status}]\n`;
-		}
-		case "item/agentMessage/delta":
-		case "item/reasoning/textDelta":
-		case "item/reasoning/summaryTextDelta":
-		case "item/commandExecution/outputDelta":
-			return text || "";
-		case "item/plan/delta":
-			return text ? `\n[plan] ${text}` : "";
-		case "error": {
-			const errorRecord = (
-				message.params as Record<string, unknown> | undefined
-			)?.error;
-			const errorMessage = extractTurnErrorMessage(errorRecord) || text;
-			return errorMessage ? `\n[error] ${errorMessage}\n` : "";
-		}
-		default:
-			return "";
-	}
-};
-
 const captureContainerCodexState = async (
 	containerName: string,
 	scanRootDir: string,
 	fileName: string,
-	) => {
-		const shellScript = [
-			"set -eu",
-			`mkdir -p '${scanRootDir}'`,
-			`output='${scanRootDir}/${fileName}'`,
-			"{",
-			`echo '# Codex Runtime State'`,
-			"echo",
-			`echo '## config.toml'`,
-			"echo '```toml'",
-			`if [ -f /root/.codex/config.toml ]; then cat /root/.codex/config.toml; else echo '(missing)'; fi`,
-			"echo '```'",
-			"echo",
-			`echo '## auth.json'`,
-			"echo '```json'",
-			`if [ -f /root/.codex/auth.json ]; then cat /root/.codex/auth.json; else echo '(missing)'; fi`,
-			"echo '```'",
-			"echo",
-			`echo '## environment'`,
-			"echo '```text'",
+) => {
+	const shellScript = [
+		"set -eu",
+		`mkdir -p '${scanRootDir}'`,
+		`output='${scanRootDir}/${fileName}'`,
+		"{",
+		`echo '# Codex Runtime State'`,
+		"echo",
+		`echo '## config.toml'`,
+		"echo '```toml'",
+		`if [ -f /root/.codex/config.toml ]; then cat /root/.codex/config.toml; else echo '(missing)'; fi`,
+		"echo '```'",
+		"echo",
+		`echo '## auth.json'`,
+		"echo '```json'",
+		`if [ -f /root/.codex/auth.json ]; then cat /root/.codex/auth.json; else echo '(missing)'; fi`,
+		"echo '```'",
+		"echo",
+		`echo '## environment'`,
+		"echo '```text'",
 		`env | grep -iE 'OPENAI|proxy|BASE_URL|CODEX' | sort || true`,
 		"echo '```'",
 		`} > "$output"`,
@@ -5502,259 +4213,6 @@ const prepareRepositoryForScanInContainer = async (input: {
 	};
 };
 
-const getPermissionRequestId = (request: Record<string, unknown>) =>
-	asString(request.id) ||
-	asString(request.permissionId) ||
-	asString(asRecord(request.permission)?.id) ||
-	asString(asRecord(request.rawRequest)?.id);
-
-const autoApprovePermissionRequest = async (
-	session: {
-		respondPermission: (
-			permissionId: string,
-			reply: "always" | "once",
-		) => Promise<void>;
-	},
-	stderrPath: string,
-	request: Record<string, unknown>,
-) => {
-	const permissionId = getPermissionRequestId(request);
-	if (!permissionId) {
-		await appendScanRuntimeFile(
-			stderrPath,
-			"[sandbox-agent-permission] unable to auto-approve permission without id\n",
-		);
-		return;
-	}
-
-	const availableReplies = Array.isArray(request.availableReplies)
-		? request.availableReplies
-				.map((reply) => String(reply))
-				.filter((reply) => reply.length > 0)
-		: [];
-	const replies = [
-		...availableReplies.filter((reply) => reply === "always"),
-		...availableReplies.filter((reply) => reply === "once"),
-		"always",
-		"once",
-	].filter((reply, index, values) => values.indexOf(reply) === index) as Array<
-		"always" | "once"
-	>;
-
-	for (const reply of replies) {
-		try {
-			await session.respondPermission(permissionId, reply);
-			await appendScanRuntimeFile(
-				stderrPath,
-				`[sandbox-agent-permission] auto-approved permission id=${permissionId} reply=${reply}\n`,
-			);
-			return;
-		} catch (error) {
-			await appendScanRuntimeFile(
-				stderrPath,
-				`[sandbox-agent-permission] auto-approve attempt failed id=${permissionId} reply=${reply} error=${
-					error instanceof Error ? error.message : String(error)
-				}\n`,
-			);
-		}
-	}
-};
-
-const runSandboxAgentHeadlessTurnInContainer = async (input: {
-	baseUrl: string;
-	provider: "codex" | "claude";
-	cwd: string;
-	prompt: string;
-	model?: string;
-	thinkingLevel?: string;
-	jsonlPath: string;
-	textPath: string;
-	stderrPath: string;
-	onSessionId?: (sessionId: string) => Promise<void>;
-}) => {
-	const client: any = await SandboxAgent.connect({
-		baseUrl: input.baseUrl,
-		fetch: sandboxAgentFetch,
-	} as never);
-
-	const session: any = await client.createSession({
-		agent: input.provider,
-		cwd: input.cwd,
-		...(input.provider === "codex"
-			? {}
-			: {
-					model: input.model || undefined,
-					thoughtLevel: input.thinkingLevel || undefined,
-				}),
-		mode: input.provider === "codex" ? "full-access" : undefined,
-	} as never);
-
-	const sessionId = asString(session?.agentSessionId);
-	if (!sessionId) {
-		throw new Error("sandbox-agent session is missing native agentSessionId");
-	}
-	if (sessionId) {
-		await input.onSessionId?.(sessionId);
-	}
-
-	let eventWriteChain = Promise.resolve();
-	const appendRuntimeError = async (message: string) => {
-		const errorMessage = {
-			method: "error",
-			params: {
-				error: {
-					message,
-				},
-			},
-		} satisfies JsonRpcMessage;
-		await appendScanRuntimeFile(
-			input.jsonlPath,
-			formatJsonRpcRuntimeMessage(errorMessage),
-		);
-		const rendered = renderJsonRpcMessage(errorMessage);
-		if (rendered) {
-			await appendScanRuntimeFile(input.textPath, rendered);
-		}
-	};
-
-	const appendNormalizedMessages = async (event: SandboxAgentSessionEvent) => {
-		const normalized = normalizeSandboxAgentPayloadToJsonRpc({
-			payload: event.payload,
-			fallbackItemId: asString(event.sessionId) || sessionId || "sandbox-agent",
-		});
-		if (normalized.messages.length > 0) {
-			await appendScanRuntimeFile(
-				input.jsonlPath,
-				normalized.messages
-					.map((message) =>
-						formatJsonRpcRuntimeMessage(message, event.createdAt),
-					)
-					.join(""),
-			);
-			const rendered = normalized.messages
-				.map((message) => renderJsonRpcMessage(message))
-				.join("");
-			if (rendered) {
-				await appendScanRuntimeFile(input.textPath, rendered);
-			}
-		}
-	};
-
-	session.onEvent((event: SandboxAgentSessionEvent) => {
-		eventWriteChain = eventWriteChain
-			.then(async () => {
-				await appendNormalizedMessages(event);
-				const payload = asRecord(event.payload);
-				if (asString(payload?.method) !== "session/request_permission") {
-					return;
-				}
-				const params = asRecord(payload?.params) || {};
-				await autoApprovePermissionRequest(session, input.stderrPath, {
-					...params,
-					id: asString(payload?.id) || asString(params.id) || undefined,
-				});
-			})
-			.catch(async (error) => {
-				await appendScanRuntimeFile(
-					input.stderrPath,
-					`[sandbox-agent-event] ${
-						error instanceof Error ? error.message : "unknown error"
-					}\n`,
-				);
-			});
-	});
-
-	session.onPermissionRequest((request: Record<string, unknown>) => {
-		void autoApprovePermissionRequest(session, input.stderrPath, request);
-	});
-
-	await appendScanRuntimeFile(
-		input.jsonlPath,
-		formatJsonRpcRuntimeMessage({ method: "turn/started", params: {} }),
-	);
-
-	try {
-		try {
-			await withTimeout(
-				session.prompt([
-					{
-						type: "text",
-						text: input.prompt,
-					},
-				]),
-				SANDBOX_AGENT_PROMPT_TIMEOUT_MS,
-				() =>
-					new Error(
-						`sandbox-agent session.prompt timed out after ${Math.round(
-							SANDBOX_AGENT_PROMPT_TIMEOUT_MS / 1000,
-						)}s`,
-					),
-			);
-		} catch (error) {
-			if (isPromptPayloadSchemaError(error)) {
-				await withTimeout(
-					session.prompt(input.prompt),
-					SANDBOX_AGENT_PROMPT_TIMEOUT_MS,
-					() =>
-						new Error(
-							`sandbox-agent session.prompt timed out after ${Math.round(
-								SANDBOX_AGENT_PROMPT_TIMEOUT_MS / 1000,
-							)}s`,
-						),
-				);
-			} else {
-				throw error;
-			}
-		}
-		await appendScanRuntimeFile(
-			input.jsonlPath,
-			formatJsonRpcRuntimeMessage({
-				method: "turn/completed",
-				params: { turn: "completed" },
-			}),
-		);
-		await eventWriteChain;
-	} catch (error) {
-		const message =
-			error instanceof Error ? error.message : "sandbox-agent prompt failed";
-		await eventWriteChain.catch(() => {});
-		await appendRuntimeError(message);
-		await appendScanRuntimeFile(
-			input.stderrPath,
-			`[sandbox-agent] ${message}\n`,
-		);
-		throw error;
-	} finally {
-		try {
-			await (session as { close: () => Promise<void> }).close();
-		} catch (error) {
-			await appendScanRuntimeFile(
-				input.stderrPath,
-				`[sandbox-agent-cleanup] session.close failed: ${
-					error instanceof Error ? error.message : "unknown error"
-				}\n`,
-			).catch(() => {});
-		}
-		const maybeClose = (client as { close?: () => Promise<void> }).close;
-		if (typeof maybeClose === "function") {
-			try {
-				await maybeClose.call(client);
-			} catch (error) {
-				await appendScanRuntimeFile(
-					input.stderrPath,
-					`[sandbox-agent-cleanup] client.close failed: ${
-						error instanceof Error ? error.message : "unknown error"
-					}\n`,
-				).catch(() => {});
-			}
-		}
-	}
-
-	return {
-		sessionId,
-	};
-};
-
 type FullScanExecutionContext = Awaited<
 	ReturnType<typeof resolveScanExecutionContext>
 >;
@@ -5907,7 +4365,9 @@ const resolveScanJobPipelineDefinitions = (
 		"stages" in snapshot &&
 		"pipelines" in snapshot
 	) {
-		return snapshot as ScanPipelineDefinitions;
+		return normalizeLegacyVerificationSchema(
+			snapshot as ScanPipelineDefinitions,
+		);
 	}
 	throw new TRPCError({
 		code: "INTERNAL_SERVER_ERROR",
@@ -6404,53 +4864,54 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 				},
 			}),
 		});
-	const analyzeFindingStage = createAnalyzeFindingStageDefinition<FullScanPipelineContext>({
-		id: SCAN_STAGE_METADATA.analyzeFinding.id,
-		name: SCAN_STAGE_METADATA.analyzeFinding.name,
-		persistent: false,
-		reuseContainer: true,
-		outputSchema: getDefinitionsStageOutputSchema(
-			pipelineDefinitions,
-			SCAN_STAGE_IDS.analyzeFinding,
-		),
-		queue: createStageQueueBinding({
-			queue: analyzeFindingQueue,
-			getGroupQueue: (groupInstanceId) =>
-				getScanStageGroupQueue(
-					scanJob.scanJobId,
-					groupInstanceId,
-					"analyze-finding",
-				),
-			obliterateGroupQueue: (groupInstanceId) =>
-				obliterateScanStageGroupQueue(
-					scanJob.scanJobId,
-					groupInstanceId,
-					"analyze-finding",
-				),
-			ownsInputId: async (ctx, inputId, _jobData, _jobId, scope) => {
-				const task = await findTaskByIdRepo(inputId).catch(() => null);
-				return Boolean(
-					task &&
-						task.scanJobId === ctx.scanJob.scanJobId &&
-						task.stageName === SCAN_STAGE_IDS.analyzeFinding &&
-						(await taskMatchesStageQueueScope(task, scope?.groupInstanceId)),
-				);
-			},
-			loadInput: async (ctx, inputId) => {
-				const task = await findTaskByIdRepo(inputId).catch(() => null);
-				if (
-					!task ||
-					task.scanJobId !== ctx.scanJob.scanJobId ||
-					task.stageName !== SCAN_STAGE_IDS.analyzeFinding ||
-					task.status !== "pending" ||
-					!task.input
-				) {
-					return undefined;
-				}
-				return task.input as AnalyzeFindingStageInput;
-			},
-		}),
-	});
+	const analyzeFindingStage =
+		createAnalyzeFindingStageDefinition<FullScanPipelineContext>({
+			id: SCAN_STAGE_METADATA.analyzeFinding.id,
+			name: SCAN_STAGE_METADATA.analyzeFinding.name,
+			persistent: false,
+			reuseContainer: true,
+			outputSchema: getDefinitionsStageOutputSchema(
+				pipelineDefinitions,
+				SCAN_STAGE_IDS.analyzeFinding,
+			),
+			queue: createStageQueueBinding({
+				queue: analyzeFindingQueue,
+				getGroupQueue: (groupInstanceId) =>
+					getScanStageGroupQueue(
+						scanJob.scanJobId,
+						groupInstanceId,
+						"analyze-finding",
+					),
+				obliterateGroupQueue: (groupInstanceId) =>
+					obliterateScanStageGroupQueue(
+						scanJob.scanJobId,
+						groupInstanceId,
+						"analyze-finding",
+					),
+				ownsInputId: async (ctx, inputId, _jobData, _jobId, scope) => {
+					const task = await findTaskByIdRepo(inputId).catch(() => null);
+					return Boolean(
+						task &&
+							task.scanJobId === ctx.scanJob.scanJobId &&
+							task.stageName === SCAN_STAGE_IDS.analyzeFinding &&
+							(await taskMatchesStageQueueScope(task, scope?.groupInstanceId)),
+					);
+				},
+				loadInput: async (ctx, inputId) => {
+					const task = await findTaskByIdRepo(inputId).catch(() => null);
+					if (
+						!task ||
+						task.scanJobId !== ctx.scanJob.scanJobId ||
+						task.stageName !== SCAN_STAGE_IDS.analyzeFinding ||
+						task.status !== "pending" ||
+						!task.input
+					) {
+						return undefined;
+					}
+					return task.input as AnalyzeFindingStageInput;
+				},
+			}),
+		});
 	const critiqueFindingStage =
 		createCritiqueFindingStageDefinition<FullScanPipelineContext>({
 			id: SCAN_STAGE_METADATA.critiqueFinding.id,
@@ -6547,53 +5008,54 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 				},
 			}),
 		});
-	const triageFindingStage = createTriageFindingStageDefinition<FullScanPipelineContext>({
-		id: SCAN_STAGE_METADATA.triageFinding.id,
-		name: SCAN_STAGE_METADATA.triageFinding.name,
-		persistent: true,
-		reuseContainer: true,
-		outputSchema: getDefinitionsStageOutputSchema(
-			pipelineDefinitions,
-			SCAN_STAGE_IDS.triageFinding,
-		),
-		queue: createStageQueueBinding({
-			queue: triageFindingQueue,
-			getGroupQueue: (groupInstanceId) =>
-				getScanStageGroupQueue(
-					scanJob.scanJobId,
-					groupInstanceId,
-					"triage-finding",
-				),
-			obliterateGroupQueue: (groupInstanceId) =>
-				obliterateScanStageGroupQueue(
-					scanJob.scanJobId,
-					groupInstanceId,
-					"triage-finding",
-				),
-			ownsInputId: async (ctx, inputId, _jobData, _jobId, scope) => {
-				const task = await findTaskByIdRepo(inputId).catch(() => null);
-				return Boolean(
-					task &&
-						task.scanJobId === ctx.scanJob.scanJobId &&
-						task.stageName === SCAN_STAGE_IDS.triageFinding &&
-						(await taskMatchesStageQueueScope(task, scope?.groupInstanceId)),
-				);
-			},
-			loadInput: async (ctx, inputId) => {
-				const task = await findTaskByIdRepo(inputId).catch(() => null);
-				if (
-					!task ||
-					task.scanJobId !== ctx.scanJob.scanJobId ||
-					task.stageName !== SCAN_STAGE_IDS.triageFinding ||
-					task.status !== "pending" ||
-					!task.input
-				) {
-					return undefined;
-				}
-				return task.input as TriageFindingStageInput;
-			},
-		}),
-	});
+	const triageFindingStage =
+		createTriageFindingStageDefinition<FullScanPipelineContext>({
+			id: SCAN_STAGE_METADATA.triageFinding.id,
+			name: SCAN_STAGE_METADATA.triageFinding.name,
+			persistent: true,
+			reuseContainer: true,
+			outputSchema: getDefinitionsStageOutputSchema(
+				pipelineDefinitions,
+				SCAN_STAGE_IDS.triageFinding,
+			),
+			queue: createStageQueueBinding({
+				queue: triageFindingQueue,
+				getGroupQueue: (groupInstanceId) =>
+					getScanStageGroupQueue(
+						scanJob.scanJobId,
+						groupInstanceId,
+						"triage-finding",
+					),
+				obliterateGroupQueue: (groupInstanceId) =>
+					obliterateScanStageGroupQueue(
+						scanJob.scanJobId,
+						groupInstanceId,
+						"triage-finding",
+					),
+				ownsInputId: async (ctx, inputId, _jobData, _jobId, scope) => {
+					const task = await findTaskByIdRepo(inputId).catch(() => null);
+					return Boolean(
+						task &&
+							task.scanJobId === ctx.scanJob.scanJobId &&
+							task.stageName === SCAN_STAGE_IDS.triageFinding &&
+							(await taskMatchesStageQueueScope(task, scope?.groupInstanceId)),
+					);
+				},
+				loadInput: async (ctx, inputId) => {
+					const task = await findTaskByIdRepo(inputId).catch(() => null);
+					if (
+						!task ||
+						task.scanJobId !== ctx.scanJob.scanJobId ||
+						task.stageName !== SCAN_STAGE_IDS.triageFinding ||
+						task.status !== "pending" ||
+						!task.input
+					) {
+						return undefined;
+					}
+					return task.input as TriageFindingStageInput;
+				},
+			}),
+		});
 
 	const stages = [
 		repositoryStage,
@@ -6946,11 +5408,10 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 							toTaskDir,
 							toRelativePath: "inputs/candidate.json",
 						}),
-						analysisReportTemplatePath:
-							await writeAnalysisReportTemplateInput({
-								scanJob: manifestInput.scanJob,
-								toTaskDir,
-							}),
+						analysisReportTemplatePath: await writeAnalysisReportTemplateInput({
+							scanJob: manifestInput.scanJob,
+							toTaskDir,
+						}),
 					};
 					const task = await createTaskRepo({
 						taskId,
@@ -6979,8 +5440,8 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			route: { key: "critic", default: true },
 			outputSchema: analysisSchema,
 			outputSchemaDescription: "Draft analysisSchema result for critic review",
-				fork: false,
-				transformOutput: async ({ stageInput, stageOutput }) => [
+			fork: false,
+			transformOutput: async ({ stageInput, stageOutput }) => [
 				{
 					...stageInput,
 					draftAnalysisPath: "",
@@ -7261,7 +5722,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 			route: { key: "analysis", default: true },
 			outputSchema: criticResponseSchema,
 			outputSchemaDescription: "CriticResponse feedback for analysis",
-				transformOutput: async ({ stageInput }) => [
+			transformOutput: async ({ stageInput }) => [
 				{
 					scanJob: stageInput.scanJob,
 					repositoryPath: stageInput.repositoryPath,
@@ -7518,121 +5979,122 @@ const buildDeltaScanPipeline = (context: FullScanPipelineContext) => {
 		DeltaScopeFunctionInput,
 		FullScanFunctionStage
 	>({
-			name: "delta-scope-to-function",
-			from: deltaScopeStage,
-			to: scanTargetStage,
-			fork: false,
-			transformOutput: async ({
-				ctx,
-				stageOutput,
-			}): Promise<DeltaScopeFunctionInput[]> =>
-				stageOutput.functions.map((functionPath) => ({
-					scanJob: ctx.scanJob,
-					repositoryPath: stageOutput.repository,
-					modulePath: "",
-					threatModelPath: "",
-					targetPath: functionPath,
-					moduleId: "delta-scope",
-					moduleName: "Delta Scope",
-					targetId: "",
-					targetName: "",
-					targetKind: "function",
-					priority: null,
-					vulnerabilityClassFocus: "delta-scoped",
-				})),
-			createTasks: async ({ fromTaskId, stageOutput, nextInputObjects }) => {
-				const fromTask = await findTaskByIdRepo(fromTaskId);
-				const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
-					context,
-					fromTask,
-				);
-				const scopedFunctions = await Promise.all(
-					stageOutput.functions.map((functionPath) =>
-						readTaskJsonArtifact<CanonicalFunction>({
-							taskDir: fromTaskDir,
-							containerPath: functionPath,
-						}),
-					),
-				);
-				const syntheticModule = buildSyntheticDeltaModule(scopedFunctions);
-				const syntheticThreatModel = buildSyntheticDeltaThreatModel(
-					syntheticModule,
-					scopedFunctions,
-				);
-				const taskIds: string[] = [];
-				for (const manifestInput of nextInputObjects) {
-					const func = await readTaskJsonArtifact<CanonicalFunction>({
+		name: "delta-scope-to-function",
+		from: deltaScopeStage,
+		to: scanTargetStage,
+		fork: false,
+		transformOutput: async ({
+			ctx,
+			stageOutput,
+		}): Promise<DeltaScopeFunctionInput[]> =>
+			stageOutput.functions.map((functionPath) => ({
+				scanJob: ctx.scanJob,
+				repositoryPath: stageOutput.repository,
+				modulePath: "",
+				threatModelPath: "",
+				targetPath: functionPath,
+				moduleId: "delta-scope",
+				moduleName: "Delta Scope",
+				targetId: "",
+				targetName: "",
+				targetKind: "function",
+				priority: null,
+				vulnerabilityClassFocus: "delta-scoped",
+			})),
+		createTasks: async ({ fromTaskId, stageOutput, nextInputObjects }) => {
+			const fromTask = await findTaskByIdRepo(fromTaskId);
+			const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
+				context,
+				fromTask,
+			);
+			const scopedFunctions = await Promise.all(
+				stageOutput.functions.map((functionPath) =>
+					readTaskJsonArtifact<CanonicalFunction>({
 						taskDir: fromTaskDir,
-						containerPath: manifestInput.targetPath,
-					});
-					const target = buildTargetFromDeltaFunction(func);
-					const taskId = createShortTaskId();
-					const taskName = func.functionName;
-					const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
-						taskId,
-						stageName: SCAN_STAGE_IDS.scanTarget,
-						taskName,
-					});
-					const repositoryPath = await copyArtifactToDownstreamInput({
-						fromTaskDir,
-						fromPath: manifestInput.repositoryPath,
-						toTaskDir,
-						toRelativePath: "inputs/repository.json",
-					});
-					const modulePath = await writeDownstreamInputArtifact({
-						toTaskDir,
-						toRelativePath: "inputs/module.json",
-						value: syntheticModule,
-					});
-					const threatModelPath = await writeDownstreamInputArtifact({
-						toTaskDir,
-						toRelativePath: "inputs/module-threat-model.json",
-						value: syntheticThreatModel,
-					});
-					const targetPath = await writeDownstreamInputArtifact({
-						toTaskDir,
-						toRelativePath: "inputs/target.json",
-						value: target,
-					});
-					const vulnerabilityClassFocus =
-						manifestInput.vulnerabilityClassFocus?.trim() ||
-						func.vulnerabilityType?.trim() ||
-						func.likelyVulnerabilityTypes?.[0]?.trim() ||
-						DEFAULT_VULNERABILITY_CLASS_FOCUS;
-					const downstreamInput: ScanTargetStageInput = {
-						scanJob: manifestInput.scanJob,
-						repositoryPath,
-						modulePath,
-						threatModelPath,
-						targetPath,
-						moduleId: func.moduleId || "delta-scope",
-						moduleName: func.moduleName || "Delta Scope",
-						targetId: func.functionId,
-						targetName: func.functionName,
-						targetKind: "function",
-						filePath: func.filePath,
-						line: func.line,
-						summary: func.summary,
-						priority: func.priority,
-						vulnerabilityClassFocus,
-					};
-					const task = await createTaskRepo({
-						taskId,
-						scanJobId: context.scanJob.scanJobId,
-						parentTaskId: fromTaskId,
-						name: taskName,
-						stageName: SCAN_STAGE_IDS.scanTarget,
-						priority: func.priority,
-						input: downstreamInput,
-					});
-					taskIds.push(task.taskId);
-				}
-				return taskIds;
-			},
-		});
-	const [runtimeDeltaScopeStage] = attachStageRuntimeConfigs(scanJob.scanJobId, [
-		deltaScopeStage,
-	]);
+						containerPath: functionPath,
+					}),
+				),
+			);
+			const syntheticModule = buildSyntheticDeltaModule(scopedFunctions);
+			const syntheticThreatModel = buildSyntheticDeltaThreatModel(
+				syntheticModule,
+				scopedFunctions,
+			);
+			const taskIds: string[] = [];
+			for (const manifestInput of nextInputObjects) {
+				const func = await readTaskJsonArtifact<CanonicalFunction>({
+					taskDir: fromTaskDir,
+					containerPath: manifestInput.targetPath,
+				});
+				const target = buildTargetFromDeltaFunction(func);
+				const taskId = createShortTaskId();
+				const taskName = func.functionName;
+				const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
+					taskId,
+					stageName: SCAN_STAGE_IDS.scanTarget,
+					taskName,
+				});
+				const repositoryPath = await copyArtifactToDownstreamInput({
+					fromTaskDir,
+					fromPath: manifestInput.repositoryPath,
+					toTaskDir,
+					toRelativePath: "inputs/repository.json",
+				});
+				const modulePath = await writeDownstreamInputArtifact({
+					toTaskDir,
+					toRelativePath: "inputs/module.json",
+					value: syntheticModule,
+				});
+				const threatModelPath = await writeDownstreamInputArtifact({
+					toTaskDir,
+					toRelativePath: "inputs/module-threat-model.json",
+					value: syntheticThreatModel,
+				});
+				const targetPath = await writeDownstreamInputArtifact({
+					toTaskDir,
+					toRelativePath: "inputs/target.json",
+					value: target,
+				});
+				const vulnerabilityClassFocus =
+					manifestInput.vulnerabilityClassFocus?.trim() ||
+					func.vulnerabilityType?.trim() ||
+					func.likelyVulnerabilityTypes?.[0]?.trim() ||
+					DEFAULT_VULNERABILITY_CLASS_FOCUS;
+				const downstreamInput: ScanTargetStageInput = {
+					scanJob: manifestInput.scanJob,
+					repositoryPath,
+					modulePath,
+					threatModelPath,
+					targetPath,
+					moduleId: func.moduleId || "delta-scope",
+					moduleName: func.moduleName || "Delta Scope",
+					targetId: func.functionId,
+					targetName: func.functionName,
+					targetKind: "function",
+					filePath: func.filePath,
+					line: func.line,
+					summary: func.summary,
+					priority: func.priority,
+					vulnerabilityClassFocus,
+				};
+				const task = await createTaskRepo({
+					taskId,
+					scanJobId: context.scanJob.scanJobId,
+					parentTaskId: fromTaskId,
+					name: taskName,
+					stageName: SCAN_STAGE_IDS.scanTarget,
+					priority: func.priority,
+					input: downstreamInput,
+				});
+				taskIds.push(task.taskId);
+			}
+			return taskIds;
+		},
+	});
+	const [runtimeDeltaScopeStage] = attachStageRuntimeConfigs(
+		scanJob.scanJobId,
+		[deltaScopeStage],
+	);
 	const stageRegistry = new Map<string, FullScanPipelineStage>([
 		...basePipeline.stages.map((stage) => [stage.id, stage] as const),
 		[runtimeDeltaScopeStage!.id, runtimeDeltaScopeStage!],
@@ -7864,8 +6326,7 @@ export const runScanJobInContainer = async (
 		return;
 	}
 	await runDeltaScan(scanJobId, {
-		enqueueInitialDeltaScopeTask:
-			options?.enqueueInitialRepositoryTask ?? true,
+		enqueueInitialDeltaScopeTask: options?.enqueueInitialRepositoryTask ?? true,
 	});
 	return;
 };
@@ -8016,7 +6477,10 @@ const enqueueVerifyFindingTask = async (
 	});
 };
 
-const enqueueTriageFindingTask = async (scanJobId: string, triageFindingTaskId: string) => {
+const enqueueTriageFindingTask = async (
+	scanJobId: string,
+	triageFindingTaskId: string,
+) => {
 	const triageFindingQueue = getTriageFindingQueue(scanJobId);
 	await triageFindingQueue.add("triage-finding", triageFindingTaskId, {
 		jobId: buildQueueTaskJobId(triageFindingQueue.name, triageFindingTaskId),
@@ -8031,7 +6495,10 @@ const enqueueCritiqueFindingTask = async (
 ) => {
 	const critiqueFindingQueue = getCritiqueFindingQueue(scanJobId);
 	await critiqueFindingQueue.add("critique-finding", critiqueFindingTaskId, {
-		jobId: buildQueueTaskJobId(critiqueFindingQueue.name, critiqueFindingTaskId),
+		jobId: buildQueueTaskJobId(
+			critiqueFindingQueue.name,
+			critiqueFindingTaskId,
+		),
 		removeOnComplete: true,
 		removeOnFail: true,
 	});
@@ -8146,17 +6613,18 @@ const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
 			return;
 		case SCAN_STAGE_IDS.identifyTarget:
 			await Promise.all(
-				buildKnownQueueJobIdsForTask(getIdentifyTargetQueue(scanJobId), task).map(
-					(jobId) =>
-						forceRemoveStageQueueJob(
-							getIdentifyTargetQueue(scanJobId),
-							jobId,
-						).catch(() => {}),
+				buildKnownQueueJobIdsForTask(
+					getIdentifyTargetQueue(scanJobId),
+					task,
+				).map((jobId) =>
+					forceRemoveStageQueueJob(
+						getIdentifyTargetQueue(scanJobId),
+						jobId,
+					).catch(() => {}),
 				),
 			);
 			return;
-		case SCAN_STAGE_IDS.attackSurfaceModel:
-		{
+		case SCAN_STAGE_IDS.attackSurfaceModel: {
 			const queue = getAttackSurfaceModelQueue(scanJobId);
 			await Promise.all(
 				buildKnownQueueJobIdsForTask(queue, task).map((jobId) =>
@@ -8178,11 +6646,14 @@ const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
 			return;
 		case SCAN_STAGE_IDS.analyzeFinding:
 			await Promise.all(
-				buildKnownQueueJobIdsForTask(getAnalyzeFindingQueue(scanJobId), task).map(
-					(jobId) =>
-						forceRemoveStageQueueJob(getAnalyzeFindingQueue(scanJobId), jobId).catch(
-							() => {},
-						),
+				buildKnownQueueJobIdsForTask(
+					getAnalyzeFindingQueue(scanJobId),
+					task,
+				).map((jobId) =>
+					forceRemoveStageQueueJob(
+						getAnalyzeFindingQueue(scanJobId),
+						jobId,
+					).catch(() => {}),
 				),
 			);
 			return;
@@ -8201,22 +6672,27 @@ const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
 			return;
 		case SCAN_STAGE_IDS.verifyFinding:
 			await Promise.all(
-				buildKnownQueueJobIdsForTask(getVerifyFindingQueue(scanJobId), task).map(
-					(jobId) =>
-						forceRemoveStageQueueJob(
-							getVerifyFindingQueue(scanJobId),
-							jobId,
-						).catch(() => {}),
+				buildKnownQueueJobIdsForTask(
+					getVerifyFindingQueue(scanJobId),
+					task,
+				).map((jobId) =>
+					forceRemoveStageQueueJob(
+						getVerifyFindingQueue(scanJobId),
+						jobId,
+					).catch(() => {}),
 				),
 			);
 			return;
 		case SCAN_STAGE_IDS.triageFinding:
 			await Promise.all(
-				buildKnownQueueJobIdsForTask(getTriageFindingQueue(scanJobId), task).map(
-					(jobId) =>
-						forceRemoveStageQueueJob(getTriageFindingQueue(scanJobId), jobId).catch(
-							() => {},
-						),
+				buildKnownQueueJobIdsForTask(
+					getTriageFindingQueue(scanJobId),
+					task,
+				).map((jobId) =>
+					forceRemoveStageQueueJob(
+						getTriageFindingQueue(scanJobId),
+						jobId,
+					).catch(() => {}),
 				),
 			);
 			return;
@@ -8420,14 +6896,15 @@ const getPendingAnalysisCandidates = async (scanJobId: string) => {
 	]);
 	const candidateStateById = new Map<string, CandidateTaskExecutionState>(
 		await Promise.all(
-			candidates.map(async (candidate) =>
-				[
-				candidate.vulnerabilityCandidateId,
-				await deriveCandidateExecutionState({
-					producerTaskId: candidate.producerTaskId,
-					vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-				}),
-				] as const,
+			candidates.map(
+				async (candidate) =>
+					[
+						candidate.vulnerabilityCandidateId,
+						await deriveCandidateExecutionState({
+							producerTaskId: candidate.producerTaskId,
+							vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
+						}),
+					] as const,
 			),
 		),
 	);
@@ -8452,8 +6929,7 @@ const getPendingAnalysisCandidates = async (scanJobId: string) => {
 		}
 		const state = candidateStateById.get(candidate.vulnerabilityCandidateId);
 		return (
-			state?.latestPhase === "analysis" &&
-			state.latestTask?.status === "failed"
+			state?.latestPhase === "analysis" && state.latestTask?.status === "failed"
 		);
 	}).length;
 	return { candidates, pendingCandidates, failed };
@@ -8468,14 +6944,15 @@ const getPendingVerificationCandidates = async (scanJobId: string) => {
 		]);
 	const candidateStateById = new Map<string, CandidateTaskExecutionState>(
 		await Promise.all(
-			candidates.map(async (candidate) =>
-				[
-				candidate.vulnerabilityCandidateId,
-				await deriveCandidateExecutionState({
-					producerTaskId: candidate.producerTaskId,
-					vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-				}),
-				] as const,
+			candidates.map(
+				async (candidate) =>
+					[
+						candidate.vulnerabilityCandidateId,
+						await deriveCandidateExecutionState({
+							producerTaskId: candidate.producerTaskId,
+							vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
+						}),
+					] as const,
 			),
 		),
 	);
@@ -8609,14 +7086,13 @@ export const reconcileScanJobCandidatePipelineStatus = async (
 		verificationState,
 		triageState,
 		taskStatusCounts,
-	] =
-		await Promise.all([
-			getPendingScanTaskState(scanJobId),
-			getPendingAnalysisCandidates(scanJobId),
-			getPendingVerificationCandidates(scanJobId),
-			getPendingTriageTaskState(scanJobId),
-			listTaskStatusCountsByScanJobIdRepo(scanJobId),
-		]);
+	] = await Promise.all([
+		getPendingScanTaskState(scanJobId),
+		getPendingAnalysisCandidates(scanJobId),
+		getPendingVerificationCandidates(scanJobId),
+		getPendingTriageTaskState(scanJobId),
+		listTaskStatusCountsByScanJobIdRepo(scanJobId),
+	]);
 	const openTaskCount = taskStatusCounts
 		.filter((item) =>
 			["pending", "launching", "launched", "starting", "running"].includes(
@@ -8929,9 +7405,7 @@ export const startCandidateVerification = async (
 				existingVerificationTask.status,
 			),
 	);
-	if (
-		hasActiveVerification
-	) {
+	if (hasActiveVerification) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
 			message: "Candidate verification is already queued or running",
@@ -9015,10 +7489,7 @@ export const startCandidateVerification = async (
 			input: verificationInput,
 		}));
 
-	if (
-		verificationTask &&
-		shouldReuseVerificationTask
-	) {
+	if (verificationTask && shouldReuseVerificationTask) {
 		await stopScanContainer(verificationTask.containerName).catch(() => false);
 		await updateTaskRepo(verificationTask.taskId, {
 			vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
@@ -9107,7 +7578,7 @@ export const startCandidateAnalysis = async (input: {
 	const producerInput = asTaskRecord(producerTask.input);
 	const repositorySourcePath = readString(producerInput, "repositoryPath");
 	const moduleSourcePath = readString(producerInput, "modulePath");
-	let functionSourcePath =
+	const functionSourcePath =
 		readString(producerInput, "targetPath") ||
 		readString(producerInput, "functionPath");
 	if (!repositorySourcePath || !moduleSourcePath || !functionSourcePath) {
@@ -9366,8 +7837,7 @@ export const startCandidateReviewContainer = async (input: {
 		.map((pair) => {
 			const separatorIndex = pair.indexOf("=");
 			const key = separatorIndex === -1 ? pair : pair.slice(0, separatorIndex);
-			const value =
-				separatorIndex === -1 ? "" : pair.slice(separatorIndex + 1);
+			const value = separatorIndex === -1 ? "" : pair.slice(separatorIndex + 1);
 			return `-e '${escapeSingleQuotes(key)}=${escapeSingleQuotes(value)}'`;
 		})
 		.join(" ");
@@ -9412,3 +7882,8 @@ export const startCandidateReviewContainer = async (input: {
 		throw error;
 	}
 };
+
+export {
+	type AgentStreamRuntime,
+	findAgentStreamRuntimeByTaskId,
+} from "./scan/agent-stream-session";

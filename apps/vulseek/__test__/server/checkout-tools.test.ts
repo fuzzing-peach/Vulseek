@@ -6,13 +6,16 @@ import {
 	canRebuildCheckoutTools,
 	computeCheckoutToolsVersion,
 	createCheckoutToolsBuildManager,
+	matchesCheckoutToolsImageLabels,
+	resolveCheckoutToolsImageVariant,
 } from "@vulseek/server/services/scan/checkout-tools";
 import { describe, expect, it, vi } from "vitest";
 
 const definitionInputs = {
 	dockerfile: "FROM ubuntu:24.04\nRUN echo tools\n",
-	sandboxAgentPatch: "sandbox patch",
 	codexAcpPatch: "codex patch",
+	acpDriver: "driver source",
+	agentEvents: "normalizer source",
 };
 
 const deferred = <T>() => {
@@ -43,9 +46,65 @@ describe("checkout tools definition", () => {
 				codexAcpPatch: "changed patch",
 			}),
 		).not.toBe(version);
-		expect(buildCheckoutToolsImageTag(version)).toBe(
-			`vulseek-scan-tools:${version.slice(0, 16)}`,
+		expect(buildCheckoutToolsImageTag(version, "dev")).toBe(
+			`vulseek-scan-tools-dev:${version.slice(0, 16)}`,
 		);
+		expect(buildCheckoutToolsImageTag(version, "release")).toBe(
+			`vulseek-scan-tools-release:${version.slice(0, 16)}`,
+		);
+	});
+
+	it("resolves explicit tools image variants before environment defaults", () => {
+		expect(
+			resolveCheckoutToolsImageVariant({
+				NODE_ENV: "production",
+				VULSEEK_TOOLS_IMAGE_VARIANT: "dev",
+			}),
+		).toBe("dev");
+		expect(
+			resolveCheckoutToolsImageVariant({
+				NODE_ENV: "development",
+				VULSEEK_TOOLS_IMAGE_VARIANT: "release",
+			}),
+		).toBe("release");
+	});
+
+	it("defaults production to release and other environments to dev", () => {
+		expect(resolveCheckoutToolsImageVariant({ NODE_ENV: "production" })).toBe(
+			"release",
+		);
+		expect(resolveCheckoutToolsImageVariant({ NODE_ENV: "development" })).toBe(
+			"dev",
+		);
+		expect(resolveCheckoutToolsImageVariant({})).toBe("dev");
+	});
+
+	it("rejects an invalid explicit tools image variant", () => {
+		expect(() =>
+			resolveCheckoutToolsImageVariant({
+				VULSEEK_TOOLS_IMAGE_VARIANT: "staging",
+			}),
+		).toThrow("VULSEEK_TOOLS_IMAGE_VARIANT must be dev or release");
+	});
+
+	it("requires both version and variant image labels to match", () => {
+		const definition = {
+			version: "a".repeat(64),
+			variant: "release" as const,
+			imageTag: `vulseek-scan-tools-release:${"a".repeat(16)}`,
+		};
+		const labels = {
+			"com.fuzzing-peach.vulseek.scan-tools.version": definition.version,
+			"com.fuzzing-peach.vulseek.scan-tools.variant": "release",
+		};
+
+		expect(matchesCheckoutToolsImageLabels(definition, labels)).toBe(true);
+		expect(
+			matchesCheckoutToolsImageLabels(definition, {
+				...labels,
+				"com.fuzzing-peach.vulseek.scan-tools.variant": "dev",
+			}),
+		).toBe(false);
 	});
 
 	it("keeps tools and repository checkout in separate Dockerfiles", async () => {
@@ -64,8 +123,14 @@ describe("checkout tools definition", () => {
 		expect(toolsDockerfile).toContain(
 			'LABEL com.fuzzing-peach.vulseek.scan-tools.version="${VULSEEK_TOOLS_VERSION}"',
 		);
+		expect(toolsDockerfile).toContain(
+			'com.fuzzing-peach.vulseek.scan-tools.variant="${VULSEEK_TOOLS_VARIANT}"',
+		);
 		expect(toolsDockerfile).not.toContain("# syntax=docker/dockerfile:1");
 		expect(toolsDockerfile).not.toContain("AS repository-source");
+		expect(toolsDockerfile).not.toContain("codex-acp-builder");
+		expect(toolsDockerfile).not.toContain("sandbox-agent");
+		expect(toolsDockerfile).toContain("@agentclientprotocol/sdk@1.2.1");
 		expect(checkoutDockerfile).toContain("ARG VULSEEK_TOOLS_IMAGE");
 		expect(checkoutDockerfile).not.toContain("# syntax=docker/dockerfile:1");
 		expect(checkoutDockerfile).toContain(
@@ -79,11 +144,13 @@ describe("checkout tools definition", () => {
 
 	it("reports a failed rebuild while preserving the previous image", () => {
 		const version = "c".repeat(64);
-		const imageTag = buildCheckoutToolsImageTag(version);
+		const variant = "dev" as const;
+		const imageTag = buildCheckoutToolsImageTag(version, variant);
 		const status = buildCheckoutToolsStatus({
-			definition: { version, imageTag },
+			definition: { version, variant, imageTag },
 			image: {
 				version,
+				variant,
 				imageTag,
 				imageId: "sha256:old-image",
 				builtAt: "2026-07-14T09:00:00.000Z",
@@ -92,6 +159,7 @@ describe("checkout tools definition", () => {
 			latestBuild: {
 				buildId: "failed-build",
 				version,
+				variant,
 				imageTag,
 				status: "failed",
 				stdout: "",
@@ -117,7 +185,8 @@ describe("checkout tools build manager", () => {
 		const manager = createCheckoutToolsBuildManager({
 			resolveDefinition: async () => ({
 				version: "a".repeat(64),
-				imageTag: `vulseek-scan-tools:${"a".repeat(16)}`,
+				variant: "dev",
+				imageTag: `vulseek-scan-tools-dev:${"a".repeat(16)}`,
 			}),
 			inspectImage: async () => null,
 			executeBuild,
@@ -147,12 +216,14 @@ describe("checkout tools build manager", () => {
 		const manager = createCheckoutToolsBuildManager({
 			resolveDefinition: async () => ({
 				version: "b".repeat(64),
-				imageTag: `vulseek-scan-tools:${"b".repeat(16)}`,
+				variant: "dev",
+				imageTag: `vulseek-scan-tools-dev:${"b".repeat(16)}`,
 			}),
-			inspectImage: async ({ version, imageTag }) =>
+			inspectImage: async ({ version, variant, imageTag }) =>
 				imageExists
 					? {
 							version,
+							variant,
 							imageTag,
 							imageId: "sha256:image",
 							builtAt: "2026-07-14T10:00:00.000Z",
@@ -171,11 +242,13 @@ describe("checkout tools build manager", () => {
 	it("keeps checkout available while an existing tools image is rebuilding", async () => {
 		const build = deferred<void>();
 		const version = "d".repeat(64);
-		const imageTag = buildCheckoutToolsImageTag(version);
+		const variant = "dev" as const;
+		const imageTag = buildCheckoutToolsImageTag(version, variant);
 		const manager = createCheckoutToolsBuildManager({
-			resolveDefinition: async () => ({ version, imageTag }),
+			resolveDefinition: async () => ({ version, variant, imageTag }),
 			inspectImage: async () => ({
 				version,
+				variant,
 				imageTag,
 				imageId: "sha256:existing-image",
 				builtAt: "2026-07-14T09:00:00.000Z",
@@ -201,7 +274,8 @@ describe("checkout tools build manager", () => {
 		const manager = createCheckoutToolsBuildManager({
 			resolveDefinition: async () => ({
 				version: "e".repeat(64),
-				imageTag: `vulseek-scan-tools:${"e".repeat(16)}`,
+				variant: "dev",
+				imageTag: `vulseek-scan-tools-dev:${"e".repeat(16)}`,
 			}),
 			inspectImage: async () => null,
 			executeBuild,

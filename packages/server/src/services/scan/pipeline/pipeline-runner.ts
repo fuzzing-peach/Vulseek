@@ -2,12 +2,13 @@ import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { execAsync } from "../../../utils/process/execAsync";
-import { findScanJobByIdRepo } from "../persistence/scan-job.repo";
-import { stopSandboxAgentServerInContainer } from "../../sandbox-agent/runtime";
 import {
 	CANDIDATE_PRODUCER_STAGE_NAMES,
 	syncVulnerabilityCandidatesFromProducerTask,
 } from "../persistence/candidate.repo";
+import { normalizeCandidateResultStageOutput } from "../persistence/candidate-result-projection";
+import { CANDIDATE_RESULT_STAGE_NAMES } from "../persistence/candidate-result-projection.repo";
+import { findScanJobByIdRepo } from "../persistence/scan-job.repo";
 import {
 	bindStageLaneRuntimeRepo,
 	claimIdleStageLaneRuntimeRepo,
@@ -24,10 +25,10 @@ import {
 	markStageGroupInstanceExitedRepo,
 	releaseStageLaneRuntimeRepo,
 	resetClaimedStageLaneRuntimeForFreshStartRepo,
-	resetStageLaneRuntimesByScanJobIdRepo,
 	resetStageLaneRuntimeByLaneForExitRepo,
 	resetStageLaneRuntimeForExitRepo,
 	resetStageLaneRuntimeSessionForExitRepo,
+	resetStageLaneRuntimesByScanJobIdRepo,
 	type StageLaneRuntime,
 } from "../persistence/stage-lane-runtime.repo";
 import {
@@ -40,24 +41,19 @@ import {
 	transitionTaskStatusRepo,
 	updateTaskRepo,
 } from "../persistence/task.repo";
-import { CANDIDATE_RESULT_STAGE_NAMES } from "../persistence/candidate-result-projection.repo";
 import { readCandidateIdFromTaskInputArtifact } from "../persistence/task-artifact-resolver";
 import { buildKnownQueueJobIdsForTask } from "../queue-job-ids";
+import { AGENT_RUNTIME_FILE_NAMES } from "../runtime/agent-runtime-files";
 import { removeContainer } from "../runtime/run-single-turn-agent";
-import {
-	extractPromptResponseUsage,
-	hasEndTurnInJsonlContent,
-	SANDBOX_AGENT_RUNTIME_FILE_NAMES,
-	summarizeSandboxAgentTokenUsage,
-} from "../runtime/sandbox-agent-shared";
 import { buildEffectiveDisabledStageSet } from "../runtime-settings";
+import { SCAN_STAGE_IDS } from "../stage-metadata";
+import { resolveStageTaskName } from "../stage-task-name";
 import {
 	createStageContext,
 	type PipelineContext,
 	type StageContext,
 } from "../stages/full-scan-stage.runtime";
-import { resolveStageTaskName } from "../stage-task-name";
-import { SCAN_STAGE_IDS } from "../stage-metadata";
+import { readAgentUsageSnapshot } from "../usage-snapshot";
 import {
 	type FirstStageInputOf,
 	getDownstreamEdges,
@@ -69,12 +65,12 @@ import {
 	selectDownstreamEdgesForRoute,
 	validatePipelineRouteConfiguration,
 } from "./pipeline-definition";
-import {
-	type StageDefinition,
-	type StageExecution,
-	type StageQueueScope,
-} from "./stage-definition";
 import { validateStructuredOutputSchemaSource } from "./scan-pipeline-schema-contracts";
+import type {
+	StageDefinition,
+	StageExecution,
+	StageQueueScope,
+} from "./stage-definition";
 import {
 	buildPipelineTaskUpdatePatch,
 	type PipelineTaskUpdate,
@@ -123,7 +119,7 @@ const resolveStagePersistent = async (
 	const runtimePersistent = stage.runtimeConfig
 		? await stage.runtimeConfig.getPersistent()
 		: null;
-	return runtimePersistent ?? (stage.persistent ?? true);
+	return runtimePersistent ?? stage.persistent ?? true;
 };
 
 const resolveStageReuseContainer = async (
@@ -135,7 +131,7 @@ const resolveStageReuseContainer = async (
 	const runtimeReuseContainer = stage.runtimeConfig
 		? await stage.runtimeConfig.getReuseContainer()
 		: null;
-	return runtimeReuseContainer ?? (stage.reuseContainer ?? true);
+	return runtimeReuseContainer ?? stage.reuseContainer ?? true;
 };
 
 const resolveStageNullableOutput = async (
@@ -147,90 +143,19 @@ const resolveStageNullableOutput = async (
 	const runtimeNullableOutput = stage.runtimeConfig
 		? await stage.runtimeConfig.getNullableOutput()
 		: null;
-	return runtimeNullableOutput ?? (stage.nullableOutput ?? false);
+	return runtimeNullableOutput ?? stage.nullableOutput ?? false;
 };
 
 const resolveStageMode = async (
-	stage: Pick<StageDefinition<PipelineContext, unknown, unknown>, "mode" | "runtimeConfig">,
+	stage: Pick<
+		StageDefinition<PipelineContext, unknown, unknown>,
+		"mode" | "runtimeConfig"
+	>,
 ) => {
 	const runtimeMode = stage.runtimeConfig
 		? await stage.runtimeConfig.getMode()
 		: null;
 	return runtimeMode ?? stage.mode;
-};
-
-const asRecord = (value: unknown): Record<string, unknown> | null =>
-	value && typeof value === "object"
-		? (value as Record<string, unknown>)
-		: null;
-
-const stringField = (
-	record: Record<string, unknown> | null,
-	key: string,
-): string | null => {
-	const value = record?.[key];
-	return typeof value === "string" && value.trim().length > 0
-		? value.trim()
-		: null;
-};
-
-const extractJsonRpcErrorMessage = (record: unknown): string | null => {
-	const envelope = asRecord(record);
-	const payload = asRecord(envelope?.payload) ?? envelope;
-	const error = asRecord(payload?.error);
-	if (!error) {
-		return null;
-	}
-
-	const data = asRecord(error.data);
-	const dataMessage = stringField(data, "message");
-	const errorInfo =
-		stringField(data, "codex_error_info") ||
-		stringField(data, "error_info") ||
-		stringField(data, "type");
-	const rpcMessage = stringField(error, "message");
-	const code =
-		typeof error.code === "number" || typeof error.code === "string"
-			? String(error.code)
-			: null;
-
-	if (errorInfo && dataMessage) {
-		return `ACP JSON-RPC error: ${errorInfo}: ${dataMessage}`;
-	}
-	if (dataMessage) {
-		return `ACP JSON-RPC error: ${dataMessage}`;
-	}
-	if (errorInfo && rpcMessage) {
-		return `ACP JSON-RPC error: ${errorInfo}: ${rpcMessage}`;
-	}
-	if (rpcMessage && code) {
-		return `ACP JSON-RPC error ${code}: ${rpcMessage}`;
-	}
-	if (rpcMessage) {
-		return `ACP JSON-RPC error: ${rpcMessage}`;
-	}
-	if (code) {
-		return `ACP JSON-RPC error ${code}`;
-	}
-	return null;
-};
-
-const readLastJsonRpcErrorMessageFromJsonl = async (jsonlPath: string) => {
-	const content = await fs.readFile(jsonlPath, "utf-8").catch(() => "");
-	const lines = content.split(/\r?\n/);
-	for (let index = lines.length - 1; index >= 0; index -= 1) {
-		const line = lines[index]?.trim();
-		if (!line) {
-			continue;
-		}
-		try {
-			const message = extractJsonRpcErrorMessage(JSON.parse(line));
-			if (message) {
-				return message;
-			}
-		} catch {}
-	}
-	return null;
 };
 
 const MAX_TRANSIENT_LAUNCH_RETRIES = 5;
@@ -281,7 +206,9 @@ const isScanJobPaused = async (ctx: PipelineContext) => {
 	return scanJob?.status === "paused";
 };
 
-const shouldStopForPausedScanJob = async <TPipelineContext extends PipelineContext>(
+const shouldStopForPausedScanJob = async <
+	TPipelineContext extends PipelineContext,
+>(
 	runtime: JobRuntime<TPipelineContext>,
 ) => {
 	if (!(await isScanJobPaused(runtime.ctx))) {
@@ -295,7 +222,7 @@ const shouldStopForPausedScanJob = async <TPipelineContext extends PipelineConte
 	return true;
 };
 
-const SANDBOX_AGENT_DRIVER_TASK_DIR_NAME = "sandbox-agent-driver-tasks";
+const ACP_DRIVER_TASK_DIR_NAME = "acp-driver-tasks";
 
 const normalizeJsonOutput = (rawOutput: string) => {
 	const trimmed = rawOutput.trim();
@@ -330,18 +257,13 @@ const ensureTaskRuntimeDirectory = async (ctx: StageContext) => {
 
 const getTaskRuntimePaths = async (ctx: StageContext) => {
 	const taskDir = await ctx.taskDir();
-	const runtimeBase = SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl.replace(
-		/\.jsonl$/i,
-		"",
-	);
 	return {
 		taskDir,
-		jsonlPath: path.join(taskDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl),
-		textPath: path.join(taskDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.text),
-		stderrPath: path.join(taskDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.stderr),
-		stdoutPath: path.join(taskDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.stdout),
-		usagePath: path.join(taskDir, SANDBOX_AGENT_RUNTIME_FILE_NAMES.usage),
-		statePath: path.join(taskDir, `.${runtimeBase}-state.json`),
+		activityPath: path.join(taskDir, AGENT_RUNTIME_FILE_NAMES.activity),
+		stderrPath: path.join(taskDir, AGENT_RUNTIME_FILE_NAMES.stderr),
+		stdoutPath: path.join(taskDir, AGENT_RUNTIME_FILE_NAMES.stdout),
+		usagePath: path.join(taskDir, AGENT_RUNTIME_FILE_NAMES.usage),
+		statePath: path.join(taskDir, AGENT_RUNTIME_FILE_NAMES.state),
 		outputPath: path.join(taskDir, "output.json"),
 	};
 };
@@ -356,22 +278,19 @@ const copyPersistentLaneArtifactsToTaskDir = async (ctx: StageContext) => {
 	}
 	const skipEntries = new Set([
 		"inputs",
-		"parent-session-store",
-		"parent-runtime",
-		SANDBOX_AGENT_DRIVER_TASK_DIR_NAME,
-		"sandbox-agent-driver.pid",
-		"sandbox-agent-driver.mjs",
-		"sandbox-agent-driver-launch.sh",
+		ACP_DRIVER_TASK_DIR_NAME,
+		"acp-driver.pid",
+		"acp-driver-launch.sh",
 		"output.json",
-		SANDBOX_AGENT_RUNTIME_FILE_NAMES.jsonl,
-		SANDBOX_AGENT_RUNTIME_FILE_NAMES.text,
-		SANDBOX_AGENT_RUNTIME_FILE_NAMES.stderr,
-		SANDBOX_AGENT_RUNTIME_FILE_NAMES.stdout,
-		SANDBOX_AGENT_RUNTIME_FILE_NAMES.usage,
+		AGENT_RUNTIME_FILE_NAMES.activity,
+		AGENT_RUNTIME_FILE_NAMES.stderr,
+		AGENT_RUNTIME_FILE_NAMES.stdout,
+		AGENT_RUNTIME_FILE_NAMES.usage,
+		AGENT_RUNTIME_FILE_NAMES.state,
 	]);
-	const entries = await fs.readdir(laneDir, { withFileTypes: true }).catch(
-		() => [],
-	);
+	const entries = await fs
+		.readdir(laneDir, { withFileTypes: true })
+		.catch(() => []);
 	await fs.mkdir(taskDir, { recursive: true });
 	for (const entry of entries) {
 		if (skipEntries.has(entry.name)) {
@@ -381,21 +300,10 @@ const copyPersistentLaneArtifactsToTaskDir = async (ctx: StageContext) => {
 		const toPath = path.join(taskDir, entry.name);
 		await fs.rm(toPath, { recursive: true, force: true }).catch(() => {});
 		await fs.cp(fromPath, toPath, { recursive: true, force: true });
-		if (entry.name === "session-store") {
-			await fs
-				.rm(path.join(toPath, ".persist.lock"), {
-					recursive: true,
-					force: true,
-				})
-				.catch(() => {});
-		}
 	}
 };
 
-const updateTaskDefault = async (
-	taskId: string,
-	patch: PipelineTaskUpdate,
-) => {
+const updateTaskDefault = async (taskId: string, patch: PipelineTaskUpdate) => {
 	await updateTaskRepo(taskId, buildPipelineTaskUpdatePatch(patch));
 };
 
@@ -469,10 +377,6 @@ const summarizeTaskState = (content: string) => {
 			promptFinished: null,
 			endTurnReceived: null,
 			completedAt: null,
-			eventCount: null,
-			lastEventAgeMs: null,
-			lastEventSummary: null,
-			activeToolCalls: [],
 		};
 	}
 	try {
@@ -491,19 +395,6 @@ const summarizeTaskState = (content: string) => {
 				typeof parsed.completedAt === "string" && parsed.completedAt.trim()
 					? parsed.completedAt
 					: null,
-			eventCount:
-				typeof parsed.eventCount === "number" ? parsed.eventCount : null,
-			lastEventAgeMs:
-				typeof parsed.lastEventAgeMs === "number"
-					? parsed.lastEventAgeMs
-					: null,
-			lastEventSummary:
-				parsed.lastEventSummary && typeof parsed.lastEventSummary === "object"
-					? parsed.lastEventSummary
-					: null,
-			activeToolCalls: Array.isArray(parsed.activeToolCalls)
-				? parsed.activeToolCalls
-				: [],
 		};
 	} catch (error) {
 		return {
@@ -511,60 +402,7 @@ const summarizeTaskState = (content: string) => {
 			promptFinished: null,
 			endTurnReceived: null,
 			completedAt: null,
-			eventCount: null,
-			lastEventAgeMs: null,
-			lastEventSummary: null,
-			activeToolCalls: [],
 			error: getErrorMessage(error),
-		};
-	}
-};
-
-const summarizeLastJsonlEvent = (content: string) => {
-	const lines = content
-		.split("\n")
-		.map((line) => line.trim())
-		.filter(Boolean);
-	if (lines.length === 0) {
-		return null;
-	}
-	const lastLine = lines[lines.length - 1] || "";
-	try {
-		const parsed = JSON.parse(lastLine) as Record<string, unknown>;
-		const payload =
-			parsed.payload && typeof parsed.payload === "object"
-				? (parsed.payload as Record<string, unknown>)
-				: {};
-		const params =
-			payload.params && typeof payload.params === "object"
-				? (payload.params as Record<string, unknown>)
-				: {};
-		const update =
-			params.update && typeof params.update === "object"
-				? (params.update as Record<string, unknown>)
-				: {};
-		return {
-			lineCount: lines.length,
-			eventIndex:
-				typeof parsed.eventIndex === "number" ? parsed.eventIndex : null,
-			createdAt: typeof parsed.createdAt === "number" ? parsed.createdAt : null,
-			createdAtIso:
-				typeof parsed.createdAt === "number"
-					? new Date(parsed.createdAt).toISOString()
-					: null,
-			sender: typeof parsed.sender === "string" ? parsed.sender : null,
-			method: typeof payload.method === "string" ? payload.method : null,
-			sessionUpdate:
-				typeof update.sessionUpdate === "string" ? update.sessionUpdate : null,
-			kind: typeof update.kind === "string" ? update.kind : null,
-			status: typeof update.status === "string" ? update.status : null,
-			toolCallId:
-				typeof update.toolCallId === "string" ? update.toolCallId : null,
-		};
-	} catch (error) {
-		return {
-			lineCount: lines.length,
-			parseError: getErrorMessage(error),
 		};
 	}
 };
@@ -613,8 +451,7 @@ const inspectContainerForFailure = async (
 const buildTaskFailureDiagnostics = async (ctx: StageContext) => {
 	const {
 		taskDir,
-		jsonlPath,
-		textPath,
+		activityPath,
 		stderrPath,
 		stdoutPath,
 		statePath,
@@ -622,28 +459,24 @@ const buildTaskFailureDiagnostics = async (ctx: StageContext) => {
 	} = await getTaskRuntimePaths(ctx);
 	const [
 		task,
-		jsonlContent,
-		textContent,
+		activityContent,
 		stderrContent,
 		stdoutContent,
 		stateContent,
 		outputContent,
-		jsonlStat,
-		textStat,
+		activityStat,
 		stderrStat,
 		stdoutStat,
 		stateStat,
 		outputStat,
 	] = await Promise.all([
 		findTaskByIdRepo(ctx.taskId).catch(() => null),
-		readFileIfExists(jsonlPath),
-		readFileIfExists(textPath),
+		readFileIfExists(activityPath),
 		readFileIfExists(stderrPath),
 		readFileIfExists(stdoutPath),
 		readFileIfExists(statePath),
 		readFileIfExists(outputPath),
-		statFileIfExists(jsonlPath),
-		statFileIfExists(textPath),
+		statFileIfExists(activityPath),
 		statFileIfExists(stderrPath),
 		statFileIfExists(stdoutPath),
 		statFileIfExists(statePath),
@@ -657,8 +490,7 @@ const buildTaskFailureDiagnostics = async (ctx: StageContext) => {
 		containerName: task?.containerName || null,
 		threadId: task?.threadId || null,
 		runtimeFiles: {
-			jsonl: jsonlStat,
-			text: textStat,
+			activity: activityStat,
 			stderr: stderrStat,
 			stdout: stdoutStat,
 			state: stateStat,
@@ -666,12 +498,10 @@ const buildTaskFailureDiagnostics = async (ctx: StageContext) => {
 		},
 		output: summarizeOutputJson(outputContent),
 		state: summarizeTaskState(stateContent),
-		lastJsonlEvent: summarizeLastJsonlEvent(jsonlContent),
 		tails: {
 			stderr: tailText(stderrContent),
 			stdout: tailText(stdoutContent),
-			text: tailText(textContent),
-			jsonl: tailText(jsonlContent),
+			activity: tailText(activityContent),
 			output: tailText(outputContent),
 			state: tailText(stateContent),
 		},
@@ -700,23 +530,15 @@ const appendTaskFailureDiagnostics = async (
 };
 
 const readTaskTokenUsage = async (ctx: StageContext) => {
-	const { jsonlPath, usagePath } = await getTaskRuntimePaths(ctx);
-	const [jsonlContent, promptUsageContent] = await Promise.all([
-		readFileIfExists(jsonlPath),
-		readFileIfExists(usagePath),
-	]);
-	const summary = summarizeSandboxAgentTokenUsage(jsonlContent);
-	const promptUsage = extractPromptResponseUsage(promptUsageContent);
-	const totalTokens = promptUsage?.totalTokens ?? summary?.totalTokens ?? null;
-	const cachedReadTokens =
-		promptUsage?.cachedReadTokens ?? summary?.cachedReadTokens ?? null;
+	const { usagePath } = await getTaskRuntimePaths(ctx);
+	const usage = await readAgentUsageSnapshot(usagePath);
 	return {
-		inputTokens: promptUsage?.inputTokens ?? null,
-		outputTokens: promptUsage?.outputTokens ?? null,
-		thoughtTokens: promptUsage?.thoughtTokens ?? null,
-		totalTokens,
-		cachedReadTokens,
-		cachedWriteTokens: promptUsage?.cachedWriteTokens ?? null,
+		inputTokens: null,
+		outputTokens: null,
+		thoughtTokens: null,
+		totalTokens: usage.totalTokens || null,
+		cachedReadTokens: usage.cachedReadTokens || null,
+		cachedWriteTokens: null,
 	};
 };
 
@@ -735,7 +557,7 @@ const readPersistentQueueFailureForTask = async (
 		stageRoot,
 		"lanes",
 		`lane-${lane.laneIndex}`,
-		SANDBOX_AGENT_DRIVER_TASK_DIR_NAME,
+		ACP_DRIVER_TASK_DIR_NAME,
 	);
 	const entries = await fs.readdir(taskQueueDir).catch(() => []);
 	for (const entry of entries.filter((value) =>
@@ -779,12 +601,12 @@ const readPersistentQueueFailureForTask = async (
 };
 
 const extractDriverExitCode = (stderrContent: string) => {
-	const match = stderrContent.match(/\[sandbox-agent-driver\] exit_code=(\d+)/);
+	const match = stderrContent.match(/\[acp-driver\] exit_code=(\d+)/);
 	return match ? Number.parseInt(match[1] || "", 10) : null;
 };
 
 const hasDriverCompletedWithoutOutput = (stderrContent: string) =>
-	stderrContent.includes("[sandbox-agent-driver] prompt completed without output");
+	stderrContent.includes("[acp-driver] prompt completed without output");
 
 const extractThreadIdFromStdout = (stdoutContent: string) => {
 	const threadLine = stdoutContent
@@ -802,16 +624,6 @@ const cleanupTaskContainer = async (taskId: string) => {
 		return;
 	}
 	await removeContainer(task.containerName).catch(() => {});
-};
-
-const stopReusableSandboxAgentForTask = async (taskId: string) => {
-	const task = await findTaskByIdRepo(taskId).catch(() => null);
-	if (!task?.containerName) {
-		return;
-	}
-	await stopSandboxAgentServerInContainer({
-		containerName: task.containerName,
-	});
 };
 
 const shouldRemoveContainerAfterTask = (
@@ -1233,24 +1045,21 @@ const inspectHalfStartedRunningTask = async <
 	const stageCtx = await createStageContextForTask(runtime, task);
 	const {
 		taskDir,
-		jsonlPath,
-		textPath,
+		activityPath,
 		stderrPath,
 		stdoutPath,
 		statePath,
 		outputPath,
 	} = await getTaskRuntimePaths(stageCtx);
 	const [
-		jsonlContent,
-		textContent,
+		activityContent,
 		stderrContent,
 		stdoutContent,
 		stateContent,
 		outputContent,
 		outputStat,
 	] = await Promise.all([
-		readFileIfExists(jsonlPath),
-		readFileIfExists(textPath),
+		readFileIfExists(activityPath),
 		readFileIfExists(stderrPath),
 		readFileIfExists(stdoutPath),
 		readFileIfExists(statePath),
@@ -1259,15 +1068,11 @@ const inspectHalfStartedRunningTask = async <
 	]);
 
 	const now = Date.now();
-	const hasEndTurn =
-		hasEndTurnInJsonlContent(jsonlContent) ||
-		summarizeTaskState(stateContent).endTurnReceived === true;
+	const hasEndTurn = summarizeTaskState(stateContent).endTurnReceived === true;
 	const outputSummary = summarizeOutputJson(outputContent);
 	const stateSummary = summarizeTaskState(stateContent);
-	const lastJsonlEvent = summarizeLastJsonlEvent(jsonlContent);
 	const diagnostics = {
-		jsonlBytes: Buffer.byteLength(jsonlContent),
-		textBytes: Buffer.byteLength(textContent),
+		activityBytes: Buffer.byteLength(activityContent),
 		stderrBytes: Buffer.byteLength(stderrContent),
 		stdoutBytes: Buffer.byteLength(stdoutContent),
 		stateBytes: Buffer.byteLength(stateContent),
@@ -1278,7 +1083,6 @@ const inspectHalfStartedRunningTask = async <
 			size: outputStat.size,
 		},
 		state: stateSummary,
-		lastJsonlEvent,
 		hasEndTurn,
 		threadId: task.threadId || null,
 		containerName: task.containerName || null,
@@ -1302,20 +1106,12 @@ const inspectHalfStartedRunningTask = async <
 					outputValidEnvelope: outputSummary.validEnvelope,
 					outputRoute: outputSummary.route,
 					hasEndTurn,
-					activeToolCallIds: stateSummary.activeToolCalls
-						.map((item) =>
-							item && typeof item === "object" && "toolCallId" in item
-								? String((item as Record<string, unknown>).toolCallId)
-								: "",
-						)
-						.filter(Boolean),
 				}),
 			)
 		: previousSnapshot?.lastDiagnosticKey;
 	const runtimeOutputHash = sha1(
 		[
-			`jsonl:${jsonlContent}`,
-			`text:${textContent}`,
+			`activity:${activityContent}`,
 			`stderr:${stderrContent}`,
 			`stdout:${stdoutContent}`,
 			`state:${stateContent}`,
@@ -1623,7 +1419,9 @@ const createTaskStageContext = async <
 		allowAgentExit:
 			taskRuntime?.allowAgentExit ?? stage.id === SCAN_STAGE_IDS.analyzeFinding,
 		containerIndex:
-			taskRuntime?.containerIndex ?? taskRuntime?.laneRuntime?.laneIndex ?? null,
+			taskRuntime?.containerIndex ??
+			taskRuntime?.laneRuntime?.laneIndex ??
+			null,
 		laneIndex: taskRuntime?.laneRuntime?.laneIndex ?? null,
 		laneThreadId: taskRuntime?.laneRuntime?.threadId ?? null,
 		sessionMode: taskRuntime?.laneRuntime?.threadId
@@ -1661,41 +1459,17 @@ const isOutputEnvelope = (value: unknown): value is OutputEnvelope => {
 	);
 };
 
-const parseValidOutputEnvelope = (
-	outputContent: string,
-	ctx: Pick<StageContext, "routeOutputSchemas">,
-) => {
-	if (!outputContent.trim()) {
-		return null;
-	}
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(outputContent);
-	} catch {
-		return null;
-	}
-	if (!isOutputEnvelope(parsed)) {
-		return null;
-	}
-	if (!ctx.routeOutputSchemas?.length && parsed.route !== null) {
-		return null;
-	}
-	return parsed;
-};
-
 const resolveStageRawOutput = async (ctx: StageContext) => {
-	const { jsonlPath, textPath, stderrPath, stdoutPath, statePath, outputPath } =
+	const { activityPath, stderrPath, stdoutPath, statePath, outputPath } =
 		await getTaskRuntimePaths(ctx);
 	const [
-		jsonlContent,
-		textContent,
+		activityContent,
 		stderrContent,
 		stdoutContent,
 		stateContent,
 		outputContent,
 	] = await Promise.all([
-		readFileIfExists(jsonlPath),
-		readFileIfExists(textPath),
+		readFileIfExists(activityPath),
 		readFileIfExists(stderrPath),
 		readFileIfExists(stdoutPath),
 		readFileIfExists(statePath),
@@ -1703,8 +1477,7 @@ const resolveStageRawOutput = async (ctx: StageContext) => {
 	]);
 	const progressSignature = sha1(
 		[
-			jsonlContent,
-			textContent,
+			activityContent,
 			stderrContent,
 			stdoutContent,
 			stateContent,
@@ -1712,20 +1485,10 @@ const resolveStageRawOutput = async (ctx: StageContext) => {
 		].join("\n"),
 	);
 	const hasAgentOutput =
-		jsonlContent.trim().length > 0 || textContent.trim().length > 0;
+		stdoutContent.includes("THREAD_ID:") ||
+		summarizeTaskState(stateContent).promptFinished !== null;
 	const stateSummary = summarizeTaskState(stateContent);
 	if (!stateSummary.completedAt) {
-		const parsed = parseValidOutputEnvelope(outputContent, ctx);
-		if (parsed && stateSummary.activeToolCalls.length === 0) {
-			return {
-				rawOutput: JSON.stringify(parsed.output, null, 2),
-				stderrContent,
-				progressSignature,
-				hasAgentOutput,
-				hasExitSignal: ctx.allowAgentExit ? parsed.exit : false,
-				routeKey: parsed.route,
-			};
-		}
 		return {
 			rawOutput: null,
 			stderrContent,
@@ -1736,7 +1499,7 @@ const resolveStageRawOutput = async (ctx: StageContext) => {
 		};
 	}
 	if (!outputContent.trim()) {
-		throw new Error("Sandbox agent prompt completed without output.json");
+		throw new Error("ACP prompt completed without output.json");
 	}
 	if (outputContent.trim()) {
 		let parsed: unknown;
@@ -1819,20 +1582,22 @@ const prepareStageSuccess = async <
 		);
 	}
 	await assertScanJobNotCancelled(stageCtx);
-	const output = stage.validateOutput
+	const validatedOutput = stage.validateOutput
 		? stageCtx.nullableOutput && rawOutput.trim() === "null"
 			? (null as TOutput)
 			: await stage.validateOutput(stageCtx, input, rawOutput)
 		: await defaultValidateOutput<TOutput>(stage.id, rawOutput);
+	const output = normalizeCandidateResultStageOutput(
+		stage.id,
+		validatedOutput,
+	) as TOutput;
 	const vulnerabilityCandidateId =
 		currentTask && CANDIDATE_RESULT_STAGE_NAMES.includes(stage.id as never)
 			? await readCandidateIdFromTaskInputArtifact(currentTask)
 			: null;
 	await updateTaskDefault(stageCtx.taskId, {
 		output,
-		...(vulnerabilityCandidateId
-			? { vulnerabilityCandidateId }
-			: {}),
+		...(vulnerabilityCandidateId ? { vulnerabilityCandidateId } : {}),
 	});
 	if (isCandidateProducerStage(stage.id)) {
 		await syncVulnerabilityCandidatesFromProducerTask(stageCtx.taskId);
@@ -1933,11 +1698,6 @@ const persistTerminalSuccess = async <
 	stepStartedAt = Date.now();
 	await copyPersistentLaneArtifactsToTaskDir(stageCtx);
 	logPersistTiming("copy_persistent_lane_artifacts_to_task_dir", stepStartedAt);
-	if (!stageCtx.persistent && stageCtx.reuseContainer) {
-		stepStartedAt = Date.now();
-		await stopReusableSandboxAgentForTask(stageCtx.taskId);
-		logPersistTiming("stop_reusable_sandbox_agent", stepStartedAt);
-	}
 	stepStartedAt = Date.now();
 	if (stageCtx.laneIndex !== null) {
 		if (options?.exitLane) {
@@ -2702,104 +2462,104 @@ const launchStageExecution = async <
 					`Stage ${stageState.stage.id} rejected input ${execution.taskId}`,
 				);
 			}
-			}
-			logLaunchTiming("ensure_runtime_and_validate", stepStartedAt);
+		}
+		logLaunchTiming("ensure_runtime_and_validate", stepStartedAt);
 
-				const launchStage = stageState.stage.launch;
-				if (launchStage) {
-					void (async () => {
-						const asyncLaunchStartedAt = Date.now();
-						try {
-							await launchStage(stageCtx, execution.input);
-						logLaunchTiming("stage_launch", asyncLaunchStartedAt, {
-							laneIndex: laneRuntime?.laneIndex ?? null,
-							containerIndex,
-						});
-						const launchCompleted = await transitionTaskStatusRepo({
+		const launchStage = stageState.stage.launch;
+		if (launchStage) {
+			void (async () => {
+				const asyncLaunchStartedAt = Date.now();
+				try {
+					await launchStage(stageCtx, execution.input);
+					logLaunchTiming("stage_launch", asyncLaunchStartedAt, {
+						laneIndex: laneRuntime?.laneIndex ?? null,
+						containerIndex,
+					});
+					const launchCompleted = await transitionTaskStatusRepo({
+						taskId: execution.taskId,
+						from: ["launching"],
+						to: "launched",
+						patch: { errorMessage: null },
+					});
+					logPipelineEvent("stage.launched", {
+						scanJobId: runtime.ctx.scanJobId,
+						pipelineName: runtime.pipeline.name,
+						stageName: stageState.stageName,
+						taskId: execution.taskId,
+						taskName: stageCtx.taskName,
+						transitioned: Boolean(launchCompleted),
+						elapsedMs: Date.now() - asyncLaunchStartedAt,
+					});
+				} catch (error) {
+					const nextAttempt = (launched.attempt ?? 0) + 1;
+					if (
+						isTransientRuntimeLaunchError(error) &&
+						nextAttempt <= MAX_TRANSIENT_LAUNCH_RETRIES
+					) {
+						const failedTask = await findTaskByIdRepo(execution.taskId).catch(
+							() => null,
+						);
+						const failedContainerName =
+							failedTask?.containerName || stageCtx.containerName();
+						if (failedContainerName) {
+							await removeContainer(failedContainerName).catch(() => {});
+						}
+						if (laneRuntime) {
+							await releaseStageLaneRuntimeRepo(execution.taskId).catch(
+								() => {},
+							);
+						}
+						await transitionTaskStatusRepo({
 							taskId: execution.taskId,
 							from: ["launching"],
-							to: "launched",
-							patch: { errorMessage: null },
+							to: "pending",
+							patch: {
+								attempt: nextAttempt,
+								containerName: null,
+								containerIndex: null,
+								threadId: null,
+								errorMessage: `Transient runtime launch failure; retry ${nextAttempt}/${MAX_TRANSIENT_LAUNCH_RETRIES}: ${getErrorMessage(error)}`,
+							},
 						});
-						logPipelineEvent("stage.launched", {
+						await stageState.stage.queue
+							?.enqueue(execution.taskId, queueScope)
+							.catch(() => {});
+						logPipelineEvent("stage.launch_retry", {
 							scanJobId: runtime.ctx.scanJobId,
 							pipelineName: runtime.pipeline.name,
 							stageName: stageState.stageName,
 							taskId: execution.taskId,
 							taskName: stageCtx.taskName,
-							transitioned: Boolean(launchCompleted),
-							elapsedMs: Date.now() - asyncLaunchStartedAt,
+							attempt: nextAttempt,
+							maxAttempts: MAX_TRANSIENT_LAUNCH_RETRIES,
+							errorMessage: getErrorMessage(error),
 						});
-					} catch (error) {
-						const nextAttempt = (launched.attempt ?? 0) + 1;
-						if (
-							isTransientRuntimeLaunchError(error) &&
-							nextAttempt <= MAX_TRANSIENT_LAUNCH_RETRIES
-						) {
-							const failedTask = await findTaskByIdRepo(execution.taskId).catch(
-								() => null,
-							);
-							const failedContainerName =
-								failedTask?.containerName || stageCtx.containerName();
-							if (failedContainerName) {
-								await removeContainer(failedContainerName).catch(() => {});
-							}
-							if (laneRuntime) {
-								await releaseStageLaneRuntimeRepo(execution.taskId).catch(
-									() => {},
-								);
-							}
-							await transitionTaskStatusRepo({
-								taskId: execution.taskId,
-								from: ["launching"],
-								to: "pending",
-								patch: {
-									attempt: nextAttempt,
-									containerName: null,
-									containerIndex: null,
-									threadId: null,
-									errorMessage: `Transient runtime launch failure; retry ${nextAttempt}/${MAX_TRANSIENT_LAUNCH_RETRIES}: ${getErrorMessage(error)}`,
-								},
-							});
-							await stageState.stage.queue
-								?.enqueue(execution.taskId, queueScope)
-								.catch(() => {});
-							logPipelineEvent("stage.launch_retry", {
-								scanJobId: runtime.ctx.scanJobId,
-								pipelineName: runtime.pipeline.name,
-								stageName: stageState.stageName,
-								taskId: execution.taskId,
-								taskName: stageCtx.taskName,
-								attempt: nextAttempt,
-								maxAttempts: MAX_TRANSIENT_LAUNCH_RETRIES,
-								errorMessage: getErrorMessage(error),
-							});
-						} else {
-							await persistTerminalFailure(
-								stageState.stage,
-								runtime.ctx,
-								stageCtx,
-								execution.input,
-								error,
-							);
-							await maybeMarkTaskStageGroupExited(execution.taskId, runtime);
-						}
-					} finally {
-						runtime.wakeSignal.notify();
+					} else {
+						await persistTerminalFailure(
+							stageState.stage,
+							runtime.ctx,
+							stageCtx,
+							execution.input,
+							error,
+						);
+						await maybeMarkTaskStageGroupExited(execution.taskId, runtime);
 					}
-				})();
-				logPipelineEvent("loop.stage_launch_spawned", {
-					scanJobId: runtime.ctx.scanJobId,
-					pipelineName: runtime.pipeline.name,
-					stageName: stageState.stageName,
-					taskId: execution.taskId,
-					taskName: stageCtx.taskName,
-				});
-				return true;
-			}
+				} finally {
+					runtime.wakeSignal.notify();
+				}
+			})();
+			logPipelineEvent("loop.stage_launch_spawned", {
+				scanJobId: runtime.ctx.scanJobId,
+				pipelineName: runtime.pipeline.name,
+				stageName: stageState.stageName,
+				taskId: execution.taskId,
+				taskName: stageCtx.taskName,
+			});
+			return true;
+		}
 
-			stepStartedAt = Date.now();
-			const runResult = await stageState.stage.run(stageCtx, execution.input);
+		stepStartedAt = Date.now();
+		const runResult = await stageState.stage.run(stageCtx, execution.input);
 		logLaunchTiming("stage_run", stepStartedAt, {
 			completion: runResult.completion,
 			threadId: "threadId" in runResult ? runResult.threadId : null,
@@ -3113,10 +2873,10 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 				stageCtx,
 				input,
 				exitCode === 0
-					? new Error("Sandbox agent driver exited before reporting THREAD_ID")
+					? new Error("ACP driver exited before reporting THREAD_ID")
 					: new Error(
-							`Sandbox agent driver exited with code ${exitCode} before reporting THREAD_ID`,
-					),
+							`ACP driver exited with code ${exitCode} before reporting THREAD_ID`,
+						),
 			);
 			await maybeMarkTaskStageGroupExited(task.taskId, runtime);
 			logInspectTiming("persist_launch_failure", stepStartedAt, { exitCode });
@@ -3280,21 +3040,23 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 	const exitCode = extractDriverExitCode(rawStderrContent);
 	if (exitCode !== null) {
 		stepStartedAt = Date.now();
-		const { jsonlPath } = await getTaskRuntimePaths(stageCtx);
-		const jsonRpcErrorMessage =
-			await readLastJsonRpcErrorMessageFromJsonl(jsonlPath);
+		const driverErrorMessage = rawStderrContent
+			.trim()
+			.split(/\r?\n/)
+			.filter(Boolean)
+			.slice(-1)[0];
 		const driverExitMessage =
 			exitCode === 0
-				? "Sandbox agent driver exited before output.json completion"
-				: `Sandbox agent driver exited with code ${exitCode}`;
+				? "ACP driver exited before output.json completion"
+				: `ACP driver exited with code ${exitCode}`;
 		await persistTerminalFailure(
 			stageState.stage,
 			runtime.ctx,
 			stageCtx,
 			input,
 			new Error(
-				jsonRpcErrorMessage
-					? `${driverExitMessage}; ${jsonRpcErrorMessage}`
+				driverErrorMessage
+					? `${driverExitMessage}; ${driverErrorMessage}`
 					: driverExitMessage,
 			),
 			{ exitLane: hasExitSignal },
@@ -3302,7 +3064,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 		await maybeMarkTaskStageGroupExited(task.taskId, runtime);
 		logInspectTiming("persist_driver_exit_failure", stepStartedAt, {
 			exitCode,
-			jsonRpcErrorMessage,
+			driverErrorMessage,
 		});
 		return true;
 	}
@@ -3314,17 +3076,22 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			runtime.ctx,
 			stageCtx,
 			input,
-			new Error("Sandbox agent prompt completed without output.json"),
+			new Error("ACP prompt completed without output.json"),
 			{ exitLane: hasExitSignal },
 		);
 		await maybeMarkTaskStageGroupExited(task.taskId, runtime);
-		logInspectTiming("persist_completed_without_end_turn_failure", stepStartedAt);
+		logInspectTiming(
+			"persist_completed_without_end_turn_failure",
+			stepStartedAt,
+		);
 		return true;
 	}
 
 	stepStartedAt = Date.now();
 	const containerAlive = await isContainerAlive(task.containerName);
-	logInspectTiming("running_container_alive", stepStartedAt, { containerAlive });
+	logInspectTiming("running_container_alive", stepStartedAt, {
+		containerAlive,
+	});
 	if (!containerAlive) {
 		stepStartedAt = Date.now();
 		await persistTerminalFailure(
@@ -3332,12 +3099,13 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			runtime.ctx,
 			stageCtx,
 			input,
-			new Error(
-				"Task runtime container stopped before output.json completion",
-			),
+			new Error("Task runtime container stopped before output.json completion"),
 		);
 		await maybeMarkTaskStageGroupExited(task.taskId, runtime);
-		logInspectTiming("persist_running_container_stopped_failure", stepStartedAt);
+		logInspectTiming(
+			"persist_running_container_stopped_failure",
+			stepStartedAt,
+		);
 		return true;
 	}
 
@@ -3454,15 +3222,15 @@ const reenqueueMissingPendingTasks = async <
 	const tasks = await listTasksByScanJobIdRepo(runtime.ctx.scanJobId);
 	let reenqueueCount = 0;
 	for (const task of tasks) {
-			if (task.status !== "pending") {
-				if (
-					task.status !== "launching" &&
-					task.status !== "launched" &&
-					task.status !== "starting" &&
-					task.status !== "running"
-				) {
-					runtime.runningStdoutSnapshots.delete(task.taskId);
-				}
+		if (task.status !== "pending") {
+			if (
+				task.status !== "launching" &&
+				task.status !== "launched" &&
+				task.status !== "starting" &&
+				task.status !== "running"
+			) {
+				runtime.runningStdoutSnapshots.delete(task.taskId);
+			}
 			continue;
 		}
 		const stageState = runtime.stageStates.get(task.stageName);
@@ -3625,18 +3393,18 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 				if (row.status === "pending") {
 					acc.pending += countValue;
 				}
-					if (row.status === "launching") {
-						acc.launching += countValue;
-					}
-					if (row.status === "launched") {
-						acc.launched += countValue;
-					}
-					if (row.status === "starting") {
-						acc.starting += countValue;
-					}
-					if (row.status === "running") {
-						acc.running += countValue;
-					}
+				if (row.status === "launching") {
+					acc.launching += countValue;
+				}
+				if (row.status === "launched") {
+					acc.launched += countValue;
+				}
+				if (row.status === "starting") {
+					acc.starting += countValue;
+				}
+				if (row.status === "running") {
+					acc.running += countValue;
+				}
 				if (row.status === "completed") {
 					acc.completed += countValue;
 				}
@@ -3653,11 +3421,11 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 			},
 			{
 				total: 0,
-					pending: 0,
-					launching: 0,
-					launched: 0,
-					starting: 0,
-					running: 0,
+				pending: 0,
+				launching: 0,
+				launched: 0,
+				starting: 0,
+				running: 0,
 				completed: 0,
 				failed: 0,
 				exited: 0,
@@ -3696,7 +3464,10 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 		}> = [];
 		let stageBackfillLaunchedCount = 0;
 		for (const stageState of runtime.stageStates.values()) {
-			if (runtime.stopRequested || (await shouldStopForPausedScanJob(runtime))) {
+			if (
+				runtime.stopRequested ||
+				(await shouldStopForPausedScanJob(runtime))
+			) {
 				return;
 			}
 			const stageBackfillStartedAt = Date.now();
@@ -3913,7 +3684,9 @@ const dispatchPipelineDownstream = async <
 		const selectedRouteIsActive =
 			effectiveRouteKey == null
 				? activeRoutedEdges.some((edge) => edge.route?.default)
-				: activeRoutedEdges.some((edge) => edge.route?.key === effectiveRouteKey);
+				: activeRoutedEdges.some(
+						(edge) => edge.route?.key === effectiveRouteKey,
+					);
 		if (!selectedRouteIsActive) {
 			effectiveRouteKey = activeRoutedEdges[0]?.route?.key ?? null;
 			logPipelineEvent("downstream.route.runtime_fallback", {

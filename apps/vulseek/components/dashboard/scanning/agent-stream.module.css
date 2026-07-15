@@ -1,0 +1,223 @@
+.root {
+	--agent-bg: #ffffff;
+	--agent-surface: #f6f8fa;
+	--agent-hover: #eaeef2;
+	--agent-text: #1f2328;
+	--agent-dim: #656d76;
+	--agent-border: #d0d7de;
+	--agent-purple: #8250df;
+	--agent-blue: #0969da;
+	--agent-green: #1a7f37;
+	--agent-orange: #bc4c00;
+	position: relative;
+	color: var(--agent-text);
+	background: var(--agent-bg);
+	border: 1px solid var(--agent-border);
+	border-radius: 10px;
+	overflow: hidden;
+}
+.toolbar {
+	display: flex;
+	gap: 10px;
+	align-items: center;
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--agent-border);
+	background: var(--agent-surface);
+	color: var(--agent-dim);
+	font-size: 12px;
+}
+.toolbar code {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.status {
+	color: var(--agent-green);
+	font-weight: 600;
+	text-transform: capitalize;
+}
+.timeline {
+	max-height: 65vh;
+	overflow: auto;
+	padding: 4px;
+	font:
+		12px / 1.55 ui-monospace,
+		SFMono-Regular,
+		Menlo,
+		Consolas,
+		monospace;
+}
+.turn {
+	margin-bottom: 8px;
+}
+.turnHeader {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 14px;
+	border-bottom: 1px solid var(--agent-border);
+	border-radius: 8px 8px 0 0;
+	background: var(--agent-surface);
+	color: var(--agent-text);
+	font-size: 14px;
+}
+.turnHeader time {
+	color: var(--agent-dim);
+	font-size: 12px;
+}
+.userMessage {
+	margin-bottom: 12px;
+	border: 1px solid #c8b6e8;
+	border-radius: 8px;
+	background: #f5f0ff;
+}
+.userSummary {
+	display: flex;
+	gap: 10px;
+	align-items: center;
+	cursor: pointer;
+	padding: 9px 12px;
+	list-style-position: inside;
+}
+.userPrompt {
+	color: var(--agent-purple);
+	font-weight: 700;
+}
+.userPreview {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.userText,
+.assistantText {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.userText {
+	padding: 0 12px 10px 32px;
+}
+.assistantLane {
+	margin: 4px 0 0;
+	border-left: 4px solid #08a1bb;
+	padding: 8px 0 8px 20px;
+}
+.assistantLabel {
+	margin-bottom: 6px;
+	color: #078fac;
+	font-size: 12px;
+	font-weight: 800;
+	letter-spacing: 0.05em;
+}
+.spinner {
+	display: inline-block;
+	width: 10px;
+	height: 10px;
+	margin-left: auto;
+	border: 1.5px solid var(--agent-dim);
+	border-top-color: var(--agent-blue);
+	border-radius: 50%;
+	animation: agentSpin 0.8s linear infinite;
+	flex: 0 0 auto;
+	vertical-align: middle;
+}
+@keyframes agentSpin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+.block {
+	margin: 8px 0;
+}
+.assistantText {
+	padding: 9px 12px;
+	border-left: 3px solid var(--agent-blue);
+	background: var(--agent-surface);
+}
+.thinking {
+	border-left: 3px solid var(--agent-dim);
+}
+.thinking summary {
+	display: flex;
+	align-items: center;
+	cursor: pointer;
+	padding: 4px 8px;
+	color: var(--agent-text);
+}
+.thinkingBody {
+	padding: 0 10px 10px;
+	color: var(--agent-dim);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.tool {
+	border: 2px solid var(--agent-border);
+	border-radius: 8px;
+	background: var(--agent-surface);
+}
+.toolSummary {
+	display: flex;
+	min-width: 0;
+	align-items: center;
+	gap: 8px;
+	cursor: pointer;
+	padding: 7px 10px;
+	color: var(--agent-blue);
+}
+.toolDot {
+	width: 10px;
+	height: 10px;
+	flex: 0 0 auto;
+	border-radius: 999px;
+	background: #087fca;
+}
+.toolPreview {
+	min-width: 0;
+	overflow: hidden;
+	color: var(--agent-dim);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.tool pre {
+	margin: 0;
+	padding: 10px;
+	border-top: 1px solid var(--agent-border);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.toolResult,
+.toolError {
+	max-height: 360px;
+	overflow: auto;
+}
+.toolResult {
+	color: var(--agent-green);
+}
+.toolError {
+	color: #cf222e;
+}
+.empty {
+	padding: 32px 8px;
+	color: var(--agent-dim);
+	text-align: center;
+}
+.error {
+	padding: 8px 12px;
+	color: #cf222e;
+	background: #ffebe9;
+	border-bottom: 1px solid #ff8182;
+	font-size: 12px;
+}
+.jump {
+	position: absolute;
+	right: 16px;
+	bottom: 16px;
+	border: 1px solid var(--agent-border);
+	border-radius: 999px;
+	padding: 6px 10px;
+	color: var(--agent-blue);
+	background: var(--agent-bg);
+	box-shadow: 0 2px 8px #1f232833;
+	cursor: pointer;
+	font-size: 12px;
+}

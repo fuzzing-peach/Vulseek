@@ -254,6 +254,7 @@ start_vulseek() {
         --env RELEASE_TAG="$RELEASE_TAG" \
         --env VULSEEK_IMAGE_REPOSITORY="$IMAGE_REPOSITORY" \
         --env VULSEEK_SERVICE_NAME="$VULSEEK_SERVICE" \
+        --env VULSEEK_TOOLS_IMAGE_VARIANT=release \
         --env VULSEEK_SCAN_CONTEXT_HOST_PATH="${effective_scan_context_host_path}" \
         --env VULSEEK_SCAN_CONTEXT_APP_PATH=/scan-context \
         --env DATABASE_URL=postgresql://vulseek:vulseek_release_password@"$POSTGRES_SERVICE":5432/vulseek \

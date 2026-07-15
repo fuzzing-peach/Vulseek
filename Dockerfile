@@ -10,14 +10,14 @@ WORKDIR /usr/src/app
 
 RUN apt-get update && apt-get install -y python3 make g++ git python3-pip pkg-config libsecret-1-dev && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p apps/api apps/vulseek apps/schedules packages/server packages/server/src/services/dockerfiles packages/trpc-openapi
+RUN mkdir -p apps/api apps/vulseek apps/schedules packages/server packages/server/src/services/dockerfiles packages/trpc-openapi vendor/claude-replay
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json ./apps/api/package.json
 COPY apps/vulseek/package.json ./apps/vulseek/package.json
 COPY apps/schedules/package.json ./apps/schedules/package.json
 COPY packages/server/package.json ./packages/server/package.json
 COPY packages/trpc-openapi/package.json ./packages/trpc-openapi/package.json
-COPY packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch ./packages/server/src/services/dockerfiles/sandbox-agent@0.4.2.patch
+COPY vendor/claude-replay/package.json ./vendor/claude-replay/package.json
 
 # Install dependencies before copying source so application edits can reuse this layer.
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile

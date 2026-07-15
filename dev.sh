@@ -387,6 +387,7 @@ start_vulseek() {
         --publish published="$DRIZZLE_STUDIO_PORT",target=5555,mode=host \
         $env_args \
         --env VULSEEK_SERVICE_NAME="$VULSEEK_SERVICE" \
+        --env VULSEEK_TOOLS_IMAGE_VARIANT=dev \
         --env VULSEEK_SCAN_CONTEXT_HOST_PATH="${effective_scan_context_host_path}" \
         --env VULSEEK_SCAN_CONTEXT_APP_PATH=/scan-context \
         --env DATABASE_URL=postgresql://vulseek:vulseek_dev_password@"$POSTGRES_SERVICE":5432/vulseek \
@@ -394,6 +395,7 @@ start_vulseek() {
         --mount type=bind,source="${SCRIPT_DIR}/apps",target=/app/apps \
         --mount type=bind,source="${SCRIPT_DIR}/agents",target=/app/agents \
         --mount type=bind,source="${SCRIPT_DIR}/packages",target=/app/packages \
+        --mount type=bind,source="${SCRIPT_DIR}/vendor",target=/app/vendor \
         --mount type=bind,source="${SCRIPT_DIR}/package.json",target=/app/package.json \
         --mount type=bind,source="${SCRIPT_DIR}/pnpm-workspace.yaml",target=/app/pnpm-workspace.yaml \
         --mount type=bind,source="${env_file_path}",target=/app/.env \

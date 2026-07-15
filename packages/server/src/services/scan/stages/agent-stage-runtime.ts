@@ -2,13 +2,10 @@ import { buildTaskAgentProfileSnapshot } from "../agent-profile-snapshot";
 import { bindTaskRuntimeRepo } from "../persistence/task.repo";
 import { createStageRuntimeConfig } from "../pipeline/scan-stage-runtime-config";
 import {
-	renderPromptTemplateString,
 	type PromptTemplateValues,
+	renderPromptTemplateString,
 } from "../prompts/prompt-template";
-import {
-	startContainer,
-	type StageContainerInput,
-} from "../runtime/run-single-turn-agent";
+import { startContainer } from "../runtime/run-single-turn-agent";
 import type { AgentProfileLike, ScanJob } from "../types";
 import type { StageContext } from "./full-scan-stage.runtime";
 
@@ -33,9 +30,7 @@ export const resolveAgentStageRuntime = async (input: {
 	const taskStageRootInContainer = await input.ctx.taskDirContainer();
 	const taskRealRootInContainer = await input.ctx.taskDirRealContainer();
 	const stageDirPath =
-		input.ctx.laneIndex !== null
-			? await input.ctx.laneDir()
-			: taskStageDirPath;
+		input.ctx.laneIndex !== null ? await input.ctx.laneDir() : taskStageDirPath;
 	const stageRootInContainer =
 		input.ctx.laneIndex !== null
 			? await input.ctx.laneDirContainer()
@@ -61,14 +56,14 @@ export const launchAgentStageRuntime = async (input: {
 	scanJob: ScanJob;
 	containerNameParts?: Array<string | null | undefined>;
 	codexHomeName?: string;
-	runtimeFileNames?: StageContainerInput["runtimeFileNames"];
 }) => {
 	const runtime = await resolveAgentStageRuntime(input);
 	await bindTaskRuntimeRepo({
 		taskId: input.ctx.taskId,
 		containerName: runtime.containerName,
 		containerIndex: input.ctx.containerIndex,
-		agentProfile: buildTaskAgentProfileSnapshot(runtime.agentProfile).agentProfile,
+		agentProfile: buildTaskAgentProfileSnapshot(runtime.agentProfile)
+			.agentProfile,
 	});
 	await startContainer({
 		scanJob: input.scanJob,
@@ -81,7 +76,6 @@ export const launchAgentStageRuntime = async (input: {
 		taskRealRootInContainer: runtime.taskRealRootInContainer,
 		persistent: input.ctx.persistent,
 		reuseContainer: input.ctx.reuseContainer,
-		runtimeFileNames: input.runtimeFileNames,
 	});
 	return runtime;
 };
@@ -98,7 +92,10 @@ export const resolveStageRuntimePrompt = async (
 	fallback: string,
 	values?: PromptTemplateValues,
 ) => {
-	const prompt = await createStageRuntimeConfig(ctx.scanJobId, ctx.stageName).getPrompt();
+	const prompt = await createStageRuntimeConfig(
+		ctx.scanJobId,
+		ctx.stageName,
+	).getPrompt();
 	if (prompt == null) {
 		return fallback;
 	}

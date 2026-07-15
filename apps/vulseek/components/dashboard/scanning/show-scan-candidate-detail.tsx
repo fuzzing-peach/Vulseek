@@ -1,31 +1,28 @@
 import {
-	Activity,
 	AlertCircle,
 	ExternalLink,
 	FileIcon,
-	FileText,
 	Folder,
 	Loader2,
 	Plus,
 	RefreshCw,
 	ShieldCheck,
 	Tag,
-	X,
 	Workflow,
+	X,
 } from "lucide-react";
 import Head from "next/head";
-import { useTranslation } from "next-i18next";
 import Link from "next/link";
 import { useRouter } from "next/router";
+import { useTranslation } from "next-i18next";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { AgentStream } from "@/components/dashboard/scanning/agent-stream";
+import { SseAgentStreamTransport } from "@/components/dashboard/scanning/agent-stream-transport";
 import {
 	buildCandidateListStateHref,
 	parseCandidateListQueryState,
 } from "@/components/dashboard/scanning/candidate-list-query-state";
-import { JsonRpcSummaryPanel } from "@/components/dashboard/scanning/jsonrpc-summary";
-import { useSandboxAgentText } from "@/components/dashboard/scanning/live-task-activity";
-import { useSandboxAgentSession } from "@/components/dashboard/scanning/use-sandbox-agent-session";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
 import { DashboardPanelShell } from "@/components/shared/dashboard-panel-shell";
@@ -55,8 +52,8 @@ import {
 	formatScanStageLabel,
 	formatScanStatusLabel,
 	formatTruthResultLabel,
-	scanT,
 	type ScanTranslation,
+	scanT,
 } from "./scan-i18n";
 
 interface Props {
@@ -178,9 +175,6 @@ const getTaskStatusBadgeClassName = (status?: string | null) => {
 	return "border-muted-foreground/20 bg-muted text-muted-foreground";
 };
 
-const isContainerNearBottom = (container: HTMLElement) =>
-	container.scrollHeight - container.scrollTop - container.clientHeight <= 16;
-
 const CandidateTaskLineagePanel = ({
 	candidateId,
 	projectId,
@@ -204,11 +198,6 @@ const CandidateTaskLineagePanel = ({
 }) => {
 	const { t } = useTranslation("scan");
 	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-	const [taskOutputView, setTaskOutputView] = useState<"activities" | "text">(
-		"activities",
-	);
-	const textContainerRef = useRef<HTMLPreElement | null>(null);
-	const textAutoScrollRef = useRef(true);
 	const { data, isLoading, isError, error } =
 		api.scan.candidateTaskLineage.useQuery(
 			{ vulnerabilityCandidateId: candidateId, scanJobId, producerTaskId },
@@ -220,14 +209,15 @@ const CandidateTaskLineagePanel = ({
 	const tasks = (data?.tasks || []) as CandidateTaskLineageTask[];
 	const selectedTask =
 		tasks.find((task) => task.taskId === selectedTaskId) || tasks[0] || null;
-	const activityState = useSandboxAgentSession({
-		taskId: selectedTask?.taskId || "",
-		enabled: !!selectedTask?.taskId && taskOutputView === "activities",
-	});
-	const textState = useSandboxAgentText({
-		taskId: selectedTask?.taskId || "",
-		enabled: !!selectedTask?.taskId && taskOutputView === "text",
-	});
+	const agentStreamTransport = useMemo(
+		() =>
+			selectedTask?.taskId
+				? new SseAgentStreamTransport(
+						`/api/scan/tasks/${encodeURIComponent(selectedTask.taskId)}/agent-stream`,
+					)
+				: null,
+		[selectedTask?.taskId],
+	);
 	const upstreamTasks = tasks.filter((task) => task.relation !== "candidate");
 	const downstreamTasks = tasks.filter((task) => task.relation === "candidate");
 	const taskHref = (taskId: string) =>
@@ -244,18 +234,6 @@ const CandidateTaskLineagePanel = ({
 				: tasks[0]?.taskId || null,
 		);
 	}, [tasks]);
-
-	useEffect(() => {
-		if (taskOutputView !== "text") {
-			textAutoScrollRef.current = true;
-			return;
-		}
-		const container = textContainerRef.current;
-		if (!container || !textAutoScrollRef.current) {
-			return;
-		}
-		container.scrollTop = container.scrollHeight;
-	}, [taskOutputView, textState.text]);
 
 	const renderTaskGroup = (
 		label: string,
@@ -320,7 +298,11 @@ const CandidateTaskLineagePanel = ({
 		return (
 			<div className="flex items-center gap-2 text-muted-foreground">
 				<Loader2 className="size-4 animate-spin" />
-				{scanT(t, "scan.candidate.loadingLineage", "正在加载阶段任务 lineage...")}
+				{scanT(
+					t,
+					"scan.candidate.loadingLineage",
+					"正在加载阶段任务 lineage...",
+				)}
 			</div>
 		);
 	}
@@ -413,109 +395,10 @@ const CandidateTaskLineagePanel = ({
 				</div>
 
 				{selectedTask ? (
-					<div className="p-4">
-						<Tabs
-							value={taskOutputView}
-							onValueChange={(value) =>
-								setTaskOutputView(value as "activities" | "text")
-							}
-						>
-							<TabsList>
-								<TabsTrigger value="activities">
-									<Activity className="mr-2 size-4" />
-									{scanT(t, "scan.activity.activities", "Activities")}
-								</TabsTrigger>
-								<TabsTrigger value="text">
-									<FileText className="mr-2 size-4" />
-									{scanT(t, "scan.activity.text", "Text")}
-								</TabsTrigger>
-							</TabsList>
-
-							<TabsContent value="activities" className="pt-4">
-								{activityState.errorMessage ? (
-									<div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100">
-										{activityState.errorMessage}
-									</div>
-								) : null}
-								{activityState.metadata &&
-								activityState.messages.length === 0 ? (
-									<div className="mb-3 rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-										<div>status: {activityState.metadata.status || "-"}</div>
-										<div>
-											jsonl:{" "}
-											{activityState.metadata.jsonlExists === false
-												? "missing"
-												: "visible"}
-										</div>
-										{activityState.metadata.jsonlStatError ? (
-											<div className="break-all">
-												error: {activityState.metadata.jsonlStatError}
-											</div>
-										) : null}
-									</div>
-								) : null}
-								<JsonRpcSummaryPanel
-									messages={activityState.messages}
-									maxHeightClassName="max-h-[58vh]"
-									className="min-w-0"
-									debugTaskId={selectedTask.taskId}
-								/>
-							</TabsContent>
-
-							<TabsContent value="text" className="pt-4">
-								<div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-									{textState.isConnected ? (
-										<span className="flex items-center gap-1">
-											<span className="size-1.5 rounded-full bg-emerald-500" />
-											{scanT(t, "scan.activity.connected", "connected")}
-										</span>
-									) : (
-										<span className="flex items-center gap-1">
-											<Loader2 className="size-3 animate-spin" />
-											{scanT(t, "scan.activity.connecting", "connecting")}
-										</span>
-									)}
-									<span>
-										{scanT(t, "scan.activity.chars", "{{count}} chars", {
-											count: textState.text.length.toLocaleString(),
-										})}
-									</span>
-								</div>
-								{textState.errorMessage ? (
-									<div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/60 dark:bg-red-950/50 dark:text-red-100">
-										{textState.errorMessage}
-									</div>
-								) : null}
-								{textState.metadata && !textState.text ? (
-									<div className="mb-3 rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-										<div>status: {textState.metadata.status || "-"}</div>
-										<div>
-											text:{" "}
-											{textState.metadata.textExists === false
-												? "missing"
-												: "visible"}
-										</div>
-										{textState.metadata.textStatError ? (
-											<div className="break-all">
-												error: {textState.metadata.textStatError}
-											</div>
-										) : null}
-									</div>
-								) : null}
-								<pre
-									ref={textContainerRef}
-									onScroll={(event) => {
-										textAutoScrollRef.current = isContainerNearBottom(
-											event.currentTarget,
-										);
-									}}
-									className="max-h-[58vh] min-h-[360px] w-full overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-md border bg-muted/20 p-3 text-xs leading-relaxed text-foreground"
-								>
-									{textState.text ||
-										scanT(t, "scan.activity.noText", "No text output yet.")}
-								</pre>
-							</TabsContent>
-						</Tabs>
+					<div className="min-h-[360px] p-4">
+						{agentStreamTransport ? (
+							<AgentStream transport={agentStreamTransport} />
+						) : null}
 					</div>
 				) : (
 					<div className="flex min-h-[360px] items-center justify-center text-muted-foreground">
@@ -700,7 +583,9 @@ export const ShowScanCandidateDetail = ({
 		[candidate?.latestVerificationResult?.result, t],
 	);
 	const candidateExecutionState = useMemo(() => {
-		const candidateTasks = ((candidateLineage?.tasks || []) as CandidateTaskLineageTask[])
+		const candidateTasks = (
+			(candidateLineage?.tasks || []) as CandidateTaskLineageTask[]
+		)
 			.filter((task) => task.relation === "candidate")
 			.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 		const latestTask = candidateTasks[0] || null;
@@ -721,13 +606,15 @@ export const ShowScanCandidateDetail = ({
 		candidateExecutionState.latestTask?.stageName ||
 		"analyze-finding";
 	const candidateTaskId = candidateExecutionState.activeTask?.taskId || "";
-	const { messages: liveJsonRpcMessages } = useSandboxAgentSession({
-		taskId: candidateTaskId,
-		enabled:
-			activeTab === "overview" &&
-			!!candidateTaskId &&
-			!!candidateExecutionState.activeTask,
-	});
+	const candidateAgentStreamTransport = useMemo(
+		() =>
+			candidateTaskId
+				? new SseAgentStreamTransport(
+						`/api/scan/tasks/${encodeURIComponent(candidateTaskId)}/agent-stream`,
+					)
+				: null,
+		[candidateTaskId],
+	);
 	const canVerify =
 		candidate?.latestAnalysisResult?.result === "real_vulnerability" ||
 		candidate?.latestAnalysisResult?.result === "likely_vulnerability";
@@ -867,7 +754,10 @@ export const ShowScanCandidateDetail = ({
 		<div className="pb-10">
 			<BreadcrumbSidebar
 				list={[
-					{ name: scanT(t, "scan.breadcrumb.projects", "Projects"), href: "/dashboard/projects" },
+					{
+						name: scanT(t, "scan.breadcrumb.projects", "Projects"),
+						href: "/dashboard/projects",
+					},
 					{ name: serviceData?.environment.project.name || "" },
 					{
 						name: serviceData?.environment.name || "",
@@ -947,36 +837,36 @@ export const ShowScanCandidateDetail = ({
 			</Dialog>
 
 			<DashboardPanelShell>
-					<CardHeader>
-						<div className="flex items-start justify-between gap-4">
-							<div className="min-w-0">
-								<CardTitle className="text-xl">
-									{candidate?.title || `Candidate ${candidateId.slice(0, 6)}`}
-								</CardTitle>
-								<CardDescription className="mt-2 flex items-center gap-2 break-all">
-									<span>{candidateId}</span>
-									<CopyValueButton
-										value={candidateId}
-										label={scanT(t, "scan.field.candidateId", "Candidate ID")}
-										className="size-7 shrink-0"
-									/>
-								</CardDescription>
-							</div>
-							<div className="flex shrink-0 flex-wrap justify-end gap-2">
-								<Button
-									type="button"
-									variant="outline"
-									title={rerunAnalysisTitle}
-									aria-label={rerunAnalysisTitle}
-									isLoading={analyzeCandidateMutation.isLoading}
-									disabled={
-										!canRerunAnalysis || analyzeCandidateMutation.isLoading
-									}
-									onClick={rerunCandidateAnalysis}
-								>
-									<RefreshCw className="mr-2 size-4" />
-									{scanT(t, "scan.candidates.rerunAnalysis", "Re-run analysis")}
-								</Button>
+				<CardHeader>
+					<div className="flex items-start justify-between gap-4">
+						<div className="min-w-0">
+							<CardTitle className="text-xl">
+								{candidate?.title || `Candidate ${candidateId.slice(0, 6)}`}
+							</CardTitle>
+							<CardDescription className="mt-2 flex items-center gap-2 break-all">
+								<span>{candidateId}</span>
+								<CopyValueButton
+									value={candidateId}
+									label={scanT(t, "scan.field.candidateId", "Candidate ID")}
+									className="size-7 shrink-0"
+								/>
+							</CardDescription>
+						</div>
+						<div className="flex shrink-0 flex-wrap justify-end gap-2">
+							<Button
+								type="button"
+								variant="outline"
+								title={rerunAnalysisTitle}
+								aria-label={rerunAnalysisTitle}
+								isLoading={analyzeCandidateMutation.isLoading}
+								disabled={
+									!canRerunAnalysis || analyzeCandidateMutation.isLoading
+								}
+								onClick={rerunCandidateAnalysis}
+							>
+								<RefreshCw className="mr-2 size-4" />
+								{scanT(t, "scan.candidates.rerunAnalysis", "Re-run analysis")}
+							</Button>
 							{canVerify ? (
 								<Button
 									type="button"
@@ -1147,9 +1037,7 @@ export const ShowScanCandidateDetail = ({
 												</div>
 												<Textarea
 													value={noteDraft}
-													onChange={(event) =>
-														setNoteDraft(event.target.value)
-													}
+													onChange={(event) => setNoteDraft(event.target.value)}
 													placeholder={scanT(
 														t,
 														"scan.candidate.notePlaceholder",
@@ -1188,7 +1076,11 @@ export const ShowScanCandidateDetail = ({
 														))
 													) : (
 														<div className="text-sm text-muted-foreground">
-															{scanT(t, "scan.candidate.noTags", "No tags set.")}
+															{scanT(
+																t,
+																"scan.candidate.noTags",
+																"No tags set.",
+															)}
 														</div>
 													)}
 												</div>
@@ -1215,9 +1107,7 @@ export const ShowScanCandidateDetail = ({
 														type="button"
 														variant="secondary"
 														disabled={!normalizedTagInput}
-														onClick={() =>
-															addCandidateTag(normalizedTagInput)
-														}
+														onClick={() => addCandidateTag(normalizedTagInput)}
 													>
 														<Plus className="mr-2 size-4" />
 														{scanT(t, "scan.common.add", "Add")}
@@ -1258,14 +1148,15 @@ export const ShowScanCandidateDetail = ({
 													{formatScanStageLabel(t, candidateStreamStage)}
 												</Badge>
 											</div>
-											<JsonRpcSummaryPanel
-												messages={liveJsonRpcMessages}
-												maxHeightClassName="max-h-[420px]"
-											/>
+											{candidateAgentStreamTransport ? (
+												<AgentStream
+													transport={candidateAgentStreamTransport}
+												/>
+											) : null}
 										</section>
 									) : null}
 
-										<section className="rounded-lg border p-4">
+									<section className="rounded-lg border p-4">
 										<div className="mb-4 text-lg font-semibold">
 											{scanT(t, "scan.section.analysis", "Analysis")}
 										</div>
@@ -1331,7 +1222,11 @@ export const ShowScanCandidateDetail = ({
 											</div>
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
-													{scanT(t, "scan.field.runtimeSeconds", "Runtime Seconds")}
+													{scanT(
+														t,
+														"scan.field.runtimeSeconds",
+														"Runtime Seconds",
+													)}
 												</div>
 												<div className="mt-1 text-sm">
 													{candidate.latestAnalysisResult?.runtimeSeconds ??
@@ -1443,7 +1338,11 @@ export const ShowScanCandidateDetail = ({
 										<div className="grid gap-3 md:grid-cols-2">
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
-													{scanT(t, "scan.field.classification", "Classification")}
+													{scanT(
+														t,
+														"scan.field.classification",
+														"Classification",
+													)}
 												</div>
 												<div className="mt-1 text-sm">
 													{candidate.latestTriageResult
@@ -1452,13 +1351,16 @@ export const ShowScanCandidateDetail = ({
 											</div>
 											<div className="rounded-md border p-3">
 												<div className="text-xs text-muted-foreground">
-													{scanT(t, "scan.field.securityIssue", "Security Issue")}
+													{scanT(
+														t,
+														"scan.field.securityIssue",
+														"Security Issue",
+													)}
 												</div>
 												<div className="mt-1 text-sm">
 													{typeof candidate.latestTriageResult
 														?.isSecurityIssue === "boolean"
-															? candidate.latestTriageResult
-																.isSecurityIssue
+														? candidate.latestTriageResult.isSecurityIssue
 															? scanT(t, "scan.common.yes", "Yes")
 															: scanT(t, "scan.common.no", "No")
 														: "-"}
@@ -1489,8 +1391,8 @@ export const ShowScanCandidateDetail = ({
 													)}
 												</div>
 												<div className="mt-1 whitespace-pre-wrap break-words text-sm">
-													{candidate.latestTriageResult
-														?.disqualifierReason || "-"}
+													{candidate.latestTriageResult?.disqualifierReason ||
+														"-"}
 												</div>
 											</div>
 											<div className="rounded-md border p-3">
@@ -1499,8 +1401,8 @@ export const ShowScanCandidateDetail = ({
 												</div>
 												<div className="mt-1 text-sm">
 													{candidate.latestTriageResult?.cvssSeverity || "-"}
-													{typeof candidate.latestTriageResult
-														?.cvssScore === "number"
+													{typeof candidate.latestTriageResult?.cvssScore ===
+													"number"
 														? ` ${candidate.latestTriageResult.cvssScore.toFixed(1)}`
 														: ""}
 												</div>
@@ -1551,12 +1453,12 @@ export const ShowScanCandidateDetail = ({
 									<div className="font-medium">
 										{scanT(t, "scan.files.title", "Files")}
 									</div>
-										<div className="text-sm text-muted-foreground">
-											{scanT(
-												t,
-												"scan.files.candidateDescription",
-												"Browse candidate context files.",
-											)}
+									<div className="text-sm text-muted-foreground">
+										{scanT(
+											t,
+											"scan.files.candidateDescription",
+											"Browse candidate context files.",
+										)}
 									</div>
 								</div>
 								<div className="grid min-h-[65vh] grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]">
@@ -1601,7 +1503,11 @@ export const ShowScanCandidateDetail = ({
 												{selectedFile?.content ? (
 													<CopyValueButton
 														value={selectedFile.content}
-														label={scanT(t, "scan.files.content", "File Content")}
+														label={scanT(
+															t,
+															"scan.files.content",
+															"File Content",
+														)}
 														className="size-7 shrink-0"
 													/>
 												) : null}
@@ -1620,7 +1526,11 @@ export const ShowScanCandidateDetail = ({
 											) : isLoadingSelectedFile ? (
 												<div className="flex min-h-[280px] items-center justify-center gap-2 text-muted-foreground">
 													<Loader2 className="size-4 animate-spin" />
-													{scanT(t, "scan.files.loadingFile", "Loading file...")}
+													{scanT(
+														t,
+														"scan.files.loadingFile",
+														"Loading file...",
+													)}
 												</div>
 											) : (
 												<pre className="whitespace-pre-wrap break-words font-mono text-sm">

@@ -649,7 +649,7 @@ Verification:
     id:
       type: string
     result:
-      enum: [true, likely, false]
+      enum: ["true", "likely", "false"]
     summary:
       type: string
     confidence:

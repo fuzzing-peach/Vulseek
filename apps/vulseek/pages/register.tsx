@@ -101,12 +101,13 @@ const Register = ({ isCloud }: Props) => {
 	}, [form, form.reset, form.formState.isSubmitSuccessful]);
 
 	const onSubmit = async (values: Register) => {
-		const { data, error } = await authClient.signUp.email({
+		const registration = {
 			email: values.email,
 			password: values.password,
 			name: values.name,
 			username: values.username.toLowerCase(),
-		});
+		};
+		const { data, error } = await authClient.signUp.email(registration);
 
 		if (error) {
 			setIsError(true);

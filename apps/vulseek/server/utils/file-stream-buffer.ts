@@ -25,6 +25,7 @@ class FileStreamBuffer {
 	private readonly pollIntervalMs: number;
 	private content = "";
 	private offset = 0;
+	private tail = Buffer.alloc(0);
 	private initialized = false;
 	private initializing: Promise<void> | null = null;
 	private syncing = false;
@@ -46,8 +47,10 @@ class FileStreamBuffer {
 
 	private async loadEntireFile(reason: "init" | "reset" | "missing") {
 		const content = await fs.readFile(this.filePath, "utf-8").catch(() => "");
+		const bytes = Buffer.from(content, "utf-8");
 		this.content = content;
-		this.offset = Buffer.byteLength(content, "utf-8");
+		this.offset = bytes.length;
+		this.tail = bytes.subarray(Math.max(0, bytes.length - 4096));
 		this.initialized = true;
 		if (reason !== "init") {
 			this.notify({
@@ -114,6 +117,7 @@ class FileStreamBuffer {
 		this.subscribers.clear();
 		this.content = "";
 		this.offset = 0;
+		this.tail = Buffer.alloc(0);
 		this.initialized = false;
 		this.initializing = null;
 		this.syncing = false;
@@ -141,6 +145,7 @@ class FileStreamBuffer {
 				if (this.content !== "" || this.offset !== 0) {
 					this.content = "";
 					this.offset = 0;
+					this.tail = Buffer.alloc(0);
 					this.notify({
 						type: "snapshot",
 						content: "",
@@ -157,6 +162,33 @@ class FileStreamBuffer {
 				return;
 			}
 
+			// A producer can truncate and rewrite past the previous offset between
+			// polls. Verify the bytes immediately before that offset so this cannot
+			// be mistaken for an append.
+			if (this.offset > 0 && this.tail.length > 0) {
+				const length = Math.min(this.tail.length, this.offset);
+				const handle = await fs.open(this.filePath, "r");
+				let matches = false;
+				try {
+					const diskTail = Buffer.alloc(length);
+					const { bytesRead } = await handle.read(
+						diskTail,
+						0,
+						length,
+						this.offset - length,
+					);
+					matches =
+						bytesRead === length &&
+						diskTail.equals(this.tail.subarray(this.tail.length - length));
+				} finally {
+					await handle.close();
+				}
+				if (!matches) {
+					await this.loadEntireFile("reset");
+					return;
+				}
+			}
+
 			if (stat.size === this.offset) {
 				return;
 			}
@@ -169,6 +201,7 @@ class FileStreamBuffer {
 				const delta = buffer.toString("utf-8");
 				this.content += delta;
 				this.offset = stat.size;
+				this.tail = Buffer.concat([this.tail, buffer]).subarray(-4096);
 				this.notify({
 					type: "append",
 					content: delta,
@@ -196,7 +229,10 @@ export const getFileStreamBuffer = (
 		return existing;
 	}
 
-	const created = new FileStreamBuffer(filePath, options?.pollIntervalMs ?? 1000);
+	const created = new FileStreamBuffer(
+		filePath,
+		options?.pollIntervalMs ?? 1000,
+	);
 	fileStreamBuffers.set(filePath, created);
 	return created;
 };

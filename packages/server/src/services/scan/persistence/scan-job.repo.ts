@@ -4,6 +4,7 @@ import type { ScanRuntimeSettings } from "@vulseek/server/db/schema";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, or, sql } from "drizzle-orm";
 import {
+	normalizeLegacyVerificationSchema,
 	SCAN_PIPELINE_DEFINITIONS,
 	type ScanPipelineDefinitions,
 } from "../pipeline/scan-pipeline-definitions";
@@ -236,7 +237,9 @@ export const loadScanJobPipelineDefinitionSnapshotRepo = async (scanJobId: strin
 		throw new TRPCError({ code: "NOT_FOUND", message: "Scan job not found" });
 	}
 	if (hasUsableScanPipelineDefinitionSnapshot(row.scanPipelineDefinitionSnapshot)) {
-		return row.scanPipelineDefinitionSnapshot;
+		return normalizeLegacyVerificationSchema(
+			row.scanPipelineDefinitionSnapshot,
+		);
 	}
 	throw new TRPCError({
 		code: "INTERNAL_SERVER_ERROR",

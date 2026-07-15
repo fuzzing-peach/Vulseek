@@ -37,12 +37,38 @@ type CandidateProjectionPatchInput = {
 	resultAt: string;
 };
 
+export const normalizeCandidateResultStageOutput = (
+	stageName: string,
+	output: unknown,
+) => {
+	if (
+		stageName !== "verify-finding" ||
+		!output ||
+		typeof output !== "object" ||
+		Array.isArray(output)
+	) {
+		return output;
+	}
+	const result = (output as { result?: unknown }).result;
+	if (typeof result !== "boolean") {
+		return output;
+	}
+	return {
+		...(output as Record<string, unknown>),
+		result: result ? "true" : "false",
+	};
+};
+
 export const buildCandidateProjectionPatch = (
 	input: CandidateProjectionPatchInput,
 ) => {
+	const output = normalizeCandidateResultStageOutput(
+		input.stageName,
+		input.output,
+	);
 	const result =
-		input.output && typeof input.output === "object"
-			? (input.output as { result?: unknown }).result
+		output && typeof output === "object"
+			? (output as { result?: unknown }).result
 			: null;
 	const resultValue = typeof result === "string" ? result : null;
 	const common = {
@@ -54,7 +80,7 @@ export const buildCandidateProjectionPatch = (
 	if (input.stageName === "analyze-finding") {
 		return {
 			analysisTaskId: input.taskId,
-			analysisOutput: input.output,
+			analysisOutput: output,
 			analysisResult: common.result,
 			analysisRank: common.rank,
 			analysisResultAt: common.resultAt,
@@ -63,7 +89,7 @@ export const buildCandidateProjectionPatch = (
 	if (input.stageName === "verify-finding") {
 		return {
 			verificationTaskId: input.taskId,
-			verificationOutput: input.output,
+			verificationOutput: output,
 			verificationResult: common.result,
 			verificationRank: common.rank,
 			verificationResultAt: common.resultAt,
@@ -72,7 +98,7 @@ export const buildCandidateProjectionPatch = (
 	if (input.stageName === "triage-finding") {
 		return {
 			triageTaskId: input.taskId,
-			triageOutput: input.output,
+			triageOutput: output,
 			triageResult: common.result,
 			triageRank: common.rank,
 			triageResultAt: common.resultAt,

@@ -178,6 +178,46 @@ export type ScanPipelineDefinitionsSource = z.infer<
 	typeof scanPipelineDefinitionsSourceSchema
 >;
 
+export const normalizeLegacyVerificationSchema = (
+	definitions: ScanPipelineDefinitions,
+): ScanPipelineDefinitions => {
+	const verification = definitions.schemas.Verification;
+	const properties = verification?.properties;
+	const result =
+		properties && typeof properties === "object"
+			? (properties as Record<string, unknown>).result
+			: null;
+	const values =
+		result && typeof result === "object"
+			? (result as { enum?: unknown }).enum
+			: null;
+	if (
+		!Array.isArray(values) ||
+		values.length !== 3 ||
+		values[0] !== true ||
+		values[1] !== "likely" ||
+		values[2] !== false
+	) {
+		return definitions;
+	}
+	return {
+		...definitions,
+		schemas: {
+			...definitions.schemas,
+			Verification: {
+				...verification,
+				properties: {
+					...(properties as Record<string, unknown>),
+					result: {
+						...(result as Record<string, unknown>),
+						enum: ["true", "likely", "false"],
+					},
+				},
+			},
+		},
+	};
+};
+
 export const resolveScanPipelineDefinitionsDir = (
 	moduleUrl: string,
 	runtimeRoot = process.cwd(),

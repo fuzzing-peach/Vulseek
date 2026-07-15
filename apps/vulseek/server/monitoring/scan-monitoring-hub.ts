@@ -1,10 +1,10 @@
 import {
+	type AgentTaskRuntime,
 	docker,
-	findRunningSandboxAgentTaskRuntimesByScanJobId,
-	findSandboxAgentTaskRuntimeByTaskId,
+	findAgentTaskRuntimeByTaskId,
+	findRunningAgentTaskRuntimesByScanJobId,
 	listRunningScanJobsByOrganizationId,
-	createIncrementalTaskTokenUsageReader,
-	type SandboxAgentTaskRuntime,
+	readAgentUsageSnapshot,
 } from "@vulseek/server";
 
 const SAMPLE_INTERVAL_MS = 1300;
@@ -48,7 +48,7 @@ export type ScanMonitoringSample = DockerMetrics & {
 
 type TaskSnapshot = {
 	taskId: string;
-	taskKind: SandboxAgentTaskRuntime["taskKind"];
+	taskKind: AgentTaskRuntime["taskKind"];
 	container: ScanStatsContainer | null;
 	metrics: DockerMetrics;
 	totalTokens: number;
@@ -116,8 +116,10 @@ const parseDockerStats = (raw: any): DockerMetrics => {
 	const memoryLimit = Number(raw.memory_stats?.limit || 0);
 	const block = { readBytes: 0, writeBytes: 0 };
 	for (const item of raw.blkio_stats?.io_service_bytes_recursive || []) {
-		if (String(item.op).toLowerCase() === "read") block.readBytes += Number(item.value || 0);
-		if (String(item.op).toLowerCase() === "write") block.writeBytes += Number(item.value || 0);
+		if (String(item.op).toLowerCase() === "read")
+			block.readBytes += Number(item.value || 0);
+		if (String(item.op).toLowerCase() === "write")
+			block.writeBytes += Number(item.value || 0);
 	}
 	let rxBytes = 0;
 	let txBytes = 0;
@@ -138,7 +140,10 @@ const parseDockerStats = (raw: any): DockerMetrics => {
 };
 
 class ContainerStatsCache {
-	private readonly entries = new Map<string, { expiresAt: number; promise: Promise<DockerMetrics> }>();
+	private readonly entries = new Map<
+		string,
+		{ expiresAt: number; promise: Promise<DockerMetrics> }
+	>();
 
 	get(containerName: string): Promise<DockerMetrics> {
 		const existing = this.entries.get(containerName);
@@ -162,14 +167,13 @@ class ContainerStatsCache {
 
 class TaskSampler {
 	private readonly listeners = new Set<Listener<TaskSnapshot>>();
-	private readonly readTokenUsage = createIncrementalTaskTokenUsageReader();
 	private timer?: NodeJS.Timeout;
 	private disposeTimer?: NodeJS.Timeout;
 	private sampling = false;
 	private snapshot: TaskSnapshot | null = null;
 
 	constructor(
-		private readonly runtime: SandboxAgentTaskRuntime,
+		private readonly runtime: AgentTaskRuntime,
 		private readonly containerStats: ContainerStatsCache,
 		private readonly onDisposed: () => void,
 	) {}
@@ -197,7 +201,6 @@ class TaskSampler {
 	private stop() {
 		if (this.timer) clearInterval(this.timer);
 		this.timer = undefined;
-		this.readTokenUsage.clear(this.runtime.jsonlPath);
 		this.snapshot = null;
 		this.onDisposed();
 	}
@@ -206,7 +209,7 @@ class TaskSampler {
 		if (this.sampling) return;
 		this.sampling = true;
 		try {
-			const usage = await this.readTokenUsage.read(this.runtime.jsonlPath);
+			const usage = await readAgentUsageSnapshot(this.runtime.usagePath);
 			const container = this.runtime.containerName
 				? {
 						containerId: this.runtime.containerName,
@@ -256,7 +259,10 @@ class JobSampler {
 		if (this.snapshot) listener(this.snapshot);
 		if (!this.reconcileTimer) {
 			void this.reconcile();
-			this.reconcileTimer = setInterval(() => void this.reconcile(), RECONCILE_INTERVAL_MS);
+			this.reconcileTimer = setInterval(
+				() => void this.reconcile(),
+				RECONCILE_INTERVAL_MS,
+			);
 			this.publishTimer = setInterval(() => this.publish(), SAMPLE_INTERVAL_MS);
 		}
 		return { release: () => this.release(listener) };
@@ -275,7 +281,8 @@ class JobSampler {
 		this.reconcileTimer = undefined;
 		if (this.publishTimer) clearInterval(this.publishTimer);
 		this.publishTimer = undefined;
-		for (const subscription of this.taskSubscriptions.values()) subscription.release();
+		for (const subscription of this.taskSubscriptions.values())
+			subscription.release();
 		this.taskSubscriptions.clear();
 		this.taskSnapshots.clear();
 		this.snapshot = null;
@@ -283,7 +290,9 @@ class JobSampler {
 	}
 
 	private async reconcile() {
-		const runtimes = await findRunningSandboxAgentTaskRuntimesByScanJobId(this.scanJobId);
+		const runtimes = await findRunningAgentTaskRuntimesByScanJobId(
+			this.scanJobId,
+		);
 		const activeIds = new Set(runtimes.map((runtime) => runtime.taskId));
 		for (const runtime of runtimes) {
 			if (this.taskSubscriptions.has(runtime.taskId)) continue;
@@ -313,7 +322,8 @@ class JobSampler {
 		const metrics = emptyMetrics();
 		const containersByName = new Map<string, ScanStatsContainer>();
 		for (const task of tasks) {
-			if (task.container) containersByName.set(task.container.containerName, task.container);
+			if (task.container)
+				containersByName.set(task.container.containerName, task.container);
 			addMetrics(metrics, task.metrics);
 		}
 		const containers = [...containersByName.values()];
@@ -326,12 +336,20 @@ class JobSampler {
 		this.snapshot = {
 			...finalizeMetrics(metrics),
 			time: new Date().toISOString(),
-			runningContainerCount: new Set(containers.map((container) => container.containerName)).size,
+			runningContainerCount: new Set(
+				containers.map((container) => container.containerName),
+			).size,
 			containers,
 			tokenSnapshot: {
 				timestampMs: Date.now(),
-				totalTokens: tokenTasks.reduce((sum, task) => sum + task.totalTokens, 0),
-				cachedReadTokens: tokenTasks.reduce((sum, task) => sum + task.cachedReadTokens, 0),
+				totalTokens: tokenTasks.reduce(
+					(sum, task) => sum + task.totalTokens,
+					0,
+				),
+				cachedReadTokens: tokenTasks.reduce(
+					(sum, task) => sum + task.cachedReadTokens,
+					0,
+				),
 				tasks: tokenTasks,
 			},
 			activeJobCount: 1,
@@ -369,7 +387,10 @@ class OrganizationSampler {
 		if (this.snapshot) listener(this.snapshot);
 		if (!this.reconcileTimer) {
 			void this.reconcile();
-			this.reconcileTimer = setInterval(() => void this.reconcile(), RECONCILE_INTERVAL_MS);
+			this.reconcileTimer = setInterval(
+				() => void this.reconcile(),
+				RECONCILE_INTERVAL_MS,
+			);
 			this.publishTimer = setInterval(() => this.publish(), SAMPLE_INTERVAL_MS);
 		}
 		return { release: () => this.release(listener) };
@@ -388,7 +409,8 @@ class OrganizationSampler {
 		this.reconcileTimer = undefined;
 		if (this.publishTimer) clearInterval(this.publishTimer);
 		this.publishTimer = undefined;
-		for (const subscription of this.jobSubscriptions.values()) subscription.release();
+		for (const subscription of this.jobSubscriptions.values())
+			subscription.release();
 		this.jobSubscriptions.clear();
 		this.jobSnapshots.clear();
 		this.snapshot = null;
@@ -431,7 +453,8 @@ class OrganizationSampler {
 			for (const container of job.containers) {
 				containersByName.set(container.containerName, container);
 			}
-			for (const task of job.tokenSnapshot.tasks) tasksById.set(task.taskId, task);
+			for (const task of job.tokenSnapshot.tasks)
+				tasksById.set(task.taskId, task);
 		}
 		const containers = [...containersByName.values()];
 		const tasks = [...tasksById.values()];
@@ -439,12 +462,17 @@ class OrganizationSampler {
 		this.snapshot = {
 			...finalizeMetrics(metrics),
 			time: new Date().toISOString(),
-			runningContainerCount: new Set(containers.map((container) => container.containerName)).size,
+			runningContainerCount: new Set(
+				containers.map((container) => container.containerName),
+			).size,
 			containers,
 			tokenSnapshot: {
 				timestampMs: Date.now(),
 				totalTokens: tasks.reduce((sum, task) => sum + task.totalTokens, 0),
-				cachedReadTokens: tasks.reduce((sum, task) => sum + task.cachedReadTokens, 0),
+				cachedReadTokens: tasks.reduce(
+					(sum, task) => sum + task.cachedReadTokens,
+					0,
+				),
 				tasks,
 			},
 			activeJobCount: jobs.length,
@@ -456,7 +484,10 @@ class OrganizationSampler {
 export class MonitoringHub {
 	private readonly taskSamplers = new Map<string, TaskSampler>();
 	private readonly jobSamplers = new Map<string, JobSampler>();
-	private readonly organizationSamplers = new Map<string, OrganizationSampler>();
+	private readonly organizationSamplers = new Map<
+		string,
+		OrganizationSampler
+	>();
 	private readonly containerStats = new ContainerStatsCache();
 
 	async acquireTask(
@@ -466,7 +497,7 @@ export class MonitoringHub {
 		const existing = this.taskSamplers.get(taskId);
 		let sampler = existing;
 		if (!sampler) {
-			sampler = await findSandboxAgentTaskRuntimeByTaskId(taskId).then((runtime) => {
+			sampler = await findAgentTaskRuntimeByTaskId(taskId).then((runtime) => {
 				if (!runtime) throw new Error("Task runtime not found");
 				const created = new TaskSampler(runtime, this.containerStats, () => {
 					if (this.taskSamplers.get(taskId) === created) {
@@ -483,20 +514,23 @@ export class MonitoringHub {
 		);
 	}
 
-	acquireJob(scanJobId: string, listener: Listener<ScanMonitoringSample>): Subscription {
+	acquireJob(
+		scanJobId: string,
+		listener: Listener<ScanMonitoringSample>,
+	): Subscription {
 		const sampler =
 			this.jobSamplers.get(scanJobId) ||
-			new JobSampler(
-				scanJobId,
-				this.taskSamplers,
-				this.containerStats,
-				() => this.jobSamplers.delete(scanJobId),
+			new JobSampler(scanJobId, this.taskSamplers, this.containerStats, () =>
+				this.jobSamplers.delete(scanJobId),
 			);
 		this.jobSamplers.set(scanJobId, sampler);
 		return sampler.subscribe(listener);
 	}
 
-	acquireOrganization(organizationId: string, listener: Listener<ScanMonitoringSample>): Subscription {
+	acquireOrganization(
+		organizationId: string,
+		listener: Listener<ScanMonitoringSample>,
+	): Subscription {
 		const sampler =
 			this.organizationSamplers.get(organizationId) ||
 			new OrganizationSampler(
@@ -519,12 +553,14 @@ export class MonitoringHub {
 				timestampMs: Date.now(),
 				totalTokens: snapshot.totalTokens,
 				cachedReadTokens: snapshot.cachedReadTokens,
-				tasks: [{
-					taskId: snapshot.taskId,
-					label: `${snapshot.taskKind.replace(/_/g, " ")} ${snapshot.taskId.slice(0, 8)}`,
-					totalTokens: snapshot.totalTokens,
-					cachedReadTokens: snapshot.cachedReadTokens,
-				}],
+				tasks: [
+					{
+						taskId: snapshot.taskId,
+						label: `${snapshot.taskKind.replace(/_/g, " ")} ${snapshot.taskId.slice(0, 8)}`,
+						totalTokens: snapshot.totalTokens,
+						cachedReadTokens: snapshot.cachedReadTokens,
+					},
+				],
 			},
 			activeJobCount: 1,
 		};

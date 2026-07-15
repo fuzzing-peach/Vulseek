@@ -4,3 +4,4 @@ packages:
   - "apps/schedules"
   - "packages/server"
   - "packages/trpc-openapi"
+  - "vendor/claude-replay"

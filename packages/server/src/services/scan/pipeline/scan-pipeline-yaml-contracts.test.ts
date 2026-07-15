@@ -281,6 +281,18 @@ test("YAML stage output schemas validate current scan output shapes", async () =
 	await validateStageOutput("triage-finding", triage);
 });
 
+test("verification YAML schema requires string results", () => {
+	const verificationSchema = SCAN_PIPELINE_DEFINITIONS.schemas.Verification;
+	assert.deepEqual(
+		(verificationSchema?.properties as Record<string, unknown> | undefined)?.result,
+		{ enum: ["true", "likely", "false"] },
+	);
+
+	const contract = contractForStage("verify-finding");
+	assert.throws(() => validateJsonSchemaContract(contract, { ...verification, result: true }));
+	assert.throws(() => validateJsonSchemaContract(contract, { ...verification, result: false }));
+});
+
 test("YAML routed final analysis schema validates critic-approved analysis", () => {
 	const edge = SCAN_PIPELINE_DEFINITIONS.pipelines.full.edges.find(
 		(item) => item.name === "analyze-finding-to-verify-finding",

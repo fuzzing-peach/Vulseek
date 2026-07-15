@@ -1,4 +1,5 @@
 import {
+	applyNodeChanges,
 	Background,
 	BaseEdge,
 	Controls,
@@ -9,7 +10,6 @@ import {
 	MarkerType,
 	type Node,
 	type NodeChange,
-	applyNodeChanges,
 	type NodeProps,
 	type NodeTypes,
 	Position,
@@ -18,8 +18,13 @@ import {
 } from "@xyflow/react";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { useTranslation } from "next-i18next";
-import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import type {
+	CSSProperties,
+	ReactNode,
+	PointerEvent as ReactPointerEvent,
+} from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
 import {
 	Dialog,
 	DialogContent,
@@ -28,7 +33,6 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -174,17 +178,27 @@ const buildEffectiveDisabledStageSet = (
 
 	const bySource = new Map<string, string[]>();
 	for (const edge of graph.edges) {
-		if (explicitDisabled.has(edge.source) || explicitDisabled.has(edge.target)) {
+		if (
+			explicitDisabled.has(edge.source) ||
+			explicitDisabled.has(edge.target)
+		) {
 			continue;
 		}
-		bySource.set(edge.source, [...(bySource.get(edge.source) ?? []), edge.target]);
+		bySource.set(edge.source, [
+			...(bySource.get(edge.source) ?? []),
+			edge.target,
+		]);
 	}
 
 	const reachable = new Set<string>();
 	const queue = [rootStageName];
 	while (queue.length > 0) {
 		const stageName = queue.shift();
-		if (!stageName || reachable.has(stageName) || explicitDisabled.has(stageName)) {
+		if (
+			!stageName ||
+			reachable.has(stageName) ||
+			explicitDisabled.has(stageName)
+		) {
 			continue;
 		}
 		reachable.add(stageName);
@@ -232,20 +246,18 @@ const applyRuntimeSettingsToGraph = (
 			const configuredConcurrency =
 				typeof setting.concurrency === "number"
 					? setting.concurrency
-					: ((node as unknown as Record<string, unknown>)
-							.configuredConcurrency as number | null | undefined) ?? null;
+					: (((node as unknown as Record<string, unknown>)
+							.configuredConcurrency as number | null | undefined) ?? null);
 			const agentProfile =
-				configuredAgentProfileId &&
-				profileById.get(configuredAgentProfileId)
+				configuredAgentProfileId && profileById.get(configuredAgentProfileId)
 					? profileById.get(configuredAgentProfileId)
 					: node.agentProfile;
 			return {
 				...node,
-				disabled:
-					isRootRuntimeStage(node.stageName)
-						? false
-						: setting.disabled === true ||
-							getNodeRuntimeBoolean(node, "disabled"),
+				disabled: isRootRuntimeStage(node.stageName)
+					? false
+					: setting.disabled === true ||
+						getNodeRuntimeBoolean(node, "disabled"),
 				effectiveDisabled: effectiveDisabled.has(node.stageName),
 				configuredConcurrency,
 				configuredAgentProfileId,
@@ -542,7 +554,11 @@ const StageDetailDialog = ({
 								<div className="flex items-center justify-between gap-4">
 									<div>
 										<Label>
-											{scanT(t, "scan.stageGraph.disableStage", "Disable stage")}
+											{scanT(
+												t,
+												"scan.stageGraph.disableStage",
+												"Disable stage",
+											)}
 										</Label>
 										<div className="text-xs text-muted-foreground">
 											{scanT(
@@ -735,7 +751,7 @@ const buildSideCorridorEdgePoints = (input: {
 	return [start, { x: midX, y: start.y }, { x: midX, y: end.y }, end];
 };
 
-	const buildLowerCorridorEdgePoints = (source: Point, target: Point) => {
+const buildLowerCorridorEdgePoints = (source: Point, target: Point) => {
 	const start = getNodeAnchor(source, "bottom");
 	const end = getNodeAnchor(target, "bottom");
 	const routeY =
@@ -768,8 +784,14 @@ const buildEdgePoints = (input: {
 	) {
 		const start = { x: source.x + NODE_WIDTH, y: source.y + NODE_HEIGHT / 2 };
 		const end = { x: target.x, y: target.y + NODE_HEIGHT / 2 };
-		const routeBottomY = Math.max(source.y, target.y) + NODE_HEIGHT + FORWARD_LONG_EDGE_OFFSET_Y;
-		return [start, { x: start.x, y: routeBottomY }, { x: end.x, y: routeBottomY }, end];
+		const routeBottomY =
+			Math.max(source.y, target.y) + NODE_HEIGHT + FORWARD_LONG_EDGE_OFFSET_Y;
+		return [
+			start,
+			{ x: start.x, y: routeBottomY },
+			{ x: end.x, y: routeBottomY },
+			end,
+		];
 	}
 	if (source.x === target.x && source.y === target.y) {
 		const centerY = source.y + NODE_HEIGHT / 2;
@@ -857,7 +879,10 @@ const buildEdgePoints = (input: {
 	return [start, { x: start.x, y: midY }, { x: end.x, y: midY }, end];
 };
 
-const inferPointSide = (point: Point | undefined, nodePosition: Point): Side => {
+const inferPointSide = (
+	point: Point | undefined,
+	nodePosition: Point,
+): Side => {
 	if (!point) {
 		return "right";
 	}
@@ -986,8 +1011,12 @@ const buildFlowElements = (
 			points[points.length - 1],
 			target ?? { x: 0, y: 0 },
 		);
-		const sourceNode = graph.nodes.find((node) => node.stageName === edge.source);
-		const targetNode = graph.nodes.find((node) => node.stageName === edge.target);
+		const sourceNode = graph.nodes.find(
+			(node) => node.stageName === edge.source,
+		);
+		const targetNode = graph.nodes.find(
+			(node) => node.stageName === edge.target,
+		);
 		const isInactiveEdge =
 			(sourceNode && getNodeRuntimeBoolean(sourceNode, "effectiveDisabled")) ||
 			(targetNode && getNodeRuntimeBoolean(targetNode, "effectiveDisabled"));
@@ -1055,15 +1084,12 @@ const ScanStageGraphPanel = ({
 	const [selectedStage, setSelectedStage] = useState<StageGraphNode | null>(
 		null,
 	);
-	const handleNodesChange = useCallback(
-		(changes: NodeChange[]) => {
-			setElements((previousElements) => ({
-				...previousElements,
-				nodes: applyNodeChanges(changes, previousElements.nodes),
-			}));
-		},
-		[],
-	);
+	const handleNodesChange = useCallback((changes: NodeChange[]) => {
+		setElements((previousElements) => ({
+			...previousElements,
+			nodes: applyNodeChanges(changes, previousElements.nodes),
+		}));
+	}, []);
 	const handleEdgePointMove = useCallback<EdgePointMoveHandler>(
 		(edgeId, pointIndex, point) => {
 			setElements((previousElements) => ({
@@ -1095,7 +1121,8 @@ const ScanStageGraphPanel = ({
 			!layoutError,
 	);
 	const effectiveGraph = useMemo(
-		() => applyRuntimeSettingsToGraph(graph, scanRuntimeSettings, agentProfiles),
+		() =>
+			applyRuntimeSettingsToGraph(graph, scanRuntimeSettings, agentProfiles),
 		[graph, scanRuntimeSettings, agentProfiles],
 	);
 
@@ -1259,7 +1286,9 @@ const asPreviewAgentProfile = (
 		baseUrl: typeof record.baseUrl === "string" ? record.baseUrl : "",
 		model,
 		pricingProvider:
-			typeof record.pricingProvider === "string" ? record.pricingProvider : null,
+			typeof record.pricingProvider === "string"
+				? record.pricingProvider
+				: null,
 		thinkingLevel:
 			typeof record.thinkingLevel === "string" ? record.thinkingLevel : "",
 		thinkingLevelEnabled:
@@ -1399,7 +1428,7 @@ export const ScanStageGraph = ({
 		const nextSettings = {
 			...scanRuntimeSettings,
 			stages: {
-				...(scanRuntimeSettings.stages ?? {}),
+				...(scanRuntimeSettings?.stages ?? {}),
 				[stageName]: setting,
 			},
 		};

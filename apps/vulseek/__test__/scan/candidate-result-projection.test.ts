@@ -45,6 +45,23 @@ describe("candidate result projection", () => {
 				verificationResult: "likely",
 				verificationRank: 3,
 				verificationResultAt: "2026-07-13T10:00:00.000Z",
-			});
+		});
+	});
+
+	it("normalizes legacy boolean verification results to strings", () => {
+		expect(
+			buildCandidateProjectionPatch({
+				scanJobId: "job-1",
+				vulnerabilityCandidateId: "candidate-1",
+				taskId: "task-1",
+				stageName: "verify-finding",
+				output: { id: "result-1", result: true },
+				resultAt: "2026-07-13T10:00:00.000Z",
+			}),
+		).toMatchObject({
+			verificationOutput: { id: "result-1", result: "true" },
+			verificationResult: "true",
+			verificationRank: 4,
+		});
 	});
 });

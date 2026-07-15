@@ -34,6 +34,7 @@
 		"test": "vitest --config __test__/vitest.config.ts"
 	},
 	"dependencies": {
+		"claude-replay": "workspace:*",
 		"@ai-sdk/anthropic": "^2.0.5",
 		"@ai-sdk/azure": "^2.0.16",
 		"@ai-sdk/cohere": "^2.0.4",
@@ -141,7 +142,6 @@
 		"react18-json-view": "^0.2.10",
 		"recharts": "^2.15.3",
 		"rotating-file-stream": "3.2.3",
-		"sandbox-agent": "0.4.x",
 		"slugify": "^1.6.6",
 		"sonner": "^1.7.4",
 		"ssh2": "1.15.0",

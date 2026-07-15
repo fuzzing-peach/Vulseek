@@ -16,9 +16,9 @@ import {
 	SquareTerminal,
 } from "lucide-react";
 import Head from "next/head";
-import { useTranslation } from "next-i18next";
 import Link from "next/link";
 import { useRouter } from "next/router";
+import { useTranslation } from "next-i18next";
 import {
 	type KeyboardEvent,
 	type MouseEvent,
@@ -43,15 +43,14 @@ import {
 import {
 	LiveTaskActivityBadge,
 	LiveTaskActivityButton,
-	LiveTaskTextButton,
 } from "@/components/dashboard/scanning/live-task-activity";
 import { ScanMonitoring } from "@/components/dashboard/scanning/scan-monitoring";
 import {
-	ScanStageGraph,
 	type ScanRuntimeSettingsDraft,
+	ScanStageGraph,
 } from "@/components/dashboard/scanning/scan-stage-graph";
 import { buildTaskQueueMetrics } from "@/components/dashboard/scanning/task-queue-metrics";
-import { useSandboxAgentActivities } from "@/components/dashboard/scanning/use-sandbox-agent-activity";
+import { useAgentActivities } from "@/components/dashboard/scanning/use-agent-activity";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
 import { DashboardPanelShell } from "@/components/shared/dashboard-panel-shell";
@@ -89,7 +88,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { idleSandboxAgentActivity } from "@/lib/scan/sandbox-agent-activity";
+import { idleAgentActivity } from "@/lib/scan/agent-activity";
 import { api, type RouterOutputs } from "@/utils/api";
 import {
 	formatAnalysisResultLabel,
@@ -99,8 +98,8 @@ import {
 	formatScanTypeLabel,
 	formatTriageResultLabel,
 	formatTruthResultLabel,
-	scanT,
 	type ScanTranslation,
+	scanT,
 } from "./scan-i18n";
 
 interface Props {
@@ -289,9 +288,7 @@ const formatDurationSeconds = (value: number | null | undefined) => {
 };
 
 const formatEvaluationMetric = (value: unknown) =>
-	typeof value === "number" && Number.isFinite(value)
-		? value.toFixed(3)
-		: "-";
+	typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : "-";
 
 const getEvaluationResult = (evaluation: ScanEvaluationResult) => {
 	const result = evaluation?.result;
@@ -642,33 +639,22 @@ const getTaskStageLabel = (t: ScanTranslation, stage?: string) => {
 	) {
 		return formatScanStageLabel(t, "delta-scope");
 	}
-	if (
-		stage === "repository-profile"
-	) {
+	if (stage === "repository-profile") {
 		return formatScanStageLabel(t, "repository-profile");
 	}
-	if (
-		stage === "attack-surface-model" ||
-		stage === "attack-surface-model"
-	) {
+	if (stage === "attack-surface-model" || stage === "attack-surface-model") {
 		return formatScanStageLabel(t, "attack-surface-model");
 	}
-	if (
-		stage === "identify-target"
-	) {
+	if (stage === "identify-target") {
 		return formatScanStageLabel(t, "identify-target");
 	}
-	if (
-		stage === "scan-target"
-	) {
+	if (stage === "scan-target") {
 		return formatScanStageLabel(t, "scan-target");
 	}
 	if (stage === "analyze-finding") {
 		return formatScanStageLabel(t, "analyze-finding");
 	}
-	if (
-		stage === "critique-finding"
-	) {
+	if (stage === "critique-finding") {
 		return formatScanStageLabel(t, "critique-finding");
 	}
 	if (stage === "verify-finding") {
@@ -680,7 +666,12 @@ const getTaskStageLabel = (t: ScanTranslation, stage?: string) => {
 	return formatScanStageLabel(t, stage);
 };
 
-const RERUNNABLE_TASK_STATUSES = new Set(["completed", "failed", "exited", "canceled"]);
+const RERUNNABLE_TASK_STATUSES = new Set([
+	"completed",
+	"failed",
+	"exited",
+	"canceled",
+]);
 
 const buildCandidateReanalysisKey = (input: {
 	vulnerabilityCandidateId: string;
@@ -728,11 +719,7 @@ const localizeTaskListText = (
 		return formatScanStageLabel(t, "repository-profile");
 	}
 	if (text === "Diff impact function scoping") {
-		return scanT(
-			t,
-			"scan.tasks.deltaScopeSubtitle",
-			"增量 diff 影响函数定位",
-		);
+		return scanT(t, "scan.tasks.deltaScopeSubtitle", "增量 diff 影响函数定位");
 	}
 	if (text === "Repository-wide planner and module partitioning") {
 		return scanT(
@@ -751,8 +738,9 @@ const getTaskListDisplay = (
 	const title = getTaskStageLabel(t, task.stage || undefined);
 	const localizedTitle = localizeTaskListText(t, task.title);
 	const localizedSubtitle = localizeTaskListText(t, task.subtitle);
-	const subtitleParts = [localizedSubtitle, localizedTitle]
-		.filter((value) => value && value !== "-" && value !== title);
+	const subtitleParts = [localizedSubtitle, localizedTitle].filter(
+		(value) => value && value !== "-" && value !== title,
+	);
 	return {
 		title,
 		subtitle: subtitleParts.join(" · ") || "-",
@@ -787,8 +775,10 @@ const normalizeTaskStageOption = (stage?: string | null) => {
 	if (!stage) {
 		return null;
 	}
-	return TASK_STAGE_OPTION_BY_STAGE_NAME[stage] ||
-		(stage in RUNNING_TASK_STAGE_ORDER ? stage : null);
+	return (
+		TASK_STAGE_OPTION_BY_STAGE_NAME[stage] ||
+		(stage in RUNNING_TASK_STAGE_ORDER ? stage : null)
+	);
 };
 
 const TERMINAL_TASK_STATUS_OPTIONS = [
@@ -828,9 +818,7 @@ function layoutColumn(
 	let y = MARGIN_Y;
 	return colNodes.map((node) => {
 		const proportion =
-			totalCount > 0
-				? (node.count || 0) / totalCount
-				: 1 / colNodes.length;
+			totalCount > 0 ? (node.count || 0) / totalCount : 1 / colNodes.length;
 		const h = NODE_MIN_H + extraH * proportion;
 		const result = { node, x: colX, y, h };
 		y += h + COL_GAP;
@@ -908,41 +896,41 @@ const SankeyFlowDiagram = ({
 		(l) => l.count > 0 && layoutById.has(l.source) && layoutById.has(l.target),
 	);
 
-	const renderedLinks = activeLinks.map((link) => {
-		const src = layoutById.get(link.source);
-		const tgt = layoutById.get(link.target);
-		if (!src || !tgt) {
-			return null;
-		}
-		const srcH =
-			src.node.count > 0 ? (src.h * link.count) / src.node.count : 0;
-		const tgtH =
-			tgt.node.count > 0 ? (tgt.h * link.count) / tgt.node.count : 0;
-		const srcOff = srcOffsets.get(link.source) ?? 0;
-		const tgtOff = tgtOffsets.get(link.target) ?? 0;
-		srcOffsets.set(link.source, srcOff + srcH);
-		tgtOffsets.set(link.target, tgtOff + tgtH);
-		const x0 = src.x + NODE_W;
-		const y0t = src.y + srcOff;
-		const y0b = y0t + srcH;
-		const x1 = tgt.x;
-		const y1t = tgt.y + tgtOff;
-		const y1b = y1t + tgtH;
-		const cx = (x0 + x1) / 2;
-		const d = [
-			`M ${x0} ${y0t}`,
-			`C ${cx} ${y0t}, ${cx} ${y1t}, ${x1} ${y1t}`,
-			`L ${x1} ${y1b}`,
-			`C ${cx} ${y1b}, ${cx} ${y0b}, ${x0} ${y0b}`,
-			"Z",
-		].join(" ");
-		const colors = nodeColors[link.target] ?? defaultNodeColors;
-		return { key: `${link.source}-${link.target}`, d, colors };
-	}).filter((link): link is NonNullable<typeof link> => Boolean(link));
+	const renderedLinks = activeLinks
+		.map((link) => {
+			const src = layoutById.get(link.source);
+			const tgt = layoutById.get(link.target);
+			if (!src || !tgt) {
+				return null;
+			}
+			const srcH =
+				src.node.count > 0 ? (src.h * link.count) / src.node.count : 0;
+			const tgtH =
+				tgt.node.count > 0 ? (tgt.h * link.count) / tgt.node.count : 0;
+			const srcOff = srcOffsets.get(link.source) ?? 0;
+			const tgtOff = tgtOffsets.get(link.target) ?? 0;
+			srcOffsets.set(link.source, srcOff + srcH);
+			tgtOffsets.set(link.target, tgtOff + tgtH);
+			const x0 = src.x + NODE_W;
+			const y0t = src.y + srcOff;
+			const y0b = y0t + srcH;
+			const x1 = tgt.x;
+			const y1t = tgt.y + tgtOff;
+			const y1b = y1t + tgtH;
+			const cx = (x0 + x1) / 2;
+			const d = [
+				`M ${x0} ${y0t}`,
+				`C ${cx} ${y0t}, ${cx} ${y1t}, ${x1} ${y1t}`,
+				`L ${x1} ${y1b}`,
+				`C ${cx} ${y1b}, ${cx} ${y0b}, ${x0} ${y0b}`,
+				"Z",
+			].join(" ");
+			const colors = nodeColors[link.target] ?? defaultNodeColors;
+			return { key: `${link.source}-${link.target}`, d, colors };
+		})
+		.filter((link): link is NonNullable<typeof link> => Boolean(link));
 
-	const renderNodes = (
-		colLayout: ReturnType<typeof layoutColumn>,
-	) =>
+	const renderNodes = (colLayout: ReturnType<typeof layoutColumn>) =>
 		colLayout.map(({ node, x, y, h }) => {
 			const colors = nodeColors[node.id] ?? defaultNodeColors;
 			const label = formatLabel(node);
@@ -1035,11 +1023,7 @@ const SankeyFlowDiagram = ({
 				</span>
 			</div>
 			<div className="relative">
-				<svg
-					width={svgWidth}
-					height={SVG_H}
-					style={{ overflow: "visible" }}
-				>
+				<svg width={svgWidth} height={SVG_H} style={{ overflow: "visible" }}>
 					{/* Links (drawn behind nodes) */}
 					{renderedLinks.map(({ key, d, colors }) => (
 						<path
@@ -1072,35 +1056,96 @@ const SankeyFlowDiagram = ({
 	);
 };
 
-	// fill / stroke colours per node id (CSS colour strings for SVG, not Tailwind classes)
-	const FLOW_NODE_COLORS: Record<string, { fill: string; stroke: string; linkFill: string }> = {
-		analysis_real_vulnerability:    { fill: "hsl(0 86% 97%)",   stroke: "hsl(0 72% 70%)",   linkFill: "hsl(0 72% 55%)" },
-		analysis_likely_vulnerability:  { fill: "hsl(30 90% 96%)",  stroke: "hsl(25 80% 65%)",  linkFill: "hsl(25 80% 50%)" },
-		analysis_plausible_but_unproven:{ fill: "hsl(48 95% 96%)",  stroke: "hsl(45 80% 60%)",  linkFill: "hsl(45 80% 45%)" },
-		analysis_false_positive:        { fill: "hsl(220 13% 96%)", stroke: "hsl(220 9% 70%)",  linkFill: "hsl(220 9% 55%)" },
-		verify_true:                    { fill: "hsl(150 60% 96%)", stroke: "hsl(150 50% 60%)", linkFill: "hsl(150 50% 45%)" },
-		verify_likely:                  { fill: "hsl(43 96% 96%)",  stroke: "hsl(43 80% 60%)",  linkFill: "hsl(43 80% 45%)" },
-		verify_false:                   { fill: "hsl(220 13% 96%)", stroke: "hsl(220 9% 70%)",  linkFill: "hsl(220 9% 55%)" },
-		triage_security_issue:          { fill: "hsl(0 86% 97%)",   stroke: "hsl(0 72% 70%)",   linkFill: "hsl(0 72% 55%)" },
-		triage_non_security:            { fill: "hsl(220 13% 96%)", stroke: "hsl(220 9% 70%)",  linkFill: "hsl(220 9% 55%)" },
-		triage_hardening:               { fill: "hsl(210 90% 96%)", stroke: "hsl(210 70% 65%)", linkFill: "hsl(210 70% 50%)" },
-		triage_needs_review:            { fill: "hsl(48 95% 96%)",  stroke: "hsl(45 80% 60%)",  linkFill: "hsl(45 80% 45%)" },
-	};
-	const DEFAULT_NODE_COLORS = { fill: "hsl(220 13% 96%)", stroke: "hsl(220 9% 70%)", linkFill: "hsl(220 9% 55%)" };
+// fill / stroke colours per node id (CSS colour strings for SVG, not Tailwind classes)
+const FLOW_NODE_COLORS: Record<
+	string,
+	{ fill: string; stroke: string; linkFill: string }
+> = {
+	analysis_real_vulnerability: {
+		fill: "hsl(0 86% 97%)",
+		stroke: "hsl(0 72% 70%)",
+		linkFill: "hsl(0 72% 55%)",
+	},
+	analysis_likely_vulnerability: {
+		fill: "hsl(30 90% 96%)",
+		stroke: "hsl(25 80% 65%)",
+		linkFill: "hsl(25 80% 50%)",
+	},
+	analysis_plausible_but_unproven: {
+		fill: "hsl(48 95% 96%)",
+		stroke: "hsl(45 80% 60%)",
+		linkFill: "hsl(45 80% 45%)",
+	},
+	analysis_false_positive: {
+		fill: "hsl(220 13% 96%)",
+		stroke: "hsl(220 9% 70%)",
+		linkFill: "hsl(220 9% 55%)",
+	},
+	verify_true: {
+		fill: "hsl(150 60% 96%)",
+		stroke: "hsl(150 50% 60%)",
+		linkFill: "hsl(150 50% 45%)",
+	},
+	verify_likely: {
+		fill: "hsl(43 96% 96%)",
+		stroke: "hsl(43 80% 60%)",
+		linkFill: "hsl(43 80% 45%)",
+	},
+	verify_false: {
+		fill: "hsl(220 13% 96%)",
+		stroke: "hsl(220 9% 70%)",
+		linkFill: "hsl(220 9% 55%)",
+	},
+	triage_security_issue: {
+		fill: "hsl(0 86% 97%)",
+		stroke: "hsl(0 72% 70%)",
+		linkFill: "hsl(0 72% 55%)",
+	},
+	triage_non_security: {
+		fill: "hsl(220 13% 96%)",
+		stroke: "hsl(220 9% 70%)",
+		linkFill: "hsl(220 9% 55%)",
+	},
+	triage_hardening: {
+		fill: "hsl(210 90% 96%)",
+		stroke: "hsl(210 70% 65%)",
+		linkFill: "hsl(210 70% 50%)",
+	},
+	triage_needs_review: {
+		fill: "hsl(48 95% 96%)",
+		stroke: "hsl(45 80% 60%)",
+		linkFill: "hsl(45 80% 45%)",
+	},
+};
+const DEFAULT_NODE_COLORS = {
+	fill: "hsl(220 13% 96%)",
+	stroke: "hsl(220 9% 70%)",
+	linkFill: "hsl(220 9% 55%)",
+};
 
-	const getResultFlowCardClassName = (id: string) => {
-		if (id.startsWith("analysis_real_vulnerability")) return "border-red-200 bg-red-50 dark:border-red-500/60 dark:bg-red-950/30";
-		if (id.startsWith("analysis_likely_vulnerability")) return "border-orange-200 bg-orange-50 dark:border-orange-500/60 dark:bg-orange-950/30";
-		if (id.startsWith("analysis_plausible")) return "border-yellow-200 bg-yellow-50 dark:border-yellow-500/60 dark:bg-yellow-950/30";
-		if (id.startsWith("analysis_false_positive")) return "border-slate-200 bg-slate-50 dark:border-slate-500/60 dark:bg-slate-950/30";
-		if (id.startsWith("verify_true") || id.startsWith("verify_likely")) return "border-emerald-200 bg-emerald-50 dark:border-emerald-500/60 dark:bg-emerald-950/30";
-		if (id.startsWith("verify_false")) return "border-slate-200 bg-slate-50 dark:border-slate-500/60 dark:bg-slate-950/30";
-		if (id.startsWith("triage_security_issue")) return "border-red-200 bg-red-50 dark:border-red-500/60 dark:bg-red-950/30";
-		if (id.startsWith("triage_non_security")) return "border-slate-200 bg-slate-50 dark:border-slate-500/60 dark:bg-slate-950/30";
-		if (id.startsWith("triage_hardening")) return "border-blue-200 bg-blue-50 dark:border-blue-500/60 dark:bg-blue-950/30";
-		if (id.startsWith("triage_needs_review")) return "border-yellow-200 bg-yellow-50 dark:border-yellow-500/60 dark:bg-yellow-950/30";
-		return "border-muted bg-muted/30";
-	};
+const getResultFlowCardClassName = (id: string) => {
+	if (id.startsWith("analysis_real_vulnerability"))
+		return "border-red-200 bg-red-50 dark:border-red-500/60 dark:bg-red-950/30";
+	if (id.startsWith("analysis_likely_vulnerability"))
+		return "border-orange-200 bg-orange-50 dark:border-orange-500/60 dark:bg-orange-950/30";
+	if (id.startsWith("analysis_plausible"))
+		return "border-yellow-200 bg-yellow-50 dark:border-yellow-500/60 dark:bg-yellow-950/30";
+	if (id.startsWith("analysis_false_positive"))
+		return "border-slate-200 bg-slate-50 dark:border-slate-500/60 dark:bg-slate-950/30";
+	if (id.startsWith("verify_true") || id.startsWith("verify_likely"))
+		return "border-emerald-200 bg-emerald-50 dark:border-emerald-500/60 dark:bg-emerald-950/30";
+	if (id.startsWith("verify_false"))
+		return "border-slate-200 bg-slate-50 dark:border-slate-500/60 dark:bg-slate-950/30";
+	if (id.startsWith("triage_security_issue"))
+		return "border-red-200 bg-red-50 dark:border-red-500/60 dark:bg-red-950/30";
+	if (id.startsWith("triage_non_security"))
+		return "border-slate-200 bg-slate-50 dark:border-slate-500/60 dark:bg-slate-950/30";
+	if (id.startsWith("triage_hardening"))
+		return "border-blue-200 bg-blue-50 dark:border-blue-500/60 dark:bg-blue-950/30";
+	if (id.startsWith("triage_needs_review"))
+		return "border-yellow-200 bg-yellow-50 dark:border-yellow-500/60 dark:bg-yellow-950/30";
+	return "border-muted bg-muted/30";
+};
 
 const formatFlowNodeLabel = (
 	t: ScanTranslation,
@@ -1125,11 +1170,7 @@ const getResultFlowNodeLabel = (
 ) => {
 	switch (id) {
 		case "analysis_real":
-			return scanT(
-				t,
-				"scan.results.flow.node.analysisReal",
-				"Analysis Real",
-			);
+			return scanT(t, "scan.results.flow.node.analysisReal", "Analysis Real");
 		case "analysis_likely":
 			return scanT(
 				t,
@@ -1137,35 +1178,19 @@ const getResultFlowNodeLabel = (
 				"Analysis Likely",
 			);
 		case "verify_true":
-			return scanT(
-				t,
-				"scan.results.flow.node.verifyTrue",
-				"Verify True",
-			);
+			return scanT(t, "scan.results.flow.node.verifyTrue", "Verify True");
 		case "verify_likely":
-			return scanT(
-				t,
-				"scan.results.flow.node.verifyLikely",
-				"Verify Likely",
-			);
+			return scanT(t, "scan.results.flow.node.verifyLikely", "Verify Likely");
 		case "verify_false":
 			return scanT(t, "scan.results.flow.node.verifyFalse", "Verify False");
 		case "verify_missing":
-			return scanT(
-				t,
-				"scan.results.flow.node.verifyMissing",
-				"Wait Verifying",
-			);
+			return scanT(t, "scan.results.flow.node.verifyMissing", "Wait Verifying");
 		case "triage_security_issue":
 			return scanT(t, "scan.results.flow.node.triageTrue", "Triage True");
 		case "triage_not_security":
 			return scanT(t, "scan.results.flow.node.triageFalse", "Triage False");
 		case "triage_missing":
-			return scanT(
-				t,
-				"scan.results.flow.node.triageMissing",
-				"Wait Triage",
-			);
+			return scanT(t, "scan.results.flow.node.triageMissing", "Wait Triage");
 		default:
 			return fallback;
 	}
@@ -1205,7 +1230,9 @@ const ResultFlowChart = ({
 								node.id,
 							)}`}
 						>
-							<div className="text-sm font-medium">{formatFlowNodeLabel(t, node)}</div>
+							<div className="text-sm font-medium">
+								{formatFlowNodeLabel(t, node)}
+							</div>
 							<div className="mt-1 text-2xl font-semibold tabular-nums">
 								{formatSummaryCount(node.count)}
 							</div>
@@ -1449,8 +1476,10 @@ export const ShowScanJobDetail = ({
 		{
 			enabled: !!scanJobId && activeTab === "candidates",
 			refetchInterval:
-				activeTab === "candidates" && scanJob?.status !== "finished" &&
-					scanJob?.status !== "failed" && scanJob?.status !== "canceled"
+				activeTab === "candidates" &&
+				scanJob?.status !== "finished" &&
+				scanJob?.status !== "failed" &&
+				scanJob?.status !== "canceled"
 					? 20_000
 					: false,
 			// No keepPreviousData: show correct data only. Use isFetchingCandidates
@@ -1494,13 +1523,13 @@ export const ShowScanJobDetail = ({
 			},
 		);
 	const { data: jobPipeline } = api.scan.jobPipeline.useQuery(
-			{ scanJobId },
-			{
-				enabled: !!scanJobId && shouldLoadJobRuntime,
-				staleTime: Number.POSITIVE_INFINITY,
-				refetchOnWindowFocus: false,
-			},
-		);
+		{ scanJobId },
+		{
+			enabled: !!scanJobId && shouldLoadJobRuntime,
+			staleTime: Number.POSITIVE_INFINITY,
+			refetchOnWindowFocus: false,
+		},
+	);
 	const { data: resultSummary, isLoading: isLoadingResultSummary } =
 		api.scan.resultSummary.useQuery(
 			{ scanJobId },
@@ -1517,13 +1546,15 @@ export const ShowScanJobDetail = ({
 		);
 	const { data: latestEvaluation, isLoading: isLoadingLatestEvaluation } =
 		api.scan.latestEvaluation.useQuery(
-				{ scanJobId },
-				{
-					enabled:
-						!!scanJobId && activeTab === "evaluate" && serviceType === "application",
-					refetchInterval: activeTab === "evaluate" ? 2000 : false,
-				},
-			);
+			{ scanJobId },
+			{
+				enabled:
+					!!scanJobId &&
+					activeTab === "evaluate" &&
+					serviceType === "application",
+				refetchInterval: activeTab === "evaluate" ? 2000 : false,
+			},
+		);
 	const { data: terminalTasks, isLoading: isLoadingTerminalTasks } =
 		api.scan.terminalTasks.useQuery(
 			{
@@ -1547,7 +1578,7 @@ export const ShowScanJobDetail = ({
 			},
 		);
 	const { activitiesByTaskId, connectedTaskIds: activityConnectedTaskIds } =
-		useSandboxAgentActivities({
+		useAgentActivities({
 			scanJobId,
 			enabled: !!scanJobId && shouldLoadJobActivities,
 		});
@@ -1576,7 +1607,7 @@ export const ShowScanJobDetail = ({
 		{ scanJobId },
 		{
 			enabled: !!scanJobId && activeTab === "files",
-				refetchInterval: activeTab === "files" ? 4000 : false,
+			refetchInterval: activeTab === "files" ? 4000 : false,
 		},
 	);
 
@@ -2191,8 +2222,7 @@ export const ShowScanJobDetail = ({
 		analysisFilters.length > 0 ||
 		verifyFilters.length > 0 ||
 		triageFilters.length > 0;
-	const hasAnyCandidates =
-		(candidates?.total ?? 0) > 0;
+	const hasAnyCandidates = (candidates?.total ?? 0) > 0;
 	const hasFinishedTaskFilters =
 		taskSearchQuery.trim().length > 0 ||
 		finishedTaskStageFilter !== "all" ||
@@ -2372,8 +2402,7 @@ export const ShowScanJobDetail = ({
 			triageTaskId: latestTriageResult?.taskId ?? null,
 			triageResult: latestTriageResult?.result ?? null,
 			triageDisqualifier: latestTriageResult?.disqualifier ?? null,
-			triageDisqualifierReason:
-				latestTriageResult?.disqualifierReason ?? null,
+			triageDisqualifierReason: latestTriageResult?.disqualifierReason ?? null,
 			triageSecurityClassification:
 				latestTriageResult?.securityClassification ?? null,
 			triageIsSecurityIssue: latestTriageResult?.isSecurityIssue ?? null,
@@ -2423,7 +2452,9 @@ export const ShowScanJobDetail = ({
 	const copySelectedCandidatesJson = async () => {
 		try {
 			await copyTextToClipboard(buildCandidateExportJson());
-			toast.success(scanT(t, "scan.candidates.copied", "Candidate JSON copied"));
+			toast.success(
+				scanT(t, "scan.candidates.copied", "Candidate JSON copied"),
+			);
 		} catch (error) {
 			toast.error(
 				error instanceof Error
@@ -2638,7 +2669,10 @@ export const ShowScanJobDetail = ({
 		<div className="pb-10">
 			<BreadcrumbSidebar
 				list={[
-					{ name: scanT(t, "scan.breadcrumb.projects", "Projects"), href: "/dashboard/projects" },
+					{
+						name: scanT(t, "scan.breadcrumb.projects", "Projects"),
+						href: "/dashboard/projects",
+					},
 					{ name: serviceData?.environment.project.name || "" },
 					{
 						name: serviceData?.environment.name || "",
@@ -2669,29 +2703,29 @@ export const ShowScanJobDetail = ({
 			</Head>
 
 			<DashboardPanelShell>
-					<CardHeader>
-						<CardTitle className="text-xl">
-							{scanT(t, "scan.job.title", "Scan Job {{id}}", {
-								id: scanJobId.slice(0, 6),
-							})}
-						</CardTitle>
-						<CardDescription className="flex items-center gap-2 break-all">
-							<span>{scanJobId}</span>
-							<CopyValueButton
-								value={scanJobId}
-								label={scanT(t, "scan.field.jobId", "Job ID")}
-								className="size-7 shrink-0"
-							/>
-						</CardDescription>
-					</CardHeader>
-					<CardContent>
-						<Tabs
-							value={activeTab}
-							onValueChange={(value) => {
-								setActiveTab(value as ScanJobTab);
-							}}
-							className="w-full"
-						>
+				<CardHeader>
+					<CardTitle className="text-xl">
+						{scanT(t, "scan.job.title", "Scan Job {{id}}", {
+							id: scanJobId.slice(0, 6),
+						})}
+					</CardTitle>
+					<CardDescription className="flex items-center gap-2 break-all">
+						<span>{scanJobId}</span>
+						<CopyValueButton
+							value={scanJobId}
+							label={scanT(t, "scan.field.jobId", "Job ID")}
+							className="size-7 shrink-0"
+						/>
+					</CardDescription>
+				</CardHeader>
+				<CardContent>
+					<Tabs
+						value={activeTab}
+						onValueChange={(value) => {
+							setActiveTab(value as ScanJobTab);
+						}}
+						className="w-full"
+					>
 						<TabsList className="flex h-auto min-h-10 w-full justify-start gap-1 overflow-x-auto p-1 sm:gap-2">
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="overview">
 								{scanT(t, "scan.job.tabs.overview", "Overview")}
@@ -2787,7 +2821,11 @@ export const ShowScanJobDetail = ({
 																	scanJobId,
 																});
 																toast.success(
-																	scanT(t, "scan.job.resumedToast", "Resumed job"),
+																	scanT(
+																		t,
+																		"scan.job.resumedToast",
+																		"Resumed job",
+																	),
 																);
 																await refreshScanJobViews();
 															} catch (error) {
@@ -2852,7 +2890,11 @@ export const ShowScanJobDetail = ({
 														{cancelScanJobMutation.isLoading ? (
 															<>
 																<Loader2 className="mr-2 size-4 animate-spin" />
-																{scanT(t, "scan.job.cancelling", "Cancelling...")}
+																{scanT(
+																	t,
+																	"scan.job.cancelling",
+																	"Cancelling...",
+																)}
 															</>
 														) : (
 															scanT(t, "scan.dialog.cancel", "Cancel")
@@ -2961,7 +3003,11 @@ export const ShowScanJobDetail = ({
 											<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
 												<div>
 													<div className="text-sm text-muted-foreground">
-														{scanT(t, "scan.field.inputCacheRead", "Input / Cache Read")}
+														{scanT(
+															t,
+															"scan.field.inputCacheRead",
+															"Input / Cache Read",
+														)}
 													</div>
 													<div className="font-medium">
 														{formatTokenUsageWithCache(
@@ -2973,7 +3019,11 @@ export const ShowScanJobDetail = ({
 												</div>
 												<div>
 													<div className="text-sm text-muted-foreground">
-														{scanT(t, "scan.field.outputTokens", "Output Tokens")}
+														{scanT(
+															t,
+															"scan.field.outputTokens",
+															"Output Tokens",
+														)}
 													</div>
 													<div className="font-medium">
 														{formatTokenCount(scanJob.outputTokens)}
@@ -2989,16 +3039,25 @@ export const ShowScanJobDetail = ({
 												</div>
 												<div>
 													<div className="text-sm text-muted-foreground">
-														{scanT(t, "scan.field.thoughtTokens", "Thought Tokens")}
+														{scanT(
+															t,
+															"scan.field.thoughtTokens",
+															"Thought Tokens",
+														)}
 													</div>
 													<div className="font-medium">
 														{formatTokenUsage(t, scanJob.thoughtTokens)}
 													</div>
 												</div>
-												{typeof scanJob.estimatedCost === "number" && scanJob.estimatedCost > 0 ? (
+												{typeof scanJob.estimatedCost === "number" &&
+												scanJob.estimatedCost > 0 ? (
 													<div>
 														<div className="text-sm text-muted-foreground">
-															{scanT(t, "scan.field.estimatedCost", "Estimated Cost")}
+															{scanT(
+																t,
+																"scan.field.estimatedCost",
+																"Estimated Cost",
+															)}
 														</div>
 														<div className="font-medium">
 															${scanJob.estimatedCost.toFixed(4)}
@@ -3075,9 +3134,13 @@ export const ShowScanJobDetail = ({
 																scanJobId,
 																note: noteDraft,
 															});
-															toast.success(scanT(t, "scan.job.noteSaved", "Note saved"));
+															toast.success(
+																scanT(t, "scan.job.noteSaved", "Note saved"),
+															);
 															await Promise.all([
-												utils.scan.jobOverview.invalidate({ scanJobId }),
+																utils.scan.jobOverview.invalidate({
+																	scanJobId,
+																}),
 																serviceType === "application"
 																	? utils.scan.allByApplication.invalidate({
 																			applicationId: serviceId,
@@ -3229,7 +3292,9 @@ export const ShowScanJobDetail = ({
 														</div>
 														<div className="font-medium">
 															{latestEvaluation.finishedAt ? (
-																<DateTooltip date={latestEvaluation.finishedAt} />
+																<DateTooltip
+																	date={latestEvaluation.finishedAt}
+																/>
 															) : (
 																"-"
 															)}
@@ -3262,7 +3327,8 @@ export const ShowScanJobDetail = ({
 														</div>
 														<div className="font-medium tabular-nums">
 															{formatEvaluationMetric(
-																getEvaluationResult(latestEvaluation)?.precision,
+																getEvaluationResult(latestEvaluation)
+																	?.precision,
 															)}
 															{" / "}
 															{formatEvaluationMetric(
@@ -3281,7 +3347,8 @@ export const ShowScanJobDetail = ({
 															</div>
 															<div className="font-medium">
 																{String(
-																	getEvaluationResult(latestEvaluation)?.summary,
+																	getEvaluationResult(latestEvaluation)
+																		?.summary,
 																)}
 															</div>
 														</div>
@@ -3327,7 +3394,9 @@ export const ShowScanJobDetail = ({
 									{scanT(t, "scan.candidates.empty", "No candidates yet")}
 								</div>
 							) : (
-								<div className={`flex flex-col gap-3 transition-opacity duration-150 ${isFetchingCandidates ? "opacity-50 pointer-events-none" : ""}`}>
+								<div
+									className={`flex flex-col gap-3 transition-opacity duration-150 ${isFetchingCandidates ? "opacity-50 pointer-events-none" : ""}`}
+								>
 									<div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_220px_220px_220px]">
 										<div className="relative">
 											<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -3392,9 +3461,9 @@ export const ShowScanJobDetail = ({
 																onCheckedChange={() =>
 																	toggleAnalysisFilter(value)
 																}
-																/>
-																<span>{formatAnalysisResultLabel(t, value)}</span>
-															</div>
+															/>
+															<span>{formatAnalysisResultLabel(t, value)}</span>
+														</div>
 													))}
 												</div>
 											</PopoverContent>
@@ -3403,7 +3472,11 @@ export const ShowScanJobDetail = ({
 											<PopoverTrigger asChild>
 												<Button variant="outline" className="justify-between">
 													<span>
-														{scanT(t, "scan.filters.verifyResult", "Verify Result")}
+														{scanT(
+															t,
+															"scan.filters.verifyResult",
+															"Verify Result",
+														)}
 														{verifyFilters.length > 0
 															? ` (${verifyFilters.length})`
 															: ""}
@@ -3414,7 +3487,11 @@ export const ShowScanJobDetail = ({
 											<PopoverContent align="end" className="w-72 p-3">
 												<div className="mb-3 flex items-center justify-between">
 													<div className="text-sm font-medium">
-														{scanT(t, "scan.filters.verifyResult", "Verify Result")}
+														{scanT(
+															t,
+															"scan.filters.verifyResult",
+															"Verify Result",
+														)}
 													</div>
 													<Button
 														type="button"
@@ -3437,9 +3514,9 @@ export const ShowScanJobDetail = ({
 																onCheckedChange={() =>
 																	toggleVerifyFilter(value)
 																}
-																/>
-																<span>{formatTruthResultLabel(t, value)}</span>
-															</div>
+															/>
+															<span>{formatTruthResultLabel(t, value)}</span>
+														</div>
 													))}
 												</div>
 											</PopoverContent>
@@ -3448,7 +3525,11 @@ export const ShowScanJobDetail = ({
 											<PopoverTrigger asChild>
 												<Button variant="outline" className="justify-between">
 													<span>
-														{scanT(t, "scan.filters.triageResult", "Triage Result")}
+														{scanT(
+															t,
+															"scan.filters.triageResult",
+															"Triage Result",
+														)}
 														{triageFilters.length > 0
 															? ` (${triageFilters.length})`
 															: ""}
@@ -3459,7 +3540,11 @@ export const ShowScanJobDetail = ({
 											<PopoverContent align="end" className="w-72 p-3">
 												<div className="mb-3 flex items-center justify-between">
 													<div className="text-sm font-medium">
-														{scanT(t, "scan.filters.triageResult", "Triage Result")}
+														{scanT(
+															t,
+															"scan.filters.triageResult",
+															"Triage Result",
+														)}
 													</div>
 													<Button
 														type="button"
@@ -3488,9 +3573,9 @@ export const ShowScanJobDetail = ({
 																	t,
 																	`scan.triageResult.${value}`,
 																	formatResultLabel(value),
-																	)}
-																</span>
-															</div>
+																)}
+															</span>
+														</div>
 													))}
 												</div>
 											</PopoverContent>
@@ -3571,7 +3656,11 @@ export const ShowScanJobDetail = ({
 															className="text-muted-foreground"
 															htmlFor="scan-candidate-page-size"
 														>
-															{scanT(t, "scan.pagination.pageSize", "Page size")}
+															{scanT(
+																t,
+																"scan.pagination.pageSize",
+																"Page size",
+															)}
 														</label>
 														<select
 															id="scan-candidate-page-size"
@@ -3746,7 +3835,9 @@ export const ShowScanJobDetail = ({
 																		onClick={() => toggleCandidateSort("score")}
 																		className="inline-flex items-center gap-1 hover:text-foreground"
 																	>
-																		<span>{scanT(t, "scan.field.score", "Score")}</span>
+																		<span>
+																			{scanT(t, "scan.field.score", "Score")}
+																		</span>
 																		<ChevronsUpDown className="size-3.5" />
 																	</button>
 																</th>
@@ -3756,221 +3847,224 @@ export const ShowScanJobDetail = ({
 															</tr>
 														</thead>
 														<tbody>
-															{candidatePagination.items.map((candidate, candidateIndex) => {
-																const verificationTruthBadge =
-																	getVerificationTruthBadge(
-																		t,
-																		candidate.latestVerificationResult?.result,
-																	);
-																const isReanalyzingCandidate =
-																	reanalyzingCandidateId ===
-																	buildCandidateReanalysisKey(candidate);
-																const isSelectedCandidate =
-																	selectedCandidateIds.has(
-																		candidate.vulnerabilityCandidateId,
-																	);
-																const latestResultUpdate =
-																	getCandidateLatestResultUpdate(candidate);
-																return (
-																	<tr
-																		key={`${candidate.vulnerabilityCandidateId}-${candidateIndex}`}
-																		className={`border-b last:border-b-0 transition-colors hover:bg-muted/40 ${
-																			isSelectedCandidate ? "bg-muted/40" : ""
-																		}`}
-																	>
-																		<td className="px-4 py-3 align-top">
-																			<Checkbox
-																				aria-label={scanT(
-																					t,
-																					"scan.candidates.selectAria",
-																					"Select candidate {{title}}",
-																					{ title: candidate.title },
-																				)}
-																				checked={isSelectedCandidate}
-																				onClick={(event) =>
-																					event.stopPropagation()
-																				}
-																				onCheckedChange={() =>
-																					toggleCandidateSelection(
-																						candidate.vulnerabilityCandidateId,
-																					)
-																				}
-																			/>
-																		</td>
-																		<td className="px-4 py-3 align-top">
-																			<Link
-																				href={buildCandidateDetailHref(
-																					candidate,
-																				)}
-																				onClick={handleCandidateLinkClick}
-																				className="block"
-																			>
-																				<div className="font-medium">
-																					{candidate.title}
-																				</div>
-																				<div className="mt-1 text-xs text-muted-foreground break-all">
-																					{candidate.filePath || "-"}
-																					{candidate.line
-																						? `:${candidate.line}`
-																						: ""}
-																				</div>
-																			</Link>
-																		</td>
-																		<td className="px-4 py-3 align-top">
-																			<Link
-																				href={buildCandidateDetailHref(
-																					candidate,
-																				)}
-																				onClick={handleCandidateLinkClick}
-																				className="block"
-																			>
-																				{candidate.latestAnalysisResult
-																					?.result ? (
-																					<Badge
-																						variant="outline"
-																						className={getAnalysisResultBadgeClassName(
-																							candidate.latestAnalysisResult
-																								.result,
-																						)}
-																					>
-																						{getShortResultLabel(
-																							t,
-																							candidate.latestAnalysisResult
-																								.result,
-																						)}
-																					</Badge>
-																				) : (
-																					<span className="text-xs text-muted-foreground">
-																						-
-																					</span>
-																				)}
-																			</Link>
-																		</td>
-																		<td className="px-4 py-3 align-top">
-																			<Link
-																				href={buildCandidateDetailHref(
-																					candidate,
-																				)}
-																				onClick={handleCandidateLinkClick}
-																				className="block"
-																			>
-																				{verificationTruthBadge ? (
-																					<Badge
-																						variant="outline"
-																						className={
-																							verificationTruthBadge.className
-																						}
-																					>
-																						{verificationTruthBadge.label}
-																					</Badge>
-																				) : (
-																					<span className="text-xs text-muted-foreground">
-																						-
-																					</span>
-																				)}
-																			</Link>
-																		</td>
-																		<td className="px-4 py-3 align-top">
-																			<Link
-																				href={buildCandidateDetailHref(
-																					candidate,
-																				)}
-																				onClick={handleCandidateLinkClick}
-																				className="block"
-																			>
-																				{candidate.latestTriageResult ? (
-																					<Badge
-																						variant="outline"
-																						className={getTriageResultBadgeClassName(
-																							candidate.latestTriageResult
-																								.result,
-																						)}
-																					>
-																						{getShortResultLabel(
-																							t,
-																							candidate.latestTriageResult
-																								.result,
-																						)}
-																					</Badge>
-																				) : (
-																					<span className="text-xs text-muted-foreground">
-																						-
-																					</span>
-																				)}
-																			</Link>
-																		</td>
-																		<td className="px-4 py-3 align-top text-xs">
-																			<Link
-																				href={buildCandidateDetailHref(
-																					candidate,
-																				)}
-																				onClick={handleCandidateLinkClick}
-																				className="block"
-																			>
-																				{latestResultUpdate ? (
-																					<>
-																						<DateTooltip
-																							date={latestResultUpdate.date}
-																							className="text-xs"
-																						/>
-																						<div className="mt-1 text-muted-foreground">
-																							{scanT(
-																								t,
-																								latestResultUpdate.stageKey,
-																								latestResultUpdate.stageLabel,
+															{candidatePagination.items.map(
+																(candidate, candidateIndex) => {
+																	const verificationTruthBadge =
+																		getVerificationTruthBadge(
+																			t,
+																			candidate.latestVerificationResult
+																				?.result,
+																		);
+																	const isReanalyzingCandidate =
+																		reanalyzingCandidateId ===
+																		buildCandidateReanalysisKey(candidate);
+																	const isSelectedCandidate =
+																		selectedCandidateIds.has(
+																			candidate.vulnerabilityCandidateId,
+																		);
+																	const latestResultUpdate =
+																		getCandidateLatestResultUpdate(candidate);
+																	return (
+																		<tr
+																			key={`${candidate.vulnerabilityCandidateId}-${candidateIndex}`}
+																			className={`border-b last:border-b-0 transition-colors hover:bg-muted/40 ${
+																				isSelectedCandidate ? "bg-muted/40" : ""
+																			}`}
+																		>
+																			<td className="px-4 py-3 align-top">
+																				<Checkbox
+																					aria-label={scanT(
+																						t,
+																						"scan.candidates.selectAria",
+																						"Select candidate {{title}}",
+																						{ title: candidate.title },
+																					)}
+																					checked={isSelectedCandidate}
+																					onClick={(event) =>
+																						event.stopPropagation()
+																					}
+																					onCheckedChange={() =>
+																						toggleCandidateSelection(
+																							candidate.vulnerabilityCandidateId,
+																						)
+																					}
+																				/>
+																			</td>
+																			<td className="px-4 py-3 align-top">
+																				<Link
+																					href={buildCandidateDetailHref(
+																						candidate,
+																					)}
+																					onClick={handleCandidateLinkClick}
+																					className="block"
+																				>
+																					<div className="font-medium">
+																						{candidate.title}
+																					</div>
+																					<div className="mt-1 text-xs text-muted-foreground break-all">
+																						{candidate.filePath || "-"}
+																						{candidate.line
+																							? `:${candidate.line}`
+																							: ""}
+																					</div>
+																				</Link>
+																			</td>
+																			<td className="px-4 py-3 align-top">
+																				<Link
+																					href={buildCandidateDetailHref(
+																						candidate,
+																					)}
+																					onClick={handleCandidateLinkClick}
+																					className="block"
+																				>
+																					{candidate.latestAnalysisResult
+																						?.result ? (
+																						<Badge
+																							variant="outline"
+																							className={getAnalysisResultBadgeClassName(
+																								candidate.latestAnalysisResult
+																									.result,
 																							)}
-																						</div>
-																					</>
-																				) : (
-																					<span className="text-muted-foreground">
-																						-
-																					</span>
-																				)}
-																			</Link>
-																		</td>
-																		<td className="px-4 py-3 align-top text-xs text-muted-foreground">
-																			<Link
-																				href={buildCandidateDetailHref(
-																					candidate,
-																				)}
-																				onClick={handleCandidateLinkClick}
-																				className="block"
-																			>
-																				{typeof candidate.score === "number"
-																					? candidate.score.toFixed(1)
-																					: "-"}
-																			</Link>
-																		</td>
-																		<td className="px-4 py-3 align-top">
-																			<Button
-																				type="button"
-																				variant="outline"
-																				size="icon"
-																				title={scanT(
-																					t,
-																					"scan.candidates.rerunAnalysis",
-																					"Re-run analysis",
-																				)}
-																				aria-label={scanT(
-																					t,
-																					"scan.candidates.rerunAnalysis",
-																					"Re-run analysis",
-																				)}
-																				disabled={isReanalyzingCandidate}
-																				onClick={() =>
-																					handleAnalyzeCandidate(candidate)
-																				}
-																			>
-																				{isReanalyzingCandidate ? (
-																					<Loader2 className="size-4 animate-spin" />
-																				) : (
-																					<RefreshCw className="size-4" />
-																				)}
-																			</Button>
-																		</td>
-																	</tr>
-																);
-															})}
+																						>
+																							{getShortResultLabel(
+																								t,
+																								candidate.latestAnalysisResult
+																									.result,
+																							)}
+																						</Badge>
+																					) : (
+																						<span className="text-xs text-muted-foreground">
+																							-
+																						</span>
+																					)}
+																				</Link>
+																			</td>
+																			<td className="px-4 py-3 align-top">
+																				<Link
+																					href={buildCandidateDetailHref(
+																						candidate,
+																					)}
+																					onClick={handleCandidateLinkClick}
+																					className="block"
+																				>
+																					{verificationTruthBadge ? (
+																						<Badge
+																							variant="outline"
+																							className={
+																								verificationTruthBadge.className
+																							}
+																						>
+																							{verificationTruthBadge.label}
+																						</Badge>
+																					) : (
+																						<span className="text-xs text-muted-foreground">
+																							-
+																						</span>
+																					)}
+																				</Link>
+																			</td>
+																			<td className="px-4 py-3 align-top">
+																				<Link
+																					href={buildCandidateDetailHref(
+																						candidate,
+																					)}
+																					onClick={handleCandidateLinkClick}
+																					className="block"
+																				>
+																					{candidate.latestTriageResult ? (
+																						<Badge
+																							variant="outline"
+																							className={getTriageResultBadgeClassName(
+																								candidate.latestTriageResult
+																									.result,
+																							)}
+																						>
+																							{getShortResultLabel(
+																								t,
+																								candidate.latestTriageResult
+																									.result,
+																							)}
+																						</Badge>
+																					) : (
+																						<span className="text-xs text-muted-foreground">
+																							-
+																						</span>
+																					)}
+																				</Link>
+																			</td>
+																			<td className="px-4 py-3 align-top text-xs">
+																				<Link
+																					href={buildCandidateDetailHref(
+																						candidate,
+																					)}
+																					onClick={handleCandidateLinkClick}
+																					className="block"
+																				>
+																					{latestResultUpdate ? (
+																						<>
+																							<DateTooltip
+																								date={latestResultUpdate.date}
+																								className="text-xs"
+																							/>
+																							<div className="mt-1 text-muted-foreground">
+																								{scanT(
+																									t,
+																									latestResultUpdate.stageKey,
+																									latestResultUpdate.stageLabel,
+																								)}
+																							</div>
+																						</>
+																					) : (
+																						<span className="text-muted-foreground">
+																							-
+																						</span>
+																					)}
+																				</Link>
+																			</td>
+																			<td className="px-4 py-3 align-top text-xs text-muted-foreground">
+																				<Link
+																					href={buildCandidateDetailHref(
+																						candidate,
+																					)}
+																					onClick={handleCandidateLinkClick}
+																					className="block"
+																				>
+																					{typeof candidate.score === "number"
+																						? candidate.score.toFixed(1)
+																						: "-"}
+																				</Link>
+																			</td>
+																			<td className="px-4 py-3 align-top">
+																				<Button
+																					type="button"
+																					variant="outline"
+																					size="icon"
+																					title={scanT(
+																						t,
+																						"scan.candidates.rerunAnalysis",
+																						"Re-run analysis",
+																					)}
+																					aria-label={scanT(
+																						t,
+																						"scan.candidates.rerunAnalysis",
+																						"Re-run analysis",
+																					)}
+																					disabled={isReanalyzingCandidate}
+																					onClick={() =>
+																						handleAnalyzeCandidate(candidate)
+																					}
+																				>
+																					{isReanalyzingCandidate ? (
+																						<Loader2 className="size-4 animate-spin" />
+																					) : (
+																						<RefreshCw className="size-4" />
+																					)}
+																				</Button>
+																			</td>
+																		</tr>
+																	);
+																},
+															)}
 														</tbody>
 													</table>
 												</div>
@@ -4001,7 +4095,11 @@ export const ShowScanJobDetail = ({
 														<div className="flex items-center justify-between gap-3">
 															<div>
 																<div className="text-sm font-medium">
-																	{scanT(t, "scan.candidates.exportFields", "Fields")}
+																	{scanT(
+																		t,
+																		"scan.candidates.exportFields",
+																		"Fields",
+																	)}
 																</div>
 																<div className="text-xs text-muted-foreground">
 																	{scanT(
@@ -4049,9 +4147,9 @@ export const ShowScanJobDetail = ({
 																			toggleCandidateExportField(field.key)
 																		}
 																	/>
-																		<span>
-																			{getCandidateExportFieldLabel(t, field)}
-																		</span>
+																	<span>
+																		{getCandidateExportFieldLabel(t, field)}
+																	</span>
 																</div>
 															))}
 														</div>
@@ -4076,7 +4174,11 @@ export const ShowScanJobDetail = ({
 															}
 														>
 															<Clipboard className="mr-2 size-4" />
-															{scanT(t, "scan.candidates.copyJson", "Copy JSON")}
+															{scanT(
+																t,
+																"scan.candidates.copyJson",
+																"Copy JSON",
+															)}
 														</Button>
 														<Button
 															type="button"
@@ -4166,7 +4268,11 @@ export const ShowScanJobDetail = ({
 											) : isLoadingSelectedFile ? (
 												<div className="flex min-h-[280px] items-center justify-center gap-2 text-muted-foreground">
 													<Loader2 className="size-4 animate-spin" />
-													{scanT(t, "scan.files.loadingFile", "Loading file...")}
+													{scanT(
+														t,
+														"scan.files.loadingFile",
+														"Loading file...",
+													)}
 												</div>
 											) : (
 												<pre className="whitespace-pre-wrap break-words font-mono text-sm">
@@ -4220,16 +4326,16 @@ export const ShowScanJobDetail = ({
 											<table className="w-full min-w-[720px] table-fixed text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
-													<th className="w-[30%] px-4 py-3 font-medium">
+														<th className="w-[30%] px-4 py-3 font-medium">
 															{scanT(t, "scan.tasks.queue", "队列")}
 														</th>
-													<th className="w-[20%] px-4 py-3 text-right font-medium">
+														<th className="w-[20%] px-4 py-3 text-right font-medium">
 															{scanT(t, "scan.status.queued", "排队中")}
 														</th>
-													<th className="w-[30%] px-4 py-3 text-right font-medium">
+														<th className="w-[30%] px-4 py-3 text-right font-medium">
 															{scanT(t, "scan.status.running", "运行中")}
 														</th>
-													<th className="w-[20%] px-4 py-3 text-right font-medium">
+														<th className="w-[20%] px-4 py-3 text-right font-medium">
 															{scanT(t, "scan.tasks.done", "完成")}
 														</th>
 													</tr>
@@ -4242,11 +4348,14 @@ export const ShowScanJobDetail = ({
 																key={queue.id}
 																className="border-b last:border-b-0"
 															>
-														<td className="w-[30%] px-4 py-3 align-top font-medium">
-																	{formatScanStageLabel(t, queue.stageName || queue.title)}
+																<td className="w-[30%] px-4 py-3 align-top font-medium">
+																	{formatScanStageLabel(
+																		t,
+																		queue.stageName || queue.title,
+																	)}
 																</td>
 																<td
-															className="w-[20%] px-4 py-3 text-right align-top"
+																	className="w-[20%] px-4 py-3 text-right align-top"
 																	title={metrics.title}
 																>
 																	<span className="tabular-nums">
@@ -4254,7 +4363,7 @@ export const ShowScanJobDetail = ({
 																	</span>
 																</td>
 																<td
-															className="w-[30%] px-4 py-3 text-right align-top"
+																	className="w-[30%] px-4 py-3 text-right align-top"
 																	title={metrics.title}
 																>
 																	<RunningCapacityBars
@@ -4263,7 +4372,7 @@ export const ShowScanJobDetail = ({
 																	/>
 																</td>
 																<td
-															className="w-[20%] px-4 py-3 text-right align-top"
+																	className="w-[20%] px-4 py-3 text-right align-top"
 																	title={metrics.title}
 																>
 																	<span className="tabular-nums">
@@ -4305,7 +4414,11 @@ export const ShowScanJobDetail = ({
 															setRunningTaskPage(1);
 															setFinishedTaskPage(1);
 														}}
-														placeholder={scanT(t, "scan.tasks.search", "搜索阶段任务")}
+														placeholder={scanT(
+															t,
+															"scan.tasks.search",
+															"搜索阶段任务",
+														)}
 														className="flex h-9 w-full rounded-md border border-input bg-background py-2 pl-9 pr-3 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
 													/>
 												</div>
@@ -4376,10 +4489,15 @@ export const ShowScanJobDetail = ({
 													{scanT(t, "scan.pagination.previous", "上一页")}
 												</Button>
 												<div className="min-w-[88px] text-center text-muted-foreground">
-													{scanT(t, "scan.pagination.page", "第 {{page}} / {{total}} 页", {
-														page: runningTaskPagination.page,
-														total: runningTaskPagination.totalPages,
-													})}
+													{scanT(
+														t,
+														"scan.pagination.page",
+														"第 {{page}} / {{total}} 页",
+														{
+															page: runningTaskPagination.page,
+															total: runningTaskPagination.totalPages,
+														},
+													)}
 												</div>
 												<Button
 													type="button"
@@ -4410,7 +4528,11 @@ export const ShowScanJobDetail = ({
 											</div>
 										) : filteredInProgressTasks.length === 0 ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
-												{scanT(t, "scan.tasks.noMatching", "没有匹配的阶段任务")}
+												{scanT(
+													t,
+													"scan.tasks.noMatching",
+													"没有匹配的阶段任务",
+												)}
 											</div>
 										) : (
 											<table className="w-full min-w-[900px] table-fixed text-sm">
@@ -4419,103 +4541,99 @@ export const ShowScanJobDetail = ({
 														<th className="w-[190px] whitespace-nowrap px-4 py-3 font-medium">
 															{scanT(t, "scan.field.stage", "阶段")}
 														</th>
-													<th className="w-[38%] px-4 py-3 font-medium">
+														<th className="w-[38%] px-4 py-3 font-medium">
 															{scanT(t, "scan.monitoring.task", "阶段任务")}
 														</th>
-													<th className="w-[110px] whitespace-nowrap px-4 py-3 font-medium">
+														<th className="w-[110px] whitespace-nowrap px-4 py-3 font-medium">
 															{scanT(t, "scan.field.runtime", "运行时长")}
 														</th>
-													<th className="px-4 py-3 font-medium">
-															{scanT(t, "scan.tasks.currentActivity", "当前活动")}
+														<th className="px-4 py-3 font-medium">
+															{scanT(
+																t,
+																"scan.tasks.currentActivity",
+																"当前活动",
+															)}
 														</th>
-													<th className="w-[120px] whitespace-nowrap px-4 py-3 font-medium">
+														<th className="w-[120px] whitespace-nowrap px-4 py-3 font-medium">
 															{scanT(t, "scan.tasks.actions", "操作")}
 														</th>
 													</tr>
 												</thead>
 												<tbody>
-											{runningTaskPagination.items.map((task) => {
-												const taskName = String(task.taskName || "").trim();
-												const runningTaskTitle =
-													taskName ||
-													localizeTaskListText(t, task.title) ||
-													"-";
-												const runningTaskSubtitle =
-													localizeTaskListText(t, task.subtitle) || "-";
+													{runningTaskPagination.items.map((task) => {
+														const taskName = String(task.taskName || "").trim();
+														const runningTaskTitle =
+															taskName ||
+															localizeTaskListText(t, task.title) ||
+															"-";
+														const runningTaskSubtitle =
+															localizeTaskListText(t, task.subtitle) || "-";
 														return (
 															<tr
-															key={task.id}
-															tabIndex={0}
-															aria-label={scanT(
-																t,
-																"scan.task.openAria",
-																"打开阶段任务 {{title}}",
-														{ title: runningTaskTitle },
-															)}
-															onClick={(event) =>
-																handleTaskRowClick(event, task.taskId)
-															}
-															onKeyDown={(event) =>
-																handleTaskRowKeyDown(event, task.taskId)
-															}
-															className="cursor-pointer border-b transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none last:border-b-0"
-														>
-															<td
-																className="w-[190px] whitespace-nowrap px-4 py-3 align-top capitalize"
-																title={getTaskStageLabel(t, task.stage)}
-															>
-																{getTaskStageLabel(t, task.stage)}
-															</td>
-													<td className="w-[38%] min-w-0 whitespace-normal px-4 py-3 align-top">
-														<div className="line-clamp-2 font-medium">
-															{runningTaskTitle}
-														</div>
-															</td>
-														<td className="w-[110px] whitespace-nowrap px-4 py-3 align-top tabular-nums">
-																{formatTaskRuntime(
-																	task.startedAt,
-																	runtimeNowMs,
+																key={task.id}
+																tabIndex={0}
+																aria-label={scanT(
+																	t,
+																	"scan.task.openAria",
+																	"打开阶段任务 {{title}}",
+																	{ title: runningTaskTitle },
 																)}
-															</td>
-														<td className="px-4 py-3 align-top">
-																<LiveTaskActivityBadge
-																	activity={
-																		activitiesByTaskId[task.taskId] ||
-																		idleSandboxAgentActivity
-																	}
-																	isConnected={activityConnectedTaskIds.has(
-																		task.taskId,
-																	)}
-																	noWrap
-																/>
-															</td>
-															<td
-														className="w-[120px] whitespace-nowrap px-4 py-3 align-top"
-																data-task-row-action
+																onClick={(event) =>
+																	handleTaskRowClick(event, task.taskId)
+																}
+																onKeyDown={(event) =>
+																	handleTaskRowKeyDown(event, task.taskId)
+																}
+																className="cursor-pointer border-b transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none last:border-b-0"
 															>
-																<div className="flex items-center gap-2">
-														<LiveTaskActivityButton
-															taskId={task.taskId}
-															title={runningTaskTitle}
-															subtitle={runningTaskSubtitle}
+																<td
+																	className="w-[190px] whitespace-nowrap px-4 py-3 align-top capitalize"
+																	title={getTaskStageLabel(t, task.stage)}
+																>
+																	{getTaskStageLabel(t, task.stage)}
+																</td>
+																<td className="w-[38%] min-w-0 whitespace-normal px-4 py-3 align-top">
+																	<div className="line-clamp-2 font-medium">
+																		{runningTaskTitle}
+																	</div>
+																</td>
+																<td className="w-[110px] whitespace-nowrap px-4 py-3 align-top tabular-nums">
+																	{formatTaskRuntime(
+																		task.startedAt,
+																		runtimeNowMs,
+																	)}
+																</td>
+																<td className="px-4 py-3 align-top">
+																	<LiveTaskActivityBadge
 																		activity={
 																			activitiesByTaskId[task.taskId] ||
-																			idleSandboxAgentActivity
+																			idleAgentActivity
 																		}
-																		variant="outline"
-																		size="icon"
-																		iconOnly
+																		isConnected={activityConnectedTaskIds.has(
+																			task.taskId,
+																		)}
+																		noWrap
 																	/>
-														<LiveTaskTextButton
-															taskId={task.taskId}
-															title={runningTaskTitle}
-															subtitle={runningTaskSubtitle}
-																		variant="outline"
-																		size="icon"
-																		iconOnly
-																	/>
-																</div>
-															</td>
+																</td>
+																<td
+																	className="w-[120px] whitespace-nowrap px-4 py-3 align-top"
+																	data-task-row-action
+																>
+																	<div className="flex items-center gap-2">
+																		<LiveTaskActivityButton
+																			taskId={task.taskId}
+																			title={runningTaskTitle}
+																			subtitle={runningTaskSubtitle}
+																			activity={
+																				activitiesByTaskId[task.taskId] ||
+																				idleAgentActivity
+																			}
+																			variant="outline"
+																			size="icon"
+																			iconOnly
+																		/>
+																	</div>
+																</td>
 															</tr>
 														);
 													})}
@@ -4552,7 +4670,11 @@ export const ShowScanJobDetail = ({
 															setRunningTaskPage(1);
 															setFinishedTaskPage(1);
 														}}
-														placeholder={scanT(t, "scan.tasks.search", "搜索阶段任务")}
+														placeholder={scanT(
+															t,
+															"scan.tasks.search",
+															"搜索阶段任务",
+														)}
 														className="flex h-9 w-full rounded-md border border-input bg-background py-2 pl-9 pr-3 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
 													/>
 												</div>
@@ -4720,18 +4842,26 @@ export const ShowScanJobDetail = ({
 										) : !terminalTasks ||
 											(terminalTasks.total === 0 && !hasFinishedTaskFilters) ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
-												{scanT(t, "scan.tasks.noFinished", "暂无已完成阶段任务")}
+												{scanT(
+													t,
+													"scan.tasks.noFinished",
+													"暂无已完成阶段任务",
+												)}
 											</div>
 										) : terminalTasks.total === 0 ||
 											finishedTaskPagination.items.length === 0 ? (
 											<div className="px-4 py-6 text-sm text-muted-foreground">
-												{scanT(t, "scan.tasks.noMatching", "没有匹配的阶段任务")}
+												{scanT(
+													t,
+													"scan.tasks.noMatching",
+													"没有匹配的阶段任务",
+												)}
 											</div>
 										) : (
 											<table className="w-full min-w-[1000px] table-fixed text-sm">
 												<thead className="border-b bg-muted/30 text-left">
 													<tr>
-													<th className="w-[52px] px-4 py-3 font-medium">
+														<th className="w-[52px] px-4 py-3 font-medium">
 															<Checkbox
 																aria-label={scanT(
 																	t,
@@ -4745,29 +4875,31 @@ export const ShowScanJobDetail = ({
 																			? "indeterminate"
 																			: false
 																}
-																disabled={!hasCurrentPageRerunnableFinishedTasks}
+																disabled={
+																	!hasCurrentPageRerunnableFinishedTasks
+																}
 																onClick={(event) => event.stopPropagation()}
 																onCheckedChange={
 																	toggleCurrentPageFinishedTaskSelection
 																}
 															/>
 														</th>
-													<th className="w-[170px] px-4 py-3 font-medium">
+														<th className="w-[170px] px-4 py-3 font-medium">
 															{scanT(t, "scan.field.stage", "阶段")}
 														</th>
-													<th className="px-4 py-3 font-medium">
+														<th className="px-4 py-3 font-medium">
 															{scanT(t, "scan.monitoring.task", "阶段任务")}
 														</th>
-													<th className="w-[120px] px-4 py-3 font-medium">
+														<th className="w-[120px] px-4 py-3 font-medium">
 															{scanT(t, "scan.field.status", "状态")}
 														</th>
-													<th className="w-[160px] px-4 py-3 font-medium">
+														<th className="w-[160px] px-4 py-3 font-medium">
 															{scanT(t, "scan.field.started", "开始时间")}
 														</th>
-													<th className="w-[160px] px-4 py-3 font-medium">
+														<th className="w-[160px] px-4 py-3 font-medium">
 															{scanT(t, "scan.field.completed", "完成时间")}
 														</th>
-													<th className="w-[88px] px-4 py-3 font-medium">
+														<th className="w-[88px] px-4 py-3 font-medium">
 															{scanT(t, "scan.tasks.actions", "操作")}
 														</th>
 													</tr>
@@ -4806,7 +4938,7 @@ export const ShowScanJobDetail = ({
 																}
 																className="cursor-pointer border-b transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none last:border-b-0"
 															>
-														<td className="w-[52px] px-4 py-3 align-top">
+																<td className="w-[52px] px-4 py-3 align-top">
 																	<Checkbox
 																		aria-label={scanT(
 																			t,
@@ -4825,15 +4957,15 @@ export const ShowScanJobDetail = ({
 																		}
 																	/>
 																</td>
-														<td className="w-[170px] px-4 py-3 align-top capitalize">
+																<td className="w-[170px] px-4 py-3 align-top capitalize">
 																	{getTaskStageLabel(t, task.stage)}
 																</td>
-														<td className="min-w-0 px-4 py-3 align-top">
+																<td className="min-w-0 px-4 py-3 align-top">
 																	<div className="line-clamp-2 font-medium">
 																		{finishedTaskTitle}
 																	</div>
 																</td>
-														<td className="w-[120px] px-4 py-3 align-top">
+																<td className="w-[120px] px-4 py-3 align-top">
 																	<Badge
 																		variant="outline"
 																		className={getTaskStatusBadgeClassName(
@@ -4843,21 +4975,21 @@ export const ShowScanJobDetail = ({
 																		{getTaskStatusLabel(t, task.status)}
 																	</Badge>
 																</td>
-														<td className="w-[160px] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
+																<td className="w-[160px] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
 																	{task.startedAt ? (
 																		<DateTooltip date={task.startedAt} />
 																	) : (
 																		"-"
 																	)}
 																</td>
-														<td className="w-[160px] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
+																<td className="w-[160px] whitespace-nowrap px-4 py-3 align-top text-xs text-muted-foreground">
 																	{task.completedAt ? (
 																		<DateTooltip date={task.completedAt} />
 																	) : (
 																		"-"
 																	)}
 																</td>
-														<td className="w-[88px] px-4 py-3 align-top">
+																<td className="w-[88px] px-4 py-3 align-top">
 																	<div className="flex items-center gap-2">
 																		<Button
 																			type="button"
@@ -4865,7 +4997,11 @@ export const ShowScanJobDetail = ({
 																			size="icon"
 																			title={
 																				canRerunTask
-																					? scanT(t, "scan.task.rerunTask", "重新运行阶段任务")
+																					? scanT(
+																							t,
+																							"scan.task.rerunTask",
+																							"重新运行阶段任务",
+																						)
 																					: scanT(
 																							t,
 																							"scan.task.rerunDisabled",
@@ -4874,7 +5010,11 @@ export const ShowScanJobDetail = ({
 																			}
 																			aria-label={
 																				canRerunTask
-																					? scanT(t, "scan.task.rerunTask", "重新运行阶段任务")
+																					? scanT(
+																							t,
+																							"scan.task.rerunTask",
+																							"重新运行阶段任务",
+																						)
 																					: scanT(
 																							t,
 																							"scan.task.rerunDisabled",
@@ -4910,7 +5050,10 @@ export const ShowScanJobDetail = ({
 							</div>
 						</TabsContent>
 					</Tabs>
-					<Dialog open={isEvaluateDialogOpen} onOpenChange={setIsEvaluateDialogOpen}>
+					<Dialog
+						open={isEvaluateDialogOpen}
+						onOpenChange={setIsEvaluateDialogOpen}
+					>
 						<DialogContent className="sm:max-w-2xl">
 							<DialogHeader>
 								<DialogTitle>
@@ -4930,11 +5073,7 @@ export const ShowScanJobDetail = ({
 										htmlFor="run-evaluate-agent-profile"
 										className="text-sm font-medium"
 									>
-										{scanT(
-											t,
-											"scan.evaluate.agentProfile",
-											"Agent Profile",
-										)}
+										{scanT(t, "scan.evaluate.agentProfile", "Agent Profile")}
 									</label>
 									<Select
 										value={evaluateAgentProfileIdDraft}
@@ -4970,9 +5109,7 @@ export const ShowScanJobDetail = ({
 										id="run-evaluate-ground-truth-path"
 										value={evaluateGroundTruthPathDraft}
 										onChange={(event) =>
-											setEvaluateGroundTruthPathDraft(
-												event.currentTarget.value,
-											)
+											setEvaluateGroundTruthPathDraft(event.currentTarget.value)
 										}
 										placeholder="/workspace/repo/ground_truth.json"
 									/>
@@ -5007,8 +5144,7 @@ export const ShowScanJobDetail = ({
 											);
 											return;
 										}
-										const groundTruthPath =
-											evaluateGroundTruthPathDraft.trim();
+										const groundTruthPath = evaluateGroundTruthPathDraft.trim();
 										if (!groundTruthPath.startsWith("/")) {
 											toast.error(
 												"Ground truth path must be an absolute container path",
@@ -5070,7 +5206,7 @@ export const ShowScanJobDetail = ({
 							{scanT(t, "scan.job.backToJobs", "Back to Jobs")}
 						</Link>
 					</div>
-					</CardContent>
+				</CardContent>
 			</DashboardPanelShell>
 		</div>
 	);

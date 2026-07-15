@@ -13,6 +13,7 @@ import {
 import {
 	buildCandidateProjectionPatch,
 	compareProjectionResultVersions,
+	normalizeCandidateResultStageOutput,
 } from "./candidate-result-projection";
 
 export const CANDIDATE_RESULT_STAGE_NAMES = [
@@ -43,14 +44,15 @@ const stageColumns = {
 } as const;
 
 const parseStageOutput = (stageName: string, output: unknown) => {
+	const normalizedOutput = normalizeCandidateResultStageOutput(stageName, output);
 	if (stageName === "analyze-finding") {
-		return analysisSchema.safeParse(output);
+		return analysisSchema.safeParse(normalizedOutput);
 	}
 	if (stageName === "verify-finding") {
-		return verificationSchema.safeParse(output);
+		return verificationSchema.safeParse(normalizedOutput);
 	}
 	if (stageName === "triage-finding") {
-		return triageSchema.safeParse(output);
+		return triageSchema.safeParse(normalizedOutput);
 	}
 	return { success: false as const };
 };
