@@ -71,6 +71,7 @@ void app.prepare().then(async () => {
 		}
 
 		if (process.env.NODE_ENV !== "production") {
+			await migration();
 			await syncContainerEnvironmentSettingToProcess();
 		}
 

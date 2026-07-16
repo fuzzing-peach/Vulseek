@@ -19,12 +19,6 @@ const makeScanJob = (overrides?: Partial<ScanJob>): ScanJob => ({
 	scanRuntimeSettings: {},
 	scanPipelineDefinitionSnapshot: {},
 	commitWindow: 3,
-	moduleTasksTotal: 0,
-	moduleTasksCompleted: 0,
-	moduleTasksFailed: 0,
-	functionTasksTotal: 0,
-	functionTasksCompleted: 0,
-	functionTasksFailed: 0,
 	applicationId: null,
 	composeId: null,
 	createdAt: "2026-05-04T00:00:00.000Z",
@@ -38,6 +32,7 @@ const makeScanJob = (overrides?: Partial<ScanJob>): ScanJob => ({
 	totalTokens: 0,
 	cachedReadTokens: 0,
 	cachedWriteTokens: 0,
+	estimatedCost: 0,
 	repositoryTaskId: "scan-job-1",
 	repositoryTaskStatus: "completed",
 	...overrides,
@@ -51,6 +46,10 @@ const makeTask = (overrides?: Partial<Task>): Task => ({
 	name: "task",
 	stageName: "identify-target",
 	status: "pending",
+	downstreamDispatchStatus: "pending",
+	downstreamRouteKey: null,
+	downstreamDispatchedAt: null,
+	dispatchKey: null,
 	priority: null,
 	attempt: 0,
 	agentProfile: null,
@@ -69,6 +68,7 @@ const makeTask = (overrides?: Partial<Task>): Task => ({
 	totalTokens: null,
 	cachedReadTokens: null,
 	cachedWriteTokens: null,
+	estimatedCost: null,
 	errorMessage: null,
 	exitReason: null,
 	exitNote: null,
@@ -151,7 +151,6 @@ test("retryFailedScanJobTasksWithDeps retries every failed task type in stage or
 	const reset: string[] = [];
 	const enqueued: string[] = [];
 	const scanJobReset: Array<{ scanJobId: string }> = [];
-	let recalculated = 0;
 
 	const result = await retryFailedScanJobTasksWithDeps("scan-job-1", {
 		loadScanJob: async () => makeScanJob(),
@@ -167,9 +166,6 @@ test("retryFailedScanJobTasksWithDeps retries every failed task type in stage or
 		},
 		enqueueTask: async (_scanJobId, task) => {
 			enqueued.push(task.taskId);
-		},
-		recalculateScanTaskCounts: async () => {
-			recalculated += 1;
 		},
 		resetScanJobForRetry: async (input) => {
 			scanJobReset.push(input);
@@ -202,7 +198,6 @@ test("retryFailedScanJobTasksWithDeps retries every failed task type in stage or
 	assert.deepEqual(cleared, removed);
 	assert.deepEqual(reset, removed);
 	assert.deepEqual(enqueued, removed);
-	assert.equal(recalculated, 1);
 	assert.deepEqual(scanJobReset, [
 		{
 			scanJobId: "scan-job-1",
@@ -229,7 +224,6 @@ test("retryFailedScanJobTasksWithDeps retries failed tasks without phase bookkee
 		clearTaskArtifacts: async () => {},
 		resetFailedTask: async () => {},
 		enqueueTask: async () => {},
-		recalculateScanTaskCounts: async () => {},
 		resetScanJobForRetry: async () => {},
 	});
 
@@ -256,7 +250,6 @@ test("retryFailedScanJobTasksWithDeps rejects when the job still has running tas
 			clearTaskArtifacts: async () => {},
 			resetFailedTask: async () => {},
 			enqueueTask: async () => {},
-			recalculateScanTaskCounts: async () => {},
 			resetScanJobForRetry: async () => {},
 		}),
 		(error: unknown) =>
@@ -281,7 +274,6 @@ test("retryFailedScanJobTasksWithDeps rejects when there are no failed tasks", a
 			clearTaskArtifacts: async () => {},
 			resetFailedTask: async () => {},
 			enqueueTask: async () => {},
-			recalculateScanTaskCounts: async () => {},
 			resetScanJobForRetry: async () => {},
 		}),
 		(error: unknown) =>

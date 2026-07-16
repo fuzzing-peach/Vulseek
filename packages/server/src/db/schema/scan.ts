@@ -43,7 +43,9 @@ export const scanJobStatusEnum = pgEnum("scanJobStatus", [
 	"pending",
 	"running",
 	"paused",
+	"finalizing",
 	"finished",
+	"partially_finished",
 	"failed",
 	"canceled",
 ]);
@@ -89,18 +91,13 @@ export const scanJobs = pgTable("scan_jobs", {
 		.notNull()
 		.default({}),
 	commitWindow: integer("commitWindow").notNull().default(3),
-	moduleTasksTotal: integer("moduleTasksTotal").notNull().default(0),
-	moduleTasksCompleted: integer("moduleTasksCompleted").notNull().default(0),
-	moduleTasksFailed: integer("moduleTasksFailed").notNull().default(0),
-	functionTasksTotal: integer("functionTasksTotal").notNull().default(0),
-	functionTasksCompleted: integer("functionTasksCompleted").notNull().default(0),
-	functionTasksFailed: integer("functionTasksFailed").notNull().default(0),
 	inputTokens: bigint("input_tokens", { mode: "number" }).notNull().default(0),
 	outputTokens: bigint("output_tokens", { mode: "number" }).notNull().default(0),
 	thoughtTokens: bigint("thought_tokens", { mode: "number" }).notNull().default(0),
 	totalTokens: bigint("total_tokens", { mode: "number" }).notNull().default(0),
 	cachedReadTokens: bigint("cached_read_tokens", { mode: "number" }).notNull().default(0),
 	cachedWriteTokens: bigint("cached_write_tokens", { mode: "number" }).notNull().default(0),
+	estimatedCost: real("estimated_cost").notNull().default(0),
 	applicationId: text("applicationId").references(
 		() => applications.applicationId,
 		{
@@ -140,7 +137,14 @@ export const tasks = pgTable(
 		),
 		name: text("name").notNull(),
 		stageName: text("stageName").notNull(),
-		status: taskStatusEnum("status").notNull().default("pending"),
+	status: taskStatusEnum("status").notNull().default("pending"),
+	downstreamDispatchStatus: text("downstreamDispatchStatus")
+		.$type<"pending" | "dispatching" | "completed">()
+		.notNull()
+		.default("pending"),
+	downstreamRouteKey: text("downstreamRouteKey"),
+	downstreamDispatchedAt: text("downstreamDispatchedAt"),
+	dispatchKey: text("dispatchKey"),
 		priority: integer("priority"),
 		attempt: integer("attempt").notNull().default(0),
 		agentProfile: jsonb("agentProfile").$type<TaskAgentProfileSnapshot | null>(),
@@ -165,7 +169,8 @@ export const tasks = pgTable(
 			thoughtTokens: bigint("thought_tokens", { mode: "number" }),
 			totalTokens: bigint("total_tokens", { mode: "number" }),
 			cachedReadTokens: bigint("cached_read_tokens", { mode: "number" }),
-			cachedWriteTokens: bigint("cached_write_tokens", { mode: "number" }),
+		cachedWriteTokens: bigint("cached_write_tokens", { mode: "number" }),
+		estimatedCost: real("estimated_cost"),
 			errorMessage: text("errorMessage"),
 		exitReason: text("exitReason").$type<
 			"agent_exit" | "leader_exit" | null
@@ -198,6 +203,10 @@ export const tasks = pgTable(
 		scanJobStatusIdx: index("tasks_scan_job_status_idx").on(
 			table.scanJobId,
 			table.status,
+		),
+		dispatchStatusIdx: index("tasks_downstream_dispatch_status_idx").on(
+			table.scanJobId,
+			table.downstreamDispatchStatus,
 		),
 		scanJobCreatedAtIdx: index("tasks_scan_job_created_at_idx").on(
 			table.scanJobId,
@@ -515,6 +524,15 @@ export const candidateResultProjectionBackfills = pgTable(
 			.$defaultFn(() => new Date().toISOString()),
 	},
 );
+
+export const scanJobCostBackfills = pgTable("scan_job_cost_backfills", {
+	backfillId: text("backfill_id").primaryKey(),
+	status: text("status").$type<"pending" | "running" | "completed">().notNull(),
+	processedCount: integer("processed_count").notNull().default(0),
+	skippedCount: integer("skipped_count").notNull().default(0),
+	skippedTasks: jsonb("skipped_tasks").$type<unknown[]>().notNull().default([]),
+	updatedAt: text("updated_at").notNull(),
+});
 
 export const scanEvaluateResults = pgTable(
 	"scan_evaluate_results",

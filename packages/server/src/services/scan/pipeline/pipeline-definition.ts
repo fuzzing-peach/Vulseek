@@ -68,6 +68,7 @@ export type PipelineEdge<
 		stageInput: StageInputOf<TFromStage>;
 		stageOutput: TSelectedOutput;
 		nextInputObjects: TToStageInputObject[];
+		dispatchKeyForItem: (index: number) => string;
 	}) => Promise<string[]>;
 };
 

@@ -188,19 +188,13 @@ export type AgentTaskRuntime = {
 	sessionId: string | null;
 	provider: "codex" | "claude";
 	runtimeDir: string;
-	activityPath: string;
-	usagePath: string;
-	statePath: string;
-	stderrPath: string;
+	stdoutPath: string;
 	updatedAt: string | null;
 };
 
 const buildAgentRuntimeFiles = (runtimeDir: string) => ({
 	runtimeDir,
-	activityPath: path.join(runtimeDir, "activity.json"),
-	usagePath: path.join(runtimeDir, "usage.json"),
-	statePath: path.join(runtimeDir, "task-state.json"),
-	stderrPath: path.join(runtimeDir, "driver-stderr.log"),
+	stdoutPath: path.join(runtimeDir, "stdout"),
 });
 
 export const findAgentTaskRuntimeByTaskId = async (

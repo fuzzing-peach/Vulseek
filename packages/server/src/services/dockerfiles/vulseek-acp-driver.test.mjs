@@ -29,17 +29,19 @@ const waitFor = async (predicate, timeoutMs = 10_000) => {
 	throw new Error(`Condition was not met within ${timeoutMs}ms`);
 };
 
+const readEvents = async (filePath) =>
+	(await readFile(filePath, "utf-8"))
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map(JSON.parse);
+
 test("ACP driver creates a session and writes normalized snapshots", async () => {
 	const dir = await mkdtemp(path.join(tmpdir(), "vulseek-acp-driver-"));
 	const adapterPath = path.join(dir, "fake-adapter.mjs");
 	const inputPath = path.join(dir, "input.json");
-	const activityPath = path.join(dir, "activity.json");
-	const usagePath = path.join(dir, "usage.json");
-	const statePath = path.join(dir, "task-state.json");
 	const outputPath = path.join(dir, "output.json");
-	const stderrPath = path.join(dir, "driver-stderr.log");
-	const stdoutPath = path.join(dir, "driver-stdout.log");
-	const lifecyclePath = path.join(dir, "driver-lifecycle.log");
+	const stdoutPath = path.join(dir, "stdout");
 
 	await writeFile(
 		adapterPath,
@@ -73,12 +75,7 @@ rl.on("line", (line) => {
 			prompt: "Inspect the repository",
 			adapterCommand: process.execPath,
 			adapterArgs: [adapterPath],
-			activityPath,
-			usagePath,
-			statePath,
-			stderrPath,
 			stdoutPath,
-			driverLifecyclePath: lifecyclePath,
 			structuredOutputResultPathInContainer: outputPath,
 			nullableOutput: true,
 			persistent: false,
@@ -109,31 +106,31 @@ rl.on("line", (line) => {
 	);
 
 	assert.equal(result.code, 0, result.stderr);
-	assert.match(result.stdout, /THREAD_ID:thread-1/);
-	const activity = JSON.parse(await readFile(activityPath, "utf-8"));
-	assert.match(activity.updatedAt, /^\d{4}-/);
-	delete activity.updatedAt;
-	assert.deepEqual(activity, {
-		version: 1,
-		revision: 3,
-		taskId: "task-1",
-		sessionId: "thread-1",
-		status: "completed",
-		activity: { kind: "completed", label: "Completed" },
-	});
-	const usage = JSON.parse(await readFile(usagePath, "utf-8"));
-	assert.match(usage.updatedAt, /^\d{4}-/);
-	delete usage.updatedAt;
-	assert.deepEqual(usage, {
-		used: 42,
-		contextSize: 1000,
-	});
-	assert.equal(JSON.parse(await readFile(outputPath, "utf-8")).output, null);
+	const events = await readEvents(stdoutPath);
+	assert.equal(events.some((event) => event.type === "start"), true);
 	assert.equal(
-		JSON.parse(await readFile(statePath, "utf-8")).promptFinished,
+		events.some(
+			(event) =>
+				event.type === "thread" && event.threadId === "thread-1",
+		),
 		true,
 	);
-	assert.match(await readFile(lifecyclePath, "utf-8"), /driver_started/);
+	assert.equal(events.some((event) => event.type === "activity"), true);
+	assert.deepEqual(
+		events.findLast((event) => event.type === "usage")?.usage,
+		{ used: 42, contextSize: 1000 },
+	);
+	assert.deepEqual(
+		events.findLast((event) => event.type === "task_done"),
+		{
+			type: "task_done",
+			taskId: "task-1",
+			status: "completed",
+			stopReason: "end_turn",
+		},
+	);
+	assert.equal(events.findLast((event) => event.type === "exit")?.code, undefined);
+	assert.equal(JSON.parse(await readFile(outputPath, "utf-8")).output, null);
 });
 
 for (const scenario of [
@@ -189,11 +186,7 @@ rl.on("line", (line) => {
 				prompt: "continue",
 				adapterCommand: process.execPath,
 				adapterArgs: [adapterPath, requestLogPath],
-				activityPath: path.join(dir, "activity.json"),
-				usagePath: path.join(dir, "usage.json"),
-				statePath: path.join(dir, "task-state.json"),
-				stderrPath: path.join(dir, "stderr.log"),
-				stdoutPath: path.join(dir, "stdout.log"),
+				stdoutPath: path.join(dir, "stdout"),
 				structuredOutputResultPathInContainer: path.join(dir, "output.json"),
 				persistent: false,
 				...scenario.input,
@@ -224,10 +217,7 @@ rl.on("line", (line) => {
 		);
 
 		assert.equal(result.code, 0, result.stderr);
-		assert.match(
-			result.stdout,
-			new RegExp(`THREAD_ID:${scenario.expectedSessionId}`),
-		);
+		assert.equal(result.stdout, "");
 		const requests = (await readFile(requestLogPath, "utf-8"))
 			.trim()
 			.split("\n")
@@ -285,11 +275,7 @@ rl.on("line", (line) => {
 		prompt,
 		adapterCommand: process.execPath,
 		adapterArgs: [adapterPath, requestLogPath],
-		activityPath: path.join(runtimeDir, "activity.json"),
-		usagePath: path.join(runtimeDir, "usage.json"),
-		statePath: path.join(runtimeDir, "task-state.json"),
-		stderrPath: path.join(runtimeDir, "stderr.log"),
-		stdoutPath: path.join(runtimeDir, "stdout.log"),
+		stdoutPath: path.join(runtimeDir, "stdout"),
 		structuredOutputResultPathInContainer: path.join(runtimeDir, "output.json"),
 		taskStageRootInContainer: runtimeDir,
 		taskAliasRootInContainer: path.join(dir, "task"),
@@ -330,9 +316,9 @@ rl.on("line", (line) => {
 		await waitFor(async () => {
 			try {
 				return (
-					JSON.parse(
-						await readFile(path.join(firstDir, "task-state.json"), "utf-8"),
-					).promptFinished === true
+					(await readEvents(path.join(firstDir, "stdout"))).some(
+						(event) => event.type === "task_done" && event.taskId === "task-1",
+					)
 				);
 			} catch {
 				return false;
@@ -355,9 +341,9 @@ rl.on("line", (line) => {
 		await waitFor(async () => {
 			try {
 				return (
-					JSON.parse(
-						await readFile(path.join(secondDir, "task-state.json"), "utf-8"),
-					).promptFinished === true
+					(await readEvents(path.join(secondDir, "stdout"))).some(
+						(event) => event.type === "task_done" && event.taskId === "task-2",
+					)
 				);
 			} catch {
 				return false;
@@ -382,9 +368,12 @@ rl.on("line", (line) => {
 			["persistent-thread", "persistent-thread"],
 		);
 		assert.equal(
-			JSON.parse(await readFile(path.join(secondDir, "activity.json"), "utf-8"))
-				.status,
-			"completed",
+			(await readEvents(path.join(secondDir, "stdout"))).some(
+				(event) =>
+					event.type === "activity" &&
+					event.status === "completed",
+			),
+			true,
 		);
 	} finally {
 		child.kill("SIGTERM");

@@ -1,7 +1,8 @@
+import { backfillCandidateResultProjections } from "@vulseek/server/services/scan/persistence/candidate-result-projection-backfill";
+import { backfillScanJobCosts } from "@vulseek/server/services/scan/persistence/scan-job-cost-backfill";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
-import { backfillCandidateResultProjections } from "@vulseek/server/services/scan/persistence/candidate-result-projection-backfill";
 import { ensureLegacyDrizzleBaseline } from "./legacy-drizzle-baseline";
 
 const connectionString = process.env.DATABASE_URL!;
@@ -17,6 +18,10 @@ export const migration = async () => {
 		const backfill = await backfillCandidateResultProjections();
 		console.log(
 			`Candidate result projection backfill complete: processed=${backfill.processedCount} skipped=${backfill.skippedCount}`,
+		);
+		const costBackfill = await backfillScanJobCosts();
+		console.log(
+			`Scan job cost backfill complete: processed=${costBackfill.processedCount} skipped=${costBackfill.skippedCount}`,
 		);
 		console.log("Migration complete");
 	} finally {

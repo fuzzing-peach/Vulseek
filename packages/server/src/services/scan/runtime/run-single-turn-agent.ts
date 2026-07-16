@@ -436,7 +436,12 @@ const appendHostBootstrapLog = async (
 	await fs
 		.appendFile(
 			logPath,
-			`[acp-driver-bootstrap] ${new Date().toISOString()} ${message}\n`,
+			`${JSON.stringify({
+				type: "log",
+				level: "info",
+				source: "host",
+				message,
+			})}\n`,
 			"utf-8",
 		)
 		.catch(() => {});
@@ -991,9 +996,7 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		})
 		.join(" ");
 
-	const stderrPath = path.join(input.stageDirPath, runtimeFileNames.stderr);
 	const stdoutPath = path.join(input.stageDirPath, runtimeFileNames.stdout);
-	const usagePath = path.join(input.stageDirPath, runtimeFileNames.usage);
 	const containerBootstrapPath = path.join(
 		input.stageDirPath,
 		CONTAINER_BOOTSTRAP_LOG_FILE_NAME,
@@ -1022,9 +1025,7 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		containerNetworkArg,
 		containerEnvArgs,
 		memoryArgs,
-		stderrPath,
 		stdoutPath,
-		usagePath,
 		containerBootstrapPath,
 	};
 };
@@ -1053,9 +1054,16 @@ export const startContainer = async (input: StageContainerInput) => {
 				execAsync(
 					`docker exec ${input.containerName} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}'"`,
 				),
-			);
-			if (input.taskRealRootInContainer) {
-				await updateTaskAliasSymlinkInContainer({
+				);
+				if (input.taskRealRootInContainer) {
+					if (!input.persistent) {
+						await drainPreviousTaskAliasInContainer({
+							containerName: input.containerName,
+							nextTaskRootInContainer: input.taskRealRootInContainer,
+							logPath,
+						});
+					}
+					await updateTaskAliasSymlinkInContainer({
 					containerName: input.containerName,
 					taskRootInContainer: input.taskRealRootInContainer,
 					logPath,
@@ -1150,37 +1158,78 @@ const updateTaskAliasSymlinkInContainer = async (input: {
 				`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(script)}'`,
 			),
 	);
+	};
+
+const DRAIN_PREVIOUS_DRIVER_TIMEOUT_MS = 60_000;
+
+const drainPreviousTaskAliasInContainer = async (input: {
+	containerName: string;
+	nextTaskRootInContainer: string;
+	logPath?: string | null;
+}) => {
+	const timeoutSeconds = Math.ceil(DRAIN_PREVIOUS_DRIVER_TIMEOUT_MS / 1000);
+	const script = [
+		"set -euo pipefail",
+		`next_root='${escapeSingleQuotes(input.nextTaskRootInContainer)}'`,
+		"if [ ! -L /task ]; then exit 0; fi",
+		"old_root=$(readlink -f /task)",
+		'if [ "$old_root" = "$next_root" ]; then exit 0; fi',
+		"pid_path=\"$old_root/acp-driver.pid\"",
+		"stdout_path=\"$old_root/stdout\"",
+		"pid=''",
+		'if [ -f "$pid_path" ]; then pid=$(cat "$pid_path" 2>/dev/null || true); fi',
+		'if [ -z "$pid" ]; then exit 0; fi',
+		`deadline=$(($(date +%s) + ${timeoutSeconds}))`,
+		"while :; do",
+			"  has_exit=false",
+			"  if [ -f \"$stdout_path\" ] && grep -Eq '\"type\"[[:space:]]*:[[:space:]]*\"exit\"' \"$stdout_path\"; then has_exit=true; fi",
+			"  process_alive=false",
+			"  if kill -0 \"$pid\" 2>/dev/null; then process_alive=true; fi",
+			"  if [ \"$has_exit\" = true ] && [ \"$process_alive\" = false ]; then exit 0; fi",
+			"  if [ \"$(date +%s)\" -ge \"$deadline\" ]; then",
+			"    echo \"previous driver did not drain: pid=$pid old_root=$old_root has_exit=$has_exit process_alive=$process_alive\" >&2",
+			"    exit 42",
+			"  fi",
+			"  sleep 0.2",
+		"done",
+	].join("\n");
+	await withHostBootstrapLog(
+		input.logPath,
+		"drain_previous_driver",
+		`next_root=${JSON.stringify(input.nextTaskRootInContainer)}`,
+		() =>
+			execAsync(
+				`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(script)}'`,
+			),
+	);
 };
 
 const ACP_DRIVER_FILE_NAME = "/opt/vulseek-acp/vulseek-acp-driver.mjs";
 const ACP_DRIVER_INPUT_FILE_NAME = "acp-driver-input.json";
-const ACP_DRIVER_STDOUT_FILE_NAME = "acp-driver-stdout.log";
 const ACP_DRIVER_LAUNCH_FILE_NAME = "acp-driver-launch.sh";
 const ACP_DRIVER_PID_FILE_NAME = "acp-driver.pid";
-const ACP_DRIVER_LIFECYCLE_FILE_NAME = "acp-driver-lifecycle.log";
 const CONTAINER_BOOTSTRAP_LOG_FILE_NAME = "container-bootstrap.log";
 const ACP_DRIVER_TASK_DIR_NAME = "acp-driver-tasks";
 const ACP_AGENT_HOME_DIR_NAME = "agent-home";
 const ACP_DRIVER_VERSION = "2026-07-15-sdk-1";
 
-const buildAcpDriverLaunchScript = (input: {
+export const buildAcpDriverLaunchScript = (input: {
 	driverScriptPath: string;
 	driverInputPath: string;
 	driverStdoutPath: string;
 	driverPidPath: string;
-	driverLifecyclePath: string;
-	taskStdoutPath: string;
-	stderrPath: string;
 }) => `#!/usr/bin/env bash
 set -euo pipefail
 
 mkdir -p '${escapeSingleQuotes(path.posix.dirname(input.driverScriptPath))}'
 : > '${escapeSingleQuotes(input.driverStdoutPath)}'
 
-nohup bash -lc 'echo "[acp-driver-lifecycle] $(date -Iseconds) shell_start pid=$$" >> "${input.driverLifecyclePath}"; node "${input.driverScriptPath}" "${input.driverInputPath}" > >(tee -a "${input.driverStdoutPath}" "${input.taskStdoutPath}" >/dev/null) 2>> "${input.stderrPath}"; status=$?; echo "[acp-driver] exit_code=$status" >> "${input.stderrPath}"; echo "[acp-driver-lifecycle] $(date -Iseconds) shell_exit status=$status" >> "${input.driverLifecyclePath}"' >/dev/null 2>&1 &
+nohup bash -c '
+  node "$1" "$2" >/dev/null 2>&1
+  status=$?
+  printf "%s\\n" "{\\"type\\":\\"exit\\",\\"code\\":\${status}}" >> "$3"
+' _ '${escapeSingleQuotes(input.driverScriptPath)}' '${escapeSingleQuotes(input.driverInputPath)}' '${escapeSingleQuotes(input.driverStdoutPath)}' >/dev/null 2>&1 &
 driver_pid=$!
-echo "[acp-driver] pid=$driver_pid" >> '${escapeSingleQuotes(input.stderrPath)}'
-echo "[acp-driver-lifecycle] $(date -Iseconds) launch_background_pid=$driver_pid" >> '${escapeSingleQuotes(input.driverLifecyclePath)}'
 echo "$driver_pid" > '${escapeSingleQuotes(input.driverPidPath)}'
 `;
 
@@ -1225,7 +1274,7 @@ const parseDriverHealthOutput = (output: string): DriverHealth => {
 const inspectDriverHealth = async (input: {
 	containerName: string;
 	driverPidPath: string;
-	driverLifecyclePath: string;
+	driverStdoutPath: string;
 }): Promise<DriverHealth> => {
 	const maxIdleMs = Number.isFinite(PERSISTENT_DRIVER_HEALTH_MAX_IDLE_MS)
 		? Math.max(30000, PERSISTENT_DRIVER_HEALTH_MAX_IDLE_MS)
@@ -1234,7 +1283,7 @@ const inspectDriverHealth = async (input: {
 	const probe = [
 		"set -u",
 		`pid_path='${escapeSingleQuotes(input.driverPidPath)}'`,
-		`lifecycle_path='${escapeSingleQuotes(input.driverLifecyclePath)}'`,
+		`stdout_path='${escapeSingleQuotes(input.driverStdoutPath)}'`,
 		`max_idle_seconds=${maxIdleSeconds}`,
 		"pid=''",
 		'if [ -f "$pid_path" ]; then pid=$(cat "$pid_path" 2>/dev/null || true); fi',
@@ -1243,13 +1292,13 @@ const inspectDriverHealth = async (input: {
 		"if [ -z \"$state\" ]; then echo 'alive=false'; echo 'reason=process_not_running'; echo \"pid=$pid\"; exit 0; fi",
 		'case "$state" in *Z*) echo \'alive=false\'; echo \'reason=process_zombie\'; echo "pid=$pid"; echo "state=$state"; exit 0;; esac',
 		'if ! kill -0 "$pid" 2>/dev/null; then echo \'alive=false\'; echo \'reason=kill_check_failed\'; echo "pid=$pid"; echo "state=$state"; exit 0; fi',
-		'if [ ! -f "$lifecycle_path" ]; then echo \'alive=false\'; echo \'reason=missing_lifecycle\'; echo "pid=$pid"; echo "state=$state"; exit 0; fi',
+		'if [ ! -f "$stdout_path" ]; then echo \'alive=false\'; echo \'reason=missing_stdout\'; echo "pid=$pid"; echo "state=$state"; exit 0; fi',
 		"now=$(date +%s)",
-		'mtime=$(stat -c %Y "$lifecycle_path" 2>/dev/null || echo 0)',
+		'mtime=$(stat -c %Y "$stdout_path" 2>/dev/null || echo 0)',
 		"age_seconds=$((now - mtime))",
 		"age_ms=$((age_seconds * 1000))",
-		"last_line=$(tail -n 1 \"$lifecycle_path\" 2>/dev/null | tr '\\n' ' ' || true)",
-		'if [ "$age_seconds" -gt "$max_idle_seconds" ]; then echo \'alive=false\'; echo \'reason=stale_lifecycle\'; echo "pid=$pid"; echo "state=$state"; echo "age_ms=$age_ms"; echo "last_line=$last_line"; exit 0; fi',
+		"last_line=$(tail -n 1 \"$stdout_path\" 2>/dev/null | tr '\\n' ' ' || true)",
+		'if [ "$age_seconds" -gt "$max_idle_seconds" ]; then echo \'alive=false\'; echo \'reason=stale_stdout\'; echo "pid=$pid"; echo "state=$state"; echo "age_ms=$age_ms"; echo "last_line=$last_line"; exit 0; fi',
 		"echo 'alive=true'",
 		"echo 'reason=ok'",
 		'echo "pid=$pid"',
@@ -1779,7 +1828,7 @@ export const runSingleTurnAgentInContainer = async (
 				)}`
 			: resolvedPromptFinal;
 	const runtimeFileNames = AGENT_RUNTIME_FILE_NAMES;
-	const taskStderrPath = path.join(taskStageDirPath, runtimeFileNames.stderr);
+	const taskStderrPath = path.join(taskStageDirPath, runtimeFileNames.stdout);
 	await initializeAgentRuntimeFiles(taskStageDirPath);
 	await appendHostBootstrapLog(
 		taskStderrPath,
@@ -1813,8 +1862,8 @@ export const runSingleTurnAgentInContainer = async (
 		ACP_DRIVER_INPUT_FILE_NAME,
 	);
 	const driverStdoutPath = path.posix.join(
-		input.stageRootInContainer,
-		ACP_DRIVER_STDOUT_FILE_NAME,
+		taskStageRootInContainer,
+		runtimeFileNames.stdout,
 	);
 	const driverLaunchPath = path.posix.join(
 		input.stageRootInContainer,
@@ -1823,10 +1872,6 @@ export const runSingleTurnAgentInContainer = async (
 	const driverPidPath = path.posix.join(
 		input.stageRootInContainer,
 		ACP_DRIVER_PID_FILE_NAME,
-	);
-	const driverLifecyclePath = path.posix.join(
-		input.stageRootInContainer,
-		ACP_DRIVER_LIFECYCLE_FILE_NAME,
 	);
 	const taskQueueDir = path.posix.join(
 		input.stageRootInContainer,
@@ -1842,7 +1887,7 @@ export const runSingleTurnAgentInContainer = async (
 					inspectDriverHealth({
 						containerName: input.containerName,
 						driverPidPath,
-						driverLifecyclePath,
+						driverStdoutPath,
 					}),
 			)
 		: null;
@@ -1958,27 +2003,10 @@ export const runSingleTurnAgentInContainer = async (
 			: null,
 		sessionMode: input.laneThreadId ? "persistent" : input.sessionMode || "new",
 		parentSessionId: input.parentSessionId || null,
-		stderrPath: path.posix.join(
-			taskStageRootInContainer,
-			runtimeFileNames.stderr,
-		),
 		stdoutPath: path.posix.join(
 			taskStageRootInContainer,
 			runtimeFileNames.stdout,
 		),
-		usagePath: path.posix.join(
-			taskStageRootInContainer,
-			runtimeFileNames.usage,
-		),
-		activityPath: path.posix.join(
-			taskStageRootInContainer,
-			runtimeFileNames.activity,
-		),
-		statePath: path.posix.join(
-			taskStageRootInContainer,
-			runtimeFileNames.state,
-		),
-		driverLifecyclePath,
 		agentHomePathInContainer: taskAgentHome.agentHomePathInContainer,
 		agentHomeLinkPathInContainer: taskAgentHome.agentHomeLinkPathInContainer,
 		parentAgentHomePathInContainer:
@@ -1997,8 +2025,13 @@ export const runSingleTurnAgentInContainer = async (
 		);
 		await appendContainerFile(
 			input.containerName,
-			driverLifecyclePath,
-			`[acp-driver-lifecycle] ${new Date().toISOString()} host_enqueue task_id=${input.taskId || ""} request_path=${requestPath} lane_thread_id=${input.laneThreadId || ""}\n`,
+			driverStdoutPath,
+			`${JSON.stringify({
+				type: "log",
+				level: "debug",
+				source: "host",
+				message: `persistent_driver_enqueue task_id=${input.taskId || ""} request_path=${requestPath} lane_thread_id=${input.laneThreadId || ""}`,
+			})}\n`,
 		).catch(() => {});
 		await withHostBootstrapLog(
 			taskStderrPath,
@@ -2019,8 +2052,13 @@ export const runSingleTurnAgentInContainer = async (
 	if (input.persistent && input.laneThreadId && persistentDriverHealth) {
 		await appendContainerFile(
 			input.containerName,
-			driverLifecyclePath,
-			`[acp-driver-lifecycle] ${new Date().toISOString()} host_driver_unhealthy task_id=${input.taskId || ""} reason=${persistentDriverHealth.reason || ""} pid=${persistentDriverHealth.pid || ""} state=${persistentDriverHealth.state || ""} lifecycle_age_ms=${persistentDriverHealth.lifecycleAgeMs ?? ""} last_lifecycle=${JSON.stringify(persistentDriverHealth.lastLifecycleLine || "")}\n`,
+			driverStdoutPath,
+			`${JSON.stringify({
+				type: "log",
+				level: "warn",
+				source: "host",
+				message: `persistent_driver_unhealthy task_id=${input.taskId || ""} reason=${persistentDriverHealth.reason || ""} pid=${persistentDriverHealth.pid || ""} state=${persistentDriverHealth.state || ""} last_stdout=${persistentDriverHealth.lastLifecycleLine || ""}`,
+			})}\n`,
 		).catch(() => {});
 		await stopPersistentDriver({
 			containerName: input.containerName,
@@ -2060,15 +2098,6 @@ export const runSingleTurnAgentInContainer = async (
 					driverInputPath,
 					driverStdoutPath,
 					driverPidPath,
-					driverLifecyclePath,
-					taskStdoutPath: path.posix.join(
-						taskStageRootInContainer,
-						runtimeFileNames.stdout,
-					),
-					stderrPath: path.posix.join(
-						taskStageRootInContainer,
-						runtimeFileNames.stderr,
-					),
 				}),
 			),
 	);

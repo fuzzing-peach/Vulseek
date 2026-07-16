@@ -97,10 +97,18 @@ const SCAN_JOB_STATUS_DEFAULTS: Record<string, string> = {
 	pending: "Pending",
 	running: "Running",
 	paused: "Paused",
+	finalizing: "Finalizing",
 	finished: "Finished",
+	partially_finished: "Partially finished",
 	failed: "Failed",
 	canceled: "Canceled",
 };
+
+export const isTerminalScanJobStatus = (status?: string | null) =>
+	status === "finished" ||
+	status === "partially_finished" ||
+	status === "failed" ||
+	status === "canceled";
 
 export const formatScanJobStatusLabel = (
 	t: ScanTranslation,

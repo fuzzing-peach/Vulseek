@@ -2,7 +2,6 @@ import {
 	cancelOpenScanJobTasks,
 	findScanJobById,
 	getScanJobConcurrencySetting,
-	reconcileScanJobCandidatePipelineStatus,
 	runScanJobInContainer,
 	updateScanJobStatus,
 } from "@vulseek/server";
@@ -110,7 +109,6 @@ export const scansWorker = new Worker(
 					if (scanJobAfterRun.status === "paused") {
 						return;
 					}
-					await reconcileScanJobCandidatePipelineStatus(scanJob.scanJobId);
 					return;
 				}
 			}
@@ -123,7 +121,6 @@ export const scansWorker = new Worker(
 			if (scanJobAfterRun.status === "paused") {
 				return;
 			}
-			await reconcileScanJobCandidatePipelineStatus(scanJob.scanJobId);
 			console.log(
 				"[scans-worker]",
 				JSON.stringify({

@@ -1,10 +1,10 @@
-import { and, asc, eq, isNull, or } from "drizzle-orm";
 import { db } from "@vulseek/server/db";
 import {
 	scanStageGroupInstances,
 	scanStageGroupLaneMemberships,
 	scanStageLaneRuntimes,
 } from "@vulseek/server/db/schema";
+import { and, asc, eq, isNull, or } from "drizzle-orm";
 
 export type StageLaneRuntime = typeof scanStageLaneRuntimes.$inferSelect;
 export type StageGroupInstance = typeof scanStageGroupInstances.$inferSelect;
@@ -284,7 +284,6 @@ export const resetStageLaneRuntimeSessionForExitRepo = async (input: {
 		.returning();
 };
 
-
 export const resetStageLaneRuntimeByLaneForExitRepo = async (input: {
 	scanJobId: string;
 	stageName: string;
@@ -334,6 +333,18 @@ export const resetStageLaneRuntimesByScanJobIdRepo = async (
 		.where(eq(scanStageLaneRuntimes.scanJobId, scanJobId))
 		.returning();
 };
+
+export const deleteStageLaneRuntimesByScanJobIdRepo = async (
+	scanJobId: string,
+) =>
+	await db
+		.delete(scanStageLaneRuntimes)
+		.where(eq(scanStageLaneRuntimes.scanJobId, scanJobId))
+		.returning({
+			scanJobId: scanStageLaneRuntimes.scanJobId,
+			stageName: scanStageLaneRuntimes.stageName,
+			laneIndex: scanStageLaneRuntimes.laneIndex,
+		});
 
 export const findActiveStageGroupInstanceByLeaderLaneRepo = async (input: {
 	scanJobId: string;
@@ -416,7 +427,10 @@ export const findStageGroupLaneMembershipRepo = async (input: {
 		.from(scanStageGroupLaneMemberships)
 		.where(
 			and(
-				eq(scanStageGroupLaneMemberships.groupInstanceId, input.groupInstanceId),
+				eq(
+					scanStageGroupLaneMemberships.groupInstanceId,
+					input.groupInstanceId,
+				),
 				eq(scanStageGroupLaneMemberships.stageName, input.stageName),
 			),
 		)
@@ -458,13 +472,17 @@ export const findStageGroupInstanceByIdRepo = async (groupInstanceId: string) =>
 		.limit(1)
 		.then((rows) => rows[0] || null);
 
-export const listStageGroupInstancesByScanJobIdRepo = async (scanJobId: string) =>
+export const listStageGroupInstancesByScanJobIdRepo = async (
+	scanJobId: string,
+) =>
 	await db
 		.select()
 		.from(scanStageGroupInstances)
 		.where(eq(scanStageGroupInstances.scanJobId, scanJobId));
 
-export const markStageGroupInstanceExitedRepo = async (groupInstanceId: string) =>
+export const markStageGroupInstanceExitedRepo = async (
+	groupInstanceId: string,
+) =>
 	await db
 		.update(scanStageGroupInstances)
 		.set({
@@ -475,7 +493,9 @@ export const markStageGroupInstanceExitedRepo = async (groupInstanceId: string) 
 		.returning()
 		.then((rows) => rows[0] || null);
 
-export const listStageGroupLaneMembershipsRepo = async (groupInstanceId: string) =>
+export const listStageGroupLaneMembershipsRepo = async (
+	groupInstanceId: string,
+) =>
 	await db
 		.select()
 		.from(scanStageGroupLaneMemberships)

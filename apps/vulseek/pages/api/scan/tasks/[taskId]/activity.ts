@@ -2,13 +2,13 @@ import { promises as fs } from "node:fs";
 import {
 	findAgentTaskRuntimeByTaskId,
 	findScanJobOrganizationId,
+	parseDriverStdout,
 	validateRequest,
 } from "@vulseek/server";
 import type { NextApiRequest, NextApiResponse } from "next";
 import {
 	type AgentActivity,
 	type AgentActivityMetadata,
-	type AgentActivitySnapshot,
 	idleAgentActivity,
 } from "@/lib/scan/agent-activity";
 
@@ -23,16 +23,14 @@ const sendEvent = (res: NextApiResponse, event: string, payload: unknown) => {
 	res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
 };
 
-const readSnapshot = async (
-	filePath: string,
-): Promise<AgentActivitySnapshot | null> => {
+const readSnapshot = async (filePath: string) => {
 	try {
-		const value = JSON.parse(
-			await fs.readFile(filePath, "utf-8"),
-		) as AgentActivitySnapshot;
-		return value?.version === 1 && typeof value.revision === "number"
-			? value
-			: null;
+		const content = await fs.readFile(filePath, "utf-8");
+		const protocol = parseDriverStdout(content);
+		return {
+			activity: protocol.latestActivity as AgentActivity | null,
+			signature: `${content.length}:${content.slice(-256)}`,
+		};
 	} catch {
 		return null;
 	}
@@ -94,7 +92,7 @@ export default async function handler(
 	res.flushHeaders?.();
 
 	let closed = false;
-	let revision = -1;
+	let revision: string | null = null;
 	const cleanup = () => {
 		closed = true;
 		clearInterval(poll);
@@ -108,14 +106,14 @@ export default async function handler(
 			res.end();
 			return;
 		}
-		const snapshot = await readSnapshot(latest.activityPath);
+		const snapshot = await readSnapshot(latest.stdoutPath);
 		const activity: AgentActivity = snapshot?.activity || idleAgentActivity;
 		if (initial) {
 			sendEvent(res, "snapshot", { metadata: metadataFor(latest), activity });
-		} else if (snapshot && snapshot.revision !== revision) {
+		} else if (snapshot && snapshot.signature !== revision) {
 			sendEvent(res, "activity", { metadata: metadataFor(latest), activity });
 		}
-		if (snapshot) revision = snapshot.revision;
+		if (snapshot) revision = snapshot.signature;
 		if (!ACTIVE_STATUSES.has(latest.status)) {
 			sendEvent(res, "done", { taskId, status: latest.status });
 			cleanup();

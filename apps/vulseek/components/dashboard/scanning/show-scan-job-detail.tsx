@@ -89,10 +89,12 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { idleAgentActivity } from "@/lib/scan/agent-activity";
+import { cachedInputPercent } from "@/lib/scan/token-usage";
 import { api, type RouterOutputs } from "@/utils/api";
 import {
 	formatAnalysisResultLabel,
 	formatScanJobStatusLabel,
+	isTerminalScanJobStatus,
 	formatScanStageLabel,
 	formatScanStatusLabel,
 	formatScanTypeLabel,
@@ -334,7 +336,12 @@ const formatTokenUsageWithCache = (
 			count: totalValue,
 		});
 	}
-	const cachedPercent = (cached / total) * 100;
+	const cachedPercent = cachedInputPercent(total, cached);
+	if (cachedPercent === null) {
+		return scanT(t, "scan.tokenUsage", "{{count}} tokens", {
+			count: totalValue,
+		});
+	}
 	return scanT(
 		t,
 		"scan.cachedTokenUsage",
@@ -534,6 +541,12 @@ const getScanJobStatusLabel = (t: ScanTranslation, status?: string) =>
 const getScanJobStatusClassName = (status?: string) => {
 	if (status === "finished") {
 		return "text-green-600";
+	}
+	if (status === "partially_finished") {
+		return "text-orange-600";
+	}
+	if (status === "finalizing") {
+		return "text-blue-600";
 	}
 
 	if (status === "canceled") {
@@ -1447,9 +1460,7 @@ export const ShowScanJobDetail = ({
 		{
 			enabled: !!scanJobId,
 			refetchInterval: (data) =>
-				data?.status === "finished" ||
-				data?.status === "failed" ||
-				data?.status === "canceled"
+					isTerminalScanJobStatus(data?.status)
 					? false
 					: 10_000,
 		},
@@ -1477,9 +1488,7 @@ export const ShowScanJobDetail = ({
 			enabled: !!scanJobId && activeTab === "candidates",
 			refetchInterval:
 				activeTab === "candidates" &&
-				scanJob?.status !== "finished" &&
-				scanJob?.status !== "failed" &&
-				scanJob?.status !== "canceled"
+					!isTerminalScanJobStatus(scanJob?.status)
 					? 20_000
 					: false,
 			// No keepPreviousData: show correct data only. Use isFetchingCandidates
@@ -1501,9 +1510,7 @@ export const ShowScanJobDetail = ({
 				enabled: !!scanJobId && shouldLoadJobRuntime,
 				refetchInterval:
 					shouldLoadJobRuntime &&
-					scanJob?.status !== "finished" &&
-					scanJob?.status !== "failed" &&
-					scanJob?.status !== "canceled"
+					!isTerminalScanJobStatus(scanJob?.status)
 						? 5000
 						: false,
 			},
@@ -1515,9 +1522,7 @@ export const ShowScanJobDetail = ({
 				enabled: !!scanJobId && shouldLoadJobRuntime,
 				refetchInterval:
 					shouldLoadJobRuntime &&
-					scanJob?.status !== "finished" &&
-					scanJob?.status !== "failed" &&
-					scanJob?.status !== "canceled"
+						!isTerminalScanJobStatus(scanJob?.status)
 						? 5000
 						: false,
 			},
@@ -1537,9 +1542,7 @@ export const ShowScanJobDetail = ({
 				enabled: !!scanJobId && activeTab === "overview",
 				refetchInterval:
 					activeTab === "overview" &&
-					scanJob?.status !== "finished" &&
-					scanJob?.status !== "failed" &&
-					scanJob?.status !== "canceled"
+						!isTerminalScanJobStatus(scanJob?.status)
 						? 10_000
 						: false,
 			},
@@ -1569,9 +1572,7 @@ export const ShowScanJobDetail = ({
 				enabled: !!scanJobId && activeTab === "tasks",
 				refetchInterval:
 					activeTab === "tasks" &&
-					scanJob?.status !== "finished" &&
-					scanJob?.status !== "failed" &&
-					scanJob?.status !== "canceled"
+						!isTerminalScanJobStatus(scanJob?.status)
 						? 10_000
 						: false,
 				keepPreviousData: true,

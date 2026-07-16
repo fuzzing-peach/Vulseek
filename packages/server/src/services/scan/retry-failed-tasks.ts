@@ -34,7 +34,6 @@ type RetryFailedTasksDeps = {
 	clearTaskArtifacts: (scanJobId: string, task: Task) => Promise<void>;
 	resetFailedTask: (taskId: string) => Promise<unknown>;
 	enqueueTask: (scanJobId: string, task: Task) => Promise<void>;
-	recalculateScanTaskCounts: (scanJobId: string) => Promise<unknown>;
 	resetScanJobForRetry: (input: { scanJobId: string }) => Promise<unknown>;
 };
 
@@ -89,7 +88,10 @@ export const retryFailedScanJobTasksWithDeps = async (
 			message: "Retry failed tasks is only supported for full scan jobs",
 		});
 	}
-	if (scanJob.status !== "finished") {
+	if (
+		scanJob.status !== "finished" &&
+		scanJob.status !== "partially_finished"
+	) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
 			message: "Only finished full scan jobs can retry failed tasks",
@@ -129,7 +131,6 @@ export const retryFailedScanJobTasksWithDeps = async (
 		retriedTasksByStage[stageName] += 1;
 	}
 
-	await deps.recalculateScanTaskCounts(scanJobId);
 	await deps.resetScanJobForRetry({
 		scanJobId,
 	});

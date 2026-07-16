@@ -29,6 +29,7 @@ import {
 	CardTitle,
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cachedInputPercent } from "@/lib/scan/token-usage";
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
 import {
@@ -177,7 +178,12 @@ const formatTokenUsageWithCache = (
 			count: totalValue,
 		});
 	}
-	const cachedPercent = (cached / total) * 100;
+	const cachedPercent = cachedInputPercent(total, cached);
+	if (cachedPercent === null) {
+		return scanT(t, "scan.tokenUsage", "{{count}} tokens", {
+			count: totalValue,
+		});
+	}
 	return scanT(
 		t,
 		"scan.cachedTokenUsage",

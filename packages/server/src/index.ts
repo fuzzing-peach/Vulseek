@@ -45,6 +45,7 @@ export * from "./services/scan/checkout-tools";
 export * from "./services/scan/constants";
 export * from "./services/scan/home-overview";
 export * from "./services/scan/live-session";
+export * from "./services/scan/runtime/driver-stdout-protocol";
 export * from "./services/scan/state/candidate-task-state";
 export type { ScanCandidateQueueJob } from "./services/scan/types";
 export * from "./services/scan/usage-snapshot";

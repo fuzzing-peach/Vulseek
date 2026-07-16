@@ -21,6 +21,7 @@ const asRecord = (value) =>
 	value && typeof value === "object" && !Array.isArray(value) ? value : {};
 const asString = (value) => (typeof value === "string" ? value : "");
 const pendingJsonWrites = new Map();
+const pendingProtocolWrites = new Map();
 
 const atomicWriteJson = async (filePath, value) => {
 	if (!filePath) return;
@@ -45,14 +46,21 @@ const atomicWriteJson = async (filePath, value) => {
 	}
 };
 
-const appendLog = async (filePath, message) => {
+const appendProtocolEvent = async (filePath, event) => {
 	if (!filePath) return;
-	await fs.mkdir(path.dirname(filePath), { recursive: true });
-	await fs.appendFile(
-		filePath,
-		`[acp-driver] ${new Date().toISOString()} ${message}\n`,
-		"utf-8",
-	);
+	const previousWrite = pendingProtocolWrites.get(filePath) || Promise.resolve();
+	const currentWrite = previousWrite.catch(() => {}).then(async () => {
+		await fs.mkdir(path.dirname(filePath), { recursive: true });
+		await fs.appendFile(filePath, `${JSON.stringify(event)}\n`, "utf-8");
+	});
+	pendingProtocolWrites.set(filePath, currentWrite);
+	try {
+		await currentWrite;
+	} finally {
+		if (pendingProtocolWrites.get(filePath) === currentWrite) {
+			pendingProtocolWrites.delete(filePath);
+		}
+	}
 };
 
 const resolveNormalizerPath = () =>
@@ -92,25 +100,20 @@ const activityForEvent = (event) => {
 
 const createSnapshotWriter = (initialInput, sessionIdRef) => {
 	let input = initialInput;
-	let revision = 0;
 	let timer = null;
 	let pendingActivity = null;
 	const write = async (status, activity) => {
-		revision += 1;
-		await atomicWriteJson(input.activityPath, {
-			version: 1,
-			revision,
+		await appendProtocolEvent(input.stdoutPath, {
+			type: "activity",
 			taskId: input.taskId || null,
 			sessionId: sessionIdRef.current || null,
 			status,
 			activity,
-			updatedAt: new Date().toISOString(),
 		});
 	};
 	return {
 		setInput(nextInput) {
 			input = nextInput;
-			revision = 0;
 			pendingActivity = null;
 			if (timer) clearTimeout(timer);
 			timer = null;
@@ -220,11 +223,8 @@ const updateTaskAlias = async (input) => {
 	await fs.symlink(target, alias, "dir");
 };
 
-const writeTaskState = async (input, value) =>
-	atomicWriteJson(input.statePath, {
-		...value,
-		updatedAt: new Date().toISOString(),
-	});
+const writeTaskEvent = async (input, event) =>
+	appendProtocolEvent(input.stdoutPath, event);
 
 const writeNullableOutput = async (input, stopReason) => {
 	if (!input.nullableOutput || stopReason !== "end_turn") return;
@@ -253,9 +253,17 @@ const run = async () => {
 	if (!inputPath) throw new Error("ACP driver input path is required");
 	const initialInput = JSON.parse(await fs.readFile(inputPath, "utf-8"));
 	let activeInput = initialInput;
-	await appendLog(initialInput.driverLifecyclePath, "driver_started");
+	await appendProtocolEvent(initialInput.stdoutPath, {
+		type: "start",
+		pid: process.pid,
+	});
 	const heartbeat = setInterval(() => {
-		void appendLog(activeInput.driverLifecyclePath, "heartbeat").catch(
+		void appendProtocolEvent(activeInput.stdoutPath, {
+			type: "log",
+			level: "debug",
+			source: "driver",
+			message: "heartbeat",
+		}).catch(
 			() => {},
 		);
 	}, 15_000);
@@ -288,7 +296,12 @@ const run = async () => {
 		},
 	});
 	child.stderr.on("data", (chunk) => {
-		void fs.appendFile(activeInput.stderrPath, chunk).catch(() => {});
+		void appendProtocolEvent(activeInput.stdoutPath, {
+			type: "log",
+			level: "error",
+			source: "agent",
+			message: chunk.toString(),
+		}).catch(() => {});
 	});
 	const childExit = new Promise((resolve) =>
 		child.once("exit", (code, signal) => resolve({ code, signal })),
@@ -304,7 +317,12 @@ const run = async () => {
 	};
 	const stop = async (signal) => {
 		await cancel().catch(() => {});
-		await appendLog(activeInput.stderrPath, `received ${signal}`);
+		await appendProtocolEvent(activeInput.stdoutPath, {
+			type: "log",
+			level: "warn",
+			source: "driver",
+			message: `received ${signal}`,
+		});
 		child.kill("SIGTERM");
 	};
 	process.once("SIGTERM", () => void stop("SIGTERM"));
@@ -332,10 +350,12 @@ const run = async () => {
 			if (ctx.params.sessionId !== sessionIdRef.current) return;
 			for (const event of normalizer.push(ctx.params)) {
 				if (event.kind === "usage") {
-					await atomicWriteJson(activeInput.usagePath, {
-						used: event.used,
-						...(event.size !== undefined ? { contextSize: event.size } : {}),
-						updatedAt: new Date().toISOString(),
+					await appendProtocolEvent(activeInput.stdoutPath, {
+						type: "usage",
+						usage: {
+							used: event.used,
+							...(event.size !== undefined ? { contextSize: event.size } : {}),
+						},
 					});
 					continue;
 				}
@@ -377,25 +397,24 @@ const run = async () => {
 			return created.sessionId;
 		};
 		sessionIdRef.current = await openSession();
-		process.stdout.write(`THREAD_ID:${sessionIdRef.current}\n`);
+		await appendProtocolEvent(initialInput.stdoutPath, {
+			type: "thread",
+			threadId: sessionIdRef.current,
+		});
 
 		const runTask = async (taskInput) => {
 			activeInput = taskInput;
 			snapshots.setInput(taskInput);
 			normalizer.reset();
 			await updateTaskAlias(taskInput);
-			if (taskInput.stdoutPath)
-				await fs.appendFile(
-					taskInput.stdoutPath,
-					`THREAD_ID:${sessionIdRef.current}\n`,
-				);
+			await writeTaskEvent(taskInput, {
+				type: "task_start",
+				taskId: taskInput.taskId || null,
+				sessionId: sessionIdRef.current,
+			});
 			await snapshots.immediate("running", {
 				kind: "prompt",
 				label: "Starting",
-			});
-			await writeTaskState(taskInput, {
-				promptFinished: false,
-				sessionId: sessionIdRef.current,
 			});
 			promptActive = true;
 			let response;
@@ -414,9 +433,10 @@ const run = async () => {
 					label: "Error",
 					detail: error.message,
 				});
-				await writeTaskState(taskInput, {
-					promptFinished: false,
-					sessionId: sessionIdRef.current,
+				await writeTaskEvent(taskInput, {
+					type: "task_done",
+					taskId: taskInput.taskId || null,
+					status: "failed",
 					error: error.message,
 				});
 				throw error;
@@ -426,18 +446,17 @@ const run = async () => {
 			await snapshots.flush();
 			const usage = asRecord(response.usage);
 			if (Object.keys(usage).length) {
-				await atomicWriteJson(taskInput.usagePath, {
-					...usage,
-					updatedAt: new Date().toISOString(),
+				await appendProtocolEvent(taskInput.stdoutPath, {
+					type: "usage",
+					usage,
 				});
 			}
 			await writeNullableOutput(taskInput, response.stopReason);
-			await writeTaskState(taskInput, {
-				promptFinished: true,
-				endTurnReceived: response.stopReason === "end_turn",
+			await writeTaskEvent(taskInput, {
+				type: "task_done",
+				taskId: taskInput.taskId || null,
+				status: response.stopReason === "cancelled" ? "cancelled" : "completed",
 				stopReason: response.stopReason,
-				sessionId: sessionIdRef.current,
-				completedAt: new Date().toISOString(),
 			});
 			const finalStatus =
 				response.stopReason === "cancelled" ? "cancelled" : "completed";
@@ -457,9 +476,6 @@ const run = async () => {
 			try {
 				await runTask({
 					...queued.input,
-					driverLifecyclePath:
-						queued.input.driverLifecyclePath ||
-						initialInput.driverLifecyclePath,
 				});
 				await fs.rename(queued.running, `${queued.running}.done`);
 			} catch (error) {
@@ -498,10 +514,12 @@ run().catch(async (error) => {
 		const input = inputPath
 			? JSON.parse(await fs.readFile(inputPath, "utf-8"))
 			: {};
-		await appendLog(
-			input.stderrPath,
-			error instanceof Error ? error.stack || error.message : String(error),
-		);
+		await appendProtocolEvent(input.stdoutPath, {
+			type: "log",
+			level: "error",
+			source: "driver",
+			message: error instanceof Error ? error.stack || error.message : String(error),
+		});
 	} catch {}
 	fsSync.writeSync(
 		process.stderr.fd,

@@ -1,8 +1,10 @@
-import { promises as fs } from "node:fs";
-
 export type AgentTokenUsage = {
+	inputTokens: number;
+	outputTokens: number;
+	thoughtTokens: number;
 	totalTokens: number;
 	cachedReadTokens: number;
+	cachedWriteTokens: number;
 };
 
 const asRecord = (value: unknown): Record<string, unknown> =>
@@ -29,7 +31,13 @@ export const parseAgentUsageSnapshot = (value: unknown): AgentTokenUsage => {
 	]);
 	const inputTokens = numberAt(usage, ["inputTokens", "input_tokens"]) ?? 0;
 	const outputTokens = numberAt(usage, ["outputTokens", "output_tokens"]) ?? 0;
+	const thoughtTokens =
+		numberAt(usage, ["thoughtTokens", "thought_tokens", "reasoningTokens"]) ??
+		0;
 	return {
+		inputTokens,
+		outputTokens,
+		thoughtTokens,
 		totalTokens: explicitTotal ?? inputTokens + outputTokens,
 		cachedReadTokens:
 			numberAt(usage, [
@@ -38,17 +46,12 @@ export const parseAgentUsageSnapshot = (value: unknown): AgentTokenUsage => {
 				"cacheReadInputTokens",
 				"cache_read_input_tokens",
 			]) ?? 0,
+		cachedWriteTokens:
+			numberAt(usage, [
+				"cachedWriteTokens",
+				"cached_write_tokens",
+				"cacheCreationInputTokens",
+				"cache_creation_input_tokens",
+			]) ?? 0,
 	};
-};
-
-export const readAgentUsageSnapshot = async (
-	filePath: string,
-): Promise<AgentTokenUsage> => {
-	try {
-		return parseAgentUsageSnapshot(
-			JSON.parse(await fs.readFile(filePath, "utf-8")),
-		);
-	} catch {
-		return { totalTokens: 0, cachedReadTokens: 0 };
-	}
 };

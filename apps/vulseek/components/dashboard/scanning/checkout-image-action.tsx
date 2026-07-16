@@ -91,6 +91,7 @@ export const CheckoutImageAction = ({ target, onCheckoutComplete }: Props) => {
 		checkoutStatus?.status === "running" ||
 		runningCheckoutTask?.status === "running";
 	const isCheckouted = checkoutImageStatus?.exists === true;
+	const toolsImageReady = toolsStatus?.exists === true;
 
 	useEffect(() => {
 		if (!checkoutId && runningCheckoutTask?.checkoutId) {
@@ -154,7 +155,7 @@ export const CheckoutImageAction = ({ target, onCheckoutComplete }: Props) => {
 					scanT(t, "scan.actions.toolsBuildFailed", "Tools image build failed"),
 			);
 		}
-	}, [refetchToolsStatus, toolsBuildStatus]);
+	}, [refetchToolsStatus, t, toolsBuildStatus]);
 
 	const checkoutLogs = useMemo(() => {
 		if (!checkoutStatus) return "";
@@ -371,7 +372,20 @@ export const CheckoutImageAction = ({ target, onCheckoutComplete }: Props) => {
 						<Button variant="outline" onClick={() => setDialogOpen(false)}>
 							{scanT(t, "scan.dialog.cancel", "Cancel")}
 						</Button>
-						<Button onClick={handleCheckout} isLoading={isStartingCheckout}>
+						<Button
+							onClick={handleCheckout}
+							isLoading={isStartingCheckout}
+							disabled={isStartingCheckout || !toolsImageReady}
+							title={
+								!toolsImageReady
+									? scanT(
+											t,
+											"scan.actions.toolsImageRequired",
+											"Build the tools image before building a checkout image.",
+										)
+									: undefined
+							}
+						>
 							<PackageSearch className="mr-2 size-4" />
 							{isCheckouted
 								? scanT(

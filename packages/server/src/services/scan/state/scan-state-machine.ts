@@ -2,83 +2,37 @@ export type ScanPipelineJobStatus =
 	| "pending"
 	| "running"
 	| "paused"
+	| "finalizing"
 	| "finished"
+	| "partially_finished"
 	| "failed"
 	| "canceled";
 
-export type ResolveScanPipelineStateInput = {
-	scanJobStatus: ScanPipelineJobStatus;
-	repositoryTaskStatus:
-		| "pending"
-		| "launching"
-		| "launched"
-		| "starting"
-		| "running"
-		| "completed"
-		| "failed"
-		| "exited"
-		| "canceled";
-	modulePendingCount: number;
-	functionPendingCount: number;
-	openTaskCount?: number;
-	moduleFailed: number;
-	functionFailed: number;
-	analysisPendingCount: number;
-	analysisFailed: number;
-	verificationPendingCount: number;
-	verificationFailed: number;
-	triagePendingCount?: number;
-	triageFailed?: number;
-};
+export type TerminalScanJobStatus =
+	| "finished"
+	| "partially_finished"
+	| "failed"
+	| "canceled";
 
-export type ResolvedScanPipelineState = {
-	status: ScanPipelineJobStatus;
-	errorMessage?: string;
-};
+export const isTerminalScanTaskStatus = (status: string) =>
+	status === "completed" ||
+	status === "failed" ||
+	status === "exited" ||
+	status === "canceled";
 
-export const resolveNextScanPipelineState = (
-	input: ResolveScanPipelineStateInput,
-): ResolvedScanPipelineState => {
-	if (input.scanJobStatus === "paused") {
-		return {
-			status: "paused",
-		};
+export const resolveTerminalScanJobStatus = (input: {
+	rootFailed: boolean;
+	failedTaskCount: number;
+	canceled: boolean;
+}): TerminalScanJobStatus => {
+	if (input.canceled) {
+		return "canceled";
 	}
-
-	if (input.scanJobStatus === "failed") {
-		return {
-			status: "failed",
-		};
+	if (input.rootFailed) {
+		return "failed";
 	}
-
-	const repositoryPending =
-		input.repositoryTaskStatus !== "completed" &&
-		input.repositoryTaskStatus !== "failed" &&
-		input.repositoryTaskStatus !== "exited" &&
-		input.repositoryTaskStatus !== "canceled";
-
-	if (
-		repositoryPending ||
-		input.functionPendingCount > 0 ||
-		input.modulePendingCount > 0 ||
-		(input.openTaskCount ?? 0) > 0 ||
-		input.analysisPendingCount > 0 ||
-		input.verificationPendingCount > 0 ||
-		(input.triagePendingCount ?? 0) > 0
-	) {
-		return {
-			status: "running",
-		};
+	if (input.failedTaskCount > 0) {
+		return "partially_finished";
 	}
-
-	if (input.repositoryTaskStatus === "failed") {
-		return {
-			status: "failed",
-			errorMessage: "Repository scanning failed",
-		};
-	}
-
-	return {
-		status: "finished",
-	};
+	return "finished";
 };

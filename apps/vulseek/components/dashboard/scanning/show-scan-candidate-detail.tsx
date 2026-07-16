@@ -2,7 +2,6 @@ import {
 	AlertCircle,
 	ExternalLink,
 	FileIcon,
-	Folder,
 	Loader2,
 	Plus,
 	RefreshCw,
@@ -41,12 +40,17 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
-import { Tree } from "@/components/ui/file-tree";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
+import {
+	LazyFileTree,
+	ROOT_DIRECTORY_KEY,
+	type DirectoryCacheEntry,
+	type DirectoryListItem,
+} from "./lazy-file-tree";
 import {
 	formatAnalysisResultLabel,
 	formatScanStageLabel,
@@ -54,6 +58,7 @@ import {
 	formatTruthResultLabel,
 	type ScanTranslation,
 	scanT,
+	isTerminalScanJobStatus,
 } from "./scan-i18n";
 
 interface Props {
@@ -455,6 +460,8 @@ export const ShowScanCandidateDetail = ({
 	const [noteDraft, setNoteDraft] = useState("");
 	const [selectedTags, setSelectedTags] = useState<string[]>([]);
 	const [tagInput, setTagInput] = useState("");
+	const [expandedDirectories, setExpandedDirectories] = useState<Record<string, boolean>>({});
+	const [directoryCache, setDirectoryCache] = useState<Record<string, DirectoryCacheEntry>>({});
 	const metadataSyncKeyRef = useRef("");
 
 	const jobCandidatesHref = buildCandidateListStateHref(
@@ -474,6 +481,10 @@ export const ShowScanCandidateDetail = ({
 	);
 	const serviceData =
 		serviceType === "application" ? applicationQuery.data : composeQuery.data;
+	const { data: jobOverview } = api.scan.jobOverview.useQuery(
+		{ scanJobId },
+		{ enabled: !!scanJobId, refetchInterval: 10000 },
+	);
 
 	const { data: candidate, isLoading: isLoadingCandidate } =
 		api.scan.candidate.useQuery(
@@ -482,7 +493,7 @@ export const ShowScanCandidateDetail = ({
 				scanJobId: scanJobId || undefined,
 				producerTaskId: producerTaskId || undefined,
 			},
-			{ enabled: !!candidateId && !!scanJobId, refetchInterval: 2000 },
+			{ enabled: !!candidateId && !!scanJobId, refetchInterval: isTerminalScanJobStatus(jobOverview?.status) ? false : 2000 },
 		);
 	const { data: candidateLineage } = api.scan.candidateTaskLineage.useQuery(
 		{
@@ -490,17 +501,16 @@ export const ShowScanCandidateDetail = ({
 			scanJobId: scanJobId || undefined,
 			producerTaskId: producerTaskId || undefined,
 		},
-		{ enabled: !!candidateId && !!scanJobId, refetchInterval: 2000 },
+		{ enabled: !!candidateId && !!scanJobId, refetchInterval: isTerminalScanJobStatus(jobOverview?.status) ? false : 2000 },
 	);
-	const { data: fileTree, isLoading: isLoadingFileTree } =
-		api.scan.candidateFilesTree.useQuery(
+	const rootDirectoryQuery = api.scan.listCandidateDirectory.useQuery(
 			{
 				vulnerabilityCandidateId: candidateId,
-				scanJobId: scanJobId || undefined,
+				scanJobId,
 			},
 			{
 				enabled: activeTab === "files" && !!candidateId && !!scanJobId,
-				refetchInterval: activeTab === "files" ? 4000 : false,
+				refetchInterval: false,
 			},
 		);
 	const { data: selectedFile, isLoading: isLoadingSelectedFile } =
@@ -552,30 +562,30 @@ export const ShowScanCandidateDetail = ({
 	}, [candidate]);
 
 	useEffect(() => {
-		if (!fileTree?.length) {
-			setSelectedFilePath(null);
+		if (rootDirectoryQuery.isLoading) {
+			setDirectoryCache((current) => ({ ...current, [ROOT_DIRECTORY_KEY]: { items: current[ROOT_DIRECTORY_KEY]?.items || [], status: "loading" } }));
 			return;
 		}
+		if (rootDirectoryQuery.isError) {
+			setDirectoryCache((current) => ({ ...current, [ROOT_DIRECTORY_KEY]: { items: [], status: "error" } }));
+			return;
+		}
+		const items = (rootDirectoryQuery.data || []) as DirectoryListItem[];
+		setDirectoryCache((current) => ({ ...current, [ROOT_DIRECTORY_KEY]: { items, status: "loaded" } }));
+	}, [rootDirectoryQuery.data, rootDirectoryQuery.isError, rootDirectoryQuery.isLoading]);
 
-		const walk = (items: Array<Record<string, unknown>>): string | null => {
-			for (const item of items) {
-				if (item.type === "file" && typeof item.id === "string") {
-					return item.id;
-				}
-				if (Array.isArray(item.children)) {
-					const next = walk(item.children as Array<Record<string, unknown>>);
-					if (next) {
-						return next;
-					}
-				}
-			}
-			return null;
-		};
-
-		setSelectedFilePath(
-			(current) => current || walk(fileTree as Array<Record<string, unknown>>),
-		);
-	}, [fileTree]);
+	const handleToggleDirectory = async (directoryPath: string) => {
+		const expanded = !expandedDirectories[directoryPath];
+		setExpandedDirectories((current) => ({ ...current, [directoryPath]: expanded }));
+		if (!expanded || directoryCache[directoryPath]?.status === "loaded" || directoryCache[directoryPath]?.status === "loading") return;
+		setDirectoryCache((current) => ({ ...current, [directoryPath]: { items: [], status: "loading" } }));
+		try {
+			const items = await utils.scan.listCandidateDirectory.fetch({ vulnerabilityCandidateId: candidateId, scanJobId, directoryPath });
+			setDirectoryCache((current) => ({ ...current, [directoryPath]: { items, status: "loaded" } }));
+		} catch {
+			setDirectoryCache((current) => ({ ...current, [directoryPath]: { items: [], status: "error" } }));
+		}
+	};
 
 	const verificationTruthBadge = useMemo(
 		() =>
@@ -886,9 +896,10 @@ export const ShowScanCandidateDetail = ({
 												utils.scan.candidate.invalidate({
 													vulnerabilityCandidateId: candidateId,
 												}),
-												utils.scan.candidateFilesTree.invalidate({
-													vulnerabilityCandidateId: candidateId,
-												}),
+								utils.scan.listCandidateDirectory.invalidate({
+									vulnerabilityCandidateId: candidateId,
+									scanJobId,
+								}),
 											]);
 											await router.push(
 												`/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}?tab=verify`,
@@ -1463,27 +1474,15 @@ export const ShowScanCandidateDetail = ({
 								</div>
 								<div className="grid min-h-[65vh] grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]">
 									<div className="border-b lg:border-b-0 lg:border-r">
-										{isLoadingFileTree ? (
-											<div className="flex h-full min-h-[320px] items-center justify-center gap-2 text-muted-foreground">
-												<Loader2 className="size-4 animate-spin" />
-												{scanT(t, "scan.files.loading", "Loading files...")}
-											</div>
-										) : !fileTree || fileTree.length === 0 ? (
-											<div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-2 text-muted-foreground">
-												<Folder className="size-6" />
-												{scanT(t, "scan.files.empty", "No files available")}
-											</div>
-										) : (
-											<Tree
-												data={fileTree}
-												className="h-[65vh] w-full rounded-none border-0"
-												onSelectChange={(item) =>
-													setSelectedFilePath(item?.id || null)
-												}
-												folderIcon={Folder}
-												itemIcon={Workflow}
-											/>
-										)}
+										<LazyFileTree
+											rootItems={directoryCache[ROOT_DIRECTORY_KEY]?.items || []}
+											rootStatus={directoryCache[ROOT_DIRECTORY_KEY]?.status || (rootDirectoryQuery.isLoading ? "loading" : "idle")}
+											expandedDirectories={expandedDirectories}
+											selectedFilePath={selectedFilePath}
+											directoryCache={directoryCache}
+											onToggleDirectory={handleToggleDirectory}
+											onSelectFile={setSelectedFilePath}
+										/>
 									</div>
 									<div className="min-w-0">
 										<div className="border-b px-4 py-3">

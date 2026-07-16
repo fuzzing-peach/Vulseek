@@ -56,10 +56,10 @@ import {
 import {
 	findScanJobByIdRepo,
 	listUnfinishedScanJobsRepo,
-	recalculateScanTaskCountsRepo,
 	resetScanJobForRetryRepo,
 	updateScanJobStatusRepo,
 } from "./scan/persistence/scan-job.repo";
+import { settleScanJobRepo } from "./scan/persistence/job-settlement.repo";
 import {
 	findStageGroupInstanceByIdRepo,
 	listStageGroupInstancesByScanJobIdRepo,
@@ -73,9 +73,9 @@ import {
 	findLatestVerificationResultByCandidateIdRepo,
 	findTaskByIdRepo,
 	listAnalysisResultsByScanJobIdRepo,
-	listCandidateDescendantTasksByProducerTaskIdRepo,
-	listChildTasksByParentTaskIdAndStageRepo,
+	hasActiveCandidateAnalysisTaskRepo,
 	listRunningTaskViewsByScanJobIdRepo,
+	listChildTasksByParentTaskIdAndStageRepo,
 	listTaskStatusCountsByScanJobIdRepo,
 	listTasksByScanJobAndStageRepo,
 	listTasksByScanJobIdRepo,
@@ -98,6 +98,7 @@ import {
 } from "./scan/pipeline/pipeline-definition";
 import {
 	runPipeline,
+	finalizeScanJob,
 	startPipelineRuntime,
 	stopPipelineRuntimesForScanJob,
 } from "./scan/pipeline/pipeline-runner";
@@ -127,6 +128,10 @@ import {
 	isRetryableTaskStageName,
 	retryFailedScanJobTasksWithDeps,
 } from "./scan/retry-failed-tasks";
+import {
+	buildLocalCheckoutDockerfile,
+	buildLocalRepositoryPopulateScript,
+} from "./scan/local-checkout";
 import { sanitizeCodexAcpConfigToml } from "./scan/runtime/codex-config-compat";
 import {
 	buildEffectiveDisabledStageSet,
@@ -184,13 +189,7 @@ import {
 	createVerifyFindingStageDefinition,
 	type VerifyFindingStageInput,
 } from "./scan/stages/verify-finding.stage";
-import {
-	type CandidateTaskExecutionState,
-	deriveCandidateTaskExecutionState,
-} from "./scan/state/candidate-task-state";
-import { getPendingScanTaskStateView } from "./scan/state/scan-pipeline-read-model";
-import { resolveNextScanPipelineState } from "./scan/state/scan-state-machine";
-import { createShortTaskId } from "./scan/task-id";
+import { createShortTaskId, createTaskIdForDispatchKey } from "./scan/task-id";
 import type {
 	AgentProfileLike,
 	AnalysisResult,
@@ -224,6 +223,7 @@ const RUNTIME_CUSTOM_SKILLS = [
 	"search-registries",
 	"tree-sitter",
 ] as const;
+
 
 type UnifiedModuleTaskView = {
 	taskId: string;
@@ -1095,7 +1095,6 @@ export const retryFailedScanJobTasks = async (scanJobId: string) =>
 		clearTaskArtifacts: clearTaskArtifactsForRetry,
 		resetFailedTask: resetFailedTaskForRetryRepo,
 		enqueueTask: enqueueRetriedTask,
-		recalculateScanTaskCounts: recalculateScanTaskCountsRepo,
 		resetScanJobForRetry: async (input) =>
 			await resetScanJobForRetryRepo(input.scanJobId, {
 				status: "pending",
@@ -1230,6 +1229,12 @@ export const rerunScanTask = async (taskId: string) => {
 			message: "Task rerun is only supported for full scan jobs",
 		});
 	}
+	if (scanJob.status === "finalizing") {
+		throw new TRPCError({
+			code: "CONFLICT",
+			message: "Scan job is finalizing and cannot accept reruns",
+		});
+	}
 	if (!RERUNNABLE_TASK_STATUSES.has(originalTask.status)) {
 		throw new TRPCError({
 			code: "CONFLICT",
@@ -1265,7 +1270,6 @@ export const rerunScanTask = async (taskId: string) => {
 			errorMessage: null,
 		}).catch(() => {});
 	}
-	await recalculateScanTaskCountsRepo(scanJob.scanJobId).catch(() => {});
 
 	return {
 		originalTaskId: originalTask.taskId,
@@ -1844,7 +1848,7 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 		"--build-arg",
 		`VULSEEK_TOOLS_IMAGE=${task.toolsImageTag}`,
 		...(isLocalPath
-			? ["--build-arg", `POST_CHECKOUT_SCRIPT=${task.postCheckoutScript}`]
+			? []
 			: [
 					"--build-arg",
 					`GIT_URL=${task.gitUrl}`,
@@ -1872,27 +1876,9 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 		};
 		const existingToolsImage = await inspectCheckoutToolsImage(toolsDefinition);
 		if (!existingToolsImage) {
-			task.phase = "waiting_tools";
-			task.stderr = appendLog(
-				task.stderr,
-				`[checkout] waiting for tools image ${task.toolsImageTag}\n`,
+			throw new Error(
+				`Checkout tools image ${task.toolsImageTag} is not available; build the tools image before checkout`,
 			);
-			const toolsBuild = await checkoutToolsBuildManager.startBuild();
-			task.toolsBuildId = toolsBuild.buildId;
-			const completedToolsBuild = await checkoutToolsBuildManager.waitForBuild(
-				toolsBuild.buildId,
-			);
-			if (completedToolsBuild.status !== "completed") {
-				throw new Error(
-					completedToolsBuild.errorMessage ||
-						"Checkout tools image build failed",
-				);
-			}
-			if (!(await inspectCheckoutToolsImage(toolsDefinition))) {
-				throw new Error(
-					`Checkout tools image ${task.toolsImageTag} is missing after build`,
-				);
-			}
 		}
 		task.phase = "building_checkout";
 		const buildResourceOptions = resolveCheckoutDockerBuildResourceOptions();
@@ -1916,32 +1902,8 @@ const runDockerBuildInBackground = async (task: CheckoutTask) => {
 			}
 		}
 		let dockerfileContent = task.dockerfileTemplate;
-		if (isLocalPath && task.localPath) {
-			// Pre-copy the local directory into tempDir/repo so it's in the build context
-			const repoDir = path.join(tempDir, "repo");
-			await fs.cp(task.localPath, repoDir, { recursive: true });
-
-			// Replace the repository-source stage to use COPY instead of git clone
-			const localRepositorySourceStage = `FROM \${VULSEEK_TOOLS_IMAGE} AS repository-source
-
-ARG POST_CHECKOUT_SCRIPT=""
-
-WORKDIR /workspace
-
-COPY repo /workspace/repo
-
-RUN if [ -n "\${POST_CHECKOUT_SCRIPT}" ]; then \\
-      cd /workspace/repo; \\
-      printf '%s\\n' "\${POST_CHECKOUT_SCRIPT}" > /tmp/vulseek-post-checkout.sh; \\
-      bash /tmp/vulseek-post-checkout.sh; \\
-      rm -f /tmp/vulseek-post-checkout.sh; \\
-    fi`;
-
-			// Replace the repository source stage up to the final tools image stage.
-			dockerfileContent = dockerfileContent.replace(
-				/FROM \$\{VULSEEK_TOOLS_IMAGE\} AS repository-source[\s\S]*?(?=FROM )/,
-				`${localRepositorySourceStage}\n\n`,
-			);
+		if (isLocalPath) {
+			dockerfileContent = buildLocalCheckoutDockerfile(dockerfileContent);
 		}
 		await fs.writeFile(dockerfilePath, dockerfileContent, "utf-8");
 		await new Promise<void>((resolve, reject) => {
@@ -1983,19 +1945,17 @@ RUN if [ -n "\${POST_CHECKOUT_SCRIPT}" ]; then \\
 				"[checkout] copying local repo into image via docker run...\n",
 			);
 			try {
+				const populateScript = buildLocalRepositoryPopulateScript();
 				await execAsyncStream(
-					`docker run --name ${tempName} -v ${task.localPath}:/tmp/localrepo:ro ${task.imageTag} bash -c "` +
-						"cp -a /tmp/localrepo/. /workspace/repo/ && " +
-						"cd /workspace/repo && " +
-						"git config --global --add safe.directory /workspace/repo && " +
-						"if [ ! -d .git ]; then " +
-						"  git init && " +
-						`  git config user.email 'local@vulseek' && ` +
-						`  git config user.name 'Local Source' && ` +
-						"  git add -A && " +
-						`  git commit -m 'local source snapshot' --allow-empty; ` +
-						"fi && " +
-						`echo '[checkout] local copy complete'"`,
+					[
+						"docker run",
+						`--name '${escapeSingleQuotes(tempName)}'`,
+						`-v '${escapeSingleQuotes(task.localPath)}:/tmp/localrepo:ro'`,
+						`-e 'POST_CHECKOUT_SCRIPT=${escapeSingleQuotes(task.postCheckoutScript)}'`,
+						`'${escapeSingleQuotes(task.imageTag)}'`,
+						"bash -lc",
+						`'${escapeSingleQuotes(populateScript)}'`,
+					].join(" "),
 					appendToTask,
 				);
 				appendToTask("[checkout] committing image...\n");
@@ -2030,6 +1990,16 @@ export const startCheckoutScanEnvironment = async (
 	input: typeof apiCheckoutScanEnvironment._type,
 ) => {
 	const context = await resolveCheckoutContext(input);
+	const toolsImage = await inspectCheckoutToolsImage({
+		version: context.toolsVersion,
+		variant: context.toolsVariant,
+		imageTag: context.toolsImageTag,
+	});
+	if (!toolsImage) {
+		throw new Error(
+			`Checkout tools image ${context.toolsImageTag} is not available; build the tools image before checkout`,
+		);
+	}
 	const checkoutId = nanoid();
 	const task: CheckoutTask = {
 		checkoutId,
@@ -3153,44 +3123,6 @@ const resolveBrowsableFilePath = (input: {
 	return path.join(input.rootPath, normalizedInput);
 };
 
-const buildContainerFileTreeItems = async (input: {
-	hostDirPath: string;
-	containerDirPath: string;
-}): Promise<ScanJobFileTreeItem[]> => {
-	const entries = (
-		await fs.readdir(input.hostDirPath, { withFileTypes: true })
-	).filter(
-		(entry) =>
-			!shouldHideCandidateFileTreeEntry({
-				entryName: entry.name,
-				containerDirPath: input.containerDirPath,
-			}),
-	);
-	const sortedEntries = entries.sort((left, right) => {
-		if (left.isDirectory() && !right.isDirectory()) return -1;
-		if (!left.isDirectory() && right.isDirectory()) return 1;
-		return left.name.localeCompare(right.name);
-	});
-
-	return await Promise.all(
-		sortedEntries.map(async (entry) => {
-			const hostPath = path.join(input.hostDirPath, entry.name);
-			const containerPath = path.posix.join(input.containerDirPath, entry.name);
-			if (entry.isDirectory()) {
-				return {
-					id: containerPath,
-					name: entry.name,
-					type: "directory" as const,
-					children: await buildContainerFileTreeItems({
-						hostDirPath: hostPath,
-						containerDirPath: containerPath,
-					}),
-				};
-			}
-			return { id: containerPath, name: entry.name, type: "file" as const };
-		}),
-	);
-};
 
 const resolveCandidateBrowsableFilePath = async (input: {
 	scanJobId: string;
@@ -3524,21 +3456,84 @@ export const readScanTaskFileContent = async (input: {
 	};
 };
 
-export const readCandidateFilesTree = async (input: {
+
+export const listCandidateDirectory = async (input: {
 	scanJobId: string;
 	candidateId: string;
+	directoryPath?: string;
 }) => {
-	const roots = await listCandidateArtifactRoots(input);
-	return await Promise.all(
-		roots.map(async (root) => ({
-			id: root.containerRootPath,
-			name: root.name,
-			type: "directory" as const,
-			children: await buildContainerFileTreeItems({
-				hostDirPath: root.hostRootPath,
-				containerDirPath: root.containerRootPath,
+	const roots = await listCandidateArtifactRoots({
+		scanJobId: input.scanJobId,
+		candidateId: input.candidateId,
+	});
+	const requestedPath = (input.directoryPath || "").trim();
+	if (!requestedPath) {
+		return await Promise.all(
+			roots.map(async (root) => ({
+				id: root.containerRootPath,
+				name: root.name,
+				type: "directory" as const,
+				hasChildren: Boolean(
+					(await fs.readdir(root.hostRootPath, { withFileTypes: true }).catch(() => []))
+						.some((entry) =>
+							!shouldHideCandidateFileTreeEntry({
+								entryName: entry.name,
+								containerDirPath: root.containerRootPath,
+							}),
+					),
+				),
+			})),
+		);
+	}
+
+	const root = roots.find(
+		(candidateRoot) =>
+			requestedPath === candidateRoot.containerRootPath ||
+			requestedPath.startsWith(`${candidateRoot.containerRootPath}/`),
+	);
+	if (!root) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Directory not found" });
+	}
+	const relativePath = path.posix.relative(root.containerRootPath, requestedPath);
+	const hostDirectory = path.join(
+		root.hostRootPath,
+		relativePath.split("/").join(path.sep),
+	);
+	assertWithinDirectory(root.hostRootPath, hostDirectory);
+	const stat = await fs.stat(hostDirectory).catch(() => null);
+	if (!stat?.isDirectory()) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Directory not found" });
+	}
+	const entries = (await fs.readdir(hostDirectory, { withFileTypes: true })).filter(
+		(entry) =>
+			!shouldHideCandidateFileTreeEntry({
+				entryName: entry.name,
+				containerDirPath: requestedPath,
 			}),
-		})),
+	);
+	entries.sort((left, right) => {
+		if (left.isDirectory() && !right.isDirectory()) return -1;
+		if (!left.isDirectory() && right.isDirectory()) return 1;
+		return left.name.localeCompare(right.name);
+	});
+	return await Promise.all(
+		entries.map(async (entry) => {
+			const id = path.posix.join(requestedPath, entry.name);
+			return {
+				id,
+				name: entry.name,
+				type: entry.isDirectory() ? ("directory" as const) : ("file" as const),
+				hasChildren: entry.isDirectory()
+					? (await fs.readdir(path.join(hostDirectory, entry.name), { withFileTypes: true }).catch(() => [])).some(
+							(child) =>
+								!shouldHideCandidateFileTreeEntry({
+									entryName: child.name,
+									containerDirPath: id,
+								}),
+						)
+					: false,
+			};
+		}),
 	);
 };
 
@@ -3563,24 +3558,6 @@ export const readCandidateFileContent = async (input: {
 		content,
 	};
 };
-
-const deriveCandidateExecutionState = async (input: {
-	producerTaskId: string;
-	vulnerabilityCandidateId: string;
-}) =>
-	deriveCandidateTaskExecutionState(
-		(
-			await listCandidateDescendantTasksByProducerTaskIdRepo({
-				producerTaskId: input.producerTaskId,
-				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
-			})
-		).map((task) => ({
-			taskId: task.taskId,
-			stageName: task.stageName,
-			status: task.status,
-			createdAt: task.createdAt,
-		})),
-	);
 
 export const findScanJobRunningTasks = async (scanJobId: string) =>
 	(await listRunningTaskViewsByScanJobIdRepo(scanJobId)).sort(
@@ -4220,7 +4197,6 @@ type FullScanExecutionContext = Awaited<
 type FullScanPipelineContext = PipelineContext & {
 	scanJob: ScanJob;
 	executionContext: FullScanExecutionContext;
-	refreshPipelineState: () => Promise<void>;
 };
 
 type FullScanPipelineStage = AnyStageDefinition<FullScanPipelineContext>;
@@ -4521,20 +4497,6 @@ const buildFullScanPipelineContext = async (
 		scanJobId: scanJob.scanJobId,
 		projectName: executionContext.projectName,
 		serviceName: executionContext.serviceName,
-		refreshPipelineState: async () => {
-			await recalculateScanTaskCountsRepo(scanJobId).catch((error) => {
-				console.log(
-					"[full-scan]",
-					JSON.stringify({
-						event: "refreshPipelineState.recalculate_failed",
-						scanJobId,
-						errorMessage:
-							error instanceof Error ? error.message : String(error),
-					}),
-				);
-			});
-			await reconcileScanJobCandidatePipelineStatus(scanJobId);
-		},
 	};
 };
 
@@ -5088,19 +5050,20 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					moduleName: "",
 					priority: null,
 				})),
-			createTasks: async ({ fromTaskId, nextInputObjects }) => {
+			createTasks: async ({ fromTaskId, nextInputObjects, dispatchKeyForItem }) => {
 				const fromTask = await findTaskByIdRepo(fromTaskId);
 				const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
 					context,
 					fromTask,
 				);
 				const taskIds: string[] = [];
-				for (const manifestInput of nextInputObjects) {
+				for (const [index, manifestInput] of nextInputObjects.entries()) {
 					const module = await readTaskJsonArtifact<CanonicalRepositoryModule>({
 						taskDir: fromTaskDir,
 						containerPath: manifestInput.modulePath,
 					});
-					const taskId = createShortTaskId();
+					const dispatchKey = dispatchKeyForItem(index);
+					const taskId = createTaskIdForDispatchKey(dispatchKey);
 					const taskName = module.name;
 					const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
 						taskId,
@@ -5129,6 +5092,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					};
 					const task = await createTaskRepo({
 						taskId,
+						dispatchKey: dispatchKeyForItem(index),
 						scanJobId: context.scanJob.scanJobId,
 						parentTaskId: fromTaskId,
 						name: taskName,
@@ -5177,14 +5141,14 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					vulnerabilityClassFocus,
 				}));
 			},
-			createTasks: async ({ fromTaskId, nextInputObjects }) => {
+			createTasks: async ({ fromTaskId, nextInputObjects, dispatchKeyForItem }) => {
 				const fromTask = await findTaskByIdRepo(fromTaskId);
 				const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
 					context,
 					fromTask,
 				);
 				const taskIds: string[] = [];
-				for (const manifestInput of nextInputObjects) {
+				for (const [index, manifestInput] of nextInputObjects.entries()) {
 					const module = await readTaskJsonArtifact<CanonicalRepositoryModule>({
 						taskDir: fromTaskDir,
 						containerPath: manifestInput.modulePath,
@@ -5192,7 +5156,8 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					const vulnerabilityClassFocus =
 						manifestInput.vulnerabilityClassFocus?.trim() ||
 						DEFAULT_VULNERABILITY_CLASS_FOCUS;
-					const taskId = createShortTaskId();
+					const dispatchKey = dispatchKeyForItem(index);
+					const taskId = createTaskIdForDispatchKey(dispatchKey);
 					const taskName = `${module.name}:${vulnerabilityClassFocus}`;
 					const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
 						taskId,
@@ -5229,6 +5194,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					};
 					const task = await createTaskRepo({
 						taskId,
+						dispatchKey: dispatchKeyForItem(index),
 						scanJobId: context.scanJob.scanJobId,
 						parentTaskId: fromTaskId,
 						name: taskName,
@@ -5268,14 +5234,14 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 						stageInput.vulnerabilityClassFocus ||
 						DEFAULT_VULNERABILITY_CLASS_FOCUS,
 				})),
-			createTasks: async ({ fromTaskId, nextInputObjects }) => {
+			createTasks: async ({ fromTaskId, nextInputObjects, dispatchKeyForItem }) => {
 				const fromTask = await findTaskByIdRepo(fromTaskId);
 				const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
 					context,
 					fromTask,
 				);
 				const taskIds: string[] = [];
-				for (const manifestInput of nextInputObjects) {
+				for (const [index, manifestInput] of nextInputObjects.entries()) {
 					const target = await readTaskJsonArtifact<CanonicalTarget>({
 						taskDir: fromTaskDir,
 						containerPath: manifestInput.targetPath,
@@ -5283,7 +5249,8 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					const vulnerabilityClassFocus =
 						manifestInput.vulnerabilityClassFocus?.trim() ||
 						DEFAULT_VULNERABILITY_CLASS_FOCUS;
-					const taskId = createShortTaskId();
+					const dispatchKey = dispatchKeyForItem(index);
+					const taskId = createTaskIdForDispatchKey(dispatchKey);
 					const taskName = `${target.targetName}:${vulnerabilityClassFocus}`;
 					const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
 						taskId,
@@ -5333,6 +5300,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					};
 					const task = await createTaskRepo({
 						taskId,
+						dispatchKey: dispatchKeyForItem(index),
 						scanJobId: context.scanJob.scanJobId,
 						parentTaskId: fromTaskId,
 						name: taskName,
@@ -5363,19 +5331,20 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					functionPath: stageInput.targetPath,
 					candidatePath,
 				})),
-			createTasks: async ({ fromTaskId, nextInputObjects }) => {
+			createTasks: async ({ fromTaskId, nextInputObjects, dispatchKeyForItem }) => {
 				const fromTask = await findTaskByIdRepo(fromTaskId);
 				const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
 					context,
 					fromTask,
 				);
 				const taskIds: string[] = [];
-				for (const manifestInput of nextInputObjects) {
+				for (const [index, manifestInput] of nextInputObjects.entries()) {
 					const candidate = await readTaskJsonArtifact<CanonicalCandidate>({
 						taskDir: fromTaskDir,
 						containerPath: manifestInput.candidatePath,
 					});
-					const taskId = createShortTaskId();
+					const dispatchKey = dispatchKeyForItem(index);
+					const taskId = createTaskIdForDispatchKey(dispatchKey);
 					const taskName = `Candidate Analysis: ${candidate.title}`;
 					const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
 						taskId,
@@ -5415,6 +5384,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					};
 					const task = await createTaskRepo({
 						taskId,
+						dispatchKey: dispatchKeyForItem(index),
 						scanJobId: context.scanJob.scanJobId,
 						vulnerabilityCandidateId: candidate.id,
 						parentTaskId: fromTaskId,
@@ -5453,6 +5423,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 				stageInput,
 				stageOutput,
 				nextInputObjects,
+				dispatchKeyForItem,
 			}) => {
 				const fromTask = await findTaskByIdRepo(fromTaskId);
 				const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
@@ -5464,8 +5435,9 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					containerPath: stageInput.candidatePath,
 				});
 				const taskIds: string[] = [];
-				for (const manifestInput of nextInputObjects) {
-					const taskId = createShortTaskId();
+				for (const [index, manifestInput] of nextInputObjects.entries()) {
+					const dispatchKey = dispatchKeyForItem(index);
+					const taskId = createTaskIdForDispatchKey(dispatchKey);
 					const taskName = `Analysis Critic: ${candidate.title}`;
 					const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
 						taskId,
@@ -5487,6 +5459,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					};
 					const task = await createTaskRepo({
 						taskId,
+						dispatchKey: dispatchKeyForItem(index),
 						scanJobId: stageInput.scanJob.scanJobId,
 						vulnerabilityCandidateId: candidate.id,
 						parentTaskId: fromTaskId,
@@ -5533,6 +5506,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 				stageInput,
 				stageOutput,
 				nextInputObjects,
+				dispatchKeyForItem,
 			}) => {
 				const fromTask = await findTaskByIdRepo(fromTaskId);
 				const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
@@ -5566,8 +5540,9 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					);
 				}
 				const taskIds: string[] = [];
-				for (const _manifestInput of nextInputObjects) {
-					const taskId = createShortTaskId();
+				for (const [index, _manifestInput] of nextInputObjects.entries()) {
+					const dispatchKey = dispatchKeyForItem(index);
+					const taskId = createTaskIdForDispatchKey(dispatchKey);
 					const taskName = `Candidate Verification: ${candidate.title}`;
 					const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
 						taskId,
@@ -5593,6 +5568,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					};
 					const task = await createTaskRepo({
 						taskId,
+						dispatchKey: dispatchKeyForItem(index),
 						scanJobId: stageInput.scanJob.scanJobId,
 						vulnerabilityCandidateId: candidate.id,
 						parentTaskId: fromTaskId,
@@ -5638,6 +5614,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 				stageInput,
 				stageOutput,
 				nextInputObjects,
+				dispatchKeyForItem,
 			}) => {
 				const fromTask = await findTaskByIdRepo(fromTaskId);
 				const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
@@ -5649,8 +5626,9 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					containerPath: stageInput.candidatePath,
 				});
 				const taskIds: string[] = [];
-				for (const _downstreamInput of nextInputObjects) {
-					const taskId = createShortTaskId();
+				for (const [index, _downstreamInput] of nextInputObjects.entries()) {
+					const dispatchKey = dispatchKeyForItem(index);
+					const taskId = createTaskIdForDispatchKey(dispatchKey);
 					const taskName = `Candidate Triage: ${candidate.title}`;
 					const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
 						taskId,
@@ -5697,6 +5675,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					};
 					const task = await createTaskRepo({
 						taskId,
+						dispatchKey: dispatchKeyForItem(index),
 						scanJobId: stageInput.scanJob.scanJobId,
 						vulnerabilityCandidateId: candidate.id,
 						parentTaskId: fromTaskId,
@@ -5737,6 +5716,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 				stageInput,
 				stageOutput,
 				nextInputObjects,
+				dispatchKeyForItem,
 			}) => {
 				const fromTask = await findTaskByIdRepo(fromTaskId);
 				const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
@@ -5748,8 +5728,9 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					containerPath: stageInput.candidatePath,
 				});
 				const taskIds: string[] = [];
-				for (const _manifestInput of nextInputObjects) {
-					const taskId = createShortTaskId();
+				for (const [index, _manifestInput] of nextInputObjects.entries()) {
+					const dispatchKey = dispatchKeyForItem(index);
+					const taskId = createTaskIdForDispatchKey(dispatchKey);
 					const taskName = `Candidate Analysis: ${candidate.title}`;
 					const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
 						taskId,
@@ -5773,6 +5754,7 @@ const buildFullScanPipeline = (context: FullScanPipelineContext) => {
 					};
 					const task = await createTaskRepo({
 						taskId,
+						dispatchKey: dispatchKeyForItem(index),
 						scanJobId: stageInput.scanJob.scanJobId,
 						vulnerabilityCandidateId: candidate.id,
 						parentTaskId: fromTaskId,
@@ -6001,7 +5983,7 @@ const buildDeltaScanPipeline = (context: FullScanPipelineContext) => {
 				priority: null,
 				vulnerabilityClassFocus: "delta-scoped",
 			})),
-		createTasks: async ({ fromTaskId, stageOutput, nextInputObjects }) => {
+		createTasks: async ({ fromTaskId, stageOutput, nextInputObjects, dispatchKeyForItem }) => {
 			const fromTask = await findTaskByIdRepo(fromTaskId);
 			const fromTaskDir = await resolveExistingFullScanTaskRuntimeDir(
 				context,
@@ -6021,13 +6003,14 @@ const buildDeltaScanPipeline = (context: FullScanPipelineContext) => {
 				scopedFunctions,
 			);
 			const taskIds: string[] = [];
-			for (const manifestInput of nextInputObjects) {
+			for (const [index, manifestInput] of nextInputObjects.entries()) {
 				const func = await readTaskJsonArtifact<CanonicalFunction>({
 					taskDir: fromTaskDir,
 					containerPath: manifestInput.targetPath,
 				});
 				const target = buildTargetFromDeltaFunction(func);
-				const taskId = createShortTaskId();
+					const dispatchKey = dispatchKeyForItem(index);
+					const taskId = createTaskIdForDispatchKey(dispatchKey);
 				const taskName = func.functionName;
 				const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
 					taskId,
@@ -6079,6 +6062,7 @@ const buildDeltaScanPipeline = (context: FullScanPipelineContext) => {
 				};
 				const task = await createTaskRepo({
 					taskId,
+					dispatchKey: dispatchKeyForItem(index),
 					scanJobId: context.scanJob.scanJobId,
 					parentTaskId: fromTaskId,
 					name: taskName,
@@ -6780,7 +6764,6 @@ export const cancelScanJob = async (scanJobId: string) => {
 	const [
 		repositoryTask,
 		allTasks,
-		candidates,
 		stageGroups,
 		laneRuntimes,
 		dockerScanContainers,
@@ -6789,19 +6772,12 @@ export const cancelScanJob = async (scanJobId: string) => {
 			? findTaskByIdRepo(scanJob.repositoryTaskId).catch(() => null)
 			: null,
 		listTasksByScanJobIdRepo(scanJobId),
-		findVulnerabilityCandidatesByScanJobIdRepo(scanJobId),
 		listStageGroupInstancesByScanJobIdRepo(scanJobId),
 		listStageLaneRuntimesByScanJobIdRepo(scanJobId).catch(() => []),
 		listDockerContainersForScanJob(scanJobId),
 	]);
 	const openTasks = allTasks.filter((task) =>
 		isOpenScanTaskStatus(task.status),
-	);
-	const moduleTasks = openTasks.filter(
-		(task) => task.stageName === SCAN_STAGE_IDS.identifyTarget,
-	);
-	const functionTasks = openTasks.filter(
-		(task) => task.stageName === SCAN_STAGE_IDS.scanTarget,
 	);
 	const tasksToCancelById = new Map<string, Task>();
 	for (const task of openTasks) {
@@ -6857,7 +6833,6 @@ export const cancelScanJob = async (scanJobId: string) => {
 				),
 			),
 	]);
-
 	const stoppedContainers = (
 		await Promise.all(
 			[...containerNames].map((name) => stopScanContainer(name)),
@@ -6875,7 +6850,6 @@ export const cancelScanJob = async (scanJobId: string) => {
 	]);
 
 	await resetStageLaneRuntimesByScanJobIdRepo(scanJobId).catch(() => []);
-	await recalculateScanTaskCountsRepo(scanJobId).catch(() => {});
 	await updateScanJobStatusRepo(scanJobId, "canceled", stopMessage);
 
 	return {
@@ -6883,277 +6857,6 @@ export const cancelScanJob = async (scanJobId: string) => {
 		scanJobId: scanJob.scanJobId,
 		stoppedContainers,
 		clearedTasks: tasksToCancel.length,
-		clearedModuleTasks: moduleTasks.length,
-		clearedFunctionTasks: functionTasks.length,
-		clearedCandidates: candidates.length,
-	};
-};
-
-const getPendingAnalysisCandidates = async (scanJobId: string) => {
-	const [candidates, analysisResultsList] = await Promise.all([
-		findVulnerabilityCandidatesByScanJobIdRepo(scanJobId),
-		listAnalysisResultsByScanJobIdRepo(scanJobId),
-	]);
-	const candidateStateById = new Map<string, CandidateTaskExecutionState>(
-		await Promise.all(
-			candidates.map(
-				async (candidate) =>
-					[
-						candidate.vulnerabilityCandidateId,
-						await deriveCandidateExecutionState({
-							producerTaskId: candidate.producerTaskId,
-							vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-						}),
-					] as const,
-			),
-		),
-	);
-	const analysisCandidateIds = new Set(
-		analysisResultsList.map((item) => item.vulnerabilityCandidateId),
-	);
-	const pendingCandidates = candidates.filter((candidate) => {
-		if (analysisCandidateIds.has(candidate.vulnerabilityCandidateId)) {
-			return false;
-		}
-		const state = candidateStateById.get(candidate.vulnerabilityCandidateId);
-		return !(
-			state?.latestPhase === "analysis" &&
-			(state.latestTask?.status === "failed" ||
-				state.latestTask?.status === "exited" ||
-				state.latestTask?.status === "canceled")
-		);
-	});
-	const failed = candidates.filter((candidate) => {
-		if (analysisCandidateIds.has(candidate.vulnerabilityCandidateId)) {
-			return false;
-		}
-		const state = candidateStateById.get(candidate.vulnerabilityCandidateId);
-		return (
-			state?.latestPhase === "analysis" && state.latestTask?.status === "failed"
-		);
-	}).length;
-	return { candidates, pendingCandidates, failed };
-};
-
-const getPendingVerificationCandidates = async (scanJobId: string) => {
-	const [candidates, analysisResultsList, verificationResultsList] =
-		await Promise.all([
-			findVulnerabilityCandidatesByScanJobIdRepo(scanJobId),
-			listAnalysisResultsByScanJobIdRepo(scanJobId),
-			listVerificationResultsByScanJobIdRepo(scanJobId),
-		]);
-	const candidateStateById = new Map<string, CandidateTaskExecutionState>(
-		await Promise.all(
-			candidates.map(
-				async (candidate) =>
-					[
-						candidate.vulnerabilityCandidateId,
-						await deriveCandidateExecutionState({
-							producerTaskId: candidate.producerTaskId,
-							vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-						}),
-					] as const,
-			),
-		),
-	);
-	const latestAnalysisResultByCandidateId = new Map<string, AnalysisResult>();
-	for (const analysisResult of analysisResultsList) {
-		if (
-			!latestAnalysisResultByCandidateId.has(
-				analysisResult.vulnerabilityCandidateId,
-			)
-		) {
-			latestAnalysisResultByCandidateId.set(
-				analysisResult.vulnerabilityCandidateId,
-				analysisResult,
-			);
-		}
-	}
-	const latestVerificationResultByCandidateId = new Map<
-		string,
-		VerificationResult
-	>();
-	for (const verificationResult of verificationResultsList) {
-		if (
-			!latestVerificationResultByCandidateId.has(
-				verificationResult.vulnerabilityCandidateId,
-			)
-		) {
-			latestVerificationResultByCandidateId.set(
-				verificationResult.vulnerabilityCandidateId,
-				verificationResult,
-			);
-		}
-	}
-	const pendingCandidates = candidates.filter((candidate) => {
-		const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
-			candidate.vulnerabilityCandidateId,
-		);
-		if (!latestAnalysisResult) {
-			return false;
-		}
-		if (!shouldVerifyFromAnalysisResult(latestAnalysisResult.result)) {
-			return false;
-		}
-		if (
-			latestVerificationResultByCandidateId.has(
-				candidate.vulnerabilityCandidateId,
-			)
-		) {
-			return false;
-		}
-		const state = candidateStateById.get(candidate.vulnerabilityCandidateId);
-		return !(
-			state?.latestPhase === "verification" &&
-			(state.latestTask?.status === "failed" ||
-				state.latestTask?.status === "exited" ||
-				state.latestTask?.status === "canceled")
-		);
-	});
-	const failed = candidates.filter((candidate) => {
-		const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
-			candidate.vulnerabilityCandidateId,
-		);
-		if (!latestAnalysisResult) {
-			return false;
-		}
-		if (!shouldVerifyFromAnalysisResult(latestAnalysisResult.result)) {
-			return false;
-		}
-		if (
-			latestVerificationResultByCandidateId.has(
-				candidate.vulnerabilityCandidateId,
-			)
-		) {
-			return false;
-		}
-		const state = candidateStateById.get(candidate.vulnerabilityCandidateId);
-		return (
-			state?.latestPhase === "verification" &&
-			state.latestTask?.status === "failed"
-		);
-	}).length;
-	return {
-		candidates,
-		pendingCandidates,
-		totalTargets: candidates.filter((candidate) => {
-			const latestAnalysisResult = latestAnalysisResultByCandidateId.get(
-				candidate.vulnerabilityCandidateId,
-			);
-			return latestAnalysisResult
-				? shouldVerifyFromAnalysisResult(latestAnalysisResult.result)
-				: false;
-		}).length,
-		failed,
-	};
-};
-
-const getPendingTriageTaskState = async (scanJobId: string) => {
-	const triageTasks = await listTasksByScanJobAndStageRepo({
-		scanJobId,
-		stageName: SCAN_STAGE_IDS.triageFinding,
-	});
-	return {
-		pendingCount: triageTasks.filter((task) =>
-			["pending", "launching", "launched", "starting", "running"].includes(
-				task.status,
-			),
-		).length,
-		failed: triageTasks.filter((task) => task.status === "failed").length,
-	};
-};
-
-const getPendingScanTaskState = async (scanJobId: string) => {
-	const [scanJob, moduleTasks, functionTasks] = await Promise.all([
-		findScanJobByIdRepo(scanJobId),
-		listUnifiedModuleTaskViewsByScanJobId(scanJobId),
-		listUnifiedFunctionTaskViewsByScanJobId(scanJobId),
-	]);
-
-	return getPendingScanTaskStateView({
-		scanJob,
-		moduleTasks,
-		functionTasks,
-	});
-};
-
-export const reconcileScanJobCandidatePipelineStatus = async (
-	scanJobId: string,
-) => {
-	const [
-		scanState,
-		analysisState,
-		verificationState,
-		triageState,
-		taskStatusCounts,
-	] = await Promise.all([
-		getPendingScanTaskState(scanJobId),
-		getPendingAnalysisCandidates(scanJobId),
-		getPendingVerificationCandidates(scanJobId),
-		getPendingTriageTaskState(scanJobId),
-		listTaskStatusCountsByScanJobIdRepo(scanJobId),
-	]);
-	const openTaskCount = taskStatusCounts
-		.filter((item) =>
-			["pending", "launching", "launched", "starting", "running"].includes(
-				item.status,
-			),
-		)
-		.reduce((sum, item) => sum + Number(item.count), 0);
-
-	if (scanState.scanJob.status === "canceled") {
-		return {
-			status: "canceled" as const,
-			analysisFailed: analysisState.failed,
-			verificationFailed: verificationState.failed,
-			triageFailed: triageState.failed,
-			moduleFailed: scanState.moduleFailed,
-			functionFailed: scanState.functionFailed,
-		};
-	}
-
-	if (scanState.scanJob.status === "paused") {
-		return {
-			status: "paused" as const,
-			analysisFailed: analysisState.failed,
-			verificationFailed: verificationState.failed,
-			triageFailed: triageState.failed,
-			moduleFailed: scanState.moduleFailed,
-			functionFailed: scanState.functionFailed,
-		};
-	}
-
-	const nextState = resolveNextScanPipelineState({
-		scanJobStatus: scanState.scanJob.status,
-		repositoryTaskStatus: scanState.scanJob.repositoryTaskStatus,
-		modulePendingCount: scanState.modulePending.length,
-		functionPendingCount: scanState.functionPending.length,
-		openTaskCount,
-		moduleFailed: scanState.moduleFailed,
-		functionFailed: scanState.functionFailed,
-		analysisPendingCount: analysisState.pendingCandidates.length,
-		analysisFailed: analysisState.failed,
-		verificationPendingCount: verificationState.pendingCandidates.length,
-		verificationFailed: verificationState.failed,
-		triagePendingCount: triageState.pendingCount,
-		triageFailed: triageState.failed,
-	});
-
-	if (nextState.status !== scanState.scanJob.status || nextState.errorMessage) {
-		await updateScanJobStatusRepo(
-			scanJobId,
-			nextState.status,
-			nextState.errorMessage,
-		);
-	}
-
-	return {
-		status: nextState.status,
-		analysisFailed: analysisState.failed,
-		verificationFailed: verificationState.failed,
-		triageFailed: triageState.failed,
-		moduleFailed: scanState.moduleFailed,
-		functionFailed: scanState.functionFailed,
 	};
 };
 
@@ -7327,6 +7030,19 @@ export const recoverPendingFullScanQueues = async (input?: {
 	let startedPipelines = 0;
 
 	for (const job of jobs) {
+		if (job.status === "finalizing") {
+			await finalizeScanJob(job.scanJobId).catch((error) => {
+				console.log(
+					"[full-scan]",
+					JSON.stringify({
+						event: "finalization.recovery_failed",
+						scanJobId: job.scanJobId,
+						errorMessage: error instanceof Error ? error.message : String(error),
+					}),
+				);
+			});
+			continue;
+		}
 		if (job.status !== "running" && job.status !== "pending") {
 			continue;
 		}
@@ -7353,10 +7069,7 @@ export const recoverPendingFullScanQueues = async (input?: {
 };
 
 export const syncFullScanTasksFromArtifacts = async (scanJobId: string) => {
-	await recalculateScanTaskCountsRepo(scanJobId).catch(() => {});
-	const pipelineState = await reconcileScanJobCandidatePipelineStatus(
-		scanJobId,
-	).catch(() => null);
+	const pipelineState = await settleScanJobRepo(scanJobId).catch(() => null);
 	return {
 		synced: true,
 		scanJobId,
@@ -7546,15 +7259,16 @@ export const startCandidateAnalysis = async (input: {
 		});
 	}
 
-	const candidateExecutionState = await deriveCandidateExecutionState({
-		producerTaskId: candidate.producerTaskId,
-		vulnerabilityCandidateId: input.vulnerabilityCandidateId,
-	});
-	if (!candidateExecutionState.canRerunAnalysis) {
+	if (
+		await hasActiveCandidateAnalysisTaskRepo({
+			scanJobId: input.scanJobId,
+			vulnerabilityCandidateId: input.vulnerabilityCandidateId,
+		})
+	) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
 			message:
-				"Candidate analysis can only be requeued after the candidate reaches a terminal state",
+				"Candidate analysis is already queued or running",
 		});
 	}
 
@@ -7585,25 +7299,6 @@ export const startCandidateAnalysis = async (input: {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
 			message: "Candidate producer task is missing analysis input artifacts",
-		});
-	}
-
-	const existingActiveAnalysisTask = (
-		await listCandidateDescendantTasksByProducerTaskIdRepo({
-			producerTaskId: producerTask.taskId,
-			vulnerabilityCandidateId: input.vulnerabilityCandidateId,
-		})
-	).find(
-		(task) =>
-			task.stageName === SCAN_STAGE_IDS.analyzeFinding &&
-			["pending", "launching", "launched", "starting", "running"].includes(
-				task.status,
-			),
-	);
-	if (existingActiveAnalysisTask) {
-		throw new TRPCError({
-			code: "BAD_REQUEST",
-			message: "Candidate analysis is already queued or running",
 		});
 	}
 
@@ -7664,10 +7359,6 @@ export const startCandidateAnalysis = async (input: {
 		await updateScanJobStatusRepo(scanJob.scanJobId, "running").catch(() => {});
 	}
 	await enqueueAnalyzeFindingTask(scanJob.scanJobId, analysisTask.taskId);
-	await recalculateScanTaskCountsRepo(scanJob.scanJobId).catch(() => {});
-	await reconcileScanJobCandidatePipelineStatus(scanJob.scanJobId).catch(
-		() => null,
-	);
 
 	return {
 		started: true,

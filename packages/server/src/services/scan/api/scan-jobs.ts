@@ -1,18 +1,15 @@
 import { db } from "@vulseek/server/db";
-import { applications, compose, tasks } from "@vulseek/server/db/schema";
+import { applications, compose } from "@vulseek/server/db/schema";
 import type { apiCreateScanJob } from "@vulseek/server/db/schema";
 import type { ScanStageSettings } from "@vulseek/server/db/schema";
 import { eq } from "drizzle-orm";
 import { DEFAULT_DELTA_COMMIT_WINDOW } from "../constants";
-import { computeTaskCost } from "../cost";
 import {
 	createScanJobRepo,
 	findScanJobByIdRepo,
 	listScanJobsByApplicationIdRepo,
 	listScanJobsByComposeIdRepo,
-	recalculateScanTaskCountsRepo,
 	resetScanJobForRetryRepo,
-	sumClaudeCodeCachedReadTokensByScanJobIdRepo,
 	updateScanJobNoteRepo,
 	updateScanJobPipelineDefinitionSnapshotRepo,
 	updateScanJobRuntimeSettingsRepo,
@@ -24,6 +21,22 @@ import {
 	normalizeScanRuntimeSettings,
 } from "../runtime-settings";
 import type { ScanPipelineDefinitions } from "../pipeline/scan-pipeline-definitions";
+import { TRPCError } from "@trpc/server";
+import { findScanJobOrganizationIdRepo } from "../persistence/scan-job-access.repo";
+
+export const authorizeScanJobAccess = async (
+	scanJobId: string,
+	organizationId: string | null | undefined,
+) => {
+	const targetOrganizationId = await findScanJobOrganizationIdRepo(scanJobId);
+	if (!targetOrganizationId) {
+		throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid scan job target" });
+	}
+	if (targetOrganizationId !== organizationId) {
+		throw new TRPCError({ code: "UNAUTHORIZED", message: "You are not authorized to access this scan job" });
+	}
+	return targetOrganizationId;
+};
 
 const resolveCreateScanJobTargetStageSettings = async (
 	input: typeof apiCreateScanJob._type,
@@ -63,33 +76,7 @@ export const createScanJob = async (input: typeof apiCreateScanJob._type) => {
 };
 
 export const findScanJobById = async (scanJobId: string) => {
-	const [scanJob, claudeCachedReadTokens, taskRows] = await Promise.all([
-		findScanJobByIdRepo(scanJobId),
-		sumClaudeCodeCachedReadTokensByScanJobIdRepo(scanJobId),
-		db
-			.select({
-				inputTokens: tasks.inputTokens,
-				outputTokens: tasks.outputTokens,
-				cachedReadTokens: tasks.cachedReadTokens,
-				agentProfile: tasks.agentProfile,
-			})
-			.from(tasks)
-			.where(eq(tasks.scanJobId, scanJobId)),
-	]);
-
-	let estimatedCost: number | null = null;
-	for (const row of taskRows) {
-		const cost = computeTaskCost(row.inputTokens, row.outputTokens, row.cachedReadTokens, row.agentProfile);
-		if (cost != null) {
-			estimatedCost = (estimatedCost ?? 0) + cost;
-		}
-	}
-
-	return {
-		...scanJob,
-		inputTokens: scanJob.inputTokens + claudeCachedReadTokens,
-		estimatedCost,
-	};
+	return await findScanJobByIdRepo(scanJobId);
 };
 
 export const findAllScanJobsByApplicationId = async (applicationId: string) =>
@@ -136,7 +123,9 @@ export const updateScanJobStatus = async (
 		| "pending"
 		| "running"
 		| "paused"
+		| "finalizing"
 		| "finished"
+		| "partially_finished"
 		| "failed"
 		| "canceled",
 	errorMessage?: string,
@@ -145,11 +134,13 @@ export const updateScanJobStatus = async (
 export const resetScanJobForRetry = async (
 	scanJobId: string,
 	input?: {
-		status?:
-			| "pending"
-			| "running"
-			| "paused"
-			| "finished"
+			status?:
+				| "pending"
+				| "running"
+				| "paused"
+				| "finalizing"
+				| "finished"
+				| "partially_finished"
 			| "failed"
 			| "canceled";
 		errorMessage?: string | null;
@@ -161,6 +152,3 @@ export const updateScanJobRepositoryTaskStatus = async (
 	scanJobId: string,
 	repositoryTaskStatus: "pending" | "launching" | "launched" | "starting" | "running" | "completed" | "failed" | "exited" | "canceled",
 ) => await updateScanJobRepositoryTaskStatusRepo(scanJobId, repositoryTaskStatus);
-
-export const recalculateScanTaskCounts = async (scanJobId: string) =>
-	await recalculateScanTaskCountsRepo(scanJobId);

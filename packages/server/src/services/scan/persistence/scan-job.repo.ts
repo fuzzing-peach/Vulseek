@@ -26,12 +26,6 @@ const selectScanJobWithRepositoryTaskStatus = {
 	scanRuntimeSettings: scanJobs.scanRuntimeSettings,
 	scanPipelineDefinitionSnapshot: scanJobs.scanPipelineDefinitionSnapshot,
 	commitWindow: scanJobs.commitWindow,
-	moduleTasksTotal: scanJobs.moduleTasksTotal,
-	moduleTasksCompleted: scanJobs.moduleTasksCompleted,
-	moduleTasksFailed: scanJobs.moduleTasksFailed,
-	functionTasksTotal: scanJobs.functionTasksTotal,
-	functionTasksCompleted: scanJobs.functionTasksCompleted,
-	functionTasksFailed: scanJobs.functionTasksFailed,
 	applicationId: scanJobs.applicationId,
 	composeId: scanJobs.composeId,
 	createdAt: scanJobs.createdAt,
@@ -45,6 +39,7 @@ const selectScanJobWithRepositoryTaskStatus = {
 	totalTokens: scanJobs.totalTokens,
 	cachedReadTokens: scanJobs.cachedReadTokens,
 	cachedWriteTokens: scanJobs.cachedWriteTokens,
+	estimatedCost: scanJobs.estimatedCost,
 	repositoryTaskId: tasks.taskId,
 	repositoryTaskStatus: sql<
 		typeof tasks.$inferSelect.status
@@ -135,7 +130,7 @@ export const listUnfinishedScanJobsRepo = async () =>
 			),
 		)
 		.where(
-			sql`${scanJobs.status} = 'pending' or ${scanJobs.status} = 'running'`,
+			sql`${scanJobs.status} in ('pending', 'running', 'finalizing')`,
 		);
 
 export const createScanJobRepo = async (input: {
@@ -293,7 +288,12 @@ export const updateScanJobStatusRepo = async (
 		patch.finishedAt = null;
 	}
 
-	if (status === "finished" || status === "failed" || status === "canceled") {
+	if (
+		status === "finished" ||
+		status === "partially_finished" ||
+		status === "failed" ||
+		status === "canceled"
+	) {
 		patch.finishedAt = new Date().toISOString();
 	}
 
@@ -425,41 +425,6 @@ export const updateScanJobTargetContextRepo = async (
 	const updated = await db
 		.update(scanJobs)
 		.set(patch)
-		.where(eq(scanJobs.scanJobId, scanJobId))
-		.returning();
-	return updated[0] || null;
-};
-
-export const recalculateScanTaskCountsRepo = async (scanJobId: string) => {
-	const taskRows = await db
-		.select({
-			stageName: tasks.stageName,
-			status: tasks.status,
-			count: sql<number>`count(*)::int`,
-		})
-		.from(tasks)
-		.where(eq(tasks.scanJobId, scanJobId))
-		.groupBy(tasks.stageName, tasks.status);
-
-	const countBy = (stageName: string, status?: string) =>
-		taskRows
-			.filter(
-				(row) =>
-					row.stageName === stageName &&
-					(status ? row.status === status : true),
-			)
-			.reduce((sum, row) => sum + row.count, 0);
-
-	const updated = await db
-		.update(scanJobs)
-		.set({
-			moduleTasksTotal: countBy("identify-target"),
-			moduleTasksCompleted: countBy("identify-target", "completed"),
-			moduleTasksFailed: countBy("identify-target", "failed"),
-			functionTasksTotal: countBy("scan-target"),
-			functionTasksCompleted: countBy("scan-target", "completed"),
-			functionTasksFailed: countBy("scan-target", "failed"),
-		})
 		.where(eq(scanJobs.scanJobId, scanJobId))
 		.returning();
 	return updated[0] || null;

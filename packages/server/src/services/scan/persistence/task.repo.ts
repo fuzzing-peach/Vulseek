@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { db } from "@vulseek/server/db";
 import {
 	scanJobs,
@@ -5,26 +6,38 @@ import {
 	tasks,
 	vulnerabilityCandidates,
 } from "@vulseek/server/db/schema";
-import { TRPCError } from "@trpc/server";
-import { and, asc, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	count,
+	desc,
+	eq,
+	ilike,
+	inArray,
+	or,
+	sql,
+} from "drizzle-orm";
 import {
 	analysisSchema,
 	triageSchema,
 	verificationSchema,
 } from "../artifacts/contracts/domain-object.contract";
-import { createShortTaskId } from "../task-id";
+import { computeTaskCost } from "../cost";
 import {
 	mapRunningTaskStage,
-	type RunningTaskStage,
 	RUNNING_TASK_VIEW_STATUSES,
+	type RunningTaskStage,
 } from "../running-task-stage";
-import type { AnalysisResult, TriageResult, VerificationResult } from "../types";
+import { createShortTaskId, createTaskIdForDispatchKey } from "../task-id";
+import type {
+	AnalysisResult,
+	TriageResult,
+	VerificationResult,
+} from "../types";
 import { upsertCandidateResultProjectionTx } from "./candidate-result-projection.repo";
 import { readCandidateIdFromTaskInputArtifact } from "./task-artifact-resolver";
 
-const CANDIDATE_PRODUCER_STAGE_NAMES = new Set([
-	"scan-target",
-]);
+const CANDIDATE_PRODUCER_STAGE_NAMES = new Set(["scan-target"]);
 
 const findProducerTaskIdForCandidateDescendantTask = async (
 	task: typeof tasks.$inferSelect,
@@ -56,9 +69,13 @@ const tokenUsageKeys = [
 ] as const;
 
 type TaskTokenUsageKey = (typeof tokenUsageKeys)[number];
+type TaskRecord = typeof tasks.$inferSelect;
 
 const hasTokenUsagePatch = (patch: Partial<typeof tasks.$inferSelect>) =>
 	tokenUsageKeys.some((key) => key in patch);
+
+const hasTaskCostPatch = (patch: Partial<typeof tasks.$inferSelect>) =>
+	hasTokenUsagePatch(patch) || "agentProfile" in patch;
 
 const toTokenCount = (value: number | null | undefined) =>
 	typeof value === "number" && Number.isFinite(value) ? value : 0;
@@ -67,12 +84,14 @@ const tokenUsageDelta = (
 	before: Pick<typeof tasks.$inferSelect, TaskTokenUsageKey>,
 	after: Pick<typeof tasks.$inferSelect, TaskTokenUsageKey>,
 ) => ({
-	inputTokens: toTokenCount(after.inputTokens) - toTokenCount(before.inputTokens),
+	inputTokens:
+		toTokenCount(after.inputTokens) - toTokenCount(before.inputTokens),
 	outputTokens:
 		toTokenCount(after.outputTokens) - toTokenCount(before.outputTokens),
 	thoughtTokens:
 		toTokenCount(after.thoughtTokens) - toTokenCount(before.thoughtTokens),
-	totalTokens: toTokenCount(after.totalTokens) - toTokenCount(before.totalTokens),
+	totalTokens:
+		toTokenCount(after.totalTokens) - toTokenCount(before.totalTokens),
 	cachedReadTokens:
 		toTokenCount(after.cachedReadTokens) -
 		toTokenCount(before.cachedReadTokens),
@@ -105,6 +124,35 @@ const applyScanJobTokenUsageDelta = async (
 		.where(eq(scanJobs.scanJobId, scanJobId));
 };
 
+const applyScanJobEstimatedCostDelta = async (
+	tx: typeof db,
+	scanJobId: string,
+	previousCost: number | null | undefined,
+	nextCost: number | null | undefined,
+) => {
+	const delta = (nextCost ?? 0) - (previousCost ?? 0);
+	if (delta === 0) {
+		return;
+	}
+	await tx
+		.update(scanJobs)
+		.set({ estimatedCost: sql`${scanJobs.estimatedCost} + ${delta}` })
+		.where(eq(scanJobs.scanJobId, scanJobId));
+};
+
+const calculateTaskCost = (
+	task: Pick<
+		TaskRecord,
+		"inputTokens" | "outputTokens" | "cachedReadTokens" | "agentProfile"
+	>,
+) =>
+	computeTaskCost(
+		task.inputTokens,
+		task.outputTokens,
+		task.cachedReadTokens,
+		task.agentProfile,
+	);
+
 const buildAnalysisTaskResultView = async (
 	task: typeof tasks.$inferSelect,
 ): Promise<AnalysisResult | null> => {
@@ -118,7 +166,8 @@ const buildAnalysisTaskResultView = async (
 	if (!vulnerabilityCandidateId) {
 		return null;
 	}
-	const producerTaskId = await findProducerTaskIdForCandidateDescendantTask(task);
+	const producerTaskId =
+		await findProducerTaskIdForCandidateDescendantTask(task);
 	if (!producerTaskId) {
 		return null;
 	}
@@ -154,7 +203,8 @@ const buildVerificationTaskResultView = async (
 	if (!vulnerabilityCandidateId) {
 		return null;
 	}
-	const producerTaskId = await findProducerTaskIdForCandidateDescendantTask(task);
+	const producerTaskId =
+		await findProducerTaskIdForCandidateDescendantTask(task);
 	if (!producerTaskId) {
 		return null;
 	}
@@ -190,7 +240,8 @@ const buildTriageTaskResultView = async (
 	if (!vulnerabilityCandidateId) {
 		return null;
 	}
-	const producerTaskId = await findProducerTaskIdForCandidateDescendantTask(task);
+	const producerTaskId =
+		await findProducerTaskIdForCandidateDescendantTask(task);
 	if (!producerTaskId) {
 		return null;
 	}
@@ -234,6 +285,7 @@ export const createTaskRepo = async (input: {
 	parentTaskId?: string | null;
 	name: string;
 	stageName: string;
+	dispatchKey?: string | null;
 	status?: (typeof taskStatusEnum.enumValues)[number];
 	priority?: number | null;
 	attempt?: number;
@@ -259,6 +311,17 @@ export const createTaskRepo = async (input: {
 	startedAt?: string | null;
 	completedAt?: string | null;
 }) => {
+	if (input.dispatchKey) {
+		const existing = await db
+			.select()
+			.from(tasks)
+			.where(eq(tasks.dispatchKey, input.dispatchKey))
+			.limit(1)
+			.then((rows) => rows[0] || null);
+		if (existing) {
+			return existing;
+		}
+	}
 	const hasExplicitTaskId = Boolean(input.taskId);
 	let created: Array<typeof tasks.$inferSelect> = [];
 	let lastError: unknown = null;
@@ -267,13 +330,17 @@ export const createTaskRepo = async (input: {
 			created = await db
 				.insert(tasks)
 				.values({
-					taskId: input.taskId || createShortTaskId(),
+					taskId:
+						input.taskId ||
+						(input.dispatchKey
+							? createTaskIdForDispatchKey(input.dispatchKey)
+							: createShortTaskId()),
 					scanJobId: input.scanJobId,
-					vulnerabilityCandidateId:
-						input.vulnerabilityCandidateId ?? null,
+					vulnerabilityCandidateId: input.vulnerabilityCandidateId ?? null,
 					parentTaskId: input.parentTaskId ?? null,
 					name: input.name,
 					stageName: input.stageName,
+					dispatchKey: input.dispatchKey ?? null,
 					status: input.status ?? "pending",
 					priority: input.priority ?? null,
 					attempt: input.attempt ?? 0,
@@ -292,6 +359,12 @@ export const createTaskRepo = async (input: {
 					totalTokens: input.totalTokens ?? null,
 					cachedReadTokens: input.cachedReadTokens ?? null,
 					cachedWriteTokens: input.cachedWriteTokens ?? null,
+					estimatedCost: calculateTaskCost({
+						inputTokens: input.inputTokens ?? null,
+						outputTokens: input.outputTokens ?? null,
+						cachedReadTokens: input.cachedReadTokens ?? null,
+						agentProfile: input.agentProfile ?? null,
+					}),
 					errorMessage: input.errorMessage ?? null,
 					exitReason: input.exitReason ?? null,
 					exitNote: input.exitNote ?? null,
@@ -339,6 +412,12 @@ export const createTaskRepo = async (input: {
 			),
 		);
 	}
+	await applyScanJobEstimatedCostDelta(
+		db,
+		created[0].scanJobId,
+		0,
+		created[0].estimatedCost,
+	);
 
 	return created[0];
 };
@@ -367,6 +446,31 @@ export const listTasksByScanJobIdRepo = async (scanJobId: string) =>
 		.from(tasks)
 		.where(eq(tasks.scanJobId, scanJobId))
 		.orderBy(desc(tasks.createdAt));
+
+export const hasActiveCandidateAnalysisTaskRepo = async (input: {
+	scanJobId: string;
+	vulnerabilityCandidateId: string;
+}) => {
+	const [row] = await db
+		.select({ taskId: tasks.taskId })
+		.from(tasks)
+		.where(
+			and(
+				eq(tasks.scanJobId, input.scanJobId),
+				eq(tasks.vulnerabilityCandidateId, input.vulnerabilityCandidateId),
+				eq(tasks.stageName, "analyze-finding"),
+				inArray(tasks.status, [
+					"pending",
+					"launching",
+					"launched",
+					"starting",
+					"running",
+				]),
+			),
+		)
+		.limit(1);
+	return Boolean(row);
+};
 
 export const listTaskRuntimeIntervalsByScanJobIdRepo = async (
 	scanJobId: string,
@@ -428,12 +532,7 @@ export const listRunningTaskRuntimeMetadataRepo = async (scanJobId: string) =>
 		.where(
 			and(
 				eq(tasks.scanJobId, scanJobId),
-				inArray(tasks.status, [
-					"launching",
-					"launched",
-					"starting",
-					"running",
-				]),
+				inArray(tasks.status, ["launching", "launched", "starting", "running"]),
 			),
 		)
 		.orderBy(desc(tasks.updatedAt));
@@ -496,61 +595,94 @@ export const listRunningTaskViewsByScanJobIdRepo = async (
 		ORDER BY t."updatedAt" DESC
 	`);
 
-	return result.map((row) => {
-		const value = row as Record<string, unknown>;
-		const stageName = String(value.stageName || "");
-		const candidateTitle = String(value.candidateTitle || value.name || "");
-		const candidateLocation = [
-			value.candidateFilePath,
-			value.candidateLine,
-		].filter((part) => part !== null && part !== undefined && part !== "").join(":");
-		const candidateSubtitle = [
-			candidateLocation,
-			value.candidateVulnerabilityType,
-		].filter(Boolean).join(" · ") || "-";
-		const first = (...keys: string[]) =>
-			keys.map((key) => value[key]).find((item) => item !== null && item !== undefined && item !== "") ?? null;
-		const location = (filePath: unknown, line: unknown) =>
-			[filePath, line].filter((part) => part !== null && part !== undefined && part !== "").join(":");
-		const stage = mapRunningTaskStage(stageName);
-		if (!stage) {
-			return null;
-		}
-		let title = String(value.name || "");
-		let subtitle = "-";
-		if (stageName === "delta-scope") {
-			title = "Delta Scope";
-			subtitle = "Diff impact function scoping";
-		} else if (stageName === "repository-profile") {
-			title = "Repository Profile";
-			subtitle = "Repository-wide planner and module partitioning";
-		} else if (stageName === "attack-surface-model") {
-			title = String(first("moduleName") || value.name || "");
-			subtitle = String(first("moduleId") || "-");
-		} else if (stageName === "identify-target") {
-			title = String(first("moduleName", "moduleObjectName") || value.name || "");
-			subtitle = String(first("moduleId", "moduleObjectId") || "-");
-		} else if (stageName === "scan-target") {
-			title = String(first("targetName", "targetId", "targetObjectName", "targetObjectId", "functionName", "functionId", "functionObjectName", "functionObjectId") || value.name || "");
-			subtitle = [
-				first("moduleName", "moduleObjectName", "targetModuleName", "functionModuleName", "functionModuleNameNested"),
-				location(first("filePath", "targetFilePath", "functionFilePath"), first("line", "targetLine", "functionLine")),
-			].filter(Boolean).join(" · ") || "-";
-		} else {
-			title = candidateTitle;
-			subtitle = candidateSubtitle;
-		}
-		return {
-			id: `${stageName}-${String(value.taskId)}`,
-			taskId: String(value.taskId),
-			taskName: String(value.name || ""),
-			title,
-			subtitle,
-			stage,
-			startedAt: value.startedAt ? String(value.startedAt) : null,
-			updatedAt: String(value.updatedAt || ""),
-		};
-	}).filter((row): row is RunningTaskViewRepoRow => row !== null);
+	return result
+		.map((row) => {
+			const value = row as Record<string, unknown>;
+			const stageName = String(value.stageName || "");
+			const candidateTitle = String(value.candidateTitle || value.name || "");
+			const candidateLocation = [value.candidateFilePath, value.candidateLine]
+				.filter((part) => part !== null && part !== undefined && part !== "")
+				.join(":");
+			const candidateSubtitle =
+				[candidateLocation, value.candidateVulnerabilityType]
+					.filter(Boolean)
+					.join(" · ") || "-";
+			const first = (...keys: string[]) =>
+				keys
+					.map((key) => value[key])
+					.find((item) => item !== null && item !== undefined && item !== "") ??
+				null;
+			const location = (filePath: unknown, line: unknown) =>
+				[filePath, line]
+					.filter((part) => part !== null && part !== undefined && part !== "")
+					.join(":");
+			const stage = mapRunningTaskStage(stageName);
+			if (!stage) {
+				return null;
+			}
+			let title = String(value.name || "");
+			let subtitle = "-";
+			if (stageName === "delta-scope") {
+				title = "Delta Scope";
+				subtitle = "Diff impact function scoping";
+			} else if (stageName === "repository-profile") {
+				title = "Repository Profile";
+				subtitle = "Repository-wide planner and module partitioning";
+			} else if (stageName === "attack-surface-model") {
+				title = String(first("moduleName") || value.name || "");
+				subtitle = String(first("moduleId") || "-");
+			} else if (stageName === "identify-target") {
+				title = String(
+					first("moduleName", "moduleObjectName") || value.name || "",
+				);
+				subtitle = String(first("moduleId", "moduleObjectId") || "-");
+			} else if (stageName === "scan-target") {
+				title = String(
+					first(
+						"targetName",
+						"targetId",
+						"targetObjectName",
+						"targetObjectId",
+						"functionName",
+						"functionId",
+						"functionObjectName",
+						"functionObjectId",
+					) ||
+						value.name ||
+						"",
+				);
+				subtitle =
+					[
+						first(
+							"moduleName",
+							"moduleObjectName",
+							"targetModuleName",
+							"functionModuleName",
+							"functionModuleNameNested",
+						),
+						location(
+							first("filePath", "targetFilePath", "functionFilePath"),
+							first("line", "targetLine", "functionLine"),
+						),
+					]
+						.filter(Boolean)
+						.join(" · ") || "-";
+			} else {
+				title = candidateTitle;
+				subtitle = candidateSubtitle;
+			}
+			return {
+				id: `${stageName}-${String(value.taskId)}`,
+				taskId: String(value.taskId),
+				taskName: String(value.name || ""),
+				title,
+				subtitle,
+				stage,
+				startedAt: value.startedAt ? String(value.startedAt) : null,
+				updatedAt: String(value.updatedAt || ""),
+			};
+		})
+		.filter((row): row is RunningTaskViewRepoRow => row !== null);
 };
 
 export const listTaskStatusCountsByScanJobIdRepo = async (scanJobId: string) =>
@@ -755,6 +887,14 @@ export const transitionTaskStatusRepo = async (input: {
 		input.to === "canceled"
 			? { completedAt: now }
 			: {}),
+		...(input.to === "failed" ||
+		input.to === "exited" ||
+		input.to === "canceled"
+			? {
+					downstreamDispatchStatus: "completed" as const,
+					downstreamDispatchedAt: now,
+				}
+			: {}),
 	};
 
 	const updated = await db.transaction(async (tx) => {
@@ -762,10 +902,7 @@ export const transitionTaskStatusRepo = async (input: {
 			.select()
 			.from(tasks)
 			.where(
-				and(
-					eq(tasks.taskId, input.taskId),
-					inArray(tasks.status, input.from),
-				),
+				and(eq(tasks.taskId, input.taskId), inArray(tasks.status, input.from)),
 			)
 			.limit(1)
 			.then((rows) => rows[0] || null);
@@ -776,10 +913,7 @@ export const transitionTaskStatusRepo = async (input: {
 			.update(tasks)
 			.set(patch)
 			.where(
-				and(
-					eq(tasks.taskId, input.taskId),
-					inArray(tasks.status, input.from),
-				),
+				and(eq(tasks.taskId, input.taskId), inArray(tasks.status, input.from)),
 			)
 			.returning();
 		const updatedTask = rows[0] || null;
@@ -790,6 +924,12 @@ export const transitionTaskStatusRepo = async (input: {
 			tx,
 			updatedTask.scanJobId,
 			tokenUsageDelta(previous, updatedTask),
+		);
+		await applyScanJobEstimatedCostDelta(
+			tx,
+			updatedTask.scanJobId,
+			previous.estimatedCost,
+			updatedTask.estimatedCost,
 		);
 		if (input.to === "completed" || input.to === "exited") {
 			await upsertCandidateResultProjectionTx(tx, updatedTask);
@@ -808,7 +948,7 @@ export const updateTaskRepo = async (
 		...patch,
 		updatedAt: new Date().toISOString(),
 	};
-	const updated = hasTokenUsagePatch(patch)
+	const updated = hasTaskCostPatch(patch)
 		? await db.transaction(async (tx) => {
 				const previous = await tx
 					.select()
@@ -821,7 +961,27 @@ export const updateTaskRepo = async (
 				}
 				const rows = await tx
 					.update(tasks)
-					.set(nextPatch)
+					.set({
+						...nextPatch,
+						estimatedCost: calculateTaskCost({
+							inputTokens:
+								("inputTokens" in patch
+									? patch.inputTokens
+									: previous.inputTokens) ?? null,
+							outputTokens:
+								("outputTokens" in patch
+									? patch.outputTokens
+									: previous.outputTokens) ?? null,
+							cachedReadTokens:
+								("cachedReadTokens" in patch
+									? patch.cachedReadTokens
+									: previous.cachedReadTokens) ?? null,
+							agentProfile:
+								("agentProfile" in patch
+									? patch.agentProfile
+									: previous.agentProfile) ?? null,
+						}),
+					})
 					.where(eq(tasks.taskId, taskId))
 					.returning();
 				const updatedTask = rows[0] || null;
@@ -832,6 +992,12 @@ export const updateTaskRepo = async (
 					tx,
 					updatedTask.scanJobId,
 					tokenUsageDelta(previous, updatedTask),
+				);
+				await applyScanJobEstimatedCostDelta(
+					tx,
+					updatedTask.scanJobId,
+					previous.estimatedCost,
+					updatedTask.estimatedCost,
 				);
 				return updatedTask;
 			})
@@ -938,19 +1104,26 @@ export const resetFailedTaskForRetryRepo = async (taskId: string) => {
 				totalTokens: null,
 				cachedReadTokens: null,
 				cachedWriteTokens: null,
+				estimatedCost: null,
 				attempt: sql`${tasks.attempt} + 1`,
 				updatedAt: new Date().toISOString(),
-				})
-				.where(eq(tasks.taskId, taskId))
-				.returning();
-			const updatedTask = rows[0] || null;
-			if (!updatedTask) {
-				return null;
-			}
+			})
+			.where(eq(tasks.taskId, taskId))
+			.returning();
+		const updatedTask = rows[0] || null;
+		if (!updatedTask) {
+			return null;
+		}
 		await applyScanJobTokenUsageDelta(
 			tx,
 			updatedTask.scanJobId,
 			tokenUsageDelta(previous, updatedTask),
+		);
+		await applyScanJobEstimatedCostDelta(
+			tx,
+			updatedTask.scanJobId,
+			previous.estimatedCost,
+			updatedTask.estimatedCost,
 		);
 		await tx
 			.delete(vulnerabilityCandidates)
@@ -996,6 +1169,7 @@ export const requeueTaskRepo = async (taskId: string) => {
 				totalTokens: null,
 				cachedReadTokens: null,
 				cachedWriteTokens: null,
+				estimatedCost: null,
 				attempt: sql`${tasks.attempt} + 1`,
 				updatedAt: new Date().toISOString(),
 			})
@@ -1009,6 +1183,12 @@ export const requeueTaskRepo = async (taskId: string) => {
 			tx,
 			updatedTask.scanJobId,
 			tokenUsageDelta(previous, updatedTask),
+		);
+		await applyScanJobEstimatedCostDelta(
+			tx,
+			updatedTask.scanJobId,
+			previous.estimatedCost,
+			updatedTask.estimatedCost,
 		);
 		return updatedTask;
 	});
@@ -1054,9 +1234,9 @@ export const listTriageResultsByScanJobIdRepo = async (
 		scanJobId,
 		stageName: "triage-finding",
 	});
-	return (
-		await Promise.all(triageTasks.map(buildTriageTaskResultView))
-	).filter((item): item is TriageResult => Boolean(item));
+	return (await Promise.all(triageTasks.map(buildTriageTaskResultView))).filter(
+		(item): item is TriageResult => Boolean(item),
+	);
 };
 
 export const findLatestAnalysisResultByCandidateIdRepo = async (input: {
@@ -1069,7 +1249,7 @@ export const findLatestAnalysisResultByCandidateIdRepo = async (input: {
 			await listCandidateDescendantTasksByProducerTaskIdRepo({
 				producerTaskId: input.producerTaskId,
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
-		});
+			});
 		for (const task of candidateTasks) {
 			if (task.stageName !== "analyze-finding") {
 				continue;
@@ -1100,7 +1280,7 @@ export const findLatestVerificationResultByCandidateIdRepo = async (input: {
 			await listCandidateDescendantTasksByProducerTaskIdRepo({
 				producerTaskId: input.producerTaskId,
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
-		});
+			});
 		for (const task of candidateTasks) {
 			if (task.stageName !== "verify-finding") {
 				continue;
@@ -1131,7 +1311,7 @@ export const findLatestTriageResultByCandidateIdRepo = async (input: {
 			await listCandidateDescendantTasksByProducerTaskIdRepo({
 				producerTaskId: input.producerTaskId,
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
-		});
+			});
 		for (const task of candidateTasks) {
 			if (task.stageName !== "triage-finding") {
 				continue;

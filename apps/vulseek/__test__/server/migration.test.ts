@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
 	ensureLegacyDrizzleBaseline: vi.fn(),
 	migrate: vi.fn(),
 	backfillCandidateResultProjections: vi.fn(),
+	backfillScanJobCosts: vi.fn(),
 }));
 
 vi.mock("postgres", () => ({
@@ -31,6 +32,13 @@ vi.mock(
 	}),
 );
 
+vi.mock(
+	"@vulseek/server/services/scan/persistence/scan-job-cost-backfill",
+	() => ({
+		backfillScanJobCosts: mocks.backfillScanJobCosts,
+	}),
+);
+
 import { migration } from "@/server/db/migration";
 
 describe("migration", () => {
@@ -42,6 +50,11 @@ describe("migration", () => {
 		const error = new Error("migration failed");
 		mocks.ensureLegacyDrizzleBaseline.mockResolvedValue(undefined);
 		mocks.backfillCandidateResultProjections.mockResolvedValue({
+			processedCount: 0,
+			skippedCount: 0,
+			skippedTasks: [],
+		});
+		mocks.backfillScanJobCosts.mockResolvedValue({
 			processedCount: 0,
 			skippedCount: 0,
 			skippedTasks: [],
@@ -60,10 +73,16 @@ describe("migration", () => {
 			skippedCount: 1,
 			skippedTasks: [],
 		});
+		mocks.backfillScanJobCosts.mockResolvedValue({
+			processedCount: 0,
+			skippedCount: 0,
+			skippedTasks: [],
+		});
 
 		await migration();
 
 		expect(mocks.backfillCandidateResultProjections).toHaveBeenCalledTimes(1);
+		expect(mocks.backfillScanJobCosts).toHaveBeenCalledTimes(1);
 		expect(mocks.closeConnection).toHaveBeenCalledTimes(1);
 	});
 });

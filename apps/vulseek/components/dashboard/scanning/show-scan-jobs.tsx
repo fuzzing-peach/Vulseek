@@ -30,7 +30,9 @@ const statusColorMap = {
 	pending: "bg-muted-foreground",
 	running: "bg-yellow-500",
 	paused: "bg-blue-500",
+	finalizing: "bg-blue-500",
 	finished: "bg-green-500",
+	partially_finished: "bg-orange-500",
 	failed: "bg-destructive",
 	canceled: "bg-destructive",
 } as const;

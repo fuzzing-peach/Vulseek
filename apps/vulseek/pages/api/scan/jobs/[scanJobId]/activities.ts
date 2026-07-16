@@ -4,12 +4,12 @@ import {
 	findRunningAgentTaskRuntimesByScanJobId,
 	findScanJobOrganizationId,
 	findScanJobStatusById,
+	parseDriverStdout,
 	validateRequest,
 } from "@vulseek/server";
 import type { NextApiRequest, NextApiResponse } from "next";
 import {
 	type AgentActivityMetadata,
-	type AgentActivitySnapshot,
 	idleAgentActivity,
 } from "@/lib/scan/agent-activity";
 
@@ -17,16 +17,14 @@ const sendEvent = (res: NextApiResponse, event: string, payload: unknown) => {
 	res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
 };
 
-const readSnapshot = async (
-	filePath: string,
-): Promise<AgentActivitySnapshot | null> => {
+const readSnapshot = async (filePath: string) => {
 	try {
-		const value = JSON.parse(
-			await fs.readFile(filePath, "utf-8"),
-		) as AgentActivitySnapshot;
-		return value?.version === 1 && typeof value.revision === "number"
-			? value
-			: null;
+		const content = await fs.readFile(filePath, "utf-8");
+		const protocol = parseDriverStdout(content);
+		return {
+			activity: protocol.latestActivity,
+			signature: `${content.length}:${content.slice(-256)}`,
+		};
 	} catch {
 		return null;
 	}
@@ -76,7 +74,7 @@ export default async function handler(
 		"X-Accel-Buffering": "no",
 	});
 	res.flushHeaders?.();
-	const revisions = new Map<string, number>();
+	const revisions = new Map<string, string>();
 	const activeTaskIds = new Set<string>();
 	let closed = false;
 	const cleanup = () => {
@@ -88,12 +86,12 @@ export default async function handler(
 		await Promise.all(
 			(await findRunningAgentTaskRuntimesByScanJobId(scanJobId)).map(
 				async (runtime) => {
-					const snapshot = await readSnapshot(runtime.activityPath);
+					const snapshot = await readSnapshot(runtime.stdoutPath);
 					return {
 						taskId: runtime.taskId,
 						metadata: metadataFor(runtime),
 						activity: snapshot?.activity || idleAgentActivity,
-						revision: snapshot?.revision ?? -1,
+						revision: snapshot?.signature || "",
 					};
 				},
 			),
