@@ -1,6 +1,6 @@
 import { db } from "@vulseek/server/db";
 import { scanJobs, tasks } from "@vulseek/server/db/schema";
-import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
 import { resolveTerminalScanJobStatus } from "../state/scan-state-machine";
 
 const TERMINAL_TASK_STATUSES = [
@@ -93,6 +93,45 @@ export const completeDownstreamDispatchRepo = async (taskId: string) => {
 			updatedAt: new Date().toISOString(),
 		})
 		.where(eq(tasks.taskId, taskId));
+};
+
+export const releaseDownstreamDispatchClaimRepo = async (taskId: string) => {
+	const [updated] = await db
+		.update(tasks)
+		.set({
+			downstreamDispatchStatus: "pending",
+			updatedAt: new Date().toISOString(),
+		})
+		.where(
+			and(
+				eq(tasks.taskId, taskId),
+				eq(tasks.downstreamDispatchStatus, "dispatching"),
+			),
+		)
+		.returning({ taskId: tasks.taskId });
+	return Boolean(updated);
+};
+
+export const listPendingCompletedDownstreamDispatchesRepo = async (
+	scanJobId: string,
+) => {
+	return db
+		.select({
+			taskId: tasks.taskId,
+			stageName: tasks.stageName,
+			input: tasks.input,
+			output: tasks.output,
+			downstreamRouteKey: tasks.downstreamRouteKey,
+		})
+		.from(tasks)
+		.where(
+			and(
+				eq(tasks.scanJobId, scanJobId),
+				eq(tasks.status, "completed"),
+				eq(tasks.downstreamDispatchStatus, "pending"),
+			),
+		)
+		.orderBy(asc(tasks.updatedAt));
 };
 
 export const completeTerminalTaskDispatchesRepo = async (scanJobId: string) => {

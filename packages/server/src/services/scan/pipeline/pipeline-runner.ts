@@ -13,9 +13,17 @@ import {
 	completeDownstreamDispatchRepo,
 	completeTerminalTaskDispatchesRepo,
 	finalizeScanJobRepo,
+	listPendingCompletedDownstreamDispatchesRepo,
+	releaseDownstreamDispatchClaimRepo,
 	resetStaleDownstreamDispatchesRepo,
 	settleScanJobRepo,
 } from "../persistence/job-settlement.repo";
+import {
+	deletePipelineRuntime,
+	getPipelineRuntimeRegistry,
+	setPipelineRuntime,
+} from "./pipeline-runtime-registry";
+import { runAfterCompletionClaim } from "./completion-claim";
 import { findScanJobByIdRepo } from "../persistence/scan-job.repo";
 import {
 	bindStageLaneRuntimeRepo,
@@ -1476,8 +1484,14 @@ type StageLifecycleSuccess<TOutput, TStageContext extends StageContext> = {
 	taskId: string;
 	taskName: string;
 	stageCtx: TStageContext;
+	prepared: PreparedStageSuccess<TOutput>;
 	output: TOutput;
 	rawOutput: string;
+};
+
+type PreparedStageSuccess<TOutput> = {
+	output: TOutput;
+	vulnerabilityCandidateId: string | null;
 };
 
 const isCandidateProducerStage = (stageId: string) =>
@@ -1494,25 +1508,8 @@ const prepareStageSuccess = async <
 	stageCtx: TStageContext,
 	input: TInput,
 	rawOutput: string,
-) => {
+): Promise<PreparedStageSuccess<TOutput>> => {
 	const currentTask = await findTaskByIdRepo(stageCtx.taskId).catch(() => null);
-	if (
-		currentTask &&
-		currentTask.status !== "launching" &&
-		currentTask.status !== "starting" &&
-		currentTask.status !== "running"
-	) {
-		logPipelineEvent("stage.stale_completion_ignored", {
-			scanJobId: stageCtx.scanJobId,
-			stageName: stage.id,
-			taskId: stageCtx.taskId,
-			taskName: stageCtx.taskName,
-			currentStatus: currentTask.status,
-		});
-		throw new Error(
-			`Task ${stageCtx.taskId} is no longer running; ignoring stale completion`,
-		);
-	}
 	await assertScanJobNotCancelled(stageCtx);
 	const validatedOutput = stage.validateOutput
 		? stageCtx.nullableOutput && rawOutput.trim() === "null"
@@ -1527,15 +1524,7 @@ const prepareStageSuccess = async <
 		currentTask && CANDIDATE_RESULT_STAGE_NAMES.includes(stage.id as never)
 			? await readCandidateIdFromTaskInputArtifact(currentTask)
 			: null;
-	await updateTaskDefault(stageCtx.taskId, {
-		output,
-		...(vulnerabilityCandidateId ? { vulnerabilityCandidateId } : {}),
-	});
-	if (isCandidateProducerStage(stage.id)) {
-		await syncVulnerabilityCandidatesFromProducerTask(stageCtx.taskId);
-	}
-	await stage.onSuccess?.(stageCtx, input, output);
-	return output;
+	return { output, vulnerabilityCandidateId };
 };
 
 const persistTerminalSuccess = async <
@@ -1546,8 +1535,10 @@ const persistTerminalSuccess = async <
 >(
 	stage: StageDefinition<TPipelineContext, TInput, TOutput, TStageContext>,
 	_ctx: TPipelineContext,
+	input: TInput,
 	stageCtx: TStageContext,
 	rawOutput: string,
+	prepared: PreparedStageSuccess<TOutput>,
 	options?: {
 		exitLane?: boolean;
 		exitReason?: "agent_exit";
@@ -1574,21 +1565,6 @@ const persistTerminalSuccess = async <
 	let stepStartedAt = Date.now();
 	const currentTask = await findTaskByIdRepo(stageCtx.taskId).catch(() => null);
 	logPersistTiming("find_current_task", stepStartedAt);
-	if (
-		currentTask &&
-		currentTask.status !== "launching" &&
-		currentTask.status !== "starting" &&
-		currentTask.status !== "running"
-	) {
-		logPipelineEvent("stage.stale_completion_ignored", {
-			scanJobId: stageCtx.scanJobId,
-			stageName: stage.id,
-			taskId: stageCtx.taskId,
-			taskName: stageCtx.taskName,
-			currentStatus: currentTask.status,
-		});
-		return false;
-	}
 	stepStartedAt = Date.now();
 	const usagePatch = await readTaskTokenUsage(stageCtx).catch(() => ({
 		inputTokens: null,
@@ -1610,53 +1586,94 @@ const persistTerminalSuccess = async <
 		taskId: stageCtx.taskId,
 		from: ["launching", "starting", "running"],
 		to: shouldMarkTaskExited ? "exited" : "completed",
-		patch: options?.exitReason
-			? {
-					exitReason: options.exitReason,
-					exitNote: shouldMarkTaskExited
-						? "Agent requested group leader exit"
-						: "Agent requested lane exit",
-					errorMessage: null,
-					...usagePatch,
-				}
-			: usagePatch,
+		patch: {
+			output: prepared.output,
+			...(prepared.vulnerabilityCandidateId
+				? { vulnerabilityCandidateId: prepared.vulnerabilityCandidateId }
+				: {}),
+			...usagePatch,
+			errorMessage: null,
+			...(options?.exitReason
+				? {
+						exitReason: options.exitReason,
+						exitNote: shouldMarkTaskExited
+							? "Agent requested group leader exit"
+							: "Agent requested lane exit",
+						errorMessage: null,
+					}
+				: {}),
+		},
 	});
 	logPersistTiming("transition_task_status", stepStartedAt, {
 		updated: Boolean(updated),
 	});
-	if (!updated) {
+	const completionClaimed = await runAfterCompletionClaim(
+		async () => Boolean(updated),
+		async () => {
+			if (options?.exitReason) {
+				return;
+			}
+			try {
+				if (isCandidateProducerStage(stage.id)) {
+					await syncVulnerabilityCandidatesFromProducerTask(stageCtx.taskId);
+				}
+				await stage.onSuccess?.(stageCtx, input, prepared.output);
+			} catch (error) {
+				logPipelineEvent("stage.post_success_handling_failed", {
+					scanJobId: stageCtx.scanJobId,
+					stageName: stage.id,
+					taskId: stageCtx.taskId,
+					errorMessage: getErrorMessage(error),
+				});
+			}
+		},
+	);
+	if (!completionClaimed) {
+		logPipelineEvent("stage.stale_completion_ignored", {
+			scanJobId: stageCtx.scanJobId,
+			stageName: stage.id,
+			taskId: stageCtx.taskId,
+			taskName: stageCtx.taskName,
+		});
 		return false;
 	}
-	stepStartedAt = Date.now();
-	await copyPersistentLaneArtifactsToTaskDir(stageCtx);
-	logPersistTiming("copy_persistent_lane_artifacts_to_task_dir", stepStartedAt);
-	stepStartedAt = Date.now();
-	if (stageCtx.laneIndex !== null) {
-		if (options?.exitLane) {
-			if (shouldRemoveContainerAfterTask(stageCtx)) {
-				await cleanupPersistentLaneForTask(stageCtx.taskId, options.runtime);
+	try {
+		stepStartedAt = Date.now();
+		await copyPersistentLaneArtifactsToTaskDir(stageCtx);
+		logPersistTiming("copy_persistent_lane_artifacts_to_task_dir", stepStartedAt);
+		stepStartedAt = Date.now();
+		if (stageCtx.laneIndex !== null) {
+			if (options?.exitLane) {
+				if (shouldRemoveContainerAfterTask(stageCtx)) {
+					await cleanupPersistentLaneForTask(stageCtx.taskId, options.runtime);
+				} else {
+					await resetStageLaneRuntimeSessionForExitRepo({
+						taskId: stageCtx.taskId,
+					}).catch(() => {});
+				}
 			} else {
-				await resetStageLaneRuntimeSessionForExitRepo({
-					taskId: stageCtx.taskId,
-				}).catch(() => {});
+				if (stageCtx.persistent) {
+					await releasePersistentLaneForTask(stageCtx.taskId);
+				} else {
+					await resetStageLaneRuntimeSessionForExitRepo({
+						taskId: stageCtx.taskId,
+					}).catch(() => {});
+				}
 			}
-		} else {
-			if (stageCtx.persistent) {
-				await releasePersistentLaneForTask(stageCtx.taskId);
-			} else {
-				await resetStageLaneRuntimeSessionForExitRepo({
-					taskId: stageCtx.taskId,
-				}).catch(() => {});
-			}
-		}
-	} else {
-		if (shouldRemoveContainerAfterTask(stageCtx)) {
+		} else if (shouldRemoveContainerAfterTask(stageCtx)) {
 			await cleanupTaskContainer(stageCtx.taskId);
 		}
+		logPersistTiming("cleanup_or_release_runtime", stepStartedAt, {
+			laneIndex: stageCtx.laneIndex,
+		});
+	} catch (error) {
+		logPipelineEvent("stage.post_success_cleanup_failed", {
+			scanJobId: stageCtx.scanJobId,
+			stageName: stage.id,
+			taskId: stageCtx.taskId,
+			errorMessage: getErrorMessage(error),
+		});
 	}
-	logPersistTiming("cleanup_or_release_runtime", stepStartedAt, {
-		laneIndex: stageCtx.laneIndex,
-	});
 	logPipelineEvent("loop.task_completed", {
 		scanJobId: stageCtx.scanJobId,
 		stageName: stage.id,
@@ -1779,47 +1796,14 @@ const persistPostSuccessHandlingFailure = async <
 	if (terminalFailurePersisted) {
 		return true;
 	}
-
-	const updated = await transitionTaskStatusRepo({
-		taskId: stageCtx.taskId,
-		from: ["completed"],
-		to: "failed",
-		patch: { errorMessage: getErrorMessage(error) },
-	}).catch(() => null);
-	if (!updated) {
-		return false;
-	}
-
-	const failureDiagnostics = await buildTaskFailureDiagnostics(stageCtx).catch(
-		(diagnosticError) => ({
-			error: `Unable to collect task failure diagnostics: ${getErrorMessage(
-				diagnosticError,
-			)}`,
-		}),
-	);
-	await appendTaskFailureDiagnostics(
-		stageCtx,
-		getErrorMessage(error),
-		failureDiagnostics,
-	).catch(() => {});
-	await cleanupFailedTaskRuntime(stageCtx.taskId);
-	await stage.onFailure?.(stageCtx, input, error);
-	logPipelineEvent("stage.failed_after_success_handling", {
-		scanJobId: stageCtx.scanJobId,
-		stageName: stage.id,
-		taskId: stageCtx.taskId,
-		taskName: stageCtx.taskName,
-		errorMessage: getErrorMessage(error),
-		diagnostics: failureDiagnostics,
-	});
-	logPipelineEvent("loop.task_failed", {
+	logPipelineEvent("stage.post_success_failure_ignored", {
 		scanJobId: stageCtx.scanJobId,
 		stageName: stage.id,
 		taskId: stageCtx.taskId,
 		taskName: stageCtx.taskName,
 		errorMessage: getErrorMessage(error),
 	});
-	return true;
+	return false;
 };
 
 const runStageTaskLifecycle = async <
@@ -1886,7 +1870,8 @@ const runStageTaskLifecycle = async <
 			taskId,
 			taskName,
 			stageCtx,
-			output,
+			prepared: output,
+			output: output.output,
 			rawOutput,
 		};
 	} catch (error) {
@@ -1977,8 +1962,17 @@ export const runStageOnce = async <
 		const result = await runStageTaskLifecycle(stage, ctx, input, {
 			taskIdOverride,
 		});
-		await persistTerminalSuccess(stage, ctx, result.stageCtx, result.rawOutput);
-		await completeDownstreamDispatchRepo(result.taskId);
+		const terminalUpdated = await persistTerminalSuccess(
+			stage,
+			ctx,
+			input,
+			result.stageCtx,
+			result.rawOutput,
+			result.prepared,
+		);
+		if (terminalUpdated) {
+			await completeDownstreamDispatchRepo(result.taskId);
+		}
 		return result.output;
 	} catch (error) {
 		const { stageCtx } = await createTaskStageContext(
@@ -2050,7 +2044,9 @@ class WakeSignal {
 	}
 }
 
-const pipelineSupervisorJobs = new Map<string, JobRuntime<PipelineContext>>();
+const pipelineSupervisorJobs = getPipelineRuntimeRegistry<
+	JobRuntime<PipelineContext>
+>();
 
 export const stopPipelineRuntimesForScanJob = (scanJobId: string) => {
 	let stoppedRuntimes = 0;
@@ -2493,7 +2489,7 @@ const launchStageExecution = async <
 		});
 		if (runResult.completion === "immediate") {
 			stepStartedAt = Date.now();
-			const output = await prepareStageSuccess(
+			const prepared = await prepareStageSuccess(
 				stageState.stage,
 				runtime.ctx,
 				stageCtx,
@@ -2504,15 +2500,17 @@ const launchStageExecution = async <
 			validateSelectedDownstreamOutput(
 				runtime,
 				stageState.stageName,
-				output,
+				prepared.output,
 				null,
 			);
 			stepStartedAt = Date.now();
 			const terminalUpdated = await persistTerminalSuccess(
 				stageState.stage,
 				runtime.ctx,
+				execution.input,
 				stageCtx,
 				runResult.rawOutput,
+				prepared,
 				{ runtime },
 			);
 			logLaunchTiming("persist_immediate_success", stepStartedAt, {
@@ -2525,7 +2523,7 @@ const launchStageExecution = async <
 					stageState.stageName,
 					execution.taskId,
 					execution.input,
-					output,
+					prepared.output,
 					null,
 				);
 				logLaunchTiming("dispatch_immediate_downstream", stepStartedAt);
@@ -2622,7 +2620,7 @@ const startStageRunAsync = <TPipelineContext extends PipelineContext>(
 				elapsedMs: Date.now() - runStartedAt,
 			});
 			if (runResult.completion === "immediate") {
-				const output = await prepareStageSuccess(
+				const prepared = await prepareStageSuccess(
 					stageState.stage,
 					runtime.ctx,
 					stageCtx,
@@ -2632,14 +2630,16 @@ const startStageRunAsync = <TPipelineContext extends PipelineContext>(
 				validateSelectedDownstreamOutput(
 					runtime,
 					stageState.stageName,
-					output,
+					prepared.output,
 					null,
 				);
 				const terminalUpdated = await persistTerminalSuccess(
 					stageState.stage,
 					runtime.ctx,
+					input,
 					stageCtx,
 					runResult.rawOutput,
+					prepared,
 					{ runtime },
 				);
 				if (terminalUpdated) {
@@ -2648,7 +2648,7 @@ const startStageRunAsync = <TPipelineContext extends PipelineContext>(
 						stageState.stageName,
 						task.taskId,
 						input,
-						output,
+						prepared.output,
 						null,
 					);
 					await maybeMarkTaskStageGroupExited(task.taskId, runtime);
@@ -2878,7 +2878,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 	if (rawOutput !== null) {
 		try {
 			stepStartedAt = Date.now();
-			const output = await prepareStageSuccess(
+			const prepared = await prepareStageSuccess(
 				stageState.stage,
 				runtime.ctx,
 				stageCtx,
@@ -2890,7 +2890,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			validateSelectedDownstreamOutput(
 				runtime,
 				stageState.stageName,
-				output,
+				prepared.output,
 				routeKey,
 			);
 			logInspectTiming("validate_downstream_output", stepStartedAt);
@@ -2898,8 +2898,10 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			const terminalUpdated = await persistTerminalSuccess(
 				stageState.stage,
 				runtime.ctx,
+				input,
 				stageCtx,
 				rawOutput,
+				prepared,
 				{
 					exitLane: hasExitSignal,
 					exitReason: hasExitSignal ? "agent_exit" : undefined,
@@ -2916,7 +2918,7 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 					stageState.stageName,
 					task.taskId,
 					input,
-					output,
+					prepared.output,
 					routeKey,
 				);
 				logInspectTiming("dispatch_pipeline_downstream", stepStartedAt);
@@ -2931,11 +2933,20 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 				await updateTaskRepo(task.taskId, {
 					errorMessage: getErrorMessage(error),
 				}).catch(() => {});
-				await persistTerminalSuccess(
+				const exitPrepared = await prepareStageSuccess(
 					stageState.stage,
 					runtime.ctx,
 					stageCtx,
+					input,
 					rawOutput,
+				);
+				await persistTerminalSuccess(
+					stageState.stage,
+					runtime.ctx,
+					input,
+					stageCtx,
+					rawOutput,
+					exitPrepared,
 					{ exitLane: true, exitReason: "agent_exit", runtime },
 				);
 				logInspectTiming("persist_exit_lane_success_with_error", stepStartedAt);
@@ -3253,11 +3264,54 @@ const inspectTasks = async <TPipelineContext extends PipelineContext>(
 	return metrics;
 };
 
+const retryPendingDownstreamDispatches = async <
+	TPipelineContext extends PipelineContext,
+>(runtime: JobRuntime<TPipelineContext>) => {
+	const pendingTasks = await listPendingCompletedDownstreamDispatchesRepo(
+		runtime.ctx.scanJobId,
+	);
+	for (const task of pendingTasks) {
+		if (!runtime.stageStates.has(task.stageName)) {
+			logPipelineEvent("downstream.retry_skipped", {
+				scanJobId: runtime.ctx.scanJobId,
+				pipelineName: runtime.pipeline.name,
+				taskId: task.taskId,
+				stageName: task.stageName,
+				reason: "stage_not_in_runtime",
+			});
+			continue;
+		}
+
+		try {
+			if (isCandidateProducerStage(task.stageName)) {
+				await syncVulnerabilityCandidatesFromProducerTask(task.taskId);
+			}
+			await dispatchPipelineDownstream(
+				runtime,
+				task.stageName,
+				task.taskId,
+				task.input,
+				task.output,
+				task.downstreamRouteKey,
+			);
+		} catch (error) {
+			logPipelineEvent("downstream.retry_failed", {
+				scanJobId: runtime.ctx.scanJobId,
+				pipelineName: runtime.pipeline.name,
+				taskId: task.taskId,
+				stageName: task.stageName,
+				errorMessage: getErrorMessage(error),
+			});
+		}
+	}
+};
+
 const runJobLoop = async <TPipelineContext extends PipelineContext>(
 	runtime: JobRuntime<TPipelineContext>,
 ) => {
 	await completeTerminalTaskDispatchesRepo(runtime.ctx.scanJobId);
 	await resetStaleDownstreamDispatchesRepo(runtime.ctx.scanJobId);
+	await retryPendingDownstreamDispatches(runtime);
 	if (await shouldStopForPausedScanJob(runtime)) {
 		return;
 	}
@@ -3284,6 +3338,8 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 		if (await shouldStopForPausedScanJob(runtime)) {
 			return;
 		}
+		await resetStaleDownstreamDispatchesRepo(runtime.ctx.scanJobId);
+		await retryPendingDownstreamDispatches(runtime);
 		if (runtime.failure) {
 			throw runtime.failure;
 		}
@@ -3474,7 +3530,13 @@ const startJobRuntime = <TPipelineContext extends PipelineContext>(
 		} finally {
 			runtime.stopRequested = true;
 			runtime.wakeSignal.notify();
-			pipelineSupervisorJobs.delete(runtime.key);
+			if (deletePipelineRuntime(runtime.key, runtime)) {
+				logPipelineEvent("runtime.removed", {
+					scanJobId: runtime.ctx.scanJobId,
+					pipelineName: runtime.pipeline.name,
+					runtimeKey: runtime.key,
+				});
+			}
 		}
 
 		if (runtime.failure) {
@@ -3492,6 +3554,11 @@ const ensureJobRuntime = <TPipelineContext extends PipelineContext>(
 		| JobRuntime<TPipelineContext>
 		| undefined;
 	if (existing) {
+		logPipelineEvent("runtime.reused", {
+			scanJobId: ctx.scanJobId,
+			pipelineName: pipeline.name,
+			runtimeKey: key,
+		});
 		return existing;
 	}
 
@@ -3521,11 +3588,13 @@ const ensureJobRuntime = <TPipelineContext extends PipelineContext>(
 		failure: null,
 		completionPromise: Promise.resolve(),
 	};
+	setPipelineRuntime(key, runtime as unknown as JobRuntime<PipelineContext>);
+	logPipelineEvent("runtime.created", {
+		scanJobId: ctx.scanJobId,
+		pipelineName: pipeline.name,
+		runtimeKey: key,
+	});
 	runtime.completionPromise = startJobRuntime(runtime);
-	pipelineSupervisorJobs.set(
-		key,
-		runtime as unknown as JobRuntime<PipelineContext>,
-	);
 	return runtime;
 };
 
@@ -3752,6 +3821,7 @@ const dispatchPipelineDownstream = async <
 		});
 		await completeDownstreamDispatchRepo(fromTaskId);
 	} catch (error) {
+		await releaseDownstreamDispatchClaimRepo(fromTaskId).catch(() => {});
 		logPipelineEvent("downstream.dispatch_incomplete", {
 			scanJobId: runtime.ctx.scanJobId,
 			pipelineName: runtime.pipeline.name,
