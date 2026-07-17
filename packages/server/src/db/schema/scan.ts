@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
 	type AnyPgColumn,
 	bigint,
@@ -211,6 +211,11 @@ export const tasks = pgTable(
 		scanJobCreatedAtIdx: index("tasks_scan_job_created_at_idx").on(
 			table.scanJobId,
 			table.createdAt,
+		),
+		scanJobFinishedAtIdx: index("tasks_scan_job_finished_at_idx").on(
+			table.scanJobId,
+			sql`coalesce(${table.completedAt}, ${table.updatedAt}) desc`,
+			sql`${table.taskId} desc`,
 		),
 		stageStatusIdx: index("tasks_stage_status_idx").on(
 			table.stageName,

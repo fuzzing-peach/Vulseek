@@ -25,6 +25,8 @@ import {
 	findCandidateProjectionPageRepo,
 	isCandidateProjectionBackfillComplete,
 } from "../persistence/candidate-projection-list.repo";
+import { buildCandidateResultSummary } from "../persistence/candidate-result-summary";
+import { listCandidateResultSummaryGroupsByScanJobIdRepo } from "../persistence/candidate-result-summary.repo";
 import { buildCandidatesWithLatestResults } from "../state/candidate-aggregates";
 import type { Task } from "../types";
 import { resolveTaskRootSegment } from "../stages/full-scan-stage.runtime";
@@ -452,89 +454,14 @@ const findScanJobTaskTimeline = async (scanJobId: string) => {
 	};
 };
 export const findScanJobResultSummary = async (scanJobId: string) => {
-	const [candidates, taskTimeline] = await Promise.all([
-		findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId(scanJobId),
+	const [resultGroups, taskTimeline] = await Promise.all([
+		listCandidateResultSummaryGroupsByScanJobIdRepo(scanJobId),
 		findScanJobTaskTimeline(scanJobId),
 	]);
-
-	const analysisNodeIds = ["analysis_real_vulnerability", "analysis_likely_vulnerability", "analysis_plausible_but_unproven", "analysis_false_positive"];
-	const verifyNodeIds = ["verify_true", "verify_likely", "verify_false"];
-	const triageNodeIds = ["triage_security_issue", "triage_non_security", "triage_hardening", "triage_needs_review"];
-
-	const a2v: Record<string, Record<string, number>> = {};
-	for (const a of analysisNodeIds) { a2v[a] = {}; for (const v of verifyNodeIds) { a2v[a][v] = 0; } }
-	const v2t: Record<string, Record<string, number>> = {};
-	for (const v of verifyNodeIds) { v2t[v] = {}; for (const t of triageNodeIds) { v2t[v][t] = 0; } }
-
-	const analysisTotals: Record<string, number> = {};
-	for (const id of analysisNodeIds) { analysisTotals[id] = 0; }
-	const verifyTotals: Record<string, number> = {};
-	for (const id of verifyNodeIds) { verifyTotals[id] = 0; }
-
-	for (const candidate of candidates) {
-		const ar = candidate.latestAnalysisResult?.result;
-		const vr = candidate.latestVerificationResult?.result;
-		const tr = candidate.latestTriageResult;
-
-		const aid = ar ? `analysis_${ar}` : null;
-		const vid = (!vr || vr === "true" || vr === "likely") ? `verify_${vr || "missing"}` : vr === "false" ? "verify_false" : "verify_missing";
-		const tid = tr ? (tr.result === "security_issue" ? "triage_security_issue" : tr.result === "hardening" ? "triage_hardening" : tr.result === "needs_review" ? "triage_needs_review" : "triage_non_security") : "triage_missing";
-
-		if (aid && analysisTotals[aid] !== undefined) { analysisTotals[aid] += 1; }
-		if (verifyTotals[vid] !== undefined) { verifyTotals[vid] += 1; }
-			if (aid && a2v[aid]) {
-				const row = a2v[aid];
-				if (row && row[vid] !== undefined) row[vid] += 1;
-			}
-			const vRow = v2t[vid];
-			if (vRow && vRow[tid] !== undefined) { vRow[tid] += 1; }
-	}
-
-	const links: Array<{ source: string; target: string; count: number }> = [];
-	for (const [source, targets] of Object.entries(a2v)) {
-		for (const [target, count] of Object.entries(targets)) {
-			if (count > 0) links.push({ source, target, count });
-		}
-	}
-	for (const [source, targets] of Object.entries(v2t)) {
-		for (const [target, count] of Object.entries(targets)) {
-			if (count > 0) links.push({ source, target, count });
-		}
-	}
-
-	const nodeCount = (id: string, stage: string) => {
-		if (stage === "analysis") return analysisTotals[id] || 0;
-		if (stage === "verify") return verifyTotals[id] || 0;
-		let c = 0; for (const v of verifyNodeIds) { c += (v2t[v]?.[id] || 0); } return c;
-	};
-
-	const titleCase = (s: string) => s.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
-	const makeNode = (id: string, stage: string) => ({
-		id, stage: stage as "analysis"|"verify"|"triage",
-		label: titleCase(stage === "analysis" ? id.replace("analysis_", "") : stage === "verify" ? id.replace("verify_", "") : id.replace("triage_", "")),
-		count: nodeCount(id, stage),
-	});
-
+	const resultSummary = buildCandidateResultSummary(resultGroups);
 	return {
-		counts: {
-			candidatesTotal: candidates.length,
-			analysisPositive: nodeCount("analysis_real_vulnerability", "analysis") + nodeCount("analysis_likely_vulnerability", "analysis"),
-			analysisReal: nodeCount("analysis_real_vulnerability", "analysis"),
-			analysisLikely: nodeCount("analysis_likely_vulnerability", "analysis"),
-			verificationTrue: nodeCount("verify_true", "verify"),
-			verificationLikely: nodeCount("verify_likely", "verify"),
-			verificationPositive: nodeCount("verify_true", "verify") + nodeCount("verify_likely", "verify"),
-			triageSecurityIssue: nodeCount("triage_security_issue", "triage"),
-		},
+		...resultSummary,
 		taskTimeline,
-		flow: {
-			nodes: [
-				...analysisNodeIds.map(id => makeNode(id, "analysis")),
-				...verifyNodeIds.map(id => makeNode(id, "verify")),
-				...triageNodeIds.map(id => makeNode(id, "triage")),
-			],
-			links,
-		},
 	};
 };
 

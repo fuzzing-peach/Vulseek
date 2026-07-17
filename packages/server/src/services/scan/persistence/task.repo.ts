@@ -735,11 +735,22 @@ export const listTerminalTasksPageByScanJobIdRepo = async (input: {
 	const totalPages = Math.max(1, Math.ceil(total / pageSize));
 	const page = Math.min(requestedPage, totalPages);
 	const items = await db
-		.select()
+		.select({
+			taskId: tasks.taskId,
+			name: tasks.name,
+			stageName: tasks.stageName,
+			status: tasks.status,
+			input: tasks.input,
+			errorMessage: tasks.errorMessage,
+			startedAt: tasks.startedAt,
+			completedAt: tasks.completedAt,
+			updatedAt: tasks.updatedAt,
+		})
 		.from(tasks)
 		.where(where)
 		.orderBy(
 			desc(sql<string>`coalesce(${tasks.completedAt}, ${tasks.updatedAt})`),
+			desc(tasks.taskId),
 		)
 		.limit(pageSize)
 		.offset((page - 1) * pageSize);

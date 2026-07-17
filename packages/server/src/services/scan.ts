@@ -87,6 +87,7 @@ import {
 	updateTaskStatusRepo,
 } from "./scan/persistence/task.repo";
 import { readTaskJsonArtifactForTask } from "./scan/persistence/task-artifact-resolver";
+import { normalizeTerminalTaskFilters } from "./scan/terminal-task-filters";
 import type {
 	AnyStageDefinition,
 	PipelineDefinition,
@@ -285,6 +286,19 @@ type TerminalTaskView = InProgressTaskView & {
 	completedAt: string | null;
 	errorMessage: string | null;
 };
+
+type TaskListViewSource = Pick<
+	Task,
+	| "taskId"
+	| "name"
+	| "stageName"
+	| "status"
+	| "input"
+	| "errorMessage"
+	| "startedAt"
+	| "completedAt"
+	| "updatedAt"
+>;
 
 type QueuePendingCountView = {
 	id: ScanStageQueueKind;
@@ -713,7 +727,7 @@ const joinTaskSubtitle = (...parts: Array<string | null | undefined>) =>
 		.join(" · ");
 
 const readCandidateRecordFromTaskInput = (
-	task: Task,
+	task: TaskListViewSource,
 ): Record<string, unknown> | null => {
 	const input = asTaskRecord(task.input);
 	if (task.stageName === SCAN_STAGE_IDS.analyzeFinding) {
@@ -731,7 +745,9 @@ const readCandidateRecordFromTaskInput = (
 	return null;
 };
 
-const buildInProgressTaskView = (task: Task): InProgressTaskView | null => {
+const buildInProgressTaskView = (
+	task: TaskListViewSource,
+): InProgressTaskView | null => {
 	const input = asTaskRecord(task.input);
 	switch (task.stageName) {
 		case SCAN_STAGE_IDS.deltaScope:
@@ -900,7 +916,9 @@ const buildInProgressTaskView = (task: Task): InProgressTaskView | null => {
 	}
 };
 
-const buildTerminalTaskView = (task: Task): TerminalTaskView | null => {
+const buildTerminalTaskView = (
+	task: TaskListViewSource,
+): TerminalTaskView | null => {
 	const status = task.status as string;
 	if (
 		status !== "completed" &&
@@ -3579,18 +3597,6 @@ export const findScanJobQueueCounts = async (scanJobId: string) => {
 		pipeline.stageIds,
 	);
 };
-const SCAN_TASK_VIEW_STAGE_TO_STAGE_NAME: Record<string, Task["stageName"]> = {
-	"delta-scope": SCAN_STAGE_IDS.deltaScope,
-	"repository-profile": SCAN_STAGE_IDS.repositoryProfile,
-	"attack-surface-model": SCAN_STAGE_IDS.attackSurfaceModel,
-	"identify-target": SCAN_STAGE_IDS.identifyTarget,
-	"scan-target": SCAN_STAGE_IDS.scanTarget,
-	"analyze-finding": SCAN_STAGE_IDS.analyzeFinding,
-	"critique-finding": SCAN_STAGE_IDS.critiqueFinding,
-	"verify-finding": SCAN_STAGE_IDS.verifyFinding,
-	"triage-finding": SCAN_STAGE_IDS.triageFinding,
-};
-
 export const findScanJobTerminalTasksPage = async (input: {
 	scanJobId: string;
 	page: number;
@@ -3599,16 +3605,7 @@ export const findScanJobTerminalTasksPage = async (input: {
 	stage?: string;
 	status?: string;
 }) => {
-	const stageName =
-		input.stage && input.stage !== "all"
-			? SCAN_TASK_VIEW_STAGE_TO_STAGE_NAME[input.stage]
-			: undefined;
-	const status =
-		input.status === "completed" ||
-		input.status === "failed" ||
-		input.status === "exited"
-			? input.status
-			: undefined;
+	const { stageName, status } = normalizeTerminalTaskFilters(input);
 	const page = await listTerminalTasksPageByScanJobIdRepo({
 		scanJobId: input.scanJobId,
 		page: input.page,
