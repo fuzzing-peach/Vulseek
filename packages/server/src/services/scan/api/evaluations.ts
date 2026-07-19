@@ -17,7 +17,7 @@ import {
 	startContainer,
 } from "../runtime/run-single-turn-agent";
 import type { AgentProfileLike, ScanJob } from "../types";
-import { findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId } from "./candidate-records";
+import { listVulnerabilityCandidatesWithProjectionByScanJobId } from "./candidate-records";
 
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
 const EVALUATION_OUTPUT_FILE_NAME = "output.json";
@@ -137,10 +137,9 @@ const csvEscape = (value: unknown) => {
 };
 
 const buildRealVulnCsv = async (scanJobId: string) => {
-	const candidates =
-		await findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId(
-			scanJobId,
-		);
+	const candidates = await listVulnerabilityCandidatesWithProjectionByScanJobId(
+		scanJobId,
+	);
 	const positiveCandidates = candidates.filter((candidate) => {
 		const triage = candidate.latestTriageResult;
 		return (

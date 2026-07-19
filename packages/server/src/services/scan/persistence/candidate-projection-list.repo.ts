@@ -2,7 +2,6 @@ import { db } from "@vulseek/server/db";
 import {
 	candidateMetadata,
 	candidateResultProjections,
-	candidateResultProjectionBackfills,
 	tasks,
 	vulnerabilityCandidates,
 } from "@vulseek/server/db/schema";
@@ -129,6 +128,16 @@ type ProjectionRow = {
 	analysisTask: typeof analysisTask.$inferSelect | null;
 	verificationTask: typeof verificationTask.$inferSelect | null;
 	triageTask: typeof triageTask.$inferSelect | null;
+};
+
+const buildCandidateProjectionItem = (row: ProjectionRow) => {
+	const candidate = toCandidateRecord(row.candidate, row.metadata ?? undefined);
+	return {
+		...candidate,
+		latestAnalysisResult: buildAnalysisResult(row),
+		latestVerificationResult: buildVerificationResult(row),
+		latestTriageResult: buildTriageResult(row),
+	};
 };
 
 const buildAnalysisResult = (row: ProjectionRow): AnalysisResult | null => {
@@ -304,23 +313,97 @@ export const findCandidateProjectionPageRepo = async (
 		.limit(pageSize)
 		.offset((page - 1) * pageSize);
 
-	const items = rows.map((row) => {
-		const candidate = toCandidateRecord(row.candidate, row.metadata ?? undefined);
-		return {
-			...candidate,
-			latestAnalysisResult: buildAnalysisResult(row),
-			latestVerificationResult: buildVerificationResult(row),
-			latestTriageResult: buildTriageResult(row),
-		};
-	});
+	const items = rows.map(buildCandidateProjectionItem);
 
 	return { items, total, page, pageSize, totalPages };
 };
 
-export const isCandidateProjectionBackfillComplete = async () =>
-	await db
-		.select({ status: candidateResultProjectionBackfills.status })
-		.from(candidateResultProjectionBackfills)
-		.where(eq(candidateResultProjectionBackfills.backfillId, "v1"))
+export const listCandidateProjectionItemsByScanJobIdRepo = async (
+	scanJobId: string,
+) => {
+	const items: Array<
+		Awaited<ReturnType<typeof findCandidateProjectionPageRepo>>["items"][number]
+	> = [];
+	let page = 1;
+	let totalPages = 1;
+	while (page <= totalPages) {
+		const result = await findCandidateProjectionPageRepo({
+			scanJobId,
+			page,
+			pageSize: 100,
+			sortKey: "createdAt",
+			sortDirection: "asc",
+		});
+		items.push(...result.items);
+		totalPages = result.totalPages;
+		page += 1;
+	}
+	return items;
+};
+
+export const findCandidateProjectionByIdRepo = async (input: {
+	scanJobId: string;
+	vulnerabilityCandidateId: string;
+	producerTaskId?: string;
+}) => {
+	const conditions = [
+		eq(vulnerabilityCandidates.scanJobId, input.scanJobId),
+		eq(
+			vulnerabilityCandidates.vulnerabilityCandidateId,
+			input.vulnerabilityCandidateId,
+		),
+	];
+	if (input.producerTaskId) {
+		conditions.push(
+			eq(vulnerabilityCandidates.producerTaskId, input.producerTaskId),
+		);
+	}
+
+	const row = await db
+		.select({
+			candidate: vulnerabilityCandidates,
+			metadata: candidateMetadata,
+			projection: candidateResultProjections,
+			analysisTask,
+			verificationTask,
+			triageTask,
+		})
+		.from(vulnerabilityCandidates)
+		.leftJoin(
+			candidateMetadata,
+			and(
+				eq(candidateMetadata.scanJobId, vulnerabilityCandidates.scanJobId),
+				eq(
+					candidateMetadata.vulnerabilityCandidateId,
+					vulnerabilityCandidates.vulnerabilityCandidateId,
+				),
+			),
+		)
+		.leftJoin(
+			candidateResultProjections,
+			and(
+				eq(candidateResultProjections.scanJobId, vulnerabilityCandidates.scanJobId),
+				eq(
+					candidateResultProjections.vulnerabilityCandidateId,
+					vulnerabilityCandidates.vulnerabilityCandidateId,
+				),
+			),
+		)
+		.leftJoin(
+			analysisTask,
+			eq(analysisTask.taskId, candidateResultProjections.analysisTaskId),
+		)
+		.leftJoin(
+			verificationTask,
+			eq(verificationTask.taskId, candidateResultProjections.verificationTaskId),
+		)
+		.leftJoin(
+			triageTask,
+			eq(triageTask.taskId, candidateResultProjections.triageTaskId),
+		)
+		.where(and(...conditions))
 		.limit(1)
-		.then((rows) => rows[0]?.status === "completed");
+		.then((rows) => rows[0] || null);
+
+	return row ? buildCandidateProjectionItem(row) : null;
+};

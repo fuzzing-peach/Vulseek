@@ -14,7 +14,6 @@ import {
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
 import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
-import { buildRepositoryProfilePrompt } from "../prompts/repository-profile.prompt";
 import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import {
 	prepareRepositoryForScanInContainer,
@@ -27,6 +26,7 @@ import {
 	resolveAgentStageRuntime,
 	resolveStageRuntimeCwd,
 	resolveStageRuntimePrompt,
+	resolveStageRuntimePromptTemplate,
 } from "./agent-stage-runtime";
 import {
 	type PipelineContext,
@@ -99,30 +99,21 @@ const executeRepositoryProfileStage = async (
 		commitSha: scanJob.commitSha,
 		baseSha: scanJob.baseSha,
 		commitWindow: scanJob.commitWindow || DEFAULT_DELTA_COMMIT_WINDOW,
-		};
-		const runtime = await resolveAgentStageRuntime({ ctx });
-		const repositoryRoot = runtime.taskStageRootInContainer;
-		const agentProvider = runtime.agentProfile?.provider || "codex";
-		const agentInstruction = runtime.agentProfile?.thinkingLevelEnabled
-			? `Use ${agentProvider} with reasoning effort around ${runtime.agentProfile.thinkingLevel}.`
-			: `Use ${agentProvider}.`;
-		const repositoryStateJson = await execAsync(
+	};
+	const runtime = await resolveAgentStageRuntime({ ctx });
+	const repositoryRoot = runtime.taskStageRootInContainer;
+	const agentProvider = runtime.agentProfile?.provider || "codex";
+	const agentInstruction = runtime.agentProfile?.thinkingLevelEnabled
+		? `Use ${agentProvider} with reasoning effort around ${runtime.agentProfile.thinkingLevel}.`
+		: `Use ${agentProvider}.`;
+	const repositoryStateJson = await execAsync(
 			`docker exec ${runtime.containerName} bash -lc "cat '${repositoryRoot}/00_repository_state.json'"`,
 		);
 	const repositoryState = JSON.parse(
 		repositoryStateJson.stdout,
 	) as PreparedRepositoryState;
 
-	const fallbackPrompt = buildRepositoryProfilePrompt({
-			repositoryRoot,
-			repositoryState,
-			repositoryStatePath: `${repositoryRoot}/00_repository_state.json`,
-			repository,
-			agentProvider,
-			thinkingLevel: runtime.agentProfile?.thinkingLevelEnabled
-				? runtime.agentProfile.thinkingLevel
-				: null,
-	});
+	const promptTemplate = await resolveStageRuntimePromptTemplate(ctx);
 
 	return await runSingleTurnAgentInContainer({
 		scanJob,
@@ -144,7 +135,7 @@ const executeRepositoryProfileStage = async (
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
-			prompt: await resolveStageRuntimePrompt(ctx, fallbackPrompt, {
+		prompt: await resolveStageRuntimePrompt(ctx, promptTemplate, {
 				taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
 				repositoryId: repository.id,
 				repositoryName: repository.name,

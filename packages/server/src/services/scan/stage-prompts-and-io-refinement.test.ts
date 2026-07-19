@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -14,9 +14,7 @@ import {
 	triageSchema,
 	verificationSchema,
 } from "./artifacts/contracts/domain-object.contract";
-import { buildDeltaScopePrompt } from "./prompts/delta-scope.prompt";
-import { buildRepositoryProfilePrompt } from "./prompts/repository-profile.prompt";
-import { buildScanTargetPrompt } from "./prompts/scan-target.prompt";
+import { renderPromptTemplateString } from "./prompts/prompt-template";
 import { createJsonSchemaContract } from "./pipeline/scan-pipeline-schema-contracts";
 import { buildStructuredOutputPromptSuffix } from "./runtime/structured-output-schema";
 
@@ -28,6 +26,25 @@ const readSkillSource = (skillName: string) =>
 		join(scanDir, "../../../../../agents/skills", skillName, "SKILL.md"),
 		"utf-8",
 	);
+
+test("Stage Graph prompt rendering rejects missing and unresolved variables", () => {
+	assert.throws(
+		() => renderPromptTemplateString("use {{repositoryName}}", {}),
+		/Missing prompt template value: repositoryName/,
+	);
+	assert.throws(
+		() => renderPromptTemplateString("use {{repositoryName}} and {{unknown}}", {
+			repositoryName: "repo",
+		}),
+		/Missing prompt template value: unknown/,
+	);
+	assert.throws(
+		() => renderPromptTemplateString("use {{repositoryName}} and {{nested.value}}", {
+			repositoryName: "repo",
+		}),
+		/Unresolved prompt template variable: \{\{nested\.value\}\}/,
+	);
+});
 
 const evidence = {
 	id: "e1",
@@ -161,20 +178,20 @@ test("refined schemas keep module artifacts concise and require function context
 	);
 });
 
-test("repository profile and scan target prompts stay concise while delegating detail to skills", () => {
-	const repositoryPrompt = buildRepositoryProfilePrompt({
-		repository: { id: "repo", name: "wolfSSL" },
-		repositoryRoot: "/workspace/repo",
-		repositoryState: {
-			currentBranch: "master",
+test("Stage Graph prompt templates stay concise while delegating detail to skills", () => {
+	const repositoryPrompt = renderPromptTemplateString(
+		readFileSync(join(scanDir, "prompts", "repository-profile.prompt.md"), "utf-8"),
+		{
+			taskIsolation: "isolate",
+			repositoryId: "repo",
+			repositoryName: "wolfSSL",
 			targetRef: "master",
-			currentExactTag: null,
-			targetTag: null,
-			resolvedTargetSha: "abc",
+			targetTag: "<none>",
+			targetCommit: "abc",
+			agentInstruction: "Use codex.",
+			repositoryStatePath: "/task/00_repository_state.json",
 		},
-		repositoryStatePath: "/task/00_repository_state.json",
-		agentProvider: "codex",
-	});
+	);
 	assert.match(repositoryPrompt, /repository-profile skill/);
 	assert.match(repositoryPrompt, /entryPoints, trustBoundaries, attackSurfaces, vulnerabilityThemes, and runtimeComponents/);
 	assert.match(repositoryPrompt, /Produce at least 4 modules/);
@@ -189,22 +206,27 @@ test("repository profile and scan target prompts stay concise while delegating d
 	assert.doesNotMatch(repositorySkill, /securityModel/);
 	assert.doesNotMatch(repositorySkill, /dangerousSinks/);
 
-	const scanTargetPrompt = buildScanTargetPrompt({
-		scanJobId: "job",
-		moduleId: "api",
-		moduleName: "API",
-		targetId: "api-user-get",
-		targetName: "GET /api/users/:id",
-		targetKind: "route-handler",
-		vulnerabilityClassFocus: "authorization bypass",
-		filePath: "src/routes/users.ts",
-		line: 12,
-		summary: "User lookup route",
-		repositoryJsonPath: "/task/inputs/repository.json",
-		moduleJsonPath: "/task/inputs/module.json",
-		threatModelJsonPath: "/task/inputs/module-threat-model.json",
-		targetJsonPath: "/task/inputs/target.json",
-	});
+	const scanTargetPrompt = renderPromptTemplateString(
+		readFileSync(join(scanDir, "prompts", "scan-target.prompt.md"), "utf-8"),
+		{
+			taskIsolation: "isolate",
+			scanJobId: "job",
+			moduleId: "api",
+			moduleName: "API",
+			targetId: "api-user-get",
+			targetName: "GET /api/users/:id",
+			targetKind: "route-handler",
+			vulnerabilityClassFocus: "authorization bypass",
+			targetFile: "src/routes/users.ts",
+			targetLine: 12,
+			targetSummary: "User lookup route",
+			repositoryJsonPath: "/task/inputs/repository.json",
+			moduleJsonPath: "/task/inputs/module.json",
+			threatModelJsonPath: "/task/inputs/module-threat-model.json",
+			targetJsonPath: "/task/inputs/target.json",
+			thinkingInstruction: "",
+		},
+	);
 	assert.match(scanTargetPrompt, /scan-target skill/);
 	assert.match(scanTargetPrompt, /target_kind: route-handler/);
 	assert.match(scanTargetPrompt, /vulnerability_class_focus: authorization bypass/);
@@ -215,6 +237,41 @@ test("repository profile and scan target prompts stay concise while delegating d
 	assert.match(scanTargetSkill, /route registration, middleware/i);
 	assert.match(scanTargetSkill, /vulnerability_class_focus/i);
 	assert.match(scanTargetSkill, /one assigned vulnerability class/i);
+});
+
+test("every Stage Graph prompt template renders without unresolved variables", () => {
+	for (const directory of ["prompts", "stages"]) {
+		for (const fileName of readdirSync(join(scanDir, directory)).filter((file) =>
+			file.endsWith(".prompt.md"),
+		)) {
+			const template = readFileSync(
+				join(scanDir, directory, fileName),
+				"utf-8",
+			);
+			const values = Object.fromEntries(
+				[...template.matchAll(/\{\{([a-zA-Z0-9_]+)\}\}/g)].map((match) => [
+					match[1],
+					"test-value",
+				]),
+			);
+			const rendered = renderPromptTemplateString(template, values);
+			assert.doesNotMatch(rendered, /\{\{/);
+		}
+	}
+});
+
+test("review stage prompts reference the Stage Graph skill names", () => {
+	const expectedSkills = {
+		"analyze-finding.prompt.md": "analyze-finding",
+		"critique-finding.prompt.md": "critique-finding",
+		"verify-finding.prompt.md": "verify-finding",
+		"triage-finding.prompt.md": "triage-finding",
+	};
+	for (const [fileName, skillName] of Object.entries(expectedSkills)) {
+		const prompt = readStagePromptTemplate(fileName);
+		assert.match(prompt, new RegExp(`skills/${skillName}/SKILL\\.md`));
+		assert.doesNotMatch(prompt, /skills\/(?:analyze|criticize|verify)\/SKILL\.md/);
+	}
 });
 
 test("delta scope prompt and schema stay limited to repository and functions", () => {
@@ -241,20 +298,21 @@ test("delta scope prompt and schema stay limited to repository and functions", (
 		false,
 	);
 
-	const deltaScopePrompt = buildDeltaScopePrompt({
-		repository: { id: "repo", name: "wolfSSL" },
-		repositoryState: {
-			currentBranch: "master",
+	const deltaScopePrompt = renderPromptTemplateString(
+		readFileSync(join(scanDir, "prompts", "scan-delta-scope.prompt.md"), "utf-8"),
+		{
+			taskIsolation: "isolate",
+			repositoryId: "repo",
+			repositoryName: "wolfSSL",
 			targetRef: "master",
-			currentExactTag: null,
-			targetTag: null,
-			resolvedTargetSha: "abc",
-			resolvedBaseSha: "def",
+			targetTag: "<none>",
+			targetCommit: "abc",
+			baseCommit: "def",
 			commitWindow: 3,
+			agentInstruction: "Use codex.",
+			repositoryStatePath: "/task/00_repository_state.json",
 		},
-		repositoryStatePath: "/task/00_repository_state.json",
-		agentProvider: "codex",
-	});
+	);
 	assert.match(deltaScopePrompt, /delta-scope as your working method/);
 	assert.match(
 		deltaScopePrompt,

@@ -16,8 +16,8 @@ task_dir: {{taskDir}}
 write_report_to: {{reportPath}}
 feedback_json_path: {{feedbackJsonPath}}
 
-Use the installed skill named analyze as your working method.
-The analyze skill file is /workspace/repo/.agents/skills/analyze/SKILL.md.
+Use the installed skill named analyze-finding as your working method.
+The analyze-finding skill file is /workspace/repo/.agents/skills/analyze-finding/SKILL.md.
 Follow the coordinator workflow and evidence rules defined in the skill.
 Read the JSON files referenced above before analysis. If feedback_json_path is not "none", read that JSON file too. If analysis_report_template_path is not "none", read that file and format the markdown report to match it.
 Write every task artifact only under task_dir.

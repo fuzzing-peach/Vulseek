@@ -4,10 +4,17 @@ import {
 	parseScanPipelineDefinitionsFromYaml,
 	resolveScanPipelineDefinitionsDir,
 	SCAN_PIPELINE_DEFINITIONS,
+	validateStagePromptConfiguration,
 	validatePipelineRegistryCoverage,
 } from "./scan-pipeline-definitions";
 
 test("loaded full pipeline fans out identify-target by threat-model vulnerability classes", () => {
+	for (const stage of SCAN_PIPELINE_DEFINITIONS.stages) {
+		assert.ok(
+			stage.runtimeConfig?.prompt?.trim() || stage.runtimeConfig?.promptFile,
+			`${stage.id} must define a Stage Graph prompt or promptFile`,
+		);
+	}
 	const edge = SCAN_PIPELINE_DEFINITIONS.pipelines.full.edges.find(
 		(item) => item.name === "attack-surface-model-to-identify-target",
 	);
@@ -29,6 +36,24 @@ test("loaded full pipeline fans out identify-target by threat-model vulnerabilit
 	assert.equal(
 		(scanEdge.input as Record<string, unknown>).vulnerabilityClassFocus,
 		"$input.vulnerabilityClassFocus",
+	);
+});
+
+test("built-in stage prompt validation rejects a stage without either prompt source", () => {
+	const stage = SCAN_PIPELINE_DEFINITIONS.stages[0]!;
+	assert.throws(
+		() =>
+			validateStagePromptConfiguration([
+				{
+					...stage,
+					runtimeConfig: {
+						...stage.runtimeConfig!,
+						prompt: null,
+						promptFile: null,
+					},
+				},
+			]),
+		/Stage .* must configure runtimeConfig\.prompt or runtimeConfig\.promptFile/,
 	);
 });
 

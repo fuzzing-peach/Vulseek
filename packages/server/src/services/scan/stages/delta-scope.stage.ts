@@ -14,7 +14,7 @@ import {
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
 import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
-import { buildDeltaScopePrompt } from "../prompts/delta-scope.prompt";
+import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import {
 	prepareRepositoryForScanInContainer,
 	type PreparedRepositoryState,
@@ -26,6 +26,7 @@ import {
 	resolveAgentStageRuntime,
 	resolveStageRuntimeCwd,
 	resolveStageRuntimePrompt,
+	resolveStageRuntimePromptTemplate,
 } from "./agent-stage-runtime";
 import {
 	type PipelineContext,
@@ -93,18 +94,10 @@ const executeDeltaScopeStage = async (
 		repositoryStateJson.stdout,
 	) as PreparedRepositoryState;
 
-	const fallbackPrompt = buildDeltaScopePrompt({
-		repository: {
-			id: ctx.taskId,
-			name: ctx.serviceName,
-		},
-		repositoryState,
-		repositoryStatePath: `${repositoryRoot}/00_repository_state.json`,
-		agentProvider: runtime.agentProfile?.provider || "codex",
-		thinkingLevel: runtime.agentProfile?.thinkingLevelEnabled
-			? runtime.agentProfile.thinkingLevel
-			: null,
-	});
+	const promptTemplate = await resolveStageRuntimePromptTemplate(ctx);
+	const agentInstruction = runtime.agentProfile?.thinkingLevelEnabled
+		? `Use ${runtime.agentProfile?.provider || "codex"} with reasoning effort around ${runtime.agentProfile.thinkingLevel}.`
+		: `Use ${runtime.agentProfile?.provider || "codex"}.`;
 
 	return await runSingleTurnAgentInContainer({
 		scanJob,
@@ -126,7 +119,24 @@ const executeDeltaScopeStage = async (
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
-		prompt: await resolveStageRuntimePrompt(ctx, fallbackPrompt),
+		prompt: await resolveStageRuntimePrompt(ctx, promptTemplate, {
+			taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
+			repositoryId: ctx.taskId,
+			repositoryName: ctx.serviceName,
+			targetRef:
+				repositoryState.currentBranch ||
+				repositoryState.targetRef ||
+				"<none>",
+			targetTag:
+				repositoryState.currentExactTag ||
+				repositoryState.targetTag ||
+				"<none>",
+			targetCommit: repositoryState.resolvedTargetSha,
+			baseCommit: repositoryState.resolvedBaseSha || "<none>",
+			commitWindow: repositoryState.commitWindow,
+			agentInstruction,
+			repositoryStatePath: `${repositoryRoot}/00_repository_state.json`,
+		}),
 		outputSchema: outputSchema ?? deltaScopeManifestSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });

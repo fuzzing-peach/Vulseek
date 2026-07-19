@@ -13,7 +13,6 @@ import {
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
 import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
-import { buildAttackSurfaceModelPrompt } from "../prompts/attack-surface-model.prompt";
 import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
 import type { ModuleThreatModelManifest, ScanJob } from "../types";
@@ -22,6 +21,7 @@ import {
 	resolveAgentStageRuntime,
 	resolveStageRuntimeCwd,
 	resolveStageRuntimePrompt,
+	resolveStageRuntimePromptTemplate,
 } from "./agent-stage-runtime";
 import {
 	type PipelineContext,
@@ -86,16 +86,7 @@ const executeAttackSurfaceModelStage = async (
 	const thinkingInstruction = runtime.agentProfile?.thinkingLevelEnabled
 		? `use_reasoning_effort: ${runtime.agentProfile.thinkingLevel}`
 		: "";
-	const fallbackPrompt = buildAttackSurfaceModelPrompt({
-		scanJobId: stageInput.scanJob.scanJobId,
-		moduleId: stageInput.moduleId,
-		moduleName: stageInput.moduleName,
-		repositoryJsonPath: stageInput.repositoryPath,
-		moduleJsonPath: stageInput.modulePath,
-		thinkingLevel: runtime.agentProfile?.thinkingLevelEnabled
-			? runtime.agentProfile.thinkingLevel
-			: null,
-	});
+	const promptTemplate = await resolveStageRuntimePromptTemplate(ctx);
 
 	return await runSingleTurnAgentInContainer({
 		scanJob: stageInput.scanJob,
@@ -117,7 +108,7 @@ const executeAttackSurfaceModelStage = async (
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
-			prompt: await resolveStageRuntimePrompt(ctx, fallbackPrompt, {
+		prompt: await resolveStageRuntimePrompt(ctx, promptTemplate, {
 				taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
 				scanJobId: stageInput.scanJob.scanJobId,
 				moduleId: stageInput.moduleId,

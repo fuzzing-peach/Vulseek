@@ -1,6 +1,7 @@
 import path from "node:path";
 import { findApplicationById } from "../../application";
 import { findComposeById } from "../../compose";
+import { TRPCError } from "@trpc/server";
 import {
 	findVulnerabilityCandidateByIdAndScanJobIdRepo,
 	findVulnerabilityCandidateByIdRepo,
@@ -11,23 +12,17 @@ import {
 } from "../persistence/candidate.repo";
 import { findScanJobByIdRepo } from "../persistence/scan-job.repo";
 import {
-	findLatestAnalysisResultByCandidateIdRepo,
-	findLatestTriageResultByCandidateIdRepo,
-	findLatestVerificationResultByCandidateIdRepo,
 	findTaskByIdRepo,
-	listAnalysisResultsByScanJobIdRepo,
 	listCandidateDescendantTasksByProducerTaskIdRepo,
 	listTaskRuntimeIntervalsByScanJobIdRepo,
-	listTriageResultsByScanJobIdRepo,
-	listVerificationResultsByScanJobIdRepo,
 } from "../persistence/task.repo";
 import {
 	findCandidateProjectionPageRepo,
-	isCandidateProjectionBackfillComplete,
+	findCandidateProjectionByIdRepo,
+	listCandidateProjectionItemsByScanJobIdRepo,
 } from "../persistence/candidate-projection-list.repo";
 import { buildCandidateResultSummary } from "../persistence/candidate-result-summary";
 import { listCandidateResultSummaryGroupsByScanJobIdRepo } from "../persistence/candidate-result-summary.repo";
-import { buildCandidatesWithLatestResults } from "../state/candidate-aggregates";
 import type { Task } from "../types";
 import { resolveTaskRootSegment } from "../stages/full-scan-stage.runtime";
 
@@ -329,16 +324,6 @@ export const enrichCandidateHostPaths = async <T extends { scanJobId: string }>(
 	);
 };
 
-const buildCandidateAnalysisReportPath = () => null;
-
-const buildCandidateVerificationArtifactPaths = () => {
-	const verifyRoot = null;
-	return {
-		verifyRoot,
-		reportPath: null,
-	};
-};
-
 export const findVulnerabilityCandidatesByScanJobId = async (
 	scanJobId: string,
 ) => await findVulnerabilityCandidatesByScanJobIdRepo(scanJobId);
@@ -346,30 +331,6 @@ export const findVulnerabilityCandidatesByScanJobId = async (
 export const backfillVulnerabilityCandidates = async (input?: {
 	scanJobId?: string;
 }) => await backfillVulnerabilityCandidatesFromTasks(input);
-
-export const findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId =
-	async (scanJobId: string) => {
-		const [
-			candidates,
-			analysisResultsList,
-			verificationResultsList,
-			triageResultsList,
-		] = await Promise.all([
-			findVulnerabilityCandidatesByScanJobIdRepo(scanJobId),
-			listAnalysisResultsByScanJobIdRepo(scanJobId),
-			listVerificationResultsByScanJobIdRepo(scanJobId),
-			listTriageResultsByScanJobIdRepo(scanJobId),
-		]);
-
-		return buildCandidatesWithLatestResults({
-			candidates,
-			analysisResults: analysisResultsList,
-			verificationResults: verificationResultsList,
-			triageResults: triageResultsList,
-			buildAnalysisReportPath: buildCandidateAnalysisReportPath,
-			buildVerificationArtifactPaths: buildCandidateVerificationArtifactPaths,
-		});
-	};
 
 const ACTIVE_TASK_STATUSES = new Set([
 	"launching",
@@ -465,191 +426,6 @@ export const findScanJobResultSummary = async (scanJobId: string) => {
 	};
 };
 
-const RESULT_SORT_RANK: Record<string, number> = {
-	real_vulnerability: 4,
-	true: 4,
-	likely_vulnerability: 3,
-	likely: 3,
-	plausible_but_unproven: 2,
-	api_misuse: 1,
-	false_positive: 0,
-	false: 0,
-};
-
-const resolveCandidateLatestResultUpdatedAtMs = (candidate: {
-	createdAt: string;
-	latestAnalysisResult?: { updatedAt?: string | null } | null;
-	latestVerificationResult?: { updatedAt?: string | null } | null;
-	latestTriageResult?: { updatedAt?: string | null } | null;
-}) => {
-	const timestamps = [
-		candidate.latestAnalysisResult?.updatedAt,
-		candidate.latestVerificationResult?.updatedAt,
-		candidate.latestTriageResult?.updatedAt,
-	]
-		.map((value) => (value ? Date.parse(value) : Number.NaN))
-		.filter(Number.isFinite);
-	if (timestamps.length > 0) {
-		return Math.max(...timestamps);
-	}
-	const createdAtMs = Date.parse(candidate.createdAt);
-	return Number.isFinite(createdAtMs) ? createdAtMs : 0;
-};
-
-const findVulnerabilityCandidatesPageWithLatestAnalysisResultLegacy =
-	async (input: {
-		scanJobId: string;
-		page: number;
-		pageSize: number;
-		query?: string;
-		analysisResults?: string[];
-		verifyResults?: string[];
-		triageResults?: string[];
-		sortKey: CandidateListSortKey;
-		sortDirection: CandidateListSortDirection;
-	}) => {
-		const candidates =
-			await findVulnerabilityCandidatesWithLatestAnalysisResultByScanJobId(
-				input.scanJobId,
-			);
-		const query = (input.query || "").trim().toLowerCase();
-		const analysisResults = new Set(input.analysisResults || []);
-		const verifyResults = new Set(input.verifyResults || []);
-		const triageResults = new Set(input.triageResults || []);
-
-		const filteredCandidates = candidates.filter((candidate) => {
-			const latestAnalysisResult = candidate.latestAnalysisResult?.result || "";
-			const latestVerifyResult =
-				candidate.latestVerificationResult?.result || "";
-			const latestTriageResult = candidate.latestTriageResult?.result || "";
-			if (
-				analysisResults.size > 0 &&
-				!analysisResults.has(latestAnalysisResult)
-			) {
-				return false;
-			}
-			if (verifyResults.size > 0 && !verifyResults.has(latestVerifyResult)) {
-				return false;
-			}
-			if (triageResults.size > 0 && !triageResults.has(latestTriageResult)) {
-				return false;
-			}
-			if (!query) {
-				return true;
-			}
-
-			const haystack = [
-				candidate.title,
-				candidate.description || "",
-				candidate.note || "",
-				...(candidate.tags || []),
-				candidate.filePath || "",
-				typeof candidate.line === "number" ? String(candidate.line) : "",
-				candidate.latestAnalysisResult?.result || "",
-				candidate.latestAnalysisResult?.reportPath || "",
-				candidate.latestAnalysisResult?.threadId || "",
-				candidate.latestVerificationResult?.result || "",
-				typeof candidate.latestVerificationResult?.confidence === "number"
-					? String(candidate.latestVerificationResult.confidence)
-					: "",
-				typeof candidate.latestVerificationResult?.score === "number"
-					? String(candidate.latestVerificationResult.score)
-					: "",
-				typeof candidate.latestAnalysisResult?.score === "number"
-					? String(candidate.latestAnalysisResult.score)
-					: "",
-				typeof candidate.score === "number" ? String(candidate.score) : "",
-				candidate.latestVerificationResult?.reportPath || "",
-				candidate.latestVerificationResult?.threadId || "",
-				candidate.latestTriageResult?.result || "",
-				candidate.latestTriageResult?.disqualifier || "",
-				candidate.latestTriageResult?.disqualifierReason || "",
-				candidate.latestTriageResult?.securityClassification || "",
-				candidate.latestTriageResult?.impactType || "",
-				candidate.latestTriageResult?.cvssSeverity || "",
-				typeof candidate.latestTriageResult?.cvssScore === "number"
-					? String(candidate.latestTriageResult.cvssScore)
-					: "",
-				typeof candidate.latestTriageResult?.epssProbability30d === "number"
-					? String(candidate.latestTriageResult.epssProbability30d)
-					: "",
-				candidate.latestTriageResult?.reportPath || "",
-			]
-				.join("\n")
-				.toLowerCase();
-			return haystack.includes(query);
-		});
-
-		const direction = input.sortDirection === "asc" ? 1 : -1;
-		filteredCandidates.sort((left, right) => {
-			if (input.sortKey === "latestResultUpdatedAt") {
-				const leftUpdatedAtMs = resolveCandidateLatestResultUpdatedAtMs(left);
-				const rightUpdatedAtMs = resolveCandidateLatestResultUpdatedAtMs(right);
-				if (leftUpdatedAtMs !== rightUpdatedAtMs) {
-					return direction * (leftUpdatedAtMs - rightUpdatedAtMs);
-				}
-				return left.title.localeCompare(right.title);
-			}
-
-			if (input.sortKey === "createdAt") {
-				const createdAtCompare = left.createdAt.localeCompare(right.createdAt);
-				if (createdAtCompare !== 0) {
-					return direction * createdAtCompare;
-				}
-				return left.title.localeCompare(right.title);
-			}
-
-			if (input.sortKey === "candidate") {
-				return direction * left.title.localeCompare(right.title);
-			}
-
-			if (input.sortKey === "analysis") {
-				const leftRank =
-					RESULT_SORT_RANK[left.latestAnalysisResult?.result || ""] ?? -1;
-				const rightRank =
-					RESULT_SORT_RANK[right.latestAnalysisResult?.result || ""] ?? -1;
-				if (leftRank !== rightRank) {
-					return direction * (leftRank - rightRank);
-				}
-				return direction * left.title.localeCompare(right.title);
-			}
-
-			if (input.sortKey === "verify") {
-				const leftRank =
-					RESULT_SORT_RANK[left.latestVerificationResult?.result || ""] ?? -1;
-				const rightRank =
-					RESULT_SORT_RANK[right.latestVerificationResult?.result || ""] ?? -1;
-				if (leftRank !== rightRank) {
-					return direction * (leftRank - rightRank);
-				}
-				return direction * left.title.localeCompare(right.title);
-			}
-
-			const leftScore = typeof left.score === "number" ? left.score : -1;
-			const rightScore = typeof right.score === "number" ? right.score : -1;
-			if (leftScore !== rightScore) {
-				return direction * (leftScore - rightScore);
-			}
-			return direction * left.title.localeCompare(right.title);
-		});
-
-		const pageSize = Math.max(1, Math.min(100, input.pageSize));
-		const total = filteredCandidates.length;
-		const totalPages = Math.max(1, Math.ceil(total / pageSize));
-		const page = Math.min(Math.max(1, input.page), totalPages);
-		const startIndex = (page - 1) * pageSize;
-
-		return {
-			items: await enrichCandidateHostPaths(
-				filteredCandidates.slice(startIndex, startIndex + pageSize),
-			),
-			total,
-			page,
-			pageSize,
-			totalPages,
-		};
-	};
-
 export const findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId =
 	async (input: {
 		scanJobId: string;
@@ -662,18 +438,16 @@ export const findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId 
 		sortKey: CandidateListSortKey;
 		sortDirection: CandidateListSortDirection;
 	}) => {
-		if (!(await isCandidateProjectionBackfillComplete())) {
-			return await findVulnerabilityCandidatesPageWithLatestAnalysisResultLegacy(
-				input,
-			);
-		}
-
 		const page = await findCandidateProjectionPageRepo(input);
 		return {
 			...page,
 			items: await enrichCandidateHostPaths(page.items),
 		};
 	};
+
+export const listVulnerabilityCandidatesWithProjectionByScanJobId = async (
+	scanJobId: string,
+) => await listCandidateProjectionItemsByScanJobIdRepo(scanJobId);
 
 export const findVulnerabilityCandidateById = async (
 	vulnerabilityCandidateId: string,
@@ -700,45 +474,25 @@ export const findVulnerabilityCandidateWithLatestAnalysisResultById =
 		scanJobId?: string;
 		producerTaskId?: string;
 	}) => {
-		const candidate = input.scanJobId
-			? await findVulnerabilityCandidateByIdAndScanJobIdRepo({
+		const resolvedScanJobId =
+			input.scanJobId ||
+			(await findVulnerabilityCandidateByIdRepo(input.vulnerabilityCandidateId))
+				?.scanJobId;
+		const projectionCandidate = resolvedScanJobId
+			? await findCandidateProjectionByIdRepo({
 					vulnerabilityCandidateId: input.vulnerabilityCandidateId,
-					scanJobId: input.scanJobId,
+					scanJobId: resolvedScanJobId,
 					producerTaskId: input.producerTaskId,
 				})
-				: await findVulnerabilityCandidateByIdRepo(
-					input.vulnerabilityCandidateId,
-				);
-		const [analysisResult, verificationResult] = await Promise.all([
-			findLatestAnalysisResultByCandidateIdRepo({
-				scanJobId: candidate.scanJobId,
-				vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-				producerTaskId: candidate.producerTaskId,
-			}),
-			findLatestVerificationResultByCandidateIdRepo({
-				scanJobId: candidate.scanJobId,
-				vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-				producerTaskId: candidate.producerTaskId,
-			}),
-		]);
-		const triageResult = await findLatestTriageResultByCandidateIdRepo({
-			scanJobId: candidate.scanJobId,
-			vulnerabilityCandidateId: candidate.vulnerabilityCandidateId,
-			producerTaskId: candidate.producerTaskId,
-		});
-
-		const [enrichedCandidate] = await enrichCandidateHostPaths(
-			buildCandidatesWithLatestResults({
-				candidates: [candidate],
-				analysisResults: analysisResult ? [analysisResult] : [],
-				verificationResults: verificationResult ? [verificationResult] : [],
-				triageResults: triageResult ? [triageResult] : [],
-				buildAnalysisReportPath: buildCandidateAnalysisReportPath,
-				buildVerificationArtifactPaths: buildCandidateVerificationArtifactPaths,
-			}),
-		);
+			: null;
+		const [enrichedCandidate] = projectionCandidate
+			? await enrichCandidateHostPaths([projectionCandidate])
+			: [];
 		if (!enrichedCandidate) {
-			throw new Error("Unable to build candidate detail");
+			throw new TRPCError({
+				code: "NOT_FOUND",
+				message: "Vulnerability candidate not found",
+			});
 		}
 		return enrichedCandidate;
 	};

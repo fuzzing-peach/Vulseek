@@ -107,3 +107,72 @@ test("stage runtime config getters read the latest job snapshot", async () => {
 	assert.equal(await runtimeConfig.getPrompt(), "Scan target after update");
 	assert.deepEqual(await runtimeConfig.getSkills(), ["updated-skill"]);
 });
+
+test("Stage Graph prompt takes precedence over promptFile and ignores blank prompt", async () => {
+	let definitions = makeDefinitions(1);
+	definitions.stages[0] = {
+		...definitions.stages[0]!,
+		runtimeConfig: {
+			...definitions.stages[0]!.runtimeConfig!,
+			prompt: "  Graph prompt wins  ",
+			promptFile: "repository-profile.prompt.md",
+		},
+	};
+	const runtimeConfig = createStageRuntimeConfigWithDeps({
+		scanJobId: "scan-job-1",
+		stageName: "scan-target",
+		loadScanJobPipelineDefinitionSnapshot: async () => definitions,
+	});
+
+	assert.equal(await runtimeConfig.getPrompt(), "  Graph prompt wins  ");
+
+	definitions.stages[0] = {
+		...definitions.stages[0]!,
+		runtimeConfig: {
+			...definitions.stages[0]!.runtimeConfig!,
+			prompt: "   ",
+			promptFile: null,
+		},
+	};
+	assert.equal(await runtimeConfig.getPrompt(), null);
+});
+
+test("Stage Graph promptFile is loaded when no direct prompt is configured", async () => {
+	const definitions = makeDefinitions(1);
+	definitions.stages[0] = {
+		...definitions.stages[0]!,
+		runtimeConfig: {
+			...definitions.stages[0]!.runtimeConfig!,
+			prompt: null,
+			promptFile: "repository-profile.prompt.md",
+		},
+	};
+	const runtimeConfig = createStageRuntimeConfigWithDeps({
+		scanJobId: "scan-job-1",
+		stageName: "scan-target",
+		loadScanJobPipelineDefinitionSnapshot: async () => definitions,
+	});
+
+	const prompt = await runtimeConfig.getPrompt();
+	assert.ok(prompt);
+	assert.match(prompt, /repository-profile skill/);
+});
+
+test("Stage Graph prompt is absent when neither source is configured", async () => {
+	const definitions = makeDefinitions(1);
+	definitions.stages[0] = {
+		...definitions.stages[0]!,
+		runtimeConfig: {
+			...definitions.stages[0]!.runtimeConfig!,
+			prompt: null,
+			promptFile: null,
+		},
+	};
+	const runtimeConfig = createStageRuntimeConfigWithDeps({
+		scanJobId: "scan-job-1",
+		stageName: "scan-target",
+		loadScanJobPipelineDefinitionSnapshot: async () => definitions,
+	});
+
+	assert.equal(await runtimeConfig.getPrompt(), null);
+});

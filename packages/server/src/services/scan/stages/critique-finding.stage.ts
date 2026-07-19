@@ -7,7 +7,6 @@ import {
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
 import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
-import { renderPromptTemplate } from "../prompts/prompt-template";
 import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
 import type { Candidate } from "../types";
@@ -16,6 +15,7 @@ import {
 	resolveAgentStageRuntime,
 	resolveStageRuntimeCwd,
 	resolveStageRuntimePrompt,
+	resolveStageRuntimePromptTemplate,
 } from "./agent-stage-runtime";
 import type { AnalyzeFindingStageInput } from "./analyze-finding.stage";
 import {
@@ -30,25 +30,6 @@ export type CritiqueFindingStageInput = AnalyzeFindingStageInput & {
 };
 
 export type CritiqueFindingStageOutput = unknown;
-
-const buildCritiqueFindingPrompt = (
-	input: CritiqueFindingStageInput,
-	paths: {
-		candidate: Candidate;
-		taskDirContainer: string;
-		taskId: string;
-	},
-) =>
-	renderPromptTemplate(new URL("./critique-finding.prompt.md", import.meta.url), {
-		taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
-		candidateId: paths.candidate.id,
-		candidateTitle: paths.candidate.title,
-		taskDir: paths.taskDirContainer,
-		analysisFingerprint: input.analysisFingerprint,
-		candidateJsonPath: input.candidatePath,
-		draftAnalysisJsonPath: input.draftAnalysisPath,
-		taskId: paths.taskId,
-	});
 
 const executeCritiqueFindingStage = async (
 	ctx: StageContext,
@@ -65,12 +46,7 @@ const executeCritiqueFindingStage = async (
 		containerNameParts: [candidate.id.slice(0, 8)],
 		codexHomeName: ".codex-critique-finding",
 	});
-
-	const fallbackPrompt = buildCritiqueFindingPrompt(stageInput, {
-		candidate,
-		taskDirContainer: runtime.taskStageRootInContainer,
-		taskId: ctx.taskId,
-	});
+	const promptTemplate = await resolveStageRuntimePromptTemplate(ctx);
 
 	return await runSingleTurnAgentInContainer({
 		scanJob: stageInput.scanJob,
@@ -92,7 +68,16 @@ const executeCritiqueFindingStage = async (
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
-		prompt: await resolveStageRuntimePrompt(ctx, fallbackPrompt),
+		prompt: await resolveStageRuntimePrompt(ctx, promptTemplate, {
+			taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
+			candidateId: candidate.id,
+			candidateTitle: candidate.title,
+			taskDir: runtime.taskStageRootInContainer,
+			analysisFingerprint: stageInput.analysisFingerprint,
+			candidateJsonPath: stageInput.candidatePath,
+			draftAnalysisJsonPath: stageInput.draftAnalysisPath,
+			taskId: ctx.taskId,
+		}),
 		outputSchema: outputSchema ?? criticResponseSchema,
 		routeOutputSchemas: ctx.routeOutputSchemas,
 		onThreadId: async (threadId) => {

@@ -761,11 +761,6 @@ export const parseScanPipelineDefinitionsSource = (
 export const parseScanPipelineDefinitionsFromYaml = (rawYaml: string) =>
 	parseScanPipelineDefinitionsSource(parseYaml(rawYaml));
 
-export const loadScanPipelineDefinitions = () =>
-	parseScanPipelineDefinitionsSource(readScanPipelineDefinitionsSource());
-
-export const SCAN_PIPELINE_DEFINITIONS = loadScanPipelineDefinitions();
-
 export type StageRuntimeConfigDeps = {
 	loadScanJobPipelineDefinitionSnapshot: (
 		scanJobId: string,
@@ -791,6 +786,32 @@ export const resolvePromptFileContent = (promptFile: string) => {
 	}
 	throw new Error(`Prompt file not found: ${promptFile}`);
 };
+
+export const validateStagePromptConfiguration = (
+	stages: ScanPipelineStageConfig[],
+) => {
+	for (const stage of stages) {
+		const runtimeConfig = stage.runtimeConfig;
+		if (!runtimeConfig?.prompt?.trim() && !runtimeConfig?.promptFile) {
+			throw new Error(
+				`Stage ${stage.id} must configure runtimeConfig.prompt or runtimeConfig.promptFile`,
+			);
+		}
+		if (runtimeConfig.promptFile) {
+			resolvePromptFileContent(runtimeConfig.promptFile);
+		}
+	}
+};
+
+export const loadScanPipelineDefinitions = () => {
+	const definitions = parseScanPipelineDefinitionsSource(
+		readScanPipelineDefinitionsSource(),
+	);
+	validateStagePromptConfiguration(definitions.stages);
+	return definitions;
+};
+
+export const SCAN_PIPELINE_DEFINITIONS = loadScanPipelineDefinitions();
 
 export const createStageRuntimeConfigWithDeps = (input: {
 	scanJobId: string;
@@ -824,7 +845,7 @@ export const createStageRuntimeConfigWithDeps = (input: {
 		getSkills: async () => (await loadRuntimeConfig())?.skills ?? [],
 		getPrompt: async () => {
 			const runtimeConfig = await loadRuntimeConfig();
-			if (runtimeConfig?.prompt != null) {
+			if (runtimeConfig?.prompt?.trim()) {
 				return runtimeConfig.prompt;
 			}
 			if (runtimeConfig?.promptFile) {

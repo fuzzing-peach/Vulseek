@@ -87,17 +87,21 @@ export const resolveStageRuntimeCwd = async (
 	(await createStageRuntimeConfig(ctx.scanJobId, ctx.stageName).getCwd()) ||
 	fallback;
 
-export const resolveStageRuntimePrompt = async (
-	ctx: StageContext,
-	fallback: string,
-	values?: PromptTemplateValues,
-) => {
+export const resolveStageRuntimePromptTemplate = async (ctx: StageContext) => {
 	const prompt = await createStageRuntimeConfig(
 		ctx.scanJobId,
 		ctx.stageName,
 	).getPrompt();
 	if (prompt == null) {
-		return fallback;
+		throw new Error(
+			`Stage ${ctx.stageName} has no prompt or promptFile configured in the Stage Graph`,
+		);
 	}
-	return values ? renderPromptTemplateString(prompt, values) : prompt;
+	return prompt;
 };
+
+export const resolveStageRuntimePrompt = async (
+	ctx: StageContext,
+	promptTemplate: string,
+	values: PromptTemplateValues,
+) => renderPromptTemplateString(promptTemplate, values);

@@ -7,7 +7,6 @@ import {
 	type StageDefinition,
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
-import { renderPromptTemplate } from "../prompts/prompt-template";
 import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
 import type {
@@ -22,6 +21,7 @@ import {
 	resolveAgentStageRuntime,
 	resolveStageRuntimeCwd,
 	resolveStageRuntimePrompt,
+	resolveStageRuntimePromptTemplate,
 } from "./agent-stage-runtime";
 import {
 	type PipelineContext,
@@ -43,46 +43,6 @@ export type TriageFindingStageOutput = Triage;
 
 type TriageStageContext = StageContext & {
 	executionContext?: unknown;
-};
-
-const buildTriageFindingPrompt = (
-	stageInput: TriageFindingStageInput,
-	input: {
-		analysisResult: FinalAnalysis;
-		verifyResult: Verification;
-		candidate: Candidate;
-		taskDirContainer: string;
-		reportPath: string;
-		taskId: string;
-	},
-) => {
-	const { analysisResult, verifyResult, candidate } = input;
-
-	return renderPromptTemplate(
-		new URL("./triage-finding.prompt.md", import.meta.url),
-		{
-			taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
-			scanJobId: stageInput.scanJob.scanJobId,
-			candidateId: candidate.id,
-			candidateTitle: candidate.title,
-			candidateDescription: candidate.description || "-",
-			candidateFile: candidate.filePath || "-",
-			candidateLine: typeof candidate.line === "number" ? candidate.line : "-",
-			analysisResult: analysisResult.result,
-			analysisSummary: analysisResult.summary || "-",
-			verifyResult: verifyResult.result,
-			verifySummary: verifyResult.summary || "-",
-			repositoryJsonPath: stageInput.repositoryPath,
-			moduleJsonPath: stageInput.modulePath,
-			functionJsonPath: stageInput.functionPath,
-			candidateJsonPath: stageInput.candidatePath,
-			analysisResultJsonPath: stageInput.analysisResultPath,
-			verifyResultJsonPath: stageInput.verifyResultPath,
-			taskDir: input.taskDirContainer,
-			reportPath: input.reportPath,
-			taskId: input.taskId,
-		},
-	);
 };
 
 const executeTriageFindingStage = async (
@@ -112,15 +72,7 @@ const executeTriageFindingStage = async (
 		codexHomeName: ".codex-triage-finding",
 	});
 	const reportPath = `${runtime.taskStageRootInContainer}/01_triage_report.md`;
-
-	const fallbackPrompt = buildTriageFindingPrompt(stageInput, {
-		analysisResult,
-		verifyResult,
-		candidate,
-		taskDirContainer: runtime.taskStageRootInContainer,
-		reportPath,
-		taskId: ctx.taskId,
-	});
+	const promptTemplate = await resolveStageRuntimePromptTemplate(ctx);
 
 	return await runSingleTurnAgentInContainer({
 		scanJob,
@@ -142,7 +94,28 @@ const executeTriageFindingStage = async (
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
-		prompt: await resolveStageRuntimePrompt(ctx, fallbackPrompt),
+		prompt: await resolveStageRuntimePrompt(ctx, promptTemplate, {
+			taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
+			scanJobId: stageInput.scanJob.scanJobId,
+			candidateId: candidate.id,
+			candidateTitle: candidate.title,
+			candidateDescription: candidate.description || "-",
+			candidateFile: candidate.filePath || "-",
+			candidateLine: typeof candidate.line === "number" ? candidate.line : "-",
+			analysisResult: analysisResult.result,
+			analysisSummary: analysisResult.summary || "-",
+			verifyResult: verifyResult.result,
+			verifySummary: verifyResult.summary || "-",
+			repositoryJsonPath: stageInput.repositoryPath,
+			moduleJsonPath: stageInput.modulePath,
+			functionJsonPath: stageInput.functionPath,
+			candidateJsonPath: stageInput.candidatePath,
+			analysisResultJsonPath: stageInput.analysisResultPath,
+			verifyResultJsonPath: stageInput.verifyResultPath,
+			taskDir: runtime.taskStageRootInContainer,
+			reportPath,
+			taskId: ctx.taskId,
+		}),
 		outputSchema: outputSchema ?? triageSchema,
 		onThreadId: async (threadId) => {
 			await bindTaskRuntimeRepo({ taskId: ctx.taskId, threadId });

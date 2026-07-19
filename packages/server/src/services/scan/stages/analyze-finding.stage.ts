@@ -7,7 +7,6 @@ import {
 	type StageQueueBinding,
 } from "../pipeline/stage-definition";
 import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
-import { renderPromptTemplate } from "../prompts/prompt-template";
 import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
 import type { Candidate, ScanJob } from "../types";
@@ -16,6 +15,7 @@ import {
 	resolveAgentStageRuntime,
 	resolveStageRuntimeCwd,
 	resolveStageRuntimePrompt,
+	resolveStageRuntimePromptTemplate,
 } from "./agent-stage-runtime";
 import {
 	type PipelineContext,
@@ -39,39 +39,6 @@ type AnalysisStageContext = StageContext & {
 	executionContext?: unknown;
 };
 
-export const buildAnalyzeFindingPrompt = (
-	stageInput: AnalyzeFindingStageInput,
-	input: {
-		candidate: Candidate;
-		reportPath: string;
-		taskDirContainer: string;
-		taskId: string;
-	},
-) => {
-	const { scanJob } = stageInput;
-
-	return renderPromptTemplate(new URL("./analyze-finding.prompt.md", import.meta.url), {
-		taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
-		scanJobId: scanJob.scanJobId,
-		candidateId: input.candidate.id,
-		candidateTitle: input.candidate.title,
-		candidateDescription: input.candidate.description || "-",
-		candidateFile: input.candidate.filePath || "-",
-		candidateLine:
-			typeof input.candidate.line === "number" ? input.candidate.line : "-",
-		taskDir: input.taskDirContainer,
-		reportPath: input.reportPath,
-		repositoryJsonPath: stageInput.repositoryPath,
-		moduleJsonPath: stageInput.modulePath,
-		functionJsonPath: stageInput.functionPath,
-		candidateJsonPath: stageInput.candidatePath,
-		analysisReportTemplatePath:
-			stageInput.analysisReportTemplatePath || "none",
-		feedbackJsonPath: stageInput.feedbackPath || "none",
-		taskId: input.taskId,
-	});
-};
-
 const executeAnalyzeFindingStage = async (
 	ctx: StageContext,
 	stageInput: AnalyzeFindingStageInput,
@@ -88,13 +55,7 @@ const executeAnalyzeFindingStage = async (
 		containerNameParts: [candidate.id.slice(0, 8)],
 	});
 	const reportPath = `${runtime.taskStageRootInContainer}/01_report.md`;
-
-	const fallbackPrompt = buildAnalyzeFindingPrompt(stageInput, {
-		candidate,
-		reportPath,
-		taskDirContainer: runtime.taskStageRootInContainer,
-		taskId: ctx.taskId,
-	});
+	const promptTemplate = await resolveStageRuntimePromptTemplate(ctx);
 
 	return await runSingleTurnAgentInContainer({
 		scanJob,
@@ -116,7 +77,25 @@ const executeAnalyzeFindingStage = async (
 		sessionMode: ctx.sessionMode,
 		parentSessionId: ctx.parentSessionId,
 		parentTaskId: ctx.parentTaskId,
-		prompt: await resolveStageRuntimePrompt(ctx, fallbackPrompt),
+		prompt: await resolveStageRuntimePrompt(ctx, promptTemplate, {
+			taskIsolation: NEVER_REUSE_TASK_PROMPT_LINES.join("\n"),
+			scanJobId: scanJob.scanJobId,
+			candidateId: candidate.id,
+			candidateTitle: candidate.title,
+			candidateDescription: candidate.description || "-",
+			candidateFile: candidate.filePath || "-",
+			candidateLine: typeof candidate.line === "number" ? candidate.line : "-",
+			repositoryJsonPath: stageInput.repositoryPath,
+			moduleJsonPath: stageInput.modulePath,
+			functionJsonPath: stageInput.functionPath,
+			candidateJsonPath: stageInput.candidatePath,
+			analysisReportTemplatePath:
+				stageInput.analysisReportTemplatePath || "none",
+			taskDir: runtime.taskStageRootInContainer,
+			reportPath,
+			feedbackJsonPath: stageInput.feedbackPath || "none",
+			taskId: ctx.taskId,
+		}),
 		outputSchema: outputSchema ?? analysisSchema,
 		routeOutputSchemas: ctx.routeOutputSchemas,
 		onThreadId: async (threadId) => {

@@ -21,8 +21,8 @@ analysis_result_json_path: {{analysisResultJsonPath}}
 task_dir: {{taskDir}}
 write_verify_report_to: {{reportPath}}
 
-Use the installed skill named verify as your working method.
-The verify skill file is /workspace/repo/.agents/skills/verify/SKILL.md.
+Use the installed skill named verify-finding as your working method.
+The verify-finding skill file is /workspace/repo/.agents/skills/verify-finding/SKILL.md.
 Read the JSON files referenced above before verification.
 Do not repeat broad exploration. This stage is a sanity check only.
 Check whether the analysis report's factual claims, code paths, target descriptions, symbols, data-flow descriptions, and trigger/precondition descriptions really exist or basically hold in the repository.
