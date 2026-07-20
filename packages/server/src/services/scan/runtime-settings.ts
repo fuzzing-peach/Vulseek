@@ -1,33 +1,47 @@
 import {
-	type ScanRuntimeSettings,
+	 type ScanRuntimeSettings,
 	type ScanStageSettings,
 	ScanRuntimeSettingsSchema,
 } from "../../db/schema/shared";
-import { SCAN_PIPELINE_DEFINITIONS } from "./pipeline/scan-pipeline-definitions";
-import { SCAN_STAGE_IDS, SCAN_STAGE_METADATA } from "./stage-metadata";
+import { loadScanPipelineDefinitions } from "./pipeline/scan-pipeline-definitions";
 
-export const FULL_SCAN_STAGE_IDS =
-	SCAN_PIPELINE_DEFINITIONS.pipelines.full.stageIds;
+export const FULL_SCAN_STAGE_IDS = [
+	"repository-profile",
+	"attack-surface-model",
+	"identify-target",
+	"scan-target",
+	"analyze-finding",
+	"critique-finding",
+	"verify-finding",
+	"triage-finding",
+];
 
-export const DELTA_SCAN_STAGE_IDS =
-	SCAN_PIPELINE_DEFINITIONS.pipelines.delta.stageIds;
+export const DELTA_SCAN_STAGE_IDS = [
+	"delta-scope",
+	"scan-target",
+	"analyze-finding",
+	"critique-finding",
+	"verify-finding",
+	"triage-finding",
+];
 
 const RUNTIME_STAGE_IDS = [
 	...FULL_SCAN_STAGE_IDS,
-	SCAN_STAGE_IDS.deltaScope,
+	...DELTA_SCAN_STAGE_IDS,
 ];
 
 export const FULL_SCAN_STAGE_ID_SET = new Set<string>(FULL_SCAN_STAGE_IDS);
 export const RUNTIME_STAGE_ID_SET = new Set<string>(RUNTIME_STAGE_IDS);
-const RUNTIME_STAGE_BY_ID = new Map(
-	SCAN_PIPELINE_DEFINITIONS.stages.map((stage) => [stage.id, stage]),
-);
+
+const loadRuntimeDefinitions = () => loadScanPipelineDefinitions();
 
 export const isRuntimeStageDisableable = (stageName: string) =>
-	RUNTIME_STAGE_BY_ID.get(stageName)?.disableable ?? true;
+	loadRuntimeDefinitions().stages.find((stage) => stage.id === stageName)
+		?.disableable ?? true;
 
 export const getRuntimeStageConcurrency = (stageName: string) =>
-	RUNTIME_STAGE_BY_ID.get(stageName)?.concurrency ?? 1;
+	loadRuntimeDefinitions().stages.find((stage) => stage.id === stageName)
+		?.concurrency ?? 1;
 
 export type ScanRuntimeStageState = {
 	disabled: boolean;
@@ -39,10 +53,15 @@ export type ScanRuntimeStageState = {
 export const normalizeScanRuntimeSettings = (
 	value: unknown,
 ): ScanRuntimeSettings => {
+	const definitions = loadRuntimeDefinitions();
+	const runtimeStageIds = new Set([
+		...definitions.pipelines.full.stageIds,
+		...definitions.pipelines.delta.stageIds,
+	]);
 	const parsed = ScanRuntimeSettingsSchema.catch({}).parse(value);
 	const stages: NonNullable<ScanRuntimeSettings["stages"]> = {};
 	for (const [stageName, setting] of Object.entries(parsed.stages ?? {})) {
-		if (!RUNTIME_STAGE_ID_SET.has(stageName)) {
+		if (!runtimeStageIds.has(stageName)) {
 			continue;
 		}
 		stages[stageName] = {
@@ -63,12 +82,16 @@ export const buildCompleteScanRuntimeSettings = (input: {
 	runtimeOverrides?: ScanRuntimeSettings | null;
 }): ScanRuntimeSettings => {
 	const stageIds =
-		input.scanType === "delta" ? DELTA_SCAN_STAGE_IDS : FULL_SCAN_STAGE_IDS;
+		input.scanType === "delta"
+			? loadRuntimeDefinitions().pipelines.delta.stageIds
+			: loadRuntimeDefinitions().pipelines.full.stageIds;
 	const overrides = normalizeScanRuntimeSettings(input.runtimeOverrides ?? {});
 	const stages: NonNullable<ScanRuntimeSettings["stages"]> = {};
+	const definitions = loadRuntimeDefinitions();
+	const stageById = new Map(definitions.stages.map((stage) => [stage.id, stage]));
 
 	for (const stageName of stageIds) {
-		const stageDefinition = RUNTIME_STAGE_BY_ID.get(stageName);
+		const stageDefinition = stageById.get(stageName);
 		const targetSetting = input.targetStageSettings?.[stageName] ?? {};
 		const override = overrides.stages?.[stageName] ?? {};
 		stages[stageName] = {
@@ -102,9 +125,10 @@ export const buildEffectiveDisabledStageSet = (input: {
 	stageNames?: string[];
 	rootStageName?: string;
 }) => {
+	const definitions = loadRuntimeDefinitions();
 	const settings = normalizeScanRuntimeSettings(input.settings);
-	const stageNames = input.stageNames ?? FULL_SCAN_STAGE_IDS;
-	const rootStageName = input.rootStageName ?? SCAN_STAGE_IDS.repositoryProfile;
+	const stageNames = input.stageNames ?? definitions.pipelines.full.stageIds;
+	const rootStageName = input.rootStageName ?? stageNames[0] ?? "";
 	const explicitDisabled = new Set(
 		Object.entries(settings.stages ?? {})
 			.filter(([, setting]) => setting.disabled === true)

@@ -1,12 +1,107 @@
 import assert from "node:assert/strict";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	parseScanPipelineDefinitionsFromYaml,
+	loadScanPipelineDefinitions,
+	normalizePipelineDefinitionSnapshot,
 	resolveScanPipelineDefinitionsDir,
-	SCAN_PIPELINE_DEFINITIONS,
+	resolveScanPipelineResourceRoot,
 	validateStagePromptConfiguration,
 	validatePipelineRegistryCoverage,
 } from "./scan-pipeline-definitions";
+
+const SCAN_PIPELINE_DEFINITIONS = loadScanPipelineDefinitions();
+
+test("normalizes a legacy pipeline snapshot to version 2", () => {
+	const legacy = JSON.parse(JSON.stringify(SCAN_PIPELINE_DEFINITIONS)) as Record<
+		string,
+		unknown
+	>;
+	delete legacy.version;
+
+	const normalized = normalizePipelineDefinitionSnapshot(legacy);
+
+	assert.equal(normalized.version, 2);
+	assert.deepEqual(normalized.pipelines.full.stageIds, [
+		...SCAN_PIPELINE_DEFINITIONS.pipelines.full.stageIds,
+	]);
+});
+
+test("materializes missing legacy stage and edge fields from the YAML baseline", () => {
+	const legacy = JSON.parse(JSON.stringify(SCAN_PIPELINE_DEFINITIONS)) as {
+		[key: string]: unknown;
+		stages: Array<Record<string, unknown>>;
+		pipelines: Record<string, { edges: Array<Record<string, unknown>> }>;
+	};
+	delete legacy.version;
+	for (const stage of legacy.stages) {
+		delete stage.effects;
+		delete stage.report;
+		delete stage.promptValues;
+		delete stage.inputArtifacts;
+		delete stage.outputArtifacts;
+	}
+	for (const pipeline of Object.values(legacy.pipelines)) {
+		for (const edge of pipeline.edges) {
+			delete edge.artifacts;
+		}
+	}
+
+	const normalized = normalizePipelineDefinitionSnapshot(legacy);
+	const scanTarget = normalized.stages.find(
+		(stage) => stage.id === "scan-target",
+	);
+	assert.deepEqual(scanTarget?.effects, [{ type: "sync-candidates" }]);
+	assert.ok(normalized.stages.every((stage) => stage.promptValues));
+	assert.ok(
+		normalized.pipelines.full.edges.every((edge) =>
+			Array.isArray(edge.artifacts),
+		),
+	);
+	assert.equal(normalized.version, 2);
+});
+
+test("runtime normalization does not merge current YAML into a saved snapshot", () => {
+	const snapshot = JSON.parse(JSON.stringify(SCAN_PIPELINE_DEFINITIONS)) as {
+		stages: Array<Record<string, unknown>>;
+	};
+	const repositoryProfile = snapshot.stages.find(
+		(stage) => stage.id === "repository-profile",
+	);
+	assert.ok(repositoryProfile);
+	delete repositoryProfile.promptValues;
+	delete repositoryProfile.inputArtifacts;
+
+	const normalized = normalizePipelineDefinitionSnapshot(snapshot, {
+		useBaseline: false,
+	});
+	const savedStage = normalized.stages.find(
+		(stage) => stage.id === "repository-profile",
+	);
+	assert.deepEqual(savedStage?.promptValues, {});
+	assert.deepEqual(savedStage?.inputArtifacts, []);
+});
+
+test("normalizing a v2 snapshot is idempotent", () => {
+	const snapshot = JSON.parse(JSON.stringify(SCAN_PIPELINE_DEFINITIONS));
+	const once = normalizePipelineDefinitionSnapshot(snapshot);
+	const twice = normalizePipelineDefinitionSnapshot(once);
+	assert.deepEqual(twice, once);
+});
+
+test("rejects malformed pipeline snapshots instead of silently rebuilding them", () => {
+	assert.throws(
+		() =>
+			normalizePipelineDefinitionSnapshot({
+				version: 1,
+				stages: {},
+				pipelines: {},
+			}),
+	);
+});
 
 test("loaded full pipeline fans out identify-target by threat-model vulnerability classes", () => {
 	for (const stage of SCAN_PIPELINE_DEFINITIONS.stages) {
@@ -486,11 +581,57 @@ test("resolveScanPipelineDefinitionsDir resolves the definitions directory", () 
 	assert.equal(definitionsDir.includes("/_next/static/media/"), false);
 });
 
-test("resolveScanPipelineDefinitionsDir falls back to bundled runtime assets", () => {
-	const definitionsDir = resolveScanPipelineDefinitionsDir(
-		"file:///packages/server/dist/services/scan/pipeline/scan-pipeline-definitions.js",
-		"/app",
+test("resolveScanPipelineDefinitionsDir does not fall back to bundled runtime assets", () => {
+	assert.throws(
+		() =>
+				resolveScanPipelineDefinitionsDir(
+					"file:///packages/server/dist/services/scan/pipeline/scan-pipeline-definitions.js",
+					"/app",
+					"/missing/scan-pipeline",
+				),
+		/definitions directory not found/,
 	);
+});
 
-	assert.equal(definitionsDir, "/app/dist/definitions");
+test("loads the current external resource and embeds prompt file content", async () => {
+	const sourceRoot = resolveScanPipelineResourceRoot();
+	const resourceRoot = await mkdtemp(join(tmpdir(), "vulseek-pipeline-"));
+	try {
+		await cp(join(sourceRoot, "pipeline"), join(resourceRoot, "pipeline"), {
+			recursive: true,
+		});
+		await cp(join(sourceRoot, "prompts"), join(resourceRoot, "prompts"), {
+			recursive: true,
+		});
+		await cp(join(sourceRoot, "stages"), join(resourceRoot, "stages"), {
+			recursive: true,
+		});
+
+		const first = loadScanPipelineDefinitions(resourceRoot);
+		const firstScanTarget = first.stages.find((stage) => stage.id === "scan-target");
+		assert.equal(firstScanTarget?.runtimeConfig?.persistent, false);
+		assert.match(firstScanTarget?.runtimeConfig?.prompt ?? "", /scan target/i);
+
+		const stagePath = join(
+			resourceRoot,
+			"pipeline",
+			"definitions",
+			"stages",
+			"scan-target.yaml",
+		);
+		const updatedStage = (await readFile(stagePath, "utf8")).replace(
+			"persistent: false",
+			"persistent: true",
+		);
+		await writeFile(stagePath, updatedStage);
+		const second = loadScanPipelineDefinitions(resourceRoot);
+		assert.equal(
+			second.stages.find((stage) => stage.id === "scan-target")?.runtimeConfig
+				?.persistent,
+			true,
+		);
+		assert.equal(firstScanTarget?.runtimeConfig?.persistent, false);
+	} finally {
+		await rm(resourceRoot, { recursive: true, force: true });
+	}
 });

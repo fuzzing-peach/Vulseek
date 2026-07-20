@@ -105,22 +105,23 @@ import {
 } from "./scan/pipeline/pipeline-runner";
 import {
 	normalizeLegacyVerificationSchema,
+	normalizePipelineDefinitionSnapshot,
+	loadScanPipelineDefinitions,
 	readScanPipelineDefinitionsYaml,
-	SCAN_PIPELINE_DEFINITIONS,
 	type ScanPipelineConfig,
 	type ScanPipelineDefinitions,
-	validatePipelineRegistryCoverage,
+	type ScanPipelineStageConfig,
 } from "./scan/pipeline/scan-pipeline-definitions";
-import { transformPipelineEdgeInput } from "./scan/pipeline/scan-pipeline-edge-transform";
+import {
+	renderPipelineTemplate,
+	transformPipelineEdgeInput,
+} from "./scan/pipeline/scan-pipeline-edge-transform";
 import {
 	createJsonSchemaContract,
 	type StructuredOutputSchemaSource,
 } from "./scan/pipeline/scan-pipeline-schema-contracts";
 import { createStageRuntimeConfig } from "./scan/pipeline/scan-stage-runtime-config";
-import {
-	createStageQueueBinding,
-	type StageDefinition,
-} from "./scan/pipeline/stage-definition";
+import { createStageQueueBinding } from "./scan/pipeline/stage-definition";
 import {
 	buildKnownQueueJobIdsForTask,
 	buildQueueTaskJobId,
@@ -3739,7 +3740,7 @@ type ScanStageGraphTargetInput = {
 	scanType?: "delta" | "full" | null;
 };
 
-export const getScanPipelineDefinitions = () => SCAN_PIPELINE_DEFINITIONS;
+export const getScanPipelineDefinitions = () => loadScanPipelineDefinitions();
 
 export const getScanPipelineYaml = () => readScanPipelineDefinitionsYaml();
 
@@ -3761,13 +3762,14 @@ export const findFullScanStageGraph = async (
 ) => {
 	const settings =
 		await resolveScanProfileConcurrencySettingsFromTarget(target);
+	const definitions = loadScanPipelineDefinitions();
 	const scanType = target.scanType === "delta" ? "delta" : "full";
 	const pipeline =
 		scanType === "delta"
-			? SCAN_PIPELINE_DEFINITIONS.pipelines.delta
-			: SCAN_PIPELINE_DEFINITIONS.pipelines.full;
+			? definitions.pipelines.delta
+			: definitions.pipelines.full;
 	const stages = pipeline.stageIds.map((stageId) => {
-		const stage = SCAN_PIPELINE_DEFINITIONS.stageMetadataById[stageId];
+		const stage = definitions.stageMetadataById[stageId];
 		if (!stage) {
 			throw new Error(`Unknown scan stage ${stageId} in ${pipeline.name}`);
 		}

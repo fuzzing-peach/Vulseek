@@ -1,5 +1,3 @@
-import { SCAN_PIPELINE_DEFINITIONS } from "./pipeline/scan-pipeline-definitions";
-
 const EXPECTED_SCAN_STAGE_KEYS = [
 	"deltaScope",
 	"repositoryProfile",
@@ -17,17 +15,20 @@ type RequiredScanStageMetadata = Record<
 	{ id: string; name: string }
 >;
 
-const requireStageMetadata = (): RequiredScanStageMetadata => {
-	const metadata = SCAN_PIPELINE_DEFINITIONS.stageMetadata;
-	for (const key of EXPECTED_SCAN_STAGE_KEYS) {
-		if (!metadata[key]) {
-			throw new Error(`Missing scan stage metadata for key ${key}`);
-		}
-	}
-	return metadata as RequiredScanStageMetadata;
+export const SCAN_STAGE_METADATA: RequiredScanStageMetadata = {
+	deltaScope: { id: "delta-scope", name: "Delta Scope" },
+	repositoryProfile: { id: "repository-profile", name: "Repository Profile" },
+	identifyTarget: { id: "identify-target", name: "Identify Target" },
+	attackSurfaceModel: {
+		id: "attack-surface-model",
+		name: "Attack Surface Model",
+	},
+	scanTarget: { id: "scan-target", name: "Scan Target" },
+	analyzeFinding: { id: "analyze-finding", name: "Analyze Finding" },
+	critiqueFinding: { id: "critique-finding", name: "Critique Finding" },
+	verifyFinding: { id: "verify-finding", name: "Verify Finding" },
+	triageFinding: { id: "triage-finding", name: "Triage Finding" },
 };
-
-export const SCAN_STAGE_METADATA = requireStageMetadata();
 
 export type ScanStageKey = keyof typeof SCAN_STAGE_METADATA;
 export type ScanStageId = (typeof SCAN_STAGE_METADATA)[ScanStageKey]["id"];

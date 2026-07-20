@@ -5,7 +5,8 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, or, sql } from "drizzle-orm";
 import {
 	normalizeLegacyVerificationSchema,
-	SCAN_PIPELINE_DEFINITIONS,
+	normalizePipelineDefinitionSnapshot,
+	loadScanPipelineDefinitions,
 	type ScanPipelineDefinitions,
 } from "../pipeline/scan-pipeline-definitions";
 import { normalizeScanRuntimeSettings } from "../runtime-settings";
@@ -148,6 +149,8 @@ export const createScanJobRepo = async (input: {
 	commitWindow?: number | null;
 	defaultDeltaCommitWindow: number;
 }) => {
+	const pipelineDefinitions = loadScanPipelineDefinitions();
+	const pipelineId = input.scanType === "delta" ? "delta" : "full";
 	const created = await db
 		.insert(scanJobs)
 		.values({
@@ -168,7 +171,7 @@ export const createScanJobRepo = async (input: {
 			scanRuntimeSettings: normalizeScanRuntimeSettings(
 				input.scanRuntimeSettings ?? {},
 			),
-			scanPipelineDefinitionSnapshot: SCAN_PIPELINE_DEFINITIONS,
+		scanPipelineDefinitionSnapshot: pipelineDefinitions,
 			commitWindow: input.commitWindow || input.defaultDeltaCommitWindow,
 			status: "pending",
 		})
@@ -183,10 +186,8 @@ export const createScanJobRepo = async (input: {
 
 	await createTaskRepo({
 		scanJobId: created[0].scanJobId,
-		name:
-			input.scanType === "delta" ? "delta-scoping" : "repository-profiling",
-		stageName:
-			input.scanType === "delta" ? "delta-scope" : "repository-profile",
+		name: pipelineDefinitions.pipelines[pipelineId].rootStageId,
+		stageName: pipelineDefinitions.pipelines[pipelineId].rootStageId,
 		status: "pending",
 	});
 

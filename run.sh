@@ -29,10 +29,22 @@ TRAEFIK_DASHBOARD_PORT="${TRAEFIK_RELEASE_DASHBOARD_PORT:-38080}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SCAN_CONTEXT_HOST_PATH="${SCRIPT_DIR}/vulseek-data-release"
 SCAN_CONTEXT_HOST_PATH="${VULSEEK_SCAN_CONTEXT_HOST_PATH:-}"
+PIPELINE_DEFINITIONS_HOST_PATH="${VULSEEK_SCAN_PIPELINE_DEFINITIONS_HOST_PATH:-${SCRIPT_DIR}/vulseek-pipeline-release}"
+PIPELINE_DEFINITIONS_CONTAINER_PATH="/opt/vulseek/scan-pipeline"
 
 resolve_scan_context_host_path() {
     local configured_path="${SCAN_CONTEXT_HOST_PATH:-${VULSEEK_SCAN_CONTEXT_HOST_PATH:-$DEFAULT_SCAN_CONTEXT_HOST_PATH}}"
     mkdir -p "$configured_path"
+    (cd "$configured_path" && pwd -P)
+}
+
+resolve_pipeline_definitions_host_path() {
+    local configured_path="${PIPELINE_DEFINITIONS_HOST_PATH}"
+    if [ ! -d "$configured_path/pipeline/definitions" ]; then
+        echo "External pipeline configuration directory is invalid: $configured_path" >&2
+        echo "It must contain pipeline/definitions, prompts, and stages directories." >&2
+        return 1
+    fi
     (cd "$configured_path" && pwd -P)
 }
 
@@ -230,6 +242,8 @@ start_vulseek() {
 
     local effective_scan_context_host_path
     effective_scan_context_host_path="$(resolve_scan_context_host_path)"
+    local effective_pipeline_definitions_host_path
+    effective_pipeline_definitions_host_path="$(resolve_pipeline_definitions_host_path)"
     export VULSEEK_SCAN_CONTEXT_HOST_PATH="$effective_scan_context_host_path"
 
     pull_image
@@ -257,10 +271,12 @@ start_vulseek() {
         --env VULSEEK_TOOLS_IMAGE_VARIANT=release \
         --env VULSEEK_SCAN_CONTEXT_HOST_PATH="${effective_scan_context_host_path}" \
         --env VULSEEK_SCAN_CONTEXT_APP_PATH=/scan-context \
+        --env VULSEEK_SCAN_PIPELINE_DEFINITIONS_PATH="${PIPELINE_DEFINITIONS_CONTAINER_PATH}" \
         --env DATABASE_URL=postgresql://vulseek:vulseek_release_password@"$POSTGRES_SERVICE":5432/vulseek \
         --env REDIS_URL=redis://"$REDIS_SERVICE":6379 \
         --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
         --mount type=bind,source="${effective_scan_context_host_path}",target=/scan-context \
+        --mount type=bind,source="${effective_pipeline_definitions_host_path}",target="${PIPELINE_DEFINITIONS_CONTAINER_PATH}",readonly \
         --mount type=volume,source=vulseek_release_data,target=/etc/vulseek \
         --mount type=volume,source=traefik_release_data,target=/etc/traefik \
         --mount type=volume,source=docker_release_config,target=/root/.docker \

@@ -41,10 +41,22 @@ TRAEFIK_DATA_VOLUME="vulseek_dev_traefik_data"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SCAN_CONTEXT_HOST_PATH="${SCRIPT_DIR}/vulseek-data-dev"
 SCAN_CONTEXT_HOST_PATH=""
+PIPELINE_DEFINITIONS_HOST_PATH="${VULSEEK_SCAN_PIPELINE_DEFINITIONS_HOST_PATH:-${SCRIPT_DIR}/packages/server/src/services/scan}"
+PIPELINE_DEFINITIONS_CONTAINER_PATH="/opt/vulseek/scan-pipeline"
 
 resolve_scan_context_host_path() {
     local configured_path="${SCAN_CONTEXT_HOST_PATH:-${VULSEEK_SCAN_CONTEXT_HOST_PATH:-$DEFAULT_SCAN_CONTEXT_HOST_PATH}}"
     mkdir -p "$configured_path"
+    (cd "$configured_path" && pwd -P)
+}
+
+resolve_pipeline_definitions_host_path() {
+    local configured_path="${PIPELINE_DEFINITIONS_HOST_PATH}"
+    if [ ! -d "$configured_path/pipeline/definitions" ]; then
+        echo -e "${RED}❌ 外部 pipeline 配置目录无效: $configured_path${NC}" >&2
+        echo -e "${YELLOW}需要包含 pipeline/definitions、prompts 和 stages 目录${NC}" >&2
+        return 1
+    fi
     (cd "$configured_path" && pwd -P)
 }
 
@@ -344,6 +356,8 @@ start_vulseek() {
     require_available_port "$DRIZZLE_STUDIO_PORT" "$VULSEEK_SERVICE"
     local effective_scan_context_host_path
     effective_scan_context_host_path="$(resolve_scan_context_host_path)"
+    local effective_pipeline_definitions_host_path
+    effective_pipeline_definitions_host_path="$(resolve_pipeline_definitions_host_path)"
     export VULSEEK_SCAN_CONTEXT_HOST_PATH="$effective_scan_context_host_path"
     
     # 检查镜像是否存在
@@ -362,6 +376,7 @@ start_vulseek() {
     local env_file_path="${SCRIPT_DIR}/${ENV_FILE}"
     echo -e "${BLUE}📝 使用环境文件: $env_file_path${NC}"
     echo -e "${BLUE}📁 Scan Context Host Path: ${effective_scan_context_host_path}${NC}"
+    echo -e "${BLUE}📁 Pipeline Definitions Host Path: ${effective_pipeline_definitions_host_path}${NC}"
     
     # 读取环境文件并构建 --env 参数
     local env_args=""
@@ -390,6 +405,7 @@ start_vulseek() {
         --env VULSEEK_TOOLS_IMAGE_VARIANT=dev \
         --env VULSEEK_SCAN_CONTEXT_HOST_PATH="${effective_scan_context_host_path}" \
         --env VULSEEK_SCAN_CONTEXT_APP_PATH=/scan-context \
+        --env VULSEEK_SCAN_PIPELINE_DEFINITIONS_PATH="${PIPELINE_DEFINITIONS_CONTAINER_PATH}" \
         --env DATABASE_URL=postgresql://vulseek:vulseek_dev_password@"$POSTGRES_SERVICE":5432/vulseek \
         --env REDIS_URL=redis://"$REDIS_SERVICE":6379 \
         --mount type=bind,source="${SCRIPT_DIR}/apps",target=/app/apps \
@@ -404,6 +420,7 @@ start_vulseek() {
         --mount type=volume,source="$SERVER_NODE_MODULES_VOLUME",target=/app/packages/server/node_modules \
         --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
         --mount type=bind,source="${effective_scan_context_host_path}",target=/scan-context \
+        --mount type=bind,source="${effective_pipeline_definitions_host_path}",target="${PIPELINE_DEFINITIONS_CONTAINER_PATH}",readonly \
         --mount type=volume,source="$APP_DATA_VOLUME",target=/etc/vulseek \
         --mount type=volume,source="$TRAEFIK_DATA_VOLUME",target=/etc/traefik \
         --mount type=volume,source="$DOCKER_CONFIG_VOLUME",target=/root/.docker \

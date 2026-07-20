@@ -5,7 +5,9 @@ import {
 	validateJsonSchemaContract,
 	validateJsonSchemaContractArtifacts,
 } from "./scan-pipeline-schema-contracts";
-import { SCAN_PIPELINE_DEFINITIONS } from "./scan-pipeline-definitions";
+import { loadScanPipelineDefinitions } from "./scan-pipeline-definitions";
+
+const SCAN_PIPELINE_DEFINITIONS = loadScanPipelineDefinitions();
 
 const artifactPath = (name: string) => `/task/artifacts/${name}.json`;
 

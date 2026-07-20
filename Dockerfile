@@ -33,10 +33,6 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm --filter=./apps/vulseek -
 
 RUN cp -R /usr/src/app/apps/vulseek/.next /prod/vulseek/.next
 RUN cp -R /usr/src/app/apps/vulseek/dist /prod/vulseek/dist
-RUN cp -R /usr/src/app/packages/server/dist/services/scan/pipeline/definitions /prod/vulseek/dist/definitions \
-	&& cp -R /usr/src/app/packages/server/dist/services/scan/stages /prod/vulseek/stages \
-	&& cp -R /usr/src/app/packages/server/dist/services/scan/prompts /prod/vulseek/prompts \
-	&& test -d /prod/vulseek/dist/definitions/schemas
 
 FROM base AS vulseek
 WORKDIR /app
@@ -69,8 +65,6 @@ COPY --from=buildpacksio/pack:0.35.0 /usr/local/bin/pack /usr/local/bin/pack
 # the expensive tool-install layers.
 COPY --from=build /prod/vulseek/.next ./.next
 COPY --from=build /prod/vulseek/dist ./dist
-COPY --from=build /prod/vulseek/stages ./stages
-COPY --from=build /prod/vulseek/prompts ./prompts
 COPY --from=build /prod/vulseek/next.config.mjs ./next.config.mjs
 COPY --from=build /prod/vulseek/public ./public
 COPY --from=build /prod/vulseek/package.json ./package.json

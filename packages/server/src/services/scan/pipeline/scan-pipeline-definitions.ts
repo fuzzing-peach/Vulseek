@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, dirname, extname, join } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
@@ -218,22 +218,58 @@ export const normalizeLegacyVerificationSchema = (
 	};
 };
 
+export const SCAN_PIPELINE_DEFINITIONS_PATH_ENV =
+	"VULSEEK_SCAN_PIPELINE_DEFINITIONS_PATH";
+
+const isTestRuntime = () =>
+	process.env.NODE_ENV === "test" ||
+	process.env.NODE === "test" ||
+	process.env.VITEST === "true" ||
+	process.argv.includes("--test") ||
+	process.execArgv.includes("--test");
+
+export const resolveScanPipelineResourceRoot = (
+	configuredPath = process.env[SCAN_PIPELINE_DEFINITIONS_PATH_ENV],
+) => {
+	if (configuredPath?.trim()) {
+		return resolve(configuredPath.trim());
+	}
+	if (isTestRuntime() || process.env.NODE_ENV !== "production") {
+		return resolve(dirname(fileURLToPath(import.meta.url)), "..");
+	}
+	throw new Error(
+		`${SCAN_PIPELINE_DEFINITIONS_PATH_ENV} must point to the external scan pipeline resource directory`,
+	);
+};
+
 export const resolveScanPipelineDefinitionsDir = (
 	moduleUrl: string,
 	runtimeRoot = process.cwd(),
+	configuredPath = process.env[SCAN_PIPELINE_DEFINITIONS_PATH_ENV],
 ) => {
-	const moduleDefinitionsDir = join(
-		dirname(fileURLToPath(moduleUrl)),
-		"definitions",
+	const resourceRoot = configuredPath?.trim()
+		? resolve(configuredPath.trim())
+		: isTestRuntime()
+			? join(dirname(fileURLToPath(moduleUrl)), "..")
+			: resolveScanPipelineResourceRoot(configuredPath);
+	const candidates = [
+		resourceRoot,
+		join(resourceRoot, "pipeline", "definitions"),
+		join(resourceRoot, "definitions"),
+	];
+	const definitionsDir = candidates.find((candidate) =>
+		existsSync(join(candidate, "schemas")),
 	);
-	return existsSync(join(moduleDefinitionsDir, "schemas"))
-		? moduleDefinitionsDir
-		: join(runtimeRoot, "dist", "definitions");
+	if (definitionsDir) {
+		return definitionsDir;
+	}
+	if (!configuredPath && isTestRuntime()) {
+		return join(runtimeRoot, "dist", "definitions");
+	}
+	throw new Error(
+		`Scan pipeline definitions directory not found under ${resourceRoot}`,
+	);
 };
-
-export const SCAN_PIPELINE_DEFINITIONS_DIR = resolveScanPipelineDefinitionsDir(
-	import.meta.url,
-);
 
 const yamlFileExtensions = new Set([".yaml", ".yml"]);
 
@@ -247,10 +283,12 @@ const listDefinitionYamlFiles = (directory: string) =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
+
 const readDefinitionSection = (
 	sectionName: "schemas" | "stages" | "pipelines",
+	definitionsDir = resolveScanPipelineDefinitionsDir(import.meta.url),
 ): Record<string, unknown> => {
-	const sectionDir = join(SCAN_PIPELINE_DEFINITIONS_DIR, sectionName);
+	const sectionDir = join(definitionsDir, sectionName);
 	const merged: Record<string, unknown> = {};
 	for (const filePath of listDefinitionYamlFiles(sectionDir)) {
 		const parsed = parseYaml(readFileSync(filePath, "utf-8")) as unknown;
@@ -271,14 +309,18 @@ const readDefinitionSection = (
 	return merged;
 };
 
-export const readScanPipelineDefinitionsSource = () => ({
-	schemas: readDefinitionSection("schemas"),
-	stages: readDefinitionSection("stages"),
-	pipelines: readDefinitionSection("pipelines"),
+export const readScanPipelineDefinitionsSource = (
+	definitionsDir = resolveScanPipelineDefinitionsDir(import.meta.url),
+) => ({
+	version: 2,
+	schemas: readDefinitionSection("schemas", definitionsDir),
+	stages: readDefinitionSection("stages", definitionsDir),
+	pipelines: readDefinitionSection("pipelines", definitionsDir),
 });
 
-export const readScanPipelineDefinitionsYaml = () =>
-	stringifyYaml(readScanPipelineDefinitionsSource());
+export const readScanPipelineDefinitionsYaml = (
+	definitionsDir = resolveScanPipelineDefinitionsDir(import.meta.url),
+) => stringifyYaml(readScanPipelineDefinitionsSource(definitionsDir));
 
 const toObjectKey = (stageId: string) =>
 	stageId.replace(/-([a-z])/g, (_match, char: string) => char.toUpperCase());
@@ -767,17 +809,17 @@ export type StageRuntimeConfigDeps = {
 	) => Promise<ScanPipelineDefinitions>;
 };
 
-export const resolvePromptFileContent = (promptFile: string) => {
+export function resolvePromptFileContent(
+	promptFile: string,
+	resourceRoot = resolveScanPipelineResourceRoot(),
+) {
 	const fileName = basename(promptFile);
 	if (fileName !== promptFile) {
 		throw new Error(`Invalid prompt file name: ${promptFile}`);
 	}
 	for (const promptDir of ["stages", "prompts"]) {
 		try {
-			return readFileSync(
-				join(dirname(SCAN_PIPELINE_DEFINITIONS_DIR), "..", promptDir, fileName),
-				"utf-8",
-			);
+			return readFileSync(join(resourceRoot, promptDir, fileName), "utf-8");
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
 				throw error;
@@ -785,10 +827,11 @@ export const resolvePromptFileContent = (promptFile: string) => {
 		}
 	}
 	throw new Error(`Prompt file not found: ${promptFile}`);
-};
+}
 
 export const validateStagePromptConfiguration = (
 	stages: ScanPipelineStageConfig[],
+	resourceRoot = resolveScanPipelineResourceRoot(),
 ) => {
 	for (const stage of stages) {
 		const runtimeConfig = stage.runtimeConfig;
@@ -798,20 +841,46 @@ export const validateStagePromptConfiguration = (
 			);
 		}
 		if (runtimeConfig.promptFile) {
-			resolvePromptFileContent(runtimeConfig.promptFile);
+			resolvePromptFileContent(runtimeConfig.promptFile, resourceRoot);
 		}
 	}
 };
 
-export const loadScanPipelineDefinitions = () => {
-	const definitions = parseScanPipelineDefinitionsSource(
-		readScanPipelineDefinitionsSource(),
-	);
-	validateStagePromptConfiguration(definitions.stages);
-	return definitions;
-};
+const hydrateStagePromptContent = (
+	definitions: ScanPipelineDefinitions,
+	resourceRoot: string,
+): ScanPipelineDefinitions => ({
+	...definitions,
+	stages: definitions.stages.map((stage) => {
+		const promptFile = stage.runtimeConfig?.promptFile;
+		if (!promptFile || stage.runtimeConfig?.prompt?.trim()) {
+			return stage;
+		}
+		return {
+			...stage,
+			runtimeConfig: {
+				...stage.runtimeConfig,
+				prompt: resolvePromptFileContent(promptFile, resourceRoot),
+			} as ScanStageRuntimeConfig,
+		};
+	}),
+});
 
-export const SCAN_PIPELINE_DEFINITIONS = loadScanPipelineDefinitions();
+export const loadScanPipelineDefinitions = (
+	configuredPath = process.env[SCAN_PIPELINE_DEFINITIONS_PATH_ENV],
+) => {
+	const resourceRoot = resolveScanPipelineResourceRoot(configuredPath);
+	const definitionsDir = resolveScanPipelineDefinitionsDir(
+		import.meta.url,
+		process.cwd(),
+		configuredPath,
+	);
+	const definitions = parseScanPipelineDefinitionsSource(
+		readScanPipelineDefinitionsSource(definitionsDir),
+	);
+	validateStagePromptConfiguration(definitions.stages, resourceRoot);
+	return hydrateStagePromptContent(definitions, resourceRoot);
+};
 
 export const createStageRuntimeConfigWithDeps = (input: {
 	scanJobId: string;
