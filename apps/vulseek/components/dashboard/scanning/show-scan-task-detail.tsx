@@ -17,6 +17,7 @@ import JsonView from "react18-json-view";
 import { toast } from "sonner";
 import { LiveTaskActivityButton } from "@/components/dashboard/scanning/live-task-activity";
 import { ScanMonitoring } from "@/components/dashboard/scanning/scan-monitoring";
+import { TaskSessionStream } from "@/components/dashboard/scanning/task-session-stream";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
 import { DashboardPanelShell } from "@/components/shared/dashboard-panel-shell";
@@ -54,7 +55,7 @@ const ACTIVE_TASK_STATUSES = new Set([
 const RERUNNABLE_TASK_STATUSES = new Set(["completed", "failed", "exited"]);
 const ROOT_DIRECTORY_KEY = "__root__";
 
-type ScanTaskTab = "details" | "monitoring" | "files";
+type ScanTaskTab = "details" | "session" | "monitoring" | "files";
 
 type DirectoryListItem = {
 	id: string;
@@ -760,6 +761,9 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 								<TabsTrigger value="details">
 									{scanT(t, "scan.task.tabs.details", "Details")}
 								</TabsTrigger>
+								<TabsTrigger value="session">
+									{scanT(t, "scan.task.tabs.session", "Session")}
+								</TabsTrigger>
 								<TabsTrigger value="monitoring">
 									{scanT(t, "scan.monitoring.title", "Monitoring")}
 								</TabsTrigger>
@@ -1000,6 +1004,10 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 										</div>
 									</DetailSection>
 								</div>
+							</TabsContent>
+
+							<TabsContent value="session" className="pt-4">
+								<TaskSessionStream key={task.taskId} taskId={task.taskId} />
 							</TabsContent>
 
 							<TabsContent value="monitoring" className="pt-4">

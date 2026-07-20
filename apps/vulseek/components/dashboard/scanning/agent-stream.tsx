@@ -31,6 +31,22 @@ type AgentStreamTurn = {
 	blocks: AgentStreamBlock[];
 };
 
+export type AgentStreamLabels = {
+	running: string;
+	waiting: string;
+	unavailable: string;
+	connectionError: string;
+	jumpToLatest: string;
+};
+
+const DEFAULT_LABELS: AgentStreamLabels = {
+	running: "Running",
+	waiting: "Waiting for native agent transcript...",
+	unavailable: "Native agent session is unavailable.",
+	connectionError: "Unable to connect to the agent session.",
+	jumpToLatest: "Jump to latest",
+};
+
 const renderJson = (value: unknown) => {
 	try {
 		return JSON.stringify(value, null, 2);
@@ -58,11 +74,13 @@ const TurnView = memo(function TurnView({
 	status,
 	isLastTurn,
 	provider,
+	labels,
 }: {
 	turn: AgentStreamTurn;
 	status: string;
 	isLastTurn: boolean;
 	provider: AgentStreamMetadata["provider"] | undefined;
+	labels: AgentStreamLabels;
 }) {
 	return (
 		<article className={styles.turn}>
@@ -98,12 +116,12 @@ const TurnView = memo(function TurnView({
 								<details className={styles.thinking}>
 									<summary>
 										{blockLabel(block.kind)}
-										{showSpinner ? (
-											<span
-												className={styles.spinner}
-												aria-label="Running"
-												title="Running"
-											/>
+						{showSpinner ? (
+							<span
+								className={styles.spinner}
+								aria-label={labels.running}
+								title={labels.running}
+							/>
 										) : null}
 									</summary>
 									<div className={styles.thinkingBody}>{block.text}</div>
@@ -117,10 +135,10 @@ const TurnView = memo(function TurnView({
 											{toolPreview(tool)}
 										</span>
 										{showSpinner ? (
-											<span
-												className={styles.spinner}
-												aria-label="Running"
-												title="Running"
+													<span
+														className={styles.spinner}
+														aria-label={labels.running}
+														title={labels.running}
 											/>
 										) : null}
 									</summary>
@@ -149,10 +167,15 @@ const TurnView = memo(function TurnView({
 export const AgentStream = ({
 	transport,
 	className,
+	labels: providedLabels,
 }: {
 	transport: AgentStreamTransport;
 	className?: string;
+	labels?: Partial<AgentStreamLabels>;
 }) => {
+	const labels = { ...DEFAULT_LABELS, ...providedLabels };
+	const labelsRef = useRef(labels);
+	labelsRef.current = labels;
 	const parserRef = useRef<ReturnType<typeof createAgentStreamParser> | null>(
 		null,
 	);
@@ -169,9 +192,19 @@ export const AgentStream = ({
 
 	useEffect(() => {
 		const unsubscribe = transport.subscribe((event: AgentStreamEvent) => {
-			setConnection((current) =>
-				reduceAgentStreamConnectionState(current, event),
-			);
+			setConnection((current) => {
+				const next = reduceAgentStreamConnectionState(current, event);
+				if (event.type !== "stream_error") {
+					return next;
+				}
+				return {
+					...next,
+					error:
+						event.payload.code === "source_unavailable"
+							? labelsRef.current.unavailable
+							: labelsRef.current.connectionError,
+				};
+			});
 			if (event.type === "metadata") {
 				setMetadata(event.payload);
 				parserRef.current = createAgentStreamParser({
@@ -251,17 +284,16 @@ export const AgentStream = ({
 							status={status}
 							isLastTurn={index === turns.length - 1}
 							provider={metadata?.provider}
+							labels={labels}
 						/>
 					))
 				) : (
-					<div className={styles.empty}>
-						Waiting for native agent transcript...
-					</div>
+					<div className={styles.empty}>{labels.waiting}</div>
 				)}
 			</div>
 			{hasNewContent ? (
 				<button className={styles.jump} type="button" onClick={jumpToLatest}>
-					Jump to latest
+					{labels.jumpToLatest}
 				</button>
 			) : null}
 		</div>
