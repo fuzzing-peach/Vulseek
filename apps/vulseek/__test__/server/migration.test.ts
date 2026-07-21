@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
 	ensureLegacyDrizzleBaseline: vi.fn(),
 	migrate: vi.fn(),
 	backfillCandidateResultProjections: vi.fn(),
+	backfillScanPipelineDefinitionSnapshots: vi.fn(),
 	backfillScanJobCosts: vi.fn(),
 }));
 
@@ -39,6 +40,14 @@ vi.mock(
 	}),
 );
 
+vi.mock(
+	"@vulseek/server/services/scan/persistence/scan-pipeline-definition-backfill",
+	() => ({
+		backfillScanPipelineDefinitionSnapshots:
+			mocks.backfillScanPipelineDefinitionSnapshots,
+	}),
+);
+
 import { migration } from "@/server/db/migration";
 
 describe("migration", () => {
@@ -58,6 +67,10 @@ describe("migration", () => {
 			processedCount: 0,
 			skippedCount: 0,
 			skippedTasks: [],
+		});
+		mocks.backfillScanPipelineDefinitionSnapshots.mockResolvedValue({
+			processedCount: 0,
+			updatedCount: 0,
 		});
 		mocks.migrate.mockRejectedValue(error);
 
@@ -82,6 +95,7 @@ describe("migration", () => {
 		await migration();
 
 		expect(mocks.backfillCandidateResultProjections).toHaveBeenCalledTimes(1);
+		expect(mocks.backfillScanPipelineDefinitionSnapshots).toHaveBeenCalledTimes(1);
 		expect(mocks.backfillScanJobCosts).toHaveBeenCalledTimes(1);
 		expect(mocks.closeConnection).toHaveBeenCalledTimes(1);
 	});

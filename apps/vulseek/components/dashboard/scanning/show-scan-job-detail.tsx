@@ -1,5 +1,6 @@
 import {
 	AlertCircle,
+	Ban,
 	ChevronRight,
 	ChevronsUpDown,
 	Clipboard,
@@ -685,7 +686,6 @@ const RERUNNABLE_TASK_STATUSES = new Set([
 	"exited",
 	"canceled",
 ]);
-
 const buildCandidateReanalysisKey = (input: {
 	vulnerabilityCandidateId: string;
 	producerTaskId?: string | null;
@@ -1589,6 +1589,7 @@ export const ShowScanJobDetail = ({
 			{ enabled: !!scanJobId && !!selectedFilePath },
 		);
 	const rerunTaskMutation = api.scan.rerunTask.useMutation();
+	const cancelTaskMutation = api.scan.cancelTask.useMutation();
 	const cancelScanJobMutation = api.scan.cancel.useMutation();
 	const pauseScanJobMutation = api.scan.pause.useMutation();
 	const resumeScanJobMutation = api.scan.resume.useMutation();
@@ -1601,6 +1602,7 @@ export const ShowScanJobDetail = ({
 		string | null
 	>(null);
 	const [rerunningTaskId, setRerunningTaskId] = useState<string | null>(null);
+	const [cancelingTaskId, setCancelingTaskId] = useState<string | null>(null);
 	const [bulkRerunningTaskIds, setBulkRerunningTaskIds] = useState<Set<string>>(
 		() => new Set(),
 	);
@@ -2062,6 +2064,25 @@ export const ShowScanJobDetail = ({
 			);
 		} finally {
 			setRerunningTaskId((current) => (current === taskId ? null : current));
+		}
+	};
+	const handleCancelTask = async (taskId: string) => {
+		setCancelingTaskId(taskId);
+		try {
+			await cancelTaskMutation.mutateAsync({ taskId });
+			toast.success(scanT(t, "scan.task.cancelled", "Task canceled"));
+			await Promise.all([
+				utils.scan.jobOverview.invalidate({ scanJobId }),
+				utils.scan.jobRunningTasks.invalidate({ scanJobId }),
+				utils.scan.jobQueueCounts.invalidate({ scanJobId }),
+				utils.scan.terminalTasks.invalidate(),
+			]);
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : scanT(t, "scan.task.cancelError", "Failed to cancel task"),
+			);
+		} finally {
+			setCancelingTaskId((current) => (current === taskId ? null : current));
 		}
 	};
 
@@ -4626,13 +4647,41 @@ export const ShowScanJobDetail = ({
 																			title={runningTaskTitle}
 																			subtitle={runningTaskSubtitle}
 																			activity={
-																				activitiesByTaskId[task.taskId] ||
-																				idleAgentActivity
+																				activitiesByTaskId[task.taskId] || idleAgentActivity
 																			}
 																			variant="outline"
 																			size="icon"
 																			iconOnly
 																		/>
+																		<Button
+																			type="button"
+																			variant="destructive"
+																			size="icon"
+																			title={scanT(
+																				t,
+																				"scan.task.cancelTask",
+																				"Cancel running task",
+																			)}
+																			aria-label={scanT(
+																				t,
+																				"scan.task.cancelTask",
+																				"Cancel running task",
+																			)}
+																			disabled={
+																				cancelingTaskId === task.taskId ||
+																				cancelTaskMutation.isLoading
+																			}
+																			onClick={(event) => {
+																				event.stopPropagation();
+																				void handleCancelTask(task.taskId);
+																			}}
+																		>
+																			{cancelingTaskId === task.taskId ? (
+																				<Loader2 className="size-4 animate-spin" />
+																			) : (
+																				<Ban className="size-4" />
+																			)}
+																		</Button>
 																	</div>
 																</td>
 															</tr>

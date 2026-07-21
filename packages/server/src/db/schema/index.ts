@@ -25,6 +25,7 @@ export * from "./project";
 export * from "./redirects";
 export * from "./redis";
 export * from "./registry";
+export * from "./research";
 export * from "./rollbacks";
 export * from "./scan";
 export * from "./schedule";

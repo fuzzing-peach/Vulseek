@@ -2,12 +2,16 @@ NullStageInput:
   type: "null"
 DeltaScopeManifest:
   type: object
-  required: [repository, functions]
+  required: [repository, module, threatModel, functions]
   additionalProperties: false
   properties:
     repository:
       $pathOf: "#/schemas/Repository"
+    module:
+      $pathOf: "#/schemas/Module"
+    threatModel:
+      $pathOf: "#/schemas/ModuleThreatModel"
     functions:
       type: array
       items:
-        $pathOf: "#/schemas/Function"
+        $pathOf: "#/schemas/Target"

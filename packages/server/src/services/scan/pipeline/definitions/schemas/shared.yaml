@@ -378,6 +378,7 @@ ModuleThreatModel:
       type: array
       items:
         type: string
+      $normalize: [trim, remove-empty, unique]
     rulePriorities:
       type: array
       items:
@@ -420,6 +421,10 @@ Candidate:
   properties:
     id:
       type: string
+      $generate:
+        function: uuid
+        length: 6
+        prefix: "candidate-"
     functionId:
       type: [string, "null"]
     title:

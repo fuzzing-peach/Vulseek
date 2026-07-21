@@ -35,7 +35,7 @@ const readPath = (root: unknown, pathExpr: string) => {
 			continue;
 		}
 		if (!isRecord(current)) {
-			throw new Error(`Cannot read path ${pathExpr}`);
+			return undefined;
 		}
 		current = current[part];
 	}
@@ -44,6 +44,9 @@ const readPath = (root: unknown, pathExpr: string) => {
 
 const FILE_EXPR_PATTERN =
 	/^\$file\((.+?)\)((?:\.[A-Za-z0-9_-]+)*)(?:\[\*])?$/;
+
+const EMBEDDED_EXPRESSION_PATTERN =
+	/\$file\([^)]*\)(?:\.[A-Za-z0-9_-]+)*(?:\[\*])?|\$(?:item|input|ctx|computed|output)(?:\.[A-Za-z0-9_-]+)*/g;
 
 export const parseFileExpression = (expression: string) => {
 	const match = expression.match(FILE_EXPR_PATTERN);
@@ -107,6 +110,12 @@ const evaluatePathExpression = (
 			expression.slice("$computed.".length),
 		);
 	}
+	if (expression === "$output") {
+		return context.stageOutput;
+	}
+	if (expression.startsWith("$output.")) {
+		return readPath(context.stageOutput, expression.slice("$output.".length));
+	}
 	if (expression.startsWith("$.")) {
 		return readPath(context.stageOutput, expression.slice("$.".length));
 	}
@@ -158,13 +167,52 @@ const evaluateExpression = async (
 	return evaluatePathExpression(expression, context);
 };
 
+const stringifyEmbeddedValue = (value: unknown) => {
+	if (value === null || value === undefined) return "";
+	if (typeof value === "string") return value;
+	if (typeof value === "number" || typeof value === "boolean") {
+		return String(value);
+	}
+	return JSON.stringify(value);
+};
+
+const renderStringTemplate = async (
+	template: string,
+	context: PipelineEdgeTransformContext,
+	fileCache: Map<string, unknown>,
+) => {
+	const matches = [...template.matchAll(EMBEDDED_EXPRESSION_PATTERN)];
+	if (matches.length === 0) {
+		if (template.startsWith("$")) {
+			return await evaluateExpression(template, context, fileCache);
+		}
+		return template;
+	}
+	if (matches.length === 1 && matches[0]?.[0] === template) {
+		return await evaluateExpression(template, context, fileCache);
+	}
+
+	let rendered = "";
+	let lastIndex = 0;
+	for (const match of matches) {
+		const expression = match[0];
+		const index = match.index ?? 0;
+		rendered += template.slice(lastIndex, index);
+		rendered += stringifyEmbeddedValue(
+			await evaluateExpression(expression, context, fileCache),
+		);
+		lastIndex = index + expression.length;
+	}
+	return rendered + template.slice(lastIndex);
+};
+
 const renderTemplate = async (
 	template: unknown,
 	context: PipelineEdgeTransformContext,
 	fileCache: Map<string, unknown>,
 ): Promise<unknown> => {
-	if (typeof template === "string" && template.startsWith("$")) {
-		return await evaluateExpression(template, context, fileCache);
+	if (typeof template === "string") {
+		return await renderStringTemplate(template, context, fileCache);
 	}
 	if (Array.isArray(template)) {
 		return await Promise.all(
@@ -182,6 +230,11 @@ const renderTemplate = async (
 	}
 	return template;
 };
+
+export const renderPipelineTemplate = async (
+	template: unknown,
+	context: PipelineEdgeTransformContext,
+) => renderTemplate(template, context, new Map<string, unknown>());
 
 const evaluateForEach = async (
 	foreach: string | null | undefined,

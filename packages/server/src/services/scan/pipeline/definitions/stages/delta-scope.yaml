@@ -1,6 +1,7 @@
 delta-scope:
   key: deltaScope
   name: Delta Scope
+  taskName: "$ctx.projectName"
   role: scan
   group: delta
   concurrency: 1
@@ -15,6 +16,17 @@ delta-scope:
     cwd: /workspace/repo
     skills: [delta-scope]
     promptFile: scan-delta-scope.prompt.md
+    prepareRepository: true
+  promptValues:
+    repositoryId: "$ctx.taskId"
+    repositoryName: "$ctx.serviceName"
+    targetRef: "$ctx.scanJob.targetRef"
+    targetTag: "$ctx.scanJob.targetTag"
+    targetCommit: "$ctx.scanJob.commitSha"
+    baseCommit: "$ctx.scanJob.baseSha"
+    commitWindow: "$ctx.scanJob.commitWindow"
+    agentInstruction: "Use the configured scan agent."
+    repositoryStatePath: "$ctx.taskDir/00_repository_state.json"
   inputSchema:
     $ref: "#/schemas/NullStageInput"
   outputSchema:

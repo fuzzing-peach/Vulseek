@@ -10,7 +10,6 @@ import {
 	resolveScanPipelineDefinitionsDir,
 	resolveScanPipelineResourceRoot,
 	validateStagePromptConfiguration,
-	validatePipelineRegistryCoverage,
 } from "./scan-pipeline-definitions";
 
 const SCAN_PIPELINE_DEFINITIONS = loadScanPipelineDefinitions();
@@ -132,6 +131,35 @@ test("loaded full pipeline fans out identify-target by threat-model vulnerabilit
 		(scanEdge.input as Record<string, unknown>).vulnerabilityClassFocus,
 		"$input.vulnerabilityClassFocus",
 	);
+});
+
+test("loads research as an independent scan pipeline with local feedback routes", () => {
+	const research = SCAN_PIPELINE_DEFINITIONS.pipelines.research;
+	assert.equal(research.rootStageId, "research-scope");
+	assert.equal(research.stageIds.length, 12);
+	assert.ok(
+		research.edges.some(
+			(edge) => edge.route?.key === "candidate-found" && edge.from === "track-review",
+		),
+	);
+	assert.ok(
+		research.edges.some(
+			(edge) => edge.route?.key === "primitive-gap" && edge.to === "track-plan",
+		),
+	);
+	assert.deepEqual(
+		research.edges
+		.filter((edge) => edge.to === "research-report")
+		.map((edge) => `${edge.from}:${edge.route?.key}`),
+		["exploit-review:confirmed"],
+	);
+	for (const stageId of research.stageIds) {
+		const stage = SCAN_PIPELINE_DEFINITIONS.stages.find(
+			(item) => item.id === stageId,
+		);
+		assert.ok(stage);
+		assert.ok(stage.maxConcurrency === null || stage.maxConcurrency <= 4);
+	}
 });
 
 test("built-in stage prompt validation rejects a stage without either prompt source", () => {
@@ -263,6 +291,18 @@ pipelines:
           key: verification
           default: true
     groups: []
+  research:
+    name: research-scan-programmatic
+    root: repository-profile
+    stages: [repository-profile]
+    edges: []
+    groups: []
+  smoke:
+    name: smoke-scan
+    root: repository-profile
+    stages: [repository-profile, analyze-finding]
+    edges: []
+    groups: []
 `);
 
 	assert.deepEqual(
@@ -270,6 +310,8 @@ pipelines:
 		{
 			full: "full",
 			delta: "delta",
+			research: "research",
+			smoke: "smoke",
 		},
 	);
 	assert.deepEqual(definitions.stageIds, [
@@ -285,6 +327,7 @@ pipelines:
 		"scan-target",
 		"analyze-finding",
 	]);
+	assert.equal(definitions.pipelines.smoke?.name, "smoke-scan");
 	assert.deepEqual(definitions.pipelines.delta.edges[0]?.route, {
 		key: "verification",
 		default: true,
@@ -305,6 +348,7 @@ pipelines:
 		promptFile: null,
 		inputArtifacts: null,
 		outputSchema: null,
+		prepareRepository: false,
 	});
 	assert.equal(definitions.schemas.Module?.type, "object");
 	assert.deepEqual(definitions.stages[0]?.outputSchema, {
@@ -353,6 +397,12 @@ pipelines:
     stages: [repository-profile]
     edges: []
     groups: []
+  research:
+    name: research-scan-programmatic
+    root: repository-profile
+    stages: [repository-profile]
+    edges: []
+    groups: []
 `),
 		/unknown target stage missing-stage/,
 	);
@@ -379,6 +429,12 @@ pipelines:
     groups: []
   delta:
     name: delta-scan-programmatic
+    root: repository-profile
+    stages: [repository-profile]
+    edges: []
+    groups: []
+  research:
+    name: research-scan-programmatic
     root: repository-profile
     stages: [repository-profile]
     edges: []
@@ -411,6 +467,12 @@ pipelines:
     groups: []
   delta:
     name: delta-scan-programmatic
+    root: repository-profile
+    stages: [repository-profile]
+    edges: []
+    groups: []
+  research:
+    name: research-scan-programmatic
     root: repository-profile
     stages: [repository-profile]
     edges: []
@@ -476,6 +538,12 @@ pipelines:
     stages: [source]
     edges: []
     groups: []
+  research:
+    name: research
+    root: source
+    stages: [source]
+    edges: []
+    groups: []
 `),
 		/unknown output field missing/,
 	);
@@ -515,61 +583,14 @@ pipelines:
     stages: [source]
     edges: []
     groups: []
-`),
-		/Unsupported transform expression/,
-	);
-});
-
-test("validatePipelineRegistryCoverage rejects missing stage and edge implementations", () => {
-	const definitions = parseScanPipelineDefinitionsFromYaml(`
-stages:
-  repository-profile:
-    key: repositoryProfile
-    name: Repository Profile
-    role: scan
-    group: full-scan
-    concurrency: 1
-    disableable: false
-  scan-target:
-    key: scanTarget
-    name: Scan Target
-    role: scan
-    group: full-scan
-    concurrency: 4
-    disableable: true
-pipelines:
-  full:
-    name: full-scan-programmatic
-    root: repository-profile
-    stages: [repository-profile, scan-target]
-    edges:
-      - name: repository-profile-to-scan-target
-        from: repository-profile
-        to: scan-target
-    groups: []
-  delta:
-    name: delta-scan-programmatic
-    root: scan-target
-    stages: [scan-target]
+  research:
+    name: research
+    root: source
+    stages: [source]
     edges: []
     groups: []
-`);
-
-	assert.throws(
-		() =>
-			validatePipelineRegistryCoverage(definitions, {
-				stageIds: new Set(["repository-profile"]),
-				edgeNames: new Set<string>(),
-			}),
-		/missing stage implementation: scan-target/,
-	);
-	assert.throws(
-		() =>
-			validatePipelineRegistryCoverage(definitions, {
-				stageIds: new Set(["repository-profile", "scan-target"]),
-				edgeNames: new Set<string>(),
-			}),
-		/missing edge implementation: repository-profile-to-scan-target/,
+`),
+		/Unsupported transform expression/,
 	);
 });
 

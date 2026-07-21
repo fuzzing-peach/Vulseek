@@ -1,6 +1,7 @@
 identify-target:
   key: identifyTarget
   name: Identify Target
+  taskName: "$file($input.modulePath).name:$input.vulnerabilityClassFocus"
   role: scan
   group: full-scan
   concurrency: 4
@@ -15,6 +16,14 @@ identify-target:
     cwd: /workspace/repo
     skills: [identify-target]
     promptFile: identify-target.prompt.md
+  promptValues:
+    scanJobId: "$ctx.scanJobId"
+    moduleId: "$file($input.modulePath).id"
+    moduleName: "$file($input.modulePath).name"
+    vulnerabilityClassFocus: "$input.vulnerabilityClassFocus"
+    repositoryJsonPath: "$input.repositoryPath"
+    moduleJsonPath: "$input.modulePath"
+    threatModelJsonPath: "$input.threatModelPath"
   inputSchema:
     $ref: "#/schemas/IdentifyTargetStageInput"
   outputSchema:

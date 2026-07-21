@@ -18,8 +18,8 @@ delta:
       input:
         scanJob: "$ctx.scanJob"
         repositoryPath: "$.repository"
-        modulePath: ""
-        threatModelPath: ""
+        modulePath: "$.module"
+        threatModelPath: "$.threatModel"
         targetPath: "$item"
         moduleId: delta-scope
         moduleName: Delta Scope
@@ -28,6 +28,11 @@ delta:
         targetKind: function
         priority: null
         vulnerabilityClassFocus: delta-scoped
+      artifacts:
+        - { from: "$input.repositoryPath", to: inputs/repository.json, inputField: repositoryPath }
+        - { from: "$input.modulePath", to: inputs/module.json, inputField: modulePath }
+        - { from: "$input.threatModelPath", to: inputs/threat-model.json, inputField: threatModelPath }
+        - { from: "$input.targetPath", to: inputs/target.json, inputField: targetPath }
     - name: scan-target-to-analyze-finding
       from: scan-target
       to: analyze-finding
@@ -40,6 +45,11 @@ delta:
         modulePath: "$input.modulePath"
         functionPath: "$input.targetPath"
         candidatePath: "$item"
+      artifacts:
+        - { from: "$input.repositoryPath", to: inputs/repository.json, inputField: repositoryPath }
+        - { from: "$input.modulePath", to: inputs/module.json, inputField: modulePath, required: false }
+        - { from: "$input.functionPath", to: inputs/target.json, inputField: functionPath }
+        - { from: "$input.candidatePath", to: inputs/candidate.json, inputField: candidatePath }
     - name: analyze-finding-to-critique-finding
       from: analyze-finding
       to: critique-finding
@@ -59,6 +69,12 @@ delta:
         candidatePath: "$input.candidatePath"
         draftAnalysisPath: ""
         analysisFingerprint: "$computed.analysisFingerprint"
+      artifacts:
+        - { from: "$input.repositoryPath", to: inputs/repository.json, inputField: repositoryPath }
+        - { from: "$input.modulePath", to: inputs/module.json, inputField: modulePath, required: false }
+        - { from: "$input.functionPath", to: inputs/target.json, inputField: functionPath }
+        - { from: "$input.candidatePath", to: inputs/candidate.json, inputField: candidatePath }
+        - { from: "$output", to: inputs/analysis.json, inputField: draftAnalysisPath }
     - name: critique-finding-to-analyze-finding
       from: critique-finding
       to: analyze-finding
@@ -77,6 +93,12 @@ delta:
         functionPath: "$input.functionPath"
         candidatePath: "$input.candidatePath"
         feedbackPath: ""
+      artifacts:
+        - { from: "$input.repositoryPath", to: inputs/repository.json, inputField: repositoryPath }
+        - { from: "$input.modulePath", to: inputs/module.json, inputField: modulePath, required: false }
+        - { from: "$input.functionPath", to: inputs/target.json, inputField: functionPath }
+        - { from: "$input.candidatePath", to: inputs/candidate.json, inputField: candidatePath }
+        - { from: "$output", to: inputs/feedback.json, inputField: feedbackPath }
     - name: analyze-finding-to-verify-finding
       from: analyze-finding
       to: verify-finding
@@ -87,10 +109,38 @@ delta:
       outputSchema:
         $ref: "#/schemas/FinalAnalysis"
       outputSchemaDescription: Final critic-approved analysis result
+      input:
+        scanJob: "$input.scanJob"
+        repositoryPath: "$input.repositoryPath"
+        modulePath: "$input.modulePath"
+        functionPath: "$input.functionPath"
+        candidatePath: "$input.candidatePath"
+        analysisResultPath: ""
+      artifacts:
+        - { from: "$input.repositoryPath", to: inputs/repository.json, inputField: repositoryPath }
+        - { from: "$input.modulePath", to: inputs/module.json, inputField: modulePath, required: false }
+        - { from: "$input.functionPath", to: inputs/target.json, inputField: functionPath }
+        - { from: "$input.candidatePath", to: inputs/candidate.json, inputField: candidatePath }
+        - { from: "$output", to: inputs/analysis.json, inputField: analysisResultPath }
     - name: verify-finding-to-triage-finding
       from: verify-finding
       to: triage-finding
       fork: false
+      input:
+        scanJob: "$input.scanJob"
+        repositoryPath: "$input.repositoryPath"
+        modulePath: "$input.modulePath"
+        functionPath: "$input.functionPath"
+        candidatePath: "$input.candidatePath"
+        analysisResultPath: "$input.analysisResultPath"
+        verifyResultPath: ""
       outputSchema:
         $ref: "#/schemas/Verification"
+      artifacts:
+        - { from: "$input.repositoryPath", to: inputs/repository.json, inputField: repositoryPath }
+        - { from: "$input.modulePath", to: inputs/module.json, inputField: modulePath, required: false }
+        - { from: "$input.functionPath", to: inputs/target.json, inputField: functionPath }
+        - { from: "$input.candidatePath", to: inputs/candidate.json, inputField: candidatePath }
+        - { from: "$input.analysisResultPath", to: inputs/analysis.json, inputField: analysisResultPath }
+        - { from: "$output", to: inputs/verification.json, inputField: verifyResultPath }
   groups: []

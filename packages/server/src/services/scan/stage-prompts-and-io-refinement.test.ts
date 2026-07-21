@@ -229,14 +229,14 @@ test("Stage Graph prompt templates stay concise while delegating detail to skill
 	);
 	assert.match(scanTargetPrompt, /scan-target skill/);
 	assert.match(scanTargetPrompt, /target_kind: route-handler/);
-	assert.match(scanTargetPrompt, /vulnerability_class_focus: authorization bypass/);
-	assert.match(scanTargetPrompt, /vulnerability_class_focus/);
+	assert.doesNotMatch(scanTargetPrompt, /vulnerability_class_focus/);
+	assert.match(scanTargetPrompt, /all concrete, security-relevant vulnerability candidates/);
 	assert.doesNotMatch(scanTargetPrompt, /function_json_path/);
 
 	const scanTargetSkill = readSkillSource("scan-target");
 	assert.match(scanTargetSkill, /route registration, middleware/i);
-	assert.match(scanTargetSkill, /vulnerability_class_focus/i);
-	assert.match(scanTargetSkill, /one assigned vulnerability class/i);
+	assert.match(scanTargetSkill, /all applicable security classes/i);
+	assert.doesNotMatch(scanTargetSkill, /one assigned vulnerability class/i);
 });
 
 test("every Stage Graph prompt template renders without unresolved variables", () => {

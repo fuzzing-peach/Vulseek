@@ -52,7 +52,7 @@ interface Props {
 	defaultCommitWindow?: number;
 	showCommitWindow?: boolean;
 	showFullScanPreview?: boolean;
-	scanType?: "delta" | "full";
+	scanType?: "delta" | "full" | "research";
 	onSubmit: (input: {
 		targetRef?: string;
 		targetTag?: string;
@@ -91,7 +91,13 @@ export const CreateScanDialog = ({
 					"scan.dialog.deltaPreview",
 					"Delta Scan scopes targets impacted by the target/base diff, then runs target scanning, finding analysis, verification, and triage.",
 				)
-			: scanT(
+			: scanType === "research"
+				? scanT(
+						t,
+						"scan.dialog.researchPreview",
+						"Research Scan builds a trust-boundary model, maintains independent research tracks, validates findings, and reviews candidate chains.",
+					)
+				: scanT(
 					t,
 					"scan.dialog.fullPreview",
 					"Full Scan checks out the selected source, profiles the repository, models attack surfaces, identifies targets, scans candidate findings, and sends verified or likely findings to triage.",

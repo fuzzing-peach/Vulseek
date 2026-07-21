@@ -3,7 +3,44 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { transformPipelineEdgeInput } from "./scan-pipeline-edge-transform";
+import {
+	renderPipelineTemplate,
+	transformPipelineEdgeInput,
+} from "./scan-pipeline-edge-transform";
+
+test("renderPipelineTemplate interpolates expressions inside text", async () => {
+	const rendered = await renderPipelineTemplate(
+		"Candidate Verification: $file($input.candidatePath).title",
+		{
+			ctx: {},
+			stageInput: { candidatePath: "/task/candidate.json" },
+			stageOutput: null,
+			readJsonFile: async () => ({ title: "Batch path desync" }),
+		},
+	);
+
+	assert.equal(rendered, "Candidate Verification: Batch path desync");
+});
+
+test("renderPipelineTemplate interpolates multiple expression types", async () => {
+	const rendered = await renderPipelineTemplate(
+		"$file($input.targetPath).targetName:$input.vulnerabilityClassFocus",
+		{
+			ctx: {},
+			stageInput: {
+				targetPath: "/task/target.json",
+				vulnerabilityClassFocus: "request-routing-confusion",
+			},
+			stageOutput: null,
+			readJsonFile: async () => ({ targetName: "serve_batch_request_v1" }),
+		},
+	);
+
+	assert.equal(
+		rendered,
+		"serve_batch_request_v1:request-routing-confusion",
+	);
+});
 
 test("transformPipelineEdgeInput fans out array items into downstream inputs", async () => {
 	const outputs = await transformPipelineEdgeInput(

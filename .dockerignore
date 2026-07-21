@@ -23,8 +23,12 @@ vulseek-data
 vulseek-data/**
 vulseek-data-dev
 vulseek-data-dev/**
+**/vulseek-data-dev
+**/vulseek-data-dev/**
 vulseek-data-release
 vulseek-data-release/**
+**/vulseek-data-release
+**/vulseek-data-release/**
 **/.scan-runtime
 **/core
 *.log

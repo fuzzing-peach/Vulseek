@@ -1,6 +1,7 @@
 verify-finding:
   key: verifyFinding
   name: Verify Finding
+  taskName: "Candidate Verification: $file($input.candidatePath).title"
   role: verification
   group: review
   concurrency: 1
@@ -8,13 +9,38 @@ verify-finding:
   disableable: true
   description: Fact-check target, paths, and evidence.
   runtimeConfig:
-    persistent: true
+    persistent: false
     reuseContainer: true
     mode: fanout
     nullableOutput: false
     cwd: /workspace/repo
     skills: [verify-finding]
     promptFile: verify-finding.prompt.md
+  promptValues:
+    scanJobId: "$ctx.scanJobId"
+    candidateId: "$file($input.candidatePath).id"
+    candidateTitle: "$file($input.candidatePath).title"
+    candidateDescription: "$file($input.candidatePath).description"
+    candidateFile: "$file($input.candidatePath).filePath"
+    candidateLine: "$file($input.candidatePath).line"
+    analysisResult: "$file($input.analysisResultPath).result"
+    analysisSummary: "$file($input.analysisResultPath).summary"
+    analysisFingerprint: "$file($input.analysisResultPath).analysisFingerprint"
+    criticApproval: "$file($input.analysisResultPath).criticApproval.summary"
+    criticTaskId: "$file($input.analysisResultPath).criticApproval.criticTaskId"
+    analysisReportPath: "$file($input.analysisResultPath).reportPath"
+    repositoryJsonPath: "$input.repositoryPath"
+    moduleJsonPath: "$input.modulePath"
+    functionJsonPath: "$input.functionPath"
+    candidateJsonPath: "$input.candidatePath"
+    analysisResultJsonPath: "$input.analysisResultPath"
+    taskDir: "$ctx.taskDir"
+    reportPath: "/task/01_verify_report.md"
+    taskId: "$ctx.taskId"
+  report: { path: /task/01_verify_report.md, required: true }
+  effects:
+    - type: project-candidate-result
+      resultStage: verify
   inputSchema:
     $ref: "#/schemas/VerifyFindingStageInput"
   outputSchema:

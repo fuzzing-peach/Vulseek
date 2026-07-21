@@ -14,6 +14,37 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isEmptySnapshot = (value: unknown) =>
 	isRecord(value) && Object.keys(value).length === 0;
 
+export const addResearchPipelineToLegacySnapshot = (
+	snapshot: ScanPipelineDefinitions,
+	currentDefinitions: ScanPipelineDefinitions,
+): ScanPipelineDefinitions => {
+	if (snapshot.pipelines.research) {
+		return snapshot;
+	}
+	const researchStageIds = new Set(
+		currentDefinitions.pipelines.research.stageIds,
+	);
+	const existingStageIds = new Set(snapshot.stages.map((stage) => stage.id));
+	return {
+		...snapshot,
+		schemas: {
+			...currentDefinitions.schemas,
+			...snapshot.schemas,
+		},
+		stages: [
+			...snapshot.stages,
+			...currentDefinitions.stages.filter(
+				(stage) =>
+					researchStageIds.has(stage.id) && !existingStageIds.has(stage.id),
+			),
+		],
+		pipelines: {
+			...snapshot.pipelines,
+			research: currentDefinitions.pipelines.research,
+		},
+	};
+};
+
 export const backfillScanPipelineDefinitionSnapshots = async () => {
 	let processedCount = 0;
 	let updatedCount = 0;
@@ -39,7 +70,10 @@ export const backfillScanPipelineDefinitionSnapshots = async () => {
 			}
 
 			const normalized = normalizePipelineDefinitionSnapshot(
-				normalizeLegacyVerificationSchema(source as ScanPipelineDefinitions),
+				addResearchPipelineToLegacySnapshot(
+					normalizeLegacyVerificationSchema(source as ScanPipelineDefinitions),
+					currentDefinitions,
+				),
 			);
 			if (
 				normalized.version !== 2 ||

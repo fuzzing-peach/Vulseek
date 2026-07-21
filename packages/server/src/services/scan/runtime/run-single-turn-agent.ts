@@ -46,6 +46,8 @@ const RUNTIME_CUSTOM_SKILLS = [
 	"verify-finding",
 	"search-registries",
 	"tree-sitter",
+	"research-agent",
+	"research-db",
 ] as const;
 
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
@@ -986,6 +988,16 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		...getGlobalContainerEnvironmentPairs(),
 		`VULSEEK_PROJECT_PROFILE_DIR=${mountedProfileDir}`,
 		`VULSEEK_PROJECT_CACHE_DIR=${path.posix.join(mountedProfileDir, "cache")}`,
+		...(input.scanJob.scanType === "research"
+			? [
+					`VULSEEK_SCAN_JOB_ID=${input.scanJob.scanJobId}`,
+					`VULSEEK_TASK_ID=${input.taskId || ""}`,
+					`VULSEEK_RESEARCH_BROKER_URL=${process.env.VULSEEK_RESEARCH_BROKER_URL?.trim() || `http://172.17.0.1:${process.env.PORT || "3000"}/api`}`,
+					...(process.env.VULSEEK_RESEARCH_BROKER_TOKEN?.trim()
+						? [`VULSEEK_RESEARCH_BROKER_TOKEN=${process.env.VULSEEK_RESEARCH_BROKER_TOKEN.trim()}`]
+						: []),
+				]
+			: []),
 	];
 	const runtimeFileNames = AGENT_RUNTIME_FILE_NAMES;
 	const containerNetworkArg = await resolveCurrentDockerNetworkArg();
@@ -1984,6 +1996,23 @@ export const runSingleTurnAgentInContainer = async (
 					: parseAgentProfileEnvPairs(input.agentProfile),
 			)
 		: {};
+	const researchBrokerEnv =
+		input.scanJob.scanType === "research"
+			? {
+					VULSEEK_SCAN_JOB_ID: input.scanJob.scanJobId,
+					VULSEEK_TASK_ID: input.taskId || "",
+					VULSEEK_RESEARCH_BROKER_URL:
+						process.env.VULSEEK_RESEARCH_BROKER_URL?.trim() ||
+						`http://172.17.0.1:${process.env.PORT || "3000"}/api`,
+					...(process.env.VULSEEK_RESEARCH_BROKER_TOKEN?.trim()
+						? {
+								VULSEEK_RESEARCH_BROKER_TOKEN:
+									process.env.VULSEEK_RESEARCH_BROKER_TOKEN.trim(),
+							}
+						: {}),
+				}
+			: {};
+	const effectiveAdapterEnv = { ...adapterEnv, ...researchBrokerEnv };
 	const buildDriverTaskInput = () => ({
 		taskId: input.taskId || undefined,
 		provider:
@@ -1991,7 +2020,7 @@ export const runSingleTurnAgentInContainer = async (
 		cwd: input.cwd,
 		prompt: promptWithOutputSchema,
 		threadId: existingTaskThreadId || input.laneThreadId || null,
-		adapterEnv,
+		adapterEnv: effectiveAdapterEnv,
 		taskStageRootInContainer,
 		taskAliasRootInContainer: TASK_ALIAS_ROOT_IN_CONTAINER,
 		structuredOutputResultPathInContainer,

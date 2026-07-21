@@ -24,6 +24,9 @@ full:
         moduleId: ""
         moduleName: ""
         priority: null
+      artifacts:
+        - { from: "$input.repositoryPath", to: inputs/repository.json, inputField: repositoryPath }
+        - { from: "$input.modulePath", to: inputs/module.json, inputField: modulePath }
     - name: attack-surface-model-to-identify-target
       from: attack-surface-model
       to: identify-target
@@ -39,6 +42,10 @@ full:
         moduleName: "$input.moduleName"
         priority: "$input.priority"
         vulnerabilityClassFocus: "$item"
+      artifacts:
+        - { from: "$input.repositoryPath", to: inputs/repository.json, inputField: repositoryPath }
+        - { from: "$input.modulePath", to: inputs/module.json, inputField: modulePath }
+        - { from: "$input.threatModelPath", to: inputs/threat-model.json, inputField: threatModelPath }
     - name: identify-target-to-scan-target
       from: identify-target
       to: scan-target
@@ -58,6 +65,11 @@ full:
         targetKind: unknown
         priority: null
         vulnerabilityClassFocus: "$input.vulnerabilityClassFocus"
+      artifacts:
+        - { from: "$input.repositoryPath", to: inputs/repository.json, inputField: repositoryPath }
+        - { from: "$input.modulePath", to: inputs/module.json, inputField: modulePath }
+        - { from: "$input.threatModelPath", to: inputs/threat-model.json, inputField: threatModelPath }
+        - { from: "$input.targetPath", to: inputs/target.json, inputField: targetPath }
     - name: scan-target-to-analyze-finding
       from: scan-target
       to: analyze-finding
@@ -70,6 +82,11 @@ full:
         modulePath: "$input.modulePath"
         functionPath: "$input.targetPath"
         candidatePath: "$item"
+      artifacts:
+        - { from: "$input.repositoryPath", to: inputs/repository.json, inputField: repositoryPath }
+        - { from: "$input.modulePath", to: inputs/module.json, inputField: modulePath }
+        - { from: "$input.functionPath", to: inputs/target.json, inputField: functionPath }
+        - { from: "$input.candidatePath", to: inputs/candidate.json, inputField: candidatePath }
     - name: analyze-finding-to-critique-finding
       from: analyze-finding
       to: critique-finding
@@ -89,6 +106,12 @@ full:
         candidatePath: "$input.candidatePath"
         draftAnalysisPath: ""
         analysisFingerprint: "$computed.analysisFingerprint"
+      artifacts:
+        - { from: "$input.repositoryPath", to: inputs/repository.json, inputField: repositoryPath }
+        - { from: "$input.modulePath", to: inputs/module.json, inputField: modulePath }
+        - { from: "$input.functionPath", to: inputs/target.json, inputField: functionPath }
+        - { from: "$input.candidatePath", to: inputs/candidate.json, inputField: candidatePath }
+        - { from: "$output", to: inputs/analysis.json, inputField: draftAnalysisPath }
     - name: critique-finding-to-analyze-finding
       from: critique-finding
       to: analyze-finding
@@ -107,6 +130,12 @@ full:
         functionPath: "$input.functionPath"
         candidatePath: "$input.candidatePath"
         feedbackPath: ""
+      artifacts:
+        - { from: "$input.repositoryPath", to: inputs/repository.json, inputField: repositoryPath }
+        - { from: "$input.modulePath", to: inputs/module.json, inputField: modulePath }
+        - { from: "$input.functionPath", to: inputs/target.json, inputField: functionPath }
+        - { from: "$input.candidatePath", to: inputs/candidate.json, inputField: candidatePath }
+        - { from: "$output", to: inputs/feedback.json, inputField: feedbackPath }
     - name: analyze-finding-to-verify-finding
       from: analyze-finding
       to: verify-finding
@@ -117,10 +146,38 @@ full:
       outputSchema:
         $ref: "#/schemas/FinalAnalysis"
       outputSchemaDescription: Final critic-approved analysis result
+      input:
+        scanJob: "$input.scanJob"
+        repositoryPath: "$input.repositoryPath"
+        modulePath: "$input.modulePath"
+        functionPath: "$input.functionPath"
+        candidatePath: "$input.candidatePath"
+        analysisResultPath: ""
+      artifacts:
+        - { from: "$input.repositoryPath", to: inputs/repository.json, inputField: repositoryPath }
+        - { from: "$input.modulePath", to: inputs/module.json, inputField: modulePath }
+        - { from: "$input.functionPath", to: inputs/target.json, inputField: functionPath }
+        - { from: "$input.candidatePath", to: inputs/candidate.json, inputField: candidatePath }
+        - { from: "$output", to: inputs/analysis.json, inputField: analysisResultPath }
     - name: verify-finding-to-triage-finding
       from: verify-finding
       to: triage-finding
       fork: false
+      input:
+        scanJob: "$input.scanJob"
+        repositoryPath: "$input.repositoryPath"
+        modulePath: "$input.modulePath"
+        functionPath: "$input.functionPath"
+        candidatePath: "$input.candidatePath"
+        analysisResultPath: "$input.analysisResultPath"
+        verifyResultPath: ""
       outputSchema:
         $ref: "#/schemas/Verification"
+      artifacts:
+        - { from: "$input.repositoryPath", to: inputs/repository.json, inputField: repositoryPath }
+        - { from: "$input.modulePath", to: inputs/module.json, inputField: modulePath }
+        - { from: "$input.functionPath", to: inputs/target.json, inputField: functionPath }
+        - { from: "$input.candidatePath", to: inputs/candidate.json, inputField: candidatePath }
+        - { from: "$input.analysisResultPath", to: inputs/analysis.json, inputField: analysisResultPath }
+        - { from: "$output", to: inputs/verification.json, inputField: verifyResultPath }
   groups: []

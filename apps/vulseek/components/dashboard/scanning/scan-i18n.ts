@@ -194,6 +194,8 @@ export const formatScanTypeLabel = (
 ) =>
 	scanType === "delta"
 		? scanT(t, "scan.scanType.delta", "Delta Scan")
+		: scanType === "research"
+			? scanT(t, "scan.scanType.research", "Research Scan")
 		: scanT(t, "scan.scanType.full", "Full Scan");
 
 export const formatResourceTypeLabel = (

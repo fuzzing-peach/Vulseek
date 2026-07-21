@@ -59,17 +59,18 @@ import {
 	updateTaskRepo,
 } from "../persistence/task.repo";
 import { readCandidateIdFromTaskInputArtifact } from "../persistence/task-artifact-resolver";
+import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";
 import { buildKnownQueueJobIdsForTask } from "../queue-job-ids";
 import { AGENT_RUNTIME_FILE_NAMES } from "../runtime/agent-runtime-files";
 import { parseDriverStdout } from "../runtime/driver-stdout-protocol";
 import { removeContainer } from "../runtime/run-single-turn-agent";
 import { buildEffectiveDisabledStageSet } from "../runtime-settings";
-import { SCAN_STAGE_IDS } from "../stage-metadata";
 import { resolveStageTaskName } from "../stage-task-name";
 import {
 	createStageContext,
 	type PipelineContext,
 	type StageContext,
+	resolveTaskRuntimeDirForTask,
 } from "../stages/full-scan-stage.runtime";
 import { parseAgentUsageSnapshot } from "../usage-snapshot";
 import {
@@ -97,6 +98,7 @@ import {
 type PipelineScanJobContext = PipelineContext & {
 	scanJob: {
 		scanJobId: string;
+		scanType?: "delta" | "full" | "research";
 		repositoryTaskId?: string | null;
 		applicationId: string | null;
 		composeId: string | null;
@@ -990,7 +992,7 @@ const createStageContextForTask = async <
 		reuseContainer: stageReuseContainer,
 		nullableOutput: stageNullableOutput,
 		groupedPersistent,
-		allowAgentExit: task.stageName === SCAN_STAGE_IDS.analyzeFinding,
+		allowAgentExit: stageDefinition?.allowAgentExit ?? false,
 		containerIndex: laneRuntime?.laneIndex ?? task.containerIndex ?? null,
 		laneIndex: laneRuntime?.laneIndex ?? null,
 		laneThreadId: laneRuntime?.threadId ?? null,
@@ -1316,13 +1318,7 @@ const resolveStageTaskId = (
 
 	const pipelineScanJob = (ctx as PipelineScanJobContext).scanJob;
 	if (pipelineScanJob?.scanJobId) {
-		if (
-			stageName === SCAN_STAGE_IDS.repositoryProfile ||
-			stageName === SCAN_STAGE_IDS.deltaScope
-		) {
-			return pipelineScanJob.repositoryTaskId || pipelineScanJob.scanJobId;
-		}
-		return pipelineScanJob.scanJobId;
+		return pipelineScanJob.repositoryTaskId || pipelineScanJob.scanJobId;
 	}
 
 	throw new Error(`Unable to resolve taskId for stage ${stageName}`);
@@ -1371,8 +1367,7 @@ const createTaskStageContext = async <
 		reuseContainer: stageReuseContainer,
 		nullableOutput: stageNullableOutput,
 		groupedPersistent: taskRuntime?.groupedPersistent ?? false,
-		allowAgentExit:
-			taskRuntime?.allowAgentExit ?? stage.id === SCAN_STAGE_IDS.analyzeFinding,
+		allowAgentExit: taskRuntime?.allowAgentExit ?? stage.allowAgentExit ?? false,
 		containerIndex:
 			taskRuntime?.containerIndex ??
 			taskRuntime?.laneRuntime?.laneIndex ??
@@ -1614,9 +1609,6 @@ const persistTerminalSuccess = async <
 				return;
 			}
 			try {
-				if (isCandidateProducerStage(stage.id)) {
-					await syncVulnerabilityCandidatesFromProducerTask(stageCtx.taskId);
-				}
 				await stage.onSuccess?.(stageCtx, input, prepared.output);
 			} catch (error) {
 				logPipelineEvent("stage.post_success_handling_failed", {
@@ -2362,7 +2354,7 @@ const launchStageExecution = async <
 			),
 			taskName: launched.name,
 			groupedPersistent: Boolean(laneRuntime && group),
-			allowAgentExit: stageState.stageName === SCAN_STAGE_IDS.analyzeFinding,
+			allowAgentExit: stageState.stage.allowAgentExit ?? false,
 		},
 	);
 	logLaunchTiming("create_stage_context", stepStartedAt, {
@@ -3607,6 +3599,52 @@ export const startPipelineRuntime = <TPipelineContext extends PipelineContext>(
 	return runtime;
 };
 
+const resolveResearchDeadlineFromStageInput = async <
+	TPipelineContext extends PipelineContext,
+>(
+	runtime: JobRuntime<TPipelineContext>,
+	fromTaskId: string,
+	stageInput: unknown,
+) => {
+	const scanJob = (runtime.ctx as unknown as PipelineScanJobContext).scanJob;
+	if (
+		!scanJob?.scanType ||
+		scanJob.scanType !== "research"
+	) {
+		return null;
+	}
+	const input =
+		stageInput && typeof stageInput === "object"
+			? (stageInput as Record<string, unknown>)
+			: {};
+	const scopePath = typeof input.scopePath === "string" ? input.scopePath : null;
+	if (!scopePath) return null;
+	const task = await findTaskByIdRepo(fromTaskId).catch(() => null);
+	if (!task) return null;
+	const taskDir = await resolveTaskRuntimeDirForTask({
+		scanJobId: runtime.ctx.scanJobId,
+		projectName: runtime.ctx.projectName,
+		serviceName: runtime.ctx.serviceName,
+		stageName: task.stageName,
+		taskName: task.name,
+		taskId: task.taskId,
+	});
+	const scope = await readTaskJsonArtifact({
+		taskDir,
+		containerPath: scopePath,
+	}).catch(() => null);
+	const deadline =
+		scope && typeof scope === "object" && !Array.isArray(scope)
+			? Date.parse(
+					String(
+						(scope as Record<string, unknown>).minimumResearchDeadlineAt ||
+							"",
+					),
+				)
+			: Number.NaN;
+	return Number.isFinite(deadline) ? deadline : null;
+};
+
 const dispatchPipelineDownstreamInternal = async <
 	TPipelineContext extends PipelineContext,
 	TInput,
@@ -3623,6 +3661,27 @@ const dispatchPipelineDownstreamInternal = async <
 	let effectiveRouteKey = routeKey;
 	const downstreamEdges = getDownstreamEdges(runtime.pipeline, stageName);
 	const routedEdges = downstreamEdges.filter((edge) => edge.route);
+	if (
+		(runtime.ctx as unknown as PipelineScanJobContext).scanJob?.scanType ===
+		"research"
+	) {
+		const deadline = await resolveResearchDeadlineFromStageInput(
+			runtime,
+			fromTaskId,
+			stageInput,
+		);
+		if (deadline && Date.now() < deadline && routeKey === "confirmed" && stageName === "exploit-review") {
+			effectiveRouteKey = "runtime-retry";
+			logPipelineEvent("research.deadline_route_extended", {
+				scanJobId: (runtime.ctx as unknown as PipelineScanJobContext).scanJob
+					.scanJobId,
+				stageName,
+				fromTaskId,
+				deadline,
+				requestedRoute: routeKey,
+			});
+		}
+	}
 	if (routedEdges.length > 0) {
 		const activeRoutedEdges: typeof routedEdges = [];
 		for (const edge of routedEdges) {

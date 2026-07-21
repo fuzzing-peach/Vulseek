@@ -1,6 +1,7 @@
 repository-profile:
   key: repositoryProfile
   name: Repository Profile
+  taskName: "$ctx.projectName"
   role: scan
   group: full-scan
   concurrency: 1
@@ -15,6 +16,15 @@ repository-profile:
     cwd: /workspace/repo
     skills: [repository-profile]
     promptFile: repository-profile.prompt.md
+  promptValues:
+    repositoryId: "$ctx.taskId"
+    repositoryName: "$ctx.serviceName"
+    targetRef: "$ctx.scanJob.targetRef"
+    targetTag: "$ctx.scanJob.targetTag"
+    targetCommit: "$ctx.scanJob.commitSha"
+    agentInstruction: "Use the configured scan agent."
+    repositoryStatePath: "$ctx.taskDir/00_repository_state.json"
+    prepareRepository: true
   inputSchema:
     $ref: "#/schemas/NullStageInput"
   outputSchema:

@@ -1,6 +1,7 @@
 analyze-finding:
   key: analyzeFinding
   name: Analyze Finding
+  taskName: "Candidate Analysis: $file($input.candidatePath).title"
   role: analysis
   group: review
   concurrency: 2
@@ -15,6 +16,26 @@ analyze-finding:
     cwd: /workspace/repo
     skills: [analyze-finding]
     promptFile: analyze-finding.prompt.md
+  promptValues:
+    scanJobId: "$ctx.scanJobId"
+    candidateId: "$file($input.candidatePath).id"
+    candidateTitle: "$file($input.candidatePath).title"
+    candidateDescription: "$file($input.candidatePath).description"
+    candidateFile: "$file($input.candidatePath).filePath"
+    candidateLine: "$file($input.candidatePath).line"
+    repositoryJsonPath: "$input.repositoryPath"
+    moduleJsonPath: "$input.modulePath"
+    functionJsonPath: "$input.functionPath"
+    candidateJsonPath: "$input.candidatePath"
+    analysisReportTemplatePath: "$input.analysisReportTemplatePath"
+    taskDir: "$ctx.taskDir"
+    reportPath: "/task/01_report.md"
+    feedbackJsonPath: "$input.feedbackPath"
+    taskId: "$ctx.taskId"
+  report: { path: /task/01_report.md, required: true }
+  effects:
+    - type: project-candidate-result
+      resultStage: analyze
   inputSchema:
     $ref: "#/schemas/AnalyzeFindingStageInput"
   outputSchema:

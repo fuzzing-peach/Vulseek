@@ -2,7 +2,7 @@ import { db } from "@vulseek/server/db";
 import { scanJobs, tasks } from "@vulseek/server/db/schema";
 import type { ScanRuntimeSettings } from "@vulseek/server/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, or, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import {
 	normalizeLegacyVerificationSchema,
 	normalizePipelineDefinitionSnapshot,
@@ -10,6 +10,7 @@ import {
 	type ScanPipelineDefinitions,
 } from "../pipeline/scan-pipeline-definitions";
 import { normalizeScanRuntimeSettings } from "../runtime-settings";
+import { getPipelineIdForScanType, type ScanType } from "../scan-type";
 import { createTaskRepo } from "./task.repo";
 
 const selectScanJobWithRepositoryTaskStatus = {
@@ -47,6 +48,13 @@ const selectScanJobWithRepositoryTaskStatus = {
 	>`coalesce(${tasks.status}, 'pending')`,
 };
 
+const scanJobRootStageName = sql<string>`
+	jsonb_extract_path_text(
+		${scanJobs.scanPipelineDefinitionSnapshot},
+		VARIADIC ARRAY['pipelines', ${scanJobs.scanType}::text, 'rootStageId']::text[]
+	)
+`;
+
 export const findScanJobByIdRepo = async (scanJobId: string) => {
 	const scanJob = await db
 		.select(selectScanJobWithRepositoryTaskStatus)
@@ -55,10 +63,7 @@ export const findScanJobByIdRepo = async (scanJobId: string) => {
 			tasks,
 			and(
 				eq(tasks.scanJobId, scanJobs.scanJobId),
-				or(
-					eq(tasks.stageName, "repository-profile"),
-					eq(tasks.stageName, "delta-scope"),
-				),
+				eq(tasks.stageName, scanJobRootStageName),
 			),
 		)
 		.where(eq(scanJobs.scanJobId, scanJobId))
@@ -90,10 +95,7 @@ export const listScanJobsByApplicationIdRepo = async (applicationId: string) =>
 			tasks,
 			and(
 				eq(tasks.scanJobId, scanJobs.scanJobId),
-				or(
-					eq(tasks.stageName, "repository-profile"),
-					eq(tasks.stageName, "delta-scope"),
-				),
+				eq(tasks.stageName, scanJobRootStageName),
 			),
 		)
 		.where(eq(scanJobs.applicationId, applicationId))
@@ -107,10 +109,7 @@ export const listScanJobsByComposeIdRepo = async (composeId: string) =>
 			tasks,
 			and(
 				eq(tasks.scanJobId, scanJobs.scanJobId),
-				or(
-					eq(tasks.stageName, "repository-profile"),
-					eq(tasks.stageName, "delta-scope"),
-				),
+				eq(tasks.stageName, scanJobRootStageName),
 			),
 		)
 		.where(eq(scanJobs.composeId, composeId))
@@ -124,10 +123,7 @@ export const listUnfinishedScanJobsRepo = async () =>
 			tasks,
 			and(
 				eq(tasks.scanJobId, scanJobs.scanJobId),
-				or(
-					eq(tasks.stageName, "repository-profile"),
-					eq(tasks.stageName, "delta-scope"),
-				),
+				eq(tasks.stageName, scanJobRootStageName),
 			),
 		)
 		.where(
@@ -137,7 +133,7 @@ export const listUnfinishedScanJobsRepo = async () =>
 export const createScanJobRepo = async (input: {
 	applicationId?: string | null;
 	composeId?: string | null;
-	scanType: string;
+	scanType: ScanType;
 	title?: string | null;
 	description?: string | null;
 	triggerSource?: string | null;
@@ -146,11 +142,12 @@ export const createScanJobRepo = async (input: {
 	targetRef?: string | null;
 	targetTag?: string | null;
 	scanRuntimeSettings?: ScanRuntimeSettings | null;
+	researchScope?: Record<string, unknown> | null;
 	commitWindow?: number | null;
 	defaultDeltaCommitWindow: number;
 }) => {
 	const pipelineDefinitions = loadScanPipelineDefinitions();
-	const pipelineId = input.scanType === "delta" ? "delta" : "full";
+	const pipelineId = getPipelineIdForScanType(input.scanType);
 	const created = await db
 		.insert(scanJobs)
 		.values({
@@ -161,7 +158,9 @@ export const createScanJobRepo = async (input: {
 				input.title ||
 				(input.scanType === "delta"
 					? "Delta Scan Job"
-					: "Full Scan Job"),
+					: input.scanType === "research"
+						? "Research Scan Job"
+						: "Full Scan Job"),
 			description: input.description || "",
 			triggerSource: input.triggerSource || "manual",
 			commitSha: input.commitSha,
@@ -171,7 +170,7 @@ export const createScanJobRepo = async (input: {
 			scanRuntimeSettings: normalizeScanRuntimeSettings(
 				input.scanRuntimeSettings ?? {},
 			),
-		scanPipelineDefinitionSnapshot: pipelineDefinitions,
+			scanPipelineDefinitionSnapshot: pipelineDefinitions,
 			commitWindow: input.commitWindow || input.defaultDeltaCommitWindow,
 			status: "pending",
 		})
@@ -186,9 +185,13 @@ export const createScanJobRepo = async (input: {
 
 	await createTaskRepo({
 		scanJobId: created[0].scanJobId,
-		name: pipelineDefinitions.pipelines[pipelineId].rootStageId,
-		stageName: pipelineDefinitions.pipelines[pipelineId].rootStageId,
+			name: pipelineDefinitions.pipelines[pipelineId]!.rootStageId,
+			stageName: pipelineDefinitions.pipelines[pipelineId]!.rootStageId,
 		status: "pending",
+		input:
+			input.scanType === "research"
+				? { researchScope: input.researchScope ?? {} }
+				: undefined,
 	});
 
 	return created[0];
@@ -233,8 +236,11 @@ export const loadScanJobPipelineDefinitionSnapshotRepo = async (scanJobId: strin
 		throw new TRPCError({ code: "NOT_FOUND", message: "Scan job not found" });
 	}
 	if (hasUsableScanPipelineDefinitionSnapshot(row.scanPipelineDefinitionSnapshot)) {
-		return normalizeLegacyVerificationSchema(
-			row.scanPipelineDefinitionSnapshot,
+		return normalizePipelineDefinitionSnapshot(
+			normalizeLegacyVerificationSchema(
+				row.scanPipelineDefinitionSnapshot,
+			),
+			{ useBaseline: false },
 		);
 	}
 	throw new TRPCError({

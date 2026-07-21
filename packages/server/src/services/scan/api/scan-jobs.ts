@@ -20,7 +20,10 @@ import {
 	buildCompleteScanRuntimeSettings,
 	normalizeScanRuntimeSettings,
 } from "../runtime-settings";
-import type { ScanPipelineDefinitions } from "../pipeline/scan-pipeline-definitions";
+import {
+	normalizePipelineDefinitionSnapshot,
+	type ScanPipelineDefinitions,
+} from "../pipeline/scan-pipeline-definitions";
 import { TRPCError } from "@trpc/server";
 import { findScanJobOrganizationIdRepo } from "../persistence/scan-job-access.repo";
 
@@ -113,7 +116,9 @@ export const updateScanJobPipelineDefinitionSnapshot = async (
 	}
 	return await updateScanJobPipelineDefinitionSnapshotRepo(
 		scanJobId,
-		scanPipelineDefinitionSnapshot as ScanPipelineDefinitions,
+		normalizePipelineDefinitionSnapshot(
+			scanPipelineDefinitionSnapshot as ScanPipelineDefinitions,
+		),
 	);
 };
 

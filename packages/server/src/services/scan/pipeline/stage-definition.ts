@@ -84,6 +84,7 @@ export type StageDefinition<
 	persistent?: boolean;
 	reuseContainer?: boolean;
 	nullableOutput?: boolean;
+	allowAgentExit?: boolean;
 	runtimeConfig?: StageRuntimeConfigGetters;
 	queue?: StageQueueBinding<TPipelineContext, TInput>;
 	validateInput?: (ctx: TStageContext, input: TInput) => Promise<boolean>;

@@ -34,10 +34,55 @@ import type {
 	TriageResult,
 	VerificationResult,
 } from "../types";
-import { upsertCandidateResultProjectionTx } from "./candidate-result-projection.repo";
+import {
+	upsertCandidateResultProjectionTx,
+	type CandidateProjectionResultStage,
+} from "./candidate-result-projection.repo";
 import { readCandidateIdFromTaskInputArtifact } from "./task-artifact-resolver";
 
 const CANDIDATE_PRODUCER_STAGE_NAMES = new Set(["scan-target"]);
+
+const resolveCandidateProjectionResultStage = async (
+	tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+	task: typeof tasks.$inferSelect,
+): Promise<CandidateProjectionResultStage | undefined> => {
+	const row = await tx
+		.select({ snapshot: scanJobs.scanPipelineDefinitionSnapshot })
+		.from(scanJobs)
+		.where(eq(scanJobs.scanJobId, task.scanJobId))
+		.limit(1)
+		.then((rows) => rows[0]);
+	const snapshot = row?.snapshot;
+	if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+		return undefined;
+	}
+	const stages = (snapshot as { stages?: unknown }).stages;
+	if (!Array.isArray(stages)) return undefined;
+	const stage = stages.find(
+		(value) =>
+			value &&
+			typeof value === "object" &&
+			(value as { id?: unknown }).id === task.stageName,
+	);
+	if (!stage || typeof stage !== "object") return undefined;
+	const effects = (stage as { effects?: unknown }).effects;
+	if (!Array.isArray(effects)) return undefined;
+	const effect = effects.find(
+		(value) =>
+			value &&
+			typeof value === "object" &&
+			(value as { type?: unknown }).type === "project-candidate-result",
+	);
+	const resultStage =
+		effect && typeof effect === "object"
+			? (effect as { resultStage?: unknown }).resultStage
+			: undefined;
+	return resultStage === "analyze" ||
+		resultStage === "verify" ||
+		resultStage === "triage"
+		? resultStage
+		: undefined;
+};
 
 const findProducerTaskIdForCandidateDescendantTask = async (
 	task: typeof tasks.$inferSelect,
@@ -943,7 +988,11 @@ export const transitionTaskStatusRepo = async (input: {
 			updatedTask.estimatedCost,
 		);
 		if (input.to === "completed" || input.to === "exited") {
-			await upsertCandidateResultProjectionTx(tx, updatedTask);
+			const resultStage = await resolveCandidateProjectionResultStage(
+				tx,
+				updatedTask,
+			);
+			await upsertCandidateResultProjectionTx(tx, updatedTask, undefined, resultStage);
 		}
 		return updatedTask;
 	});

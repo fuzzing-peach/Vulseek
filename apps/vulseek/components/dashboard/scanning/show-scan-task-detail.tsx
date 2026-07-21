@@ -2,6 +2,7 @@ import { format } from "date-fns";
 import {
 	AlertCircle,
 	ArrowLeft,
+	Ban,
 	ChevronRight,
 	FileIcon,
 	Folder,
@@ -497,6 +498,7 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 		},
 	);
 	const rerunTaskMutation = api.scan.rerunTask.useMutation();
+	const cancelTaskMutation = api.scan.cancelTask.useMutation();
 	const [activeTab, setActiveTab] = useState<ScanTaskTab>("details");
 	const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
 	const [expandedDirectories, setExpandedDirectories] = useState<
@@ -523,6 +525,7 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 		task?.name ||
 		scanT(t, "scan.task.title", "Task {{id}}", { id: taskId.slice(0, 6) });
 	const canRerunTask = task ? RERUNNABLE_TASK_STATUSES.has(task.status) : false;
+	const canCancelTask = task ? ACTIVE_TASK_STATUSES.has(task.status) : false;
 	const buildTaskHref = (targetTaskId?: string | null) =>
 		targetTaskId
 			? `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}/tasks/${encodeURIComponent(targetTaskId)}`
@@ -547,6 +550,24 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 		} catch (error) {
 			toast.error(
 				error instanceof Error ? error.message : "Failed to rerun task",
+			);
+		}
+	};
+	const handleCancelTask = async () => {
+		if (!task || !canCancelTask) return;
+		try {
+			await cancelTaskMutation.mutateAsync({ taskId: task.taskId });
+			toast.success(scanT(t, "scan.task.cancelled", "Task canceled"));
+			await Promise.all([
+				utils.scan.task.invalidate({ taskId, scanJobId }),
+				utils.scan.one.invalidate({ scanJobId }),
+				utils.scan.jobOverview.invalidate({ scanJobId }),
+				utils.scan.jobRunningTasks.invalidate({ scanJobId }),
+				utils.scan.jobQueueCounts.invalidate({ scanJobId }),
+			]);
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : scanT(t, "scan.task.cancelError", "Failed to cancel task"),
 			);
 		}
 	};
@@ -706,6 +727,17 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 								subtitle={task?.stageName || null}
 								variant="outline"
 							/>
+							<Button
+								type="button"
+								variant="destructive"
+								isLoading={cancelTaskMutation.isLoading}
+								disabled={!canCancelTask || cancelTaskMutation.isLoading}
+								title={scanT(t, "scan.task.cancelTask", "Cancel running task")}
+								onClick={() => void handleCancelTask()}
+							>
+								<Ban className="mr-2 size-4" />
+								{scanT(t, "scan.task.cancel", "Cancel")}
+							</Button>
 							<Button
 								type="button"
 								variant="outline"

@@ -38,7 +38,7 @@ export type TaskAgentProfileSnapshot = {
 	thinkingLevelEnabled?: boolean | null;
 };
 
-export const scanTypeEnum = pgEnum("scanType", ["delta", "full"]);
+export const scanTypeEnum = pgEnum("scanType", ["delta", "full", "research"]);
 export const scanJobStatusEnum = pgEnum("scanJobStatus", [
 	"pending",
 	"running",
@@ -669,7 +669,7 @@ export const apiCreateScanJob = z
 	.object({
 		applicationId: z.string().min(1).optional(),
 		composeId: z.string().min(1).optional(),
-		scanType: z.enum(["delta", "full"]),
+		scanType: z.enum(["delta", "full", "research"]),
 		title: z.string().min(1).optional(),
 		description: z.string().optional(),
 		triggerSource: z.enum(["manual", "webhook", "schedule"]).default("manual"),
@@ -679,6 +679,7 @@ export const apiCreateScanJob = z
 		targetTag: z.string().optional(),
 		commitWindow: z.number().int().min(1).max(50).optional(),
 		scanRuntimeSettings: ScanRuntimeSettingsSchema.optional(),
+		researchScope: z.record(z.unknown()).optional(),
 	})
 	.refine((value) => Boolean(value.applicationId) !== Boolean(value.composeId), {
 		message: "Provide exactly one target: applicationId or composeId",

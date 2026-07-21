@@ -1,6 +1,7 @@
 critique-finding:
   key: critiqueFinding
   name: Critique Finding
+  taskName: "Analysis Critic: $file($input.candidatePath).title"
   role: analysis
   group: review
   concurrency: 2
@@ -15,6 +16,14 @@ critique-finding:
     cwd: /workspace/repo
     skills: [critique-finding]
     promptFile: critique-finding.prompt.md
+  promptValues:
+    candidateId: "$file($input.candidatePath).id"
+    candidateTitle: "$file($input.candidatePath).title"
+    taskDir: "$ctx.taskDir"
+    analysisFingerprint: "$input.analysisFingerprint"
+    candidateJsonPath: "$input.candidatePath"
+    draftAnalysisJsonPath: "$input.draftAnalysisPath"
+    taskId: "$ctx.taskId"
   inputSchema:
     $ref: "#/schemas/CritiqueFindingStageInput"
   outputSchema:

@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import {
 	cancelScanJob,
 	canRebuildCheckoutTools,
+	cancelScanTask,
 	createScanEvaluationResult,
 	createScanJob,
 	findAllScanJobsByApplicationId,
@@ -132,7 +133,7 @@ const apiFindFullScanStageGraph = z
 	.object({
 		applicationId: z.string().min(1).optional(),
 		composeId: z.string().min(1).optional(),
-		scanType: z.enum(["delta", "full"]).optional(),
+		scanType: z.enum(["delta", "full", "research"]).optional(),
 	})
 	.refine(
 		(value) => Boolean(value.applicationId) !== Boolean(value.composeId),
@@ -420,6 +421,7 @@ export const scanRouter = createTRPCRouter({
 			const scanJob = await createScanJob(input);
 			const queueData: ScanQueueJob = {
 				scanJobId: scanJob.scanJobId,
+				mode: input.scanType,
 			};
 
 			await scansQueue.add("scans", queueData, {
@@ -538,6 +540,14 @@ export const scanRouter = createTRPCRouter({
 			}
 
 			return { task, scanJob };
+		}),
+
+	cancelTask: protectedProcedure
+		.input(z.object({ taskId: z.string().min(1) }))
+		.mutation(async ({ input, ctx }) => {
+			const task = await findTaskById(input.taskId);
+			await authorizeScanJobAccess(task.scanJobId, ctx.session.activeOrganizationId);
+			return await cancelScanTask(input.taskId);
 		}),
 
 	updateNote: protectedProcedure

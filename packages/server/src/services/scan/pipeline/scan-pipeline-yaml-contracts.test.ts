@@ -261,7 +261,9 @@ test("YAML stage output schemas validate current scan output shapes", async () =
 	});
 	await validateStageOutput("delta-scope", {
 		repository: artifactPath("repository"),
-		functions: [artifactPath("function")],
+		module: artifactPath("module"),
+		threatModel: artifactPath("threat-model"),
+		functions: [artifactPath("target")],
 	});
 	await validateStageOutput("attack-surface-model", {
 		repository: artifactPath("repository"),

@@ -1,0 +1,177 @@
+ResearchScopeStageInput:
+  type: object
+  additionalProperties: false
+  properties: {}
+  required: []
+
+ResearchScope:
+  type: object
+  additionalProperties: false
+  properties:
+    attackerModel: { type: object }
+    trustedDomain: { type: object }
+    protectedAssets: { type: array, items: { type: string } }
+    deploymentAssumptions: { type: array, items: { type: string } }
+    rulesOfEngagement: { type: array, items: { type: string } }
+    minimumResearchDeadlineAt: { type: string }
+    successCriteria: { type: object }
+  required: [attackerModel, trustedDomain, protectedAssets, deploymentAssumptions, rulesOfEngagement, minimumResearchDeadlineAt, successCriteria]
+
+ScopeManifest:
+  type: object
+  additionalProperties: false
+  properties:
+    scopePath: { type: string }
+  required: [scopePath]
+
+SurfaceMap:
+  type: object
+  additionalProperties: false
+  properties:
+    entrypoints: { type: array, items: { type: object } }
+    trustBoundaries: { type: array, items: { type: object } }
+    sources: { type: array, items: { type: object } }
+    sinks: { type: array, items: { type: object } }
+    components: { type: array, items: { type: object } }
+    dependencyFlows: { type: array, items: { type: object } }
+    coverage: { type: object }
+    openQuestions: { type: array, items: { type: string } }
+  required: [entrypoints, trustBoundaries, sources, sinks, components, dependencyFlows, coverage, openQuestions]
+
+SurfaceMapManifest:
+  type: object
+  additionalProperties: false
+  properties:
+    surfaceMapPath: { type: string }
+  required: [surfaceMapPath]
+
+TrackPlan:
+  type: object
+  additionalProperties: false
+  properties:
+    tracks: { type: array, items: { type: object } }
+    iteration: { type: integer }
+  required: [tracks, iteration]
+
+DiscoveryReport:
+  type: object
+  additionalProperties: false
+  properties:
+    trackId: { type: string }
+    source: { type: object }
+    transformations: { type: array, items: { type: object } }
+    guards: { type: array, items: { type: object } }
+    sink: { type: object }
+    reachability: { type: object }
+    attackerControl: { type: object }
+    preconditions: { type: array, items: { type: string } }
+    candidateFindings: { type: array, items: { type: object } }
+    quickDisproofAttempt: { type: object }
+    newTrackSuggestions: { type: array, items: { type: object } }
+  required: [trackId, source, transformations, guards, sink, reachability, attackerControl, preconditions, candidateFindings, quickDisproofAttempt, newTrackSuggestions]
+
+DiscoveryManifest:
+  type: object
+  additionalProperties: false
+  properties:
+    trackId: { type: string }
+    discoveryReportPath: { type: string }
+  required: [trackId, discoveryReportPath]
+
+TrackReview:
+  type: object
+  additionalProperties: false
+  properties:
+    continueTracks: { type: array, items: { type: object } }
+    newTracks: { type: array, items: { type: object } }
+    blockedTracks: { type: array, items: { type: object } }
+    exhaustedTracks: { type: array, items: { type: object } }
+    candidateFindingIds: { type: array, items: { type: string } }
+    coverageGaps: { type: array, items: { type: string } }
+    reviewPath: { type: string }
+  required: [continueTracks, newTracks, blockedTracks, exhaustedTracks, candidateFindingIds, coverageGaps, reviewPath]
+
+FindingValidation:
+  type: object
+  additionalProperties: false
+  properties:
+    candidateId: { type: string }
+    reachability: { type: object }
+    controllability: { type: object }
+    trustBoundaryCrossings: { type: array, items: { type: object } }
+    guardAnalysis: { type: object }
+    deploymentConditions: { type: array, items: { type: string } }
+    primitive: { type: object }
+    evidenceRefs: { type: array, items: { type: string } }
+    disproofResult: { type: object }
+    verdict: { type: string }
+    validationPath: { type: string }
+  required: [candidateId, reachability, controllability, trustBoundaryCrossings, guardAnalysis, deploymentConditions, primitive, evidenceRefs, disproofResult, verdict, validationPath]
+
+FindingReview:
+  type: object
+  additionalProperties: false
+  properties:
+    candidateId: { type: string }
+    decision: { type: string, enum: [confirmed, needs-more-evidence, false-positive] }
+    challenges: { type: array, items: { type: object } }
+    requiredEvidence: { type: array, items: { type: string } }
+    confirmedPrimitive: { type: object }
+    reviewPath: { type: string }
+  required: [candidateId, decision, challenges, requiredEvidence, confirmedPrimitive, reviewPath]
+
+ChainSynthesis:
+  type: object
+  additionalProperties: false
+  properties:
+    chains: { type: array, items: { type: object } }
+  required: [chains]
+
+ChainReview:
+  type: object
+  additionalProperties: false
+  properties:
+    chainId: { type: string }
+    decision: { type: string, enum: [accepted, revise-chain, primitive-gap, invalid-finding] }
+    brokenTransitions: { type: array, items: { type: object } }
+    invalidatedFindings: { type: array, items: { type: string } }
+    invalidCandidateId: { type: [string, "null"] }
+    requiredRevisions: { type: array, items: { type: string } }
+    reviewPath: { type: string }
+  required: [chainId, decision, brokenTransitions, invalidatedFindings, invalidCandidateId, requiredRevisions, reviewPath]
+
+ExploitValidation:
+  type: object
+  additionalProperties: false
+  properties:
+    chainId: { type: string }
+    steps: { type: array, items: { type: object } }
+    evidenceRefs: { type: array, items: { type: string } }
+    executionContext: { type: object }
+    failurePoint: { type: [object, "null"] }
+    successCriteriaResult: { type: string, enum: [not_attempted, satisfied, not_satisfied, inconclusive] }
+    verdict: { type: string }
+    validationPath: { type: string }
+  required: [chainId, steps, evidenceRefs, executionContext, failurePoint, successCriteriaResult, verdict, validationPath]
+
+ExploitReview:
+  type: object
+  additionalProperties: false
+  properties:
+    chainId: { type: string }
+    decision: { type: string, enum: [confirmed, runtime-retry, chain-revision, finding-revalidation] }
+    reproducibility: { type: object }
+    environmentAssumptions: { type: array, items: { type: string } }
+    invalidatedSteps: { type: array, items: { type: object } }
+    invalidCandidateId: { type: [string, "null"] }
+    reviewPath: { type: string }
+  required: [chainId, decision, reproducibility, environmentAssumptions, invalidatedSteps, invalidCandidateId, reviewPath]
+
+ResearchReport:
+  type: object
+  additionalProperties: false
+  properties:
+    chainId: { type: string }
+    reportPath: { type: string }
+    verdict: { type: string }
+  required: [chainId, reportPath, verdict]

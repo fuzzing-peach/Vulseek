@@ -1,6 +1,7 @@
 scan-target:
   key: scanTarget
   name: Scan Target
+  taskName: "$file($input.targetPath).targetName:$input.vulnerabilityClassFocus"
   role: scan
   group: full-scan
   concurrency: 4
@@ -8,13 +9,30 @@ scan-target:
   disableable: true
   description: Target-level candidate discovery.
   runtimeConfig:
-    persistent: true
+    persistent: false
     reuseContainer: true
     mode: fanout
     nullableOutput: true
     cwd: /workspace/repo
     skills: [scan-target]
     promptFile: scan-target.prompt.md
+  promptValues:
+    scanJobId: "$ctx.scanJobId"
+    moduleId: "$file($input.modulePath).id"
+    moduleName: "$file($input.modulePath).name"
+    targetId: "$file($input.targetPath).id"
+    targetName: "$file($input.targetPath).name"
+    targetKind: "$file($input.targetPath).targetKind"
+    vulnerabilityClassFocus: "$input.vulnerabilityClassFocus"
+    targetFile: "$file($input.targetPath).filePath"
+    targetLine: "$file($input.targetPath).line"
+    targetSummary: "$file($input.targetPath).summary"
+    repositoryJsonPath: "$input.repositoryPath"
+    moduleJsonPath: "$input.modulePath"
+    threatModelJsonPath: "$input.threatModelPath"
+    targetJsonPath: "$input.targetPath"
+  effects:
+    - type: sync-candidates
   inputSchema:
     $ref: "#/schemas/ScanTargetStageInput"
   outputSchema:

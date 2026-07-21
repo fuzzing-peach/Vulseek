@@ -157,9 +157,32 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 										</TooltipPrimitive.Portal>
 									</Tooltip>
 								</Button>
-							}
-						/>
-						<CreateScanDialog
+						}
+					/>
+					<CreateScanDialog
+						title={scanT(t, "scan.actions.researchScan", "Research Scan")}
+						description={scanT(t, "scan.actions.researchScanDescription", "Run an independent, registry-backed security research pipeline.")}
+						isLoading={isCreatingScanJob}
+						showCommitWindow={false}
+						showFullScanPreview
+						scanType="research"
+						serviceData={data ? (data as unknown as Record<string, unknown>) : undefined}
+						onSubmit={async ({ targetRef, targetTag, scanRuntimeSettings }) => {
+							await createScanJob({
+								applicationId,
+								scanType: "research",
+								triggerSource: "manual",
+								targetRef,
+								targetTag,
+								scanRuntimeSettings,
+							}).then(() => {
+								toast.success(scanT(t, "scan.actions.researchScanStarted", "Research scan started successfully"));
+								refetch();
+							}).catch(() => toast.error(scanT(t, "scan.actions.researchScanStartError", "Error starting research scan")));
+						}}
+						trigger={<Button variant="default" isLoading={isCreatingScanJob} className={SCAN_BUTTON_CLASS_NAME}><Shield className="size-4 mr-1" />{scanT(t, "scan.actions.researchScan", "Research Scan")}</Button>}
+					/>
+					<CreateScanDialog
 							title={scanT(t, "scan.actions.deltaScan", "Delta Scan")}
 							description={scanT(
 								t,

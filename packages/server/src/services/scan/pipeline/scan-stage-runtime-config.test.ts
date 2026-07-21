@@ -6,7 +6,8 @@ import {
 } from "./scan-pipeline-definitions";
 
 const makeDefinitions = (concurrency: number): ScanPipelineDefinitions => ({
-	pipelineIds: { full: "full", delta: "delta" },
+	version: 2,
+	pipelineIds: { full: "full", delta: "delta", research: "research" },
 	schemas: {},
 	stageIds: ["scan-target"],
 	stages: [
@@ -22,7 +23,7 @@ const makeDefinitions = (concurrency: number): ScanPipelineDefinitions => ({
 			description: null,
 			inputSchema: null,
 			outputSchema: null,
-			runtimeConfig: {
+		 runtimeConfig: {
 				agentProfile: "agent-a",
 				persistent: true,
 				reuseContainer: false,
@@ -34,8 +35,16 @@ const makeDefinitions = (concurrency: number): ScanPipelineDefinitions => ({
 				promptFile: null,
 				inputArtifacts: null,
 				outputSchema: null,
-			},
-		},
+		 },
+		inputArtifacts: [],
+		outputArtifacts: [],
+		effects: [],
+		report: null,
+		taskName: null,
+		promptValues: {},
+		containerNameParts: [],
+		allowAgentExit: false,
+	},
 	],
 	stageMetadata: {
 		scanTarget: { id: "scan-target", name: "Scan Target" },
@@ -70,6 +79,14 @@ const makeDefinitions = (concurrency: number): ScanPipelineDefinitions => ({
 		delta: {
 			id: "delta",
 			name: "delta",
+			rootStageId: "scan-target",
+			stageIds: ["scan-target"],
+			edges: [],
+			groups: [],
+		},
+		research: {
+			id: "research",
+			name: "research",
 			rootStageId: "scan-target",
 			stageIds: ["scan-target"],
 			edges: [],

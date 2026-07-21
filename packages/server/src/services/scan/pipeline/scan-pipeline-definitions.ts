@@ -7,6 +7,7 @@ import { z } from "zod";
 export const SCAN_PIPELINE_IDS = {
 	full: "full",
 	delta: "delta",
+	research: "research",
 } as const;
 
 const stageRoleSchema = z.enum(["scan", "analysis", "verification"]);
@@ -25,6 +26,7 @@ const stageRuntimeConfigSchema = z
 		promptFile: z.string().min(1).nullable().optional(),
 		inputArtifacts: z.record(z.unknown()).nullable().optional(),
 		outputSchema: z.record(z.unknown()).nullable().optional(),
+		prepareRepository: z.boolean().default(false),
 	})
 	.default({});
 
@@ -40,6 +42,63 @@ const stageConfigSchema = z.object({
 	inputSchema: z.record(z.unknown()).optional(),
 	outputSchema: z.record(z.unknown()).optional(),
 	runtimeConfig: stageRuntimeConfigSchema,
+	inputArtifacts: z
+		.array(
+			z.object({
+				from: z.string().min(1),
+				to: z.string().min(1),
+				inputField: z.string().min(1).optional(),
+				required: z.boolean().optional().default(true),
+			}),
+		)
+		.default([]),
+	outputArtifacts: z
+		.array(
+			z.object({
+				from: z.string().min(1),
+				to: z.string().min(1),
+				inputField: z.string().min(1).optional(),
+				required: z.boolean().optional().default(true),
+			}),
+		)
+		.default([]),
+	effects: z
+		.array(
+			z.discriminatedUnion("type", [
+				z.object({ type: z.literal("sync-candidates") }),
+				z.object({
+					type: z.literal("project-candidate-result"),
+					resultStage: z.enum(["analyze", "critique", "verify", "triage"]),
+				}),
+				z.object({
+					type: z.literal("research-registry"),
+					operation: z.enum([
+						"persist-scope",
+						"persist-track-plan",
+						"apply-track-review",
+						"record-discovery",
+						"record-finding-validation",
+						"record-finding-review",
+						"persist-chain",
+						"apply-chain-review",
+						"record-exploit-validation",
+						"apply-exploit-review",
+						"persist-report",
+					]),
+				}),
+			]),
+		)
+		.default([]),
+	report: z
+		.object({
+			path: z.string().min(1),
+			required: z.boolean().default(true),
+		})
+		.optional(),
+	taskName: z.string().min(1).optional(),
+	containerNameParts: z.array(z.string()).default([]),
+	allowAgentExit: z.boolean().default(false),
+	promptValues: z.record(z.unknown()).default({}),
 });
 
 const edgeConfigSchema = z.object({
@@ -58,6 +117,16 @@ const edgeConfigSchema = z.object({
 			default: z.boolean().optional(),
 		})
 		.optional(),
+	artifacts: z
+		.array(
+			z.object({
+				from: z.string().min(1),
+				to: z.string().min(1),
+				inputField: z.string().min(1).optional(),
+				required: z.boolean().optional().default(true),
+			}),
+		)
+		.default([]),
 });
 
 const groupConfigSchema = z.object({
@@ -76,12 +145,18 @@ const pipelineConfigSchema = z.object({
 });
 
 const scanPipelineDefinitionsSourceSchema = z.object({
+	version: z.number().int().min(1).default(2),
 	schemas: z.record(z.record(z.unknown())).default({}),
 	stages: z.record(stageConfigSchema),
-	pipelines: z.object({
-		full: pipelineConfigSchema,
-		delta: pipelineConfigSchema,
-	}),
+	pipelines: z
+		.record(pipelineConfigSchema)
+		.refine(
+			(pipelines) =>
+				Boolean(pipelines.full && pipelines.delta && pipelines.research),
+			{
+				message: "pipelines must define full, delta, and research",
+				},
+			),
 });
 
 export type ScanStageRole = z.infer<typeof stageRoleSchema>;
@@ -99,6 +174,35 @@ export type ScanPipelineStageConfig = {
 	inputSchema: Record<string, unknown> | null;
 	outputSchema: Record<string, unknown> | null;
 	runtimeConfig: ScanStageRuntimeConfig | null;
+	inputArtifacts: Array<{ from: string; to: string; inputField?: string; required: boolean }>;
+	outputArtifacts: Array<{ from: string; to: string; inputField?: string; required: boolean }>;
+	effects: Array<
+		| { type: "sync-candidates" }
+		| {
+				type: "project-candidate-result";
+				resultStage: "analyze" | "critique" | "verify" | "triage";
+		  }
+		| {
+				type: "research-registry";
+				operation:
+					| "persist-scope"
+					| "persist-track-plan"
+					| "apply-track-review"
+					| "record-discovery"
+					| "record-finding-validation"
+					| "record-finding-review"
+					| "persist-chain"
+					| "apply-chain-review"
+					| "record-exploit-validation"
+					| "apply-exploit-review"
+					| "persist-report";
+		  }
+	>;
+	report: { path: string; required: boolean } | null;
+	taskName: string | null;
+	promptValues: Record<string, unknown>;
+	containerNameParts: string[];
+	allowAgentExit: boolean;
 };
 
 export type ScanStageRuntimeConfig = {
@@ -113,6 +217,7 @@ export type ScanStageRuntimeConfig = {
 	promptFile: string | null;
 	inputArtifacts: Record<string, unknown> | null;
 	outputSchema: Record<string, unknown> | null;
+	prepareRepository?: boolean;
 };
 
 export type ScanPipelineEdgeConfig = {
@@ -126,6 +231,7 @@ export type ScanPipelineEdgeConfig = {
 	input: unknown;
 	outputSchema: Record<string, unknown> | null;
 	outputSchemaDescription: string | null;
+	artifacts: Array<{ from: string; to: string; inputField?: string; required: boolean }>;
 	route: {
 		key: string;
 		default?: boolean;
@@ -140,7 +246,7 @@ export type ScanPipelineGroupConfig = {
 };
 
 export type ScanPipelineConfig = {
-	id: keyof typeof SCAN_PIPELINE_IDS;
+	id: string;
 	name: string;
 	rootStageId: string;
 	stageIds: string[];
@@ -148,8 +254,15 @@ export type ScanPipelineConfig = {
 	groups: ScanPipelineGroupConfig[];
 };
 
+export type ScanPipelineMap = {
+	full: ScanPipelineConfig;
+	delta: ScanPipelineConfig;
+	research: ScanPipelineConfig;
+} & Record<string, ScanPipelineConfig>;
+
 export type ScanPipelineDefinitions = {
-	pipelineIds: typeof SCAN_PIPELINE_IDS;
+	version: number;
+	pipelineIds: Record<string, string>;
 	schemas: Record<string, Record<string, unknown>>;
 	stageIds: string[];
 	stages: ScanPipelineStageConfig[];
@@ -171,12 +284,164 @@ export type ScanPipelineDefinitions = {
 			runtimeConfig: ScanStageRuntimeConfig | null;
 		}
 	>;
-	pipelines: Record<keyof typeof SCAN_PIPELINE_IDS, ScanPipelineConfig>;
+	pipelines: ScanPipelineMap;
 };
 
 export type ScanPipelineDefinitionsSource = z.infer<
 	typeof scanPipelineDefinitionsSourceSchema
 >;
+
+export const normalizePipelineDefinitionSnapshot = (
+	value: unknown,
+	options: { useBaseline?: boolean } = {},
+): ScanPipelineDefinitions => {
+	const useBaseline = options.useBaseline ?? true;
+	if (!value || typeof value !== "object") {
+		throw new Error("Invalid scan pipeline definition snapshot");
+	}
+	const snapshot = value as Partial<ScanPipelineDefinitions> & {
+		stages?: unknown;
+		pipelines?: unknown;
+	};
+	if (!snapshot.stages || !snapshot.pipelines) {
+		throw new Error("Invalid scan pipeline definition snapshot");
+	}
+	if (
+		!Array.isArray(snapshot.stages) ||
+		!isRecord(snapshot.pipelines)
+	) {
+		throw new Error(
+			"Invalid scan pipeline definition snapshot: stages and pipelines have invalid shapes",
+		);
+	}
+	const stages = (snapshot.stages as ScanPipelineStageConfig[]).map((stage) => ({
+		...stage,
+		inputArtifacts: stage.inputArtifacts ?? [],
+		outputArtifacts: stage.outputArtifacts ?? [],
+		effects: stage.effects ?? [],
+		report: stage.report ?? null,
+		promptValues: stage.promptValues ?? {},
+		containerNameParts: stage.containerNameParts ?? [],
+		allowAgentExit: stage.allowAgentExit ?? false,
+	}));
+	const pipelines = Object.fromEntries(
+		Object.entries(snapshot.pipelines as ScanPipelineMap).map(([id, pipeline]) => [
+			id,
+			{
+				...pipeline,
+				edges: pipeline.edges.map((edge) => ({
+					...edge,
+					artifacts: edge.artifacts ?? [],
+				})),
+				groups: pipeline.groups ?? [],
+			},
+		]),
+	) as ScanPipelineMap;
+	const baseline = useBaseline ? loadScanPipelineDefinitions() : null;
+	const baselineStages = new Map(
+		baseline?.stages.map((stage) => [stage.id, stage]) ?? [],
+	);
+	const mergedStages = stages.map((stage) => {
+		const defaults = baselineStages.get(stage.id);
+		if (!defaults) return stage;
+		return {
+			...defaults,
+			...stage,
+			runtimeConfig: {
+				...(defaults.runtimeConfig ?? {}),
+				...(stage.runtimeConfig ?? {}),
+			},
+			inputArtifacts:
+				stage.inputArtifacts.length > 0
+					? stage.inputArtifacts
+					: defaults.inputArtifacts,
+			outputArtifacts:
+				stage.outputArtifacts.length > 0
+					? stage.outputArtifacts
+					: defaults.outputArtifacts,
+			effects: stage.effects.length > 0 ? stage.effects : defaults.effects,
+			report: stage.report ?? defaults.report,
+			promptValues:
+				Object.keys(stage.promptValues).length > 0
+					? stage.promptValues
+					: defaults.promptValues,
+		} as ScanPipelineStageConfig;
+	});
+	const baselinePipelines: ScanPipelineMap = baseline?.pipelines ?? {
+		full: pipelines.full,
+		delta: pipelines.delta,
+		research: pipelines.research,
+	};
+	const mergedPipelines = Object.fromEntries(
+		Object.entries(pipelines).map(([id, pipeline]) => {
+			const defaults = baselinePipelines[id];
+			if (!defaults) return [id, pipeline];
+			const defaultEdges = new Map(defaults.edges.map((edge) => [edge.name, edge]));
+			return [
+				id,
+				{
+					...defaults,
+					...pipeline,
+					edges: pipeline.edges.map((edge) => {
+						const defaultEdge = defaultEdges.get(edge.name);
+						return defaultEdge && edge.artifacts.length === 0
+							? { ...defaultEdge, ...edge, artifacts: defaultEdge.artifacts }
+							: edge;
+					}),
+				},
+			];
+		}),
+	) as ScanPipelineMap;
+	const source = {
+		version: 2,
+		schemas: snapshot.schemas ?? baseline?.schemas ?? {},
+		stages: Object.fromEntries(
+			(mergedStages as ScanPipelineStageConfig[]).map((stage) => [stage.id, {
+				key: stage.key,
+				name: stage.name,
+				role: stage.role,
+				group: stage.group,
+				concurrency: stage.concurrency,
+				maxConcurrency: stage.maxConcurrency ?? undefined,
+				disableable: stage.disableable,
+				description: stage.description ?? undefined,
+				inputSchema: stage.inputSchema ?? undefined,
+				outputSchema: stage.outputSchema ?? undefined,
+				runtimeConfig: stage.runtimeConfig ?? {},
+				inputArtifacts: stage.inputArtifacts,
+				outputArtifacts: stage.outputArtifacts,
+				effects: stage.effects,
+				report: stage.report ?? undefined,
+				taskName: stage.taskName ?? undefined,
+				promptValues: stage.promptValues,
+				containerNameParts: stage.containerNameParts,
+				allowAgentExit: stage.allowAgentExit,
+			}]),
+		),
+		pipelines: Object.fromEntries(
+			Object.entries(mergedPipelines).map(([id, pipeline]) => [id, {
+				name: pipeline.name,
+				root: pipeline.rootStageId,
+				stages: pipeline.stageIds,
+				edges: pipeline.edges.map((edge) => ({
+					name: edge.name,
+					from: edge.from,
+					to: edge.to,
+					fork: edge.fork,
+					mode: edge.mode ?? undefined,
+					foreach: edge.foreach ?? undefined,
+					input: edge.input ?? undefined,
+					outputSchema: edge.outputSchema ?? undefined,
+					outputSchemaDescription: edge.outputSchemaDescription ?? undefined,
+					route: edge.route ?? undefined,
+					artifacts: edge.artifacts,
+				})),
+				groups: pipeline.groups,
+			}]),
+		),
+	};
+	return parseScanPipelineDefinitionsSource(source);
+};
 
 export const normalizeLegacyVerificationSchema = (
 	definitions: ScanPipelineDefinitions,
@@ -339,6 +604,7 @@ const normalizeStageRuntimeConfig = (
 	promptFile: config.promptFile ?? null,
 	inputArtifacts: config.inputArtifacts ?? null,
 	outputSchema: config.outputSchema ?? null,
+	prepareRepository: config.prepareRepository ?? false,
 });
 
 const assertUnique = (values: string[], label: string) => {
@@ -352,7 +618,7 @@ const assertUnique = (values: string[], label: string) => {
 };
 
 const validatePipelineTopology = (
-	pipelineId: keyof typeof SCAN_PIPELINE_IDS,
+	pipelineId: string,
 	pipeline: ScanPipelineConfig,
 	allStageIds: Set<string>,
 ) => {
@@ -467,7 +733,7 @@ const validateJsonSchemaReferences = (
 
 const validateDefinitionsSchemaReferences = (
 	stages: ScanPipelineStageConfig[],
-	pipelines: Record<keyof typeof SCAN_PIPELINE_IDS, ScanPipelineConfig>,
+	pipelines: Record<string, ScanPipelineConfig>,
 	schemas: Record<string, Record<string, unknown>>,
 ) => {
 	for (const stage of stages) {
@@ -568,6 +834,12 @@ const validatePathExpressionPrefix = (input: {
 	if (/^\$computed\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/.test(expression)) {
 		return;
 	}
+	if (
+		expression === "$output" ||
+		/^\$output\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/.test(expression)
+	) {
+		return;
+	}
 	const outputPattern = allowForEachSuffix
 		? /^\$\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*(\[\*\])?$/
 		: /^\$\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/;
@@ -659,7 +931,7 @@ const validateTransformExpression = (input: {
 
 const validateDefinitionsEdgeTransformExpressions = (
 	stages: ScanPipelineStageConfig[],
-	pipelines: Record<keyof typeof SCAN_PIPELINE_IDS, ScanPipelineConfig>,
+	pipelines: Record<string, ScanPipelineConfig>,
 	schemas: Record<string, Record<string, unknown>>,
 ) => {
 	const stagesById = new Map(stages.map((stage) => [stage.id, stage]));
@@ -716,14 +988,19 @@ export const parseScanPipelineDefinitionsSource = (
 				inputSchema: stage.inputSchema ?? null,
 				outputSchema: stage.outputSchema ?? null,
 				runtimeConfig: normalizeStageRuntimeConfig(stage.runtimeConfig),
+				inputArtifacts: stage.inputArtifacts,
+				outputArtifacts: stage.outputArtifacts,
+				effects: stage.effects,
+				report: stage.report ?? null,
+				taskName: stage.taskName ?? null,
+				promptValues: stage.promptValues,
+				containerNameParts: stage.containerNameParts,
+				allowAgentExit: stage.allowAgentExit,
 			};
 		},
 	);
 	const allStageIds = new Set(stageIds);
-	const buildPipeline = (
-		id: keyof typeof SCAN_PIPELINE_IDS,
-	): ScanPipelineConfig => {
-		const pipeline = parsed.pipelines[id];
+	const buildPipeline = ([id, pipeline]: [string, z.infer<typeof pipelineConfigSchema>]): ScanPipelineConfig => {
 		return {
 			id,
 			name: pipeline.name,
@@ -740,6 +1017,12 @@ export const parseScanPipelineDefinitionsSource = (
 				input: edge.input ?? null,
 				outputSchema: edge.outputSchema ?? null,
 				outputSchemaDescription: edge.outputSchemaDescription ?? null,
+				artifacts: edge.artifacts.map((artifact) => ({
+					from: artifact.from,
+					to: artifact.to,
+					inputField: artifact.inputField,
+					required: artifact.required,
+				})),
 				route: edge.route
 					? {
 							key: edge.route.key,
@@ -755,17 +1038,20 @@ export const parseScanPipelineDefinitionsSource = (
 			})),
 		};
 	};
-	const pipelines = {
-		full: buildPipeline("full"),
-		delta: buildPipeline("delta"),
-	};
-	validatePipelineTopology("full", pipelines.full, allStageIds);
-	validatePipelineTopology("delta", pipelines.delta, allStageIds);
+	const pipelines = Object.fromEntries(
+		Object.entries(parsed.pipelines).map((entry) => [entry[0], buildPipeline(entry)]),
+	) as ScanPipelineMap;
+	for (const [pipelineId, pipeline] of Object.entries(pipelines)) {
+		validatePipelineTopology(pipelineId, pipeline, allStageIds);
+	}
 	validateDefinitionsSchemaReferences(stages, pipelines, parsed.schemas);
 	validateDefinitionsEdgeTransformExpressions(stages, pipelines, parsed.schemas);
 
 	return {
-		pipelineIds: SCAN_PIPELINE_IDS,
+		version: parsed.version,
+		pipelineIds: Object.fromEntries(
+			Object.keys(pipelines).map((pipelineId) => [pipelineId, pipelineId]),
+		),
 		schemas: parsed.schemas,
 		stageIds,
 		stages,
@@ -929,29 +1215,4 @@ export const createStageRuntimeConfigWithDeps = (input: {
 			(await loadStage()).outputSchema ??
 			null,
 	};
-};
-
-export const validatePipelineRegistryCoverage = (
-	definitions: ScanPipelineDefinitions,
-	registry: {
-		stageIds: ReadonlySet<string>;
-		edgeNames: ReadonlySet<string>;
-	},
-) => {
-	for (const stageId of definitions.stageIds) {
-		if (!registry.stageIds.has(stageId)) {
-			throw new Error(`missing stage implementation: ${stageId}`);
-		}
-	}
-	const edgeNames = new Set<string>();
-	for (const pipeline of Object.values(definitions.pipelines)) {
-		for (const edge of pipeline.edges) {
-			edgeNames.add(edge.name);
-		}
-	}
-	for (const edgeName of edgeNames) {
-		if (!registry.edgeNames.has(edgeName)) {
-			throw new Error(`missing edge implementation: ${edgeName}`);
-		}
-	}
 };

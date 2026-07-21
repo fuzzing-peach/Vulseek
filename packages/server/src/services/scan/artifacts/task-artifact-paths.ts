@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 const TASK_ROOT_IN_CONTAINER = "/task";
@@ -66,6 +67,27 @@ export const writeTaskJsonArtifact = async (input: {
 		"utf-8",
 	);
 	return path.posix.join(TASK_ROOT_IN_CONTAINER, normalizedRelativePath);
+};
+
+export const replaceTaskJsonArtifact = async (input: {
+	taskDir: string;
+	containerPath: string;
+	value: unknown;
+}) => {
+	const hostPath = taskArtifactHostPath(input);
+	await fs.mkdir(path.dirname(hostPath), { recursive: true });
+	const temporaryPath = `${hostPath}.${randomUUID()}.tmp`;
+	try {
+		await fs.writeFile(
+			temporaryPath,
+			`${JSON.stringify(input.value, null, 2)}\n`,
+			"utf-8",
+		);
+		await fs.rename(temporaryPath, hostPath);
+	} finally {
+		await fs.rm(temporaryPath, { force: true });
+	}
+	return input.containerPath;
 };
 
 export const writeTaskTextArtifact = async (input: {

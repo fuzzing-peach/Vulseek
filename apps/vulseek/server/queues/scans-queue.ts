@@ -68,7 +68,9 @@ export const scansWorker = new Worker(
 				return;
 			}
 
-			const mode = job.data.mode || "full";
+			const mode = job.data.mode ?? scanJob.scanType;
+			const isPrimaryScanMode =
+				mode === "full" || mode === "delta" || mode === "research";
 			console.log(
 				"[scans-worker]",
 				JSON.stringify({
@@ -78,7 +80,7 @@ export const scansWorker = new Worker(
 				}),
 			);
 
-			if (mode === "full") {
+			if (isPrimaryScanMode) {
 				const latestScanJob = await findScanJobById(job.data.scanJobId);
 				if (
 					latestScanJob.status === "failed" ||
@@ -114,7 +116,7 @@ export const scansWorker = new Worker(
 			}
 			await updateScanJobStatus(scanJob.scanJobId, "running");
 			await runScanJobInContainer(scanJob.scanJobId, {
-				enqueueInitialRepositoryTask: mode === "full",
+				enqueueInitialRepositoryTask: mode === "full" || mode === "research",
 			});
 
 			const scanJobAfterRun = await findScanJobById(job.data.scanJobId);

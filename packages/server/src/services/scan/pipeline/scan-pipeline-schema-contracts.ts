@@ -6,12 +6,28 @@ export type JsonSchemaArtifactAnnotation = {
 	path: string;
 	kind: "path" | "path_list";
 	jsonSchema: JsonSchemaObject;
+	valueAnnotations: JsonSchemaValueAnnotation[];
 };
+
+export type JsonSchemaValueAnnotation =
+	| {
+			path: string;
+			kind: "generate";
+			generator: "uuid";
+			length: number;
+			prefix: string;
+	  }
+	| {
+			path: string;
+			kind: "normalize";
+			steps: Array<"trim" | "remove-empty" | "unique">;
+	  };
 
 export type JsonSchemaContract = {
 	kind: "json-schema";
 	schema: JsonSchemaObject;
 	artifactAnnotations: JsonSchemaArtifactAnnotation[];
+	valueAnnotations: JsonSchemaValueAnnotation[];
 	validate: (value: unknown) => void;
 };
 
@@ -47,11 +63,13 @@ const normalizeJsonSchema = (input: {
 }): {
 	schema: unknown;
 	artifactAnnotations: JsonSchemaArtifactAnnotation[];
+	valueAnnotations: JsonSchemaValueAnnotation[];
 } => {
 	if (!isObject(input.schema)) {
 		return {
 			schema: input.schema,
 			artifactAnnotations: [],
+			valueAnnotations: [],
 		};
 	}
 
@@ -65,6 +83,78 @@ const normalizeJsonSchema = (input: {
 	}
 
 	return normalizePathOfSchema(input);
+};
+
+const normalizeValueAnnotations = (
+	schema: unknown,
+	schemas: Record<string, JsonSchemaObject>,
+	path = "",
+): JsonSchemaValueAnnotation[] => {
+	if (!isObject(schema)) return [];
+	if (typeof schema.$ref === "string") {
+		return normalizeValueAnnotations(
+			resolveInternalSchemaRef(schema.$ref, schemas),
+			schemas,
+			path,
+		);
+	}
+
+	const annotations: JsonSchemaValueAnnotation[] = [];
+	const generate = schema.$generate;
+	if (generate !== undefined) {
+		if (!isObject(generate) || generate.function !== "uuid") {
+			throw new Error(`Unsupported schema generator at ${path || "root"}`);
+		}
+		const length = generate.length;
+		if (typeof length !== "number" || !Number.isInteger(length) || length < 1 || length > 32) {
+			throw new Error(`UUID length must be an integer between 1 and 32 at ${path}`);
+		}
+		const prefix = generate.prefix ?? "";
+		if (typeof prefix !== "string") {
+			throw new Error(`UUID prefix must be a string at ${path}`);
+		}
+		annotations.push({
+			path,
+			kind: "generate",
+			generator: "uuid",
+			length,
+			prefix,
+		});
+	}
+
+	const normalize = schema.$normalize;
+	if (normalize !== undefined) {
+		if (
+			!Array.isArray(normalize) ||
+			!normalize.every((step) =>
+				["trim", "remove-empty", "unique"].includes(step as string),
+			)
+		) {
+			throw new Error(`Invalid normalize annotation at ${path || "root"}`);
+		}
+		annotations.push({
+			path,
+			kind: "normalize",
+			steps: normalize as Array<"trim" | "remove-empty" | "unique">,
+		});
+	}
+
+	const properties = isObject(schema.properties) ? schema.properties : {};
+	for (const [key, child] of Object.entries(properties)) {
+		annotations.push(
+			...normalizeValueAnnotations(
+				child,
+				schemas,
+				path ? `${path}.${key}` : key,
+			),
+		);
+	}
+	if (schema.items !== undefined) {
+		annotations.push(
+			...normalizeValueAnnotations(schema.items, schemas, `${path}[]`),
+		);
+	}
+	return annotations;
 };
 
 const jsonTypeOf = (value: unknown) => {
@@ -193,18 +283,21 @@ const normalizePathOfSchema = (input: {
 }): {
 	schema: unknown;
 	artifactAnnotations: JsonSchemaArtifactAnnotation[];
+	valueAnnotations: JsonSchemaValueAnnotation[];
 } => {
 	if (!isObject(input.schema)) {
-		return {
-			schema: input.schema,
-			artifactAnnotations: [],
-		};
+	return {
+		schema: input.schema,
+		artifactAnnotations: [],
+		valueAnnotations: [],
+	};
 	}
 
 	const pathOf = input.schema[PATH_OF_KEY];
 	if (typeof pathOf === "string") {
+		const artifactSchemaSource = resolveInternalSchemaRef(pathOf, input.schemas);
 		const artifactSchema = normalizeJsonSchema({
-			schema: resolveInternalSchemaRef(pathOf, input.schemas),
+			schema: artifactSchemaSource,
 			schemas: input.schemas,
 			path: input.path,
 		});
@@ -215,14 +308,22 @@ const normalizePathOfSchema = (input: {
 					path: input.path,
 					kind: input.path.endsWith("[]") ? "path_list" : "path",
 					jsonSchema: cloneJson(artifactSchema.schema) as JsonSchemaObject,
+					valueAnnotations: normalizeValueAnnotations(
+						artifactSchemaSource,
+						input.schemas,
+					),
 				},
 			],
+			valueAnnotations: [],
 		};
 	}
 
 	const nextSchema: Record<string, unknown> = {};
 	const annotations: JsonSchemaArtifactAnnotation[] = [];
 	for (const [key, value] of Object.entries(input.schema)) {
+		if (key === "$generate" || key === "$normalize") {
+			continue;
+		}
 		if (key === "properties" && isObject(value)) {
 			const properties: Record<string, unknown> = {};
 			for (const [propertyName, propertySchema] of Object.entries(value)) {
@@ -275,6 +376,11 @@ const normalizePathOfSchema = (input: {
 	return {
 		schema: nextSchema,
 		artifactAnnotations: annotations,
+		valueAnnotations: normalizeValueAnnotations(
+			input.schema,
+			input.schemas,
+			input.path,
+		),
 	};
 };
 
@@ -295,6 +401,7 @@ export const createJsonSchemaContract = (input: {
 		kind: "json-schema",
 		schema,
 		artifactAnnotations: normalized.artifactAnnotations,
+		valueAnnotations: normalized.valueAnnotations,
 		validate: (value) => validateAgainstJsonSchema(schema, value),
 	};
 };
@@ -302,6 +409,10 @@ export const createJsonSchemaContract = (input: {
 export const getJsonSchemaArtifactAnnotations = (
 	contract: JsonSchemaContract,
 ) => contract.artifactAnnotations;
+
+export const getJsonSchemaValueAnnotations = (
+	contract: JsonSchemaContract,
+) => contract.valueAnnotations;
 
 export const validateJsonSchemaContract = (
 	contract: JsonSchemaContract,

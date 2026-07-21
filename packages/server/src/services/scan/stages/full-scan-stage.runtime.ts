@@ -12,7 +12,6 @@ import type {
 	ScanStageSettings,
 } from "@vulseek/server/db/schema";
 import {
-	FULL_SCAN_STAGE_IDS,
 	getRuntimeStageSetting,
 	normalizeScanRuntimeSettings,
 } from "../runtime-settings";
@@ -34,7 +33,6 @@ export type ScanProfileConcurrencySettings = {
 	scanStageSettings: ScanStageSettings;
 };
 
-export type StageAgentKind = "scan" | "analysis" | "verification";
 type ScanTargetRef = {
 	applicationId?: string | null;
 	composeId?: string | null;
@@ -50,46 +48,6 @@ const sanitizeContainerNamePart = (value: string) =>
 		.replace(/[^a-z0-9_.-]/g, "-")
 		.replace(/-+/g, "-")
 		.replace(/^-|-$/g, "") || "x";
-
-const resolveStageAgentKindFromStageName = (
-	stageName: string,
-): StageAgentKind => {
-	switch (stageName) {
-		case SCAN_STAGE_IDS.analyzeFinding:
-		case SCAN_STAGE_IDS.critiqueFinding:
-			return "analysis";
-		case SCAN_STAGE_IDS.verifyFinding:
-		case SCAN_STAGE_IDS.triageFinding:
-			return "verification";
-		default:
-			return "scan";
-	}
-};
-
-const resolveStageContainerPrefix = (stageName: string) => {
-	switch (stageName) {
-		case SCAN_STAGE_IDS.deltaScope:
-			return "delta-scope";
-		case SCAN_STAGE_IDS.repositoryProfile:
-			return "repository-profile";
-		case SCAN_STAGE_IDS.attackSurfaceModel:
-			return "attack-surface-model";
-		case SCAN_STAGE_IDS.identifyTarget:
-			return "identify-target";
-		case SCAN_STAGE_IDS.scanTarget:
-			return "scan-target";
-		case SCAN_STAGE_IDS.analyzeFinding:
-			return "analyze-finding";
-		case SCAN_STAGE_IDS.critiqueFinding:
-			return "critique-finding";
-		case SCAN_STAGE_IDS.verifyFinding:
-			return "verify-finding";
-		case SCAN_STAGE_IDS.triageFinding:
-			return "triage-finding";
-		default:
-			return sanitizeContainerNamePart(stageName);
-	}
-};
 
 const sanitizePathPart = (value: string) =>
 	value
@@ -199,7 +157,6 @@ const resolveScanContextMount = async (
 
 export const resolveStageAgentProfileFromTarget = async (
 	targetRef: ScanTargetRef,
-	_kind: StageAgentKind,
 	stageName?: string,
 ): Promise<AgentProfileLike | null> => {
 	const target = targetRef.applicationId
@@ -219,7 +176,6 @@ export const resolveStageAgentProfileFromTarget = async (
 
 export const resolveStageAgentProfile = async (
 	scanJob: ScanJobRuntimeRef,
-	_kind: StageAgentKind,
 	stageName?: string,
 ): Promise<AgentProfileLike | null> => {
 	if (stageName) {
@@ -293,11 +249,13 @@ export const resolveScanProfileConcurrencySettings = async (
 	scanJobId: string,
 ): Promise<ScanProfileConcurrencySettings & {
 	scanRuntimeSettings: ScanRuntimeSettings;
+	scanType: "delta" | "full" | "research";
 }> => {
 	const [scanJob] = await db
 		.select({
 			applicationId: scanJobs.applicationId,
 			composeId: scanJobs.composeId,
+			scanType: scanJobs.scanType,
 			scanRuntimeSettings: scanJobs.scanRuntimeSettings,
 		})
 		.from(scanJobs)
@@ -310,6 +268,7 @@ export const resolveScanProfileConcurrencySettings = async (
 		scanRuntimeSettings: normalizeScanRuntimeSettings(
 			scanJob?.scanRuntimeSettings ?? {},
 		),
+		scanType: scanJob?.scanType ?? "full",
 	};
 };
 
@@ -321,7 +280,7 @@ export const resolveStageConcurrencySetting = async (
 	const settings = await resolveScanProfileConcurrencySettings(scanJobId);
 	const snapshotConcurrency = await createStageRuntimeConfig(scanJobId, stageName)
 		.getConcurrency();
-	return Math.max(
+	const concurrency = Math.max(
 		1,
 		getRuntimeStageSetting(settings.scanRuntimeSettings, stageName)
 			.concurrency ||
@@ -329,6 +288,7 @@ export const resolveStageConcurrencySetting = async (
 			fallback(settings) ||
 			1,
 	);
+	return settings.scanType === "research" ? Math.min(4, concurrency) : concurrency;
 };
 
 export const isFullScanStageActive = async (
@@ -344,19 +304,6 @@ export const isFullScanStageActive = async (
 		scanJob?.scanRuntimeSettings ?? {},
 		stageName,
 	);
-	if (
-		stageName === SCAN_STAGE_IDS.repositoryProfile ||
-		stageName === SCAN_STAGE_IDS.deltaScope
-	) {
-		return true;
-	}
-	if (
-		!FULL_SCAN_STAGE_IDS.includes(
-			stageName as (typeof FULL_SCAN_STAGE_IDS)[number],
-		)
-	) {
-		return true;
-	}
 	return setting.disabled !== true;
 };
 
@@ -512,16 +459,12 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 	parentSessionId: input.parentSessionId ?? null,
 	parentTaskId: input.parentTaskId ?? null,
 	agentProfile: async () =>
-		await resolveStageAgentProfile(
-			input.scanJob,
-			resolveStageAgentKindFromStageName(input.stageName),
-			input.stageName,
-		),
+		await resolveStageAgentProfile(input.scanJob, input.stageName),
 	containerName: (...parts) =>
 		[
 			sanitizeContainerNamePart(input.base.projectName),
 			sanitizeContainerNamePart(input.base.serviceName),
-			resolveStageContainerPrefix(input.stageName),
+			sanitizeContainerNamePart(input.stageName),
 			sanitizeContainerNamePart(input.scanJob.scanJobId),
 			input.persistent &&
 			input.laneIndex !== undefined &&

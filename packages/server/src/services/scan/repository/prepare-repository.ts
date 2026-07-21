@@ -1,4 +1,5 @@
 import { execAsync } from "../../../utils/process/execAsync";
+import type { ScanType } from "../scan-type";
 
 const escapeSingleQuotes = (value: string) => value.replace(/'/g, `'"'"'`);
 
@@ -19,7 +20,7 @@ export type PreparedRepositoryState = {
 
 export const prepareRepositoryForScanInContainer = async (input: {
 	containerName: string;
-	scanType: "delta" | "full";
+	scanType: ScanType;
 	targetRef?: string | null;
 	targetTag?: string | null;
 	commitSha?: string | null;
@@ -28,7 +29,7 @@ export const prepareRepositoryForScanInContainer = async (input: {
 	scanRootDir: string;
 }): Promise<PreparedRepositoryState> => {
 	const forceLatestRef = input.scanType === "delta";
-	const preferLatestTag = input.scanType === "full";
+	const preferLatestTag = input.scanType === "full" || input.scanType === "research";
 	const targetRef = input.targetRef?.trim() || "";
 	const targetTag = input.targetTag?.trim() || "";
 	const requestedCommit = input.commitSha?.trim() || "";

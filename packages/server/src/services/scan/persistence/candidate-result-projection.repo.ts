@@ -25,6 +25,11 @@ export const CANDIDATE_RESULT_STAGE_NAMES = [
 export type CandidateResultStageName =
 	(typeof CANDIDATE_RESULT_STAGE_NAMES)[number];
 
+export type CandidateProjectionResultStage =
+	| "analyze"
+	| "verify"
+	| "triage";
+
 type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type TaskRecord = typeof tasks.$inferSelect;
 
@@ -76,17 +81,25 @@ export const upsertCandidateResultProjectionTx = async (
 	tx: DbTransaction,
 	task: TaskRecord,
 	vulnerabilityCandidateId = task.vulnerabilityCandidateId,
+	resultStage?: CandidateProjectionResultStage,
 ) => {
+	const projectionStageName = resultStage
+		? resultStage === "analyze"
+			? "analyze-finding"
+			: resultStage === "verify"
+				? "verify-finding"
+				: "triage-finding"
+		: task.stageName;
 	if (
 		!vulnerabilityCandidateId ||
 		!CANDIDATE_RESULT_STAGE_NAMES.includes(
-			task.stageName as CandidateResultStageName,
+			projectionStageName as CandidateResultStageName,
 		)
 	) {
 		return false;
 	}
 
-	const parsedOutput = parseStageOutput(task.stageName, task.output);
+	const parsedOutput = parseStageOutput(projectionStageName, task.output);
 	if (!parsedOutput.success) {
 		return false;
 	}
@@ -117,7 +130,7 @@ export const upsertCandidateResultProjectionTx = async (
 		scanJobId: task.scanJobId,
 		vulnerabilityCandidateId,
 		taskId: task.taskId,
-		stageName: task.stageName,
+		stageName: projectionStageName,
 		output: parsedOutput.data,
 		resultAt,
 	});

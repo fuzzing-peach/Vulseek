@@ -4,6 +4,7 @@ import {
 	ScanRuntimeSettingsSchema,
 } from "../../db/schema/shared";
 import { loadScanPipelineDefinitions } from "./pipeline/scan-pipeline-definitions";
+import { getPipelineIdForScanType } from "./scan-type";
 
 export const FULL_SCAN_STAGE_IDS = [
 	"repository-profile",
@@ -25,9 +26,25 @@ export const DELTA_SCAN_STAGE_IDS = [
 	"triage-finding",
 ];
 
+export const RESEARCH_SCAN_STAGE_IDS = [
+	"research-scope",
+	"surface-map",
+	"track-plan",
+	"vulnerability-discovery",
+	"track-review",
+	"finding-validation",
+	"finding-review",
+	"chain-synthesis",
+	"chain-review",
+	"exploit-validation",
+	"exploit-review",
+	"research-report",
+];
+
 const RUNTIME_STAGE_IDS = [
 	...FULL_SCAN_STAGE_IDS,
 	...DELTA_SCAN_STAGE_IDS,
+	...RESEARCH_SCAN_STAGE_IDS,
 ];
 
 export const FULL_SCAN_STAGE_ID_SET = new Set<string>(FULL_SCAN_STAGE_IDS);
@@ -57,6 +74,7 @@ export const normalizeScanRuntimeSettings = (
 	const runtimeStageIds = new Set([
 		...definitions.pipelines.full.stageIds,
 		...definitions.pipelines.delta.stageIds,
+		...definitions.pipelines.research.stageIds,
 	]);
 	const parsed = ScanRuntimeSettingsSchema.catch({}).parse(value);
 	const stages: NonNullable<ScanRuntimeSettings["stages"]> = {};
@@ -77,14 +95,13 @@ export const normalizeScanRuntimeSettings = (
 };
 
 export const buildCompleteScanRuntimeSettings = (input: {
-	scanType: "delta" | "full";
+	scanType: "delta" | "full" | "research";
 	targetStageSettings?: ScanStageSettings | null;
 	runtimeOverrides?: ScanRuntimeSettings | null;
 }): ScanRuntimeSettings => {
-	const stageIds =
-		input.scanType === "delta"
-			? loadRuntimeDefinitions().pipelines.delta.stageIds
-			: loadRuntimeDefinitions().pipelines.full.stageIds;
+	const stageIds = loadRuntimeDefinitions().pipelines[
+		getPipelineIdForScanType(input.scanType)
+	].stageIds;
 	const overrides = normalizeScanRuntimeSettings(input.runtimeOverrides ?? {});
 	const stages: NonNullable<ScanRuntimeSettings["stages"]> = {};
 	const definitions = loadRuntimeDefinitions();
@@ -127,7 +144,11 @@ export const buildEffectiveDisabledStageSet = (input: {
 }) => {
 	const definitions = loadRuntimeDefinitions();
 	const settings = normalizeScanRuntimeSettings(input.settings);
-	const stageNames = input.stageNames ?? definitions.pipelines.full.stageIds;
+	const stageNames = input.stageNames ?? [
+		...definitions.pipelines.full.stageIds,
+		...definitions.pipelines.delta.stageIds,
+		...definitions.pipelines.research.stageIds,
+	];
 	const rootStageName = input.rootStageName ?? stageNames[0] ?? "";
 	const explicitDisabled = new Set(
 		Object.entries(settings.stages ?? {})

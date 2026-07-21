@@ -63,12 +63,12 @@ type FullScanStageGraphTarget =
 	| {
 			applicationId: string;
 			composeId?: never;
-			scanType?: "delta" | "full";
+			scanType?: "delta" | "full" | "research";
 	  }
 	| {
 			composeId: string;
 			applicationId?: never;
-			scanType?: "delta" | "full";
+			scanType?: "delta" | "full" | "research";
 	  };
 type StageFlowNodeData = Record<string, unknown> & {
 	label: ReactNode;
@@ -1307,7 +1307,7 @@ export const FullScanStageGraphPreview = ({
 	serviceData?: PreviewServiceData;
 	scanRuntimeSettings?: ScanRuntimeSettingsDraft;
 	onScanRuntimeSettingsChange?: (settings: ScanRuntimeSettingsDraft) => void;
-	scanType?: "delta" | "full";
+	scanType?: "delta" | "full" | "research";
 }) => {
 	const { t } = useTranslation("scan");
 	const target = useMemo<FullScanStageGraphTarget | null>(() => {
@@ -1355,6 +1355,8 @@ export const FullScanStageGraphPreview = ({
 					type:
 						scanType === "delta"
 							? scanT(t, "scan.scanType.delta", "Delta Scan")
+							: scanType === "research"
+								? scanT(t, "scan.scanType.research", "Research Scan")
 							: scanT(t, "scan.scanType.full", "Full Scan"),
 				},
 			)}

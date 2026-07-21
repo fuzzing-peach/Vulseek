@@ -1,6 +1,7 @@
 attack-surface-model:
   key: attackSurfaceModel
   name: Attack Surface Model
+  taskName: "$file($input.modulePath).name"
   role: scan
   group: full-scan
   concurrency: 4
@@ -15,6 +16,12 @@ attack-surface-model:
     cwd: /workspace/repo
     skills: [attack-surface-model]
     promptFile: attack-surface-model.prompt.md
+  promptValues:
+    scanJobId: "$ctx.scanJobId"
+    moduleId: "$file($input.modulePath).id"
+    moduleName: "$file($input.modulePath).name"
+    repositoryJsonPath: "$input.repositoryPath"
+    moduleJsonPath: "$input.modulePath"
   inputSchema:
     $ref: "#/schemas/AttackSurfaceModelStageInput"
   outputSchema:

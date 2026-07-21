@@ -1,6 +1,7 @@
 triage-finding:
   key: triageFinding
   name: Triage Finding
+  taskName: "Candidate Triage: $file($input.candidatePath).title"
   role: verification
   group: review
   concurrency: 1
@@ -8,13 +9,37 @@ triage-finding:
   disableable: true
   description: Final security classification and severity.
   runtimeConfig:
-    persistent: true
+    persistent: false
     reuseContainer: true
     mode: fanout
     nullableOutput: false
     cwd: /workspace/repo
     skills: [triage-finding]
     promptFile: triage-finding.prompt.md
+  promptValues:
+    scanJobId: "$ctx.scanJobId"
+    candidateId: "$file($input.candidatePath).id"
+    candidateTitle: "$file($input.candidatePath).title"
+    candidateDescription: "$file($input.candidatePath).description"
+    candidateFile: "$file($input.candidatePath).filePath"
+    candidateLine: "$file($input.candidatePath).line"
+    analysisResult: "$file($input.analysisResultPath).result"
+    analysisSummary: "$file($input.analysisResultPath).summary"
+    verifyResult: "$file($input.verifyResultPath).result"
+    verifySummary: "$file($input.verifyResultPath).summary"
+    repositoryJsonPath: "$input.repositoryPath"
+    moduleJsonPath: "$input.modulePath"
+    functionJsonPath: "$input.functionPath"
+    candidateJsonPath: "$input.candidatePath"
+    analysisResultJsonPath: "$input.analysisResultPath"
+    verifyResultJsonPath: "$input.verifyResultPath"
+    taskDir: "$ctx.taskDir"
+    reportPath: "/task/01_triage_report.md"
+    taskId: "$ctx.taskId"
+  report: { path: /task/01_triage_report.md, required: true }
+  effects:
+    - type: project-candidate-result
+      resultStage: triage
   inputSchema:
     $ref: "#/schemas/TriageFindingStageInput"
   outputSchema:

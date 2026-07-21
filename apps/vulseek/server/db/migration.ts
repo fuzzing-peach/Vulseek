@@ -1,5 +1,6 @@
 import { backfillCandidateResultProjections } from "@vulseek/server/services/scan/persistence/candidate-result-projection-backfill";
 import { backfillScanJobCosts } from "@vulseek/server/services/scan/persistence/scan-job-cost-backfill";
+import { backfillScanPipelineDefinitionSnapshots } from "@vulseek/server/services/scan/persistence/scan-pipeline-definition-backfill";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
@@ -15,6 +16,11 @@ export const migration = async () => {
 	try {
 		await ensureLegacyDrizzleBaseline(sql, migrationsFolder);
 		await migrate(db, { migrationsFolder });
+		const pipelineBackfill =
+			await backfillScanPipelineDefinitionSnapshots();
+		console.log(
+			`Scan pipeline snapshot backfill complete: processed=${pipelineBackfill.processedCount} updated=${pipelineBackfill.updatedCount}`,
+		);
 		const backfill = await backfillCandidateResultProjections();
 		console.log(
 			`Candidate result projection backfill complete: processed=${backfill.processedCount} skipped=${backfill.skippedCount}`,
