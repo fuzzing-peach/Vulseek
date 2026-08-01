@@ -85,7 +85,7 @@ test("rejects a generic pipeline with an unknown stage or effect", () => {
 	);
 });
 
-test("accepts research registry effects without introducing a shared output schema", () => {
+test("decodes legacy research registry effects without an executor", () => {
 	const definition = parseYamlPipelineDefinition({
 		version: 2,
 		name: "research-test",
@@ -106,5 +106,4 @@ test("accepts research registry effects without introducing a shared output sche
 	assert.deepEqual(definition.stages.scope!.effects, [
 		{ type: "research-registry", operation: "persist-scope" },
 	]);
-	assert.equal(definition.stages.scope!.outputSchema, undefined);
 });

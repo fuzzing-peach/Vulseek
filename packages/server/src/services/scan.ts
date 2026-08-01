@@ -91,6 +91,11 @@ import {
 } from "./scan/persistence/task.repo";
 import { readTaskJsonArtifactForTask } from "./scan/persistence/task-artifact-resolver";
 import { normalizeTerminalTaskFilters } from "./scan/terminal-task-filters";
+import { resolveStageTaskName } from "./scan/stage-task-name";
+import {
+	getResearchRunningTaskPresentation,
+	type RunningTaskStage,
+} from "./scan/running-task-stage";
 import type {
 	AnyStageDefinition,
 	PipelineDefinition,
@@ -128,6 +133,10 @@ import {
 	buildKnownQueueJobIdsForTask,
 	buildQueueTaskJobId,
 } from "./scan/queue-job-ids";
+import {
+	forceRemoveStageQueueJob,
+	removeKnownQueueJobsForTask,
+} from "./scan/task-queue-cleanup";
 import {
 	isRetryableTaskStageName,
 	retryFailedScanJobTasksWithDeps,
@@ -229,16 +238,7 @@ type InProgressTaskView = {
 	taskId: string;
 	title: string;
 	subtitle: string;
-	stage:
-		| "delta-scope"
-		| "repository-profile"
-		| "attack-surface-model"
-		| "identify-target"
-		| "scan-target"
-		| "analyze-finding"
-		| "critique-finding"
-		| "verify-finding"
-		| "triage-finding";
+	stage: RunningTaskStage;
 	startedAt: string | null;
 	updatedAt: string;
 };
@@ -295,6 +295,18 @@ const IN_PROGRESS_TASK_STAGE_ORDER: Record<
 	"critique-finding": 6,
 	"verify-finding": 7,
 	"triage-finding": 8,
+	"research-scope": 9,
+	"surface-map": 10,
+	"track-plan": 11,
+	"vulnerability-discovery": 12,
+	"track-review": 13,
+	"finding-validation": 14,
+	"finding-review": 15,
+	"chain-synthesis": 16,
+	"chain-review": 17,
+	"exploit-validation": 18,
+	"exploit-review": 19,
+	"research-report": 20,
 };
 
 const compareInProgressTaskView = (
@@ -548,6 +560,54 @@ const listDockerContainersForScanJob = async (scanJobId: string) => {
 		.filter((name) => name?.includes(scanJobNamePart));
 };
 
+const cleanupScanJobCredentialFiles = async (
+	scanJob: ScanJob,
+	image: string | null,
+) => {
+	const configuredHostRoot = resolveConfiguredScanContextHostPath();
+	if (!configuredHostRoot) {
+		return false;
+	}
+	const { projectName, profileName } = await resolveScanJobTargetIdentity(
+		scanJob,
+	);
+	// This command is executed by the Docker daemon. Do not pass the
+	// container-side /scan-context path as a host bind source.
+	const hostProfileDir = buildHostProjectProfileContextRoot(
+		configuredHostRoot,
+		projectName,
+		profileName,
+	);
+	await fs.mkdir(hostProfileDir, { recursive: true });
+	const jobId = sanitizeContextPathPart(scanJob.scanJobId);
+	const hostJobRoot = path.join(hostProfileDir, "jobs", jobId);
+	const credentialExpression =
+		`-type f \\( -name auth.json -o -name .credentials.json \\) -delete`;
+
+	// Prefer the host path so cleanup does not depend on a task image still
+	// existing. Fall back to a root-owned container for agent-owned files.
+	try {
+		await execAsync(
+			`find '${escapeSingleQuotes(hostJobRoot)}' ${credentialExpression}`,
+		);
+		return true;
+	} catch {
+		// The application user may not own files created in the agent container.
+	}
+
+	if (!image) return false;
+
+	const containerJobRoot = path.posix.join(
+		CONTAINER_SCAN_CONTEXT_ROOT,
+		"jobs",
+		jobId,
+	);
+	await execAsync(
+		`docker run --rm --user 0 -v '${escapeSingleQuotes(hostProfileDir)}':${CONTAINER_SCAN_CONTEXT_ROOT}:rw '${escapeSingleQuotes(image)}' sh -lc 'find "${containerJobRoot}" ${credentialExpression}'`,
+	);
+	return true;
+};
+
 const sleep = async (ms: number) =>
 	await new Promise<void>((resolve) => {
 		setTimeout(resolve, ms);
@@ -736,6 +796,19 @@ const buildInProgressTaskView = (
 	task: TaskListViewSource,
 ): InProgressTaskView | null => {
 	const input = asTaskRecord(task.input);
+	const researchPresentation = getResearchRunningTaskPresentation(
+		task.stageName,
+		task.name,
+	);
+	if (researchPresentation) {
+		return {
+			id: `${researchPresentation.stage}-${task.taskId}`,
+			taskId: task.taskId,
+			...researchPresentation,
+			startedAt: task.startedAt,
+			updatedAt: task.updatedAt,
+		};
+	}
 	switch (task.stageName) {
 		case SCAN_STAGE_IDS.deltaScope:
 			return {
@@ -938,9 +1011,6 @@ const listQueuePendingCountsByScanJobId = async (
 	concurrencyLimitByStageName = new Map<Task["stageName"], number>(),
 	stageNames?: Array<string>,
 ): Promise<QueuePendingCountView[]> => {
-	const activeStageGroups = (
-		await listStageGroupInstancesByScanJobIdRepo(scanJobId).catch(() => [])
-	).filter((group) => group.status === "active");
 	const stageNamesToRead = stageNames ?? Object.values(SCAN_STAGE_IDS);
 	const queueEntries: Array<{
 		id: ScanStageQueueKind;
@@ -961,33 +1031,6 @@ const listQueuePendingCountsByScanJobId = async (
 
 	return await Promise.all(
 		queueEntries.map(async ({ id, title, stageName, queue }) => {
-			const readCounts = async (targetQueue: Queue<string>) =>
-				await targetQueue
-					.getJobCounts("waiting", "prioritized", "delayed")
-					.catch((error) => {
-						console.warn(
-							"[scan-status-view]",
-							JSON.stringify({
-								event: "queueCounts.readFailed",
-								scanJobId,
-								queueName: targetQueue.name,
-								error: error instanceof Error ? error.message : String(error),
-							}),
-						);
-						return {
-							waiting: 0,
-							prioritized: 0,
-							delayed: 0,
-						};
-					});
-			const counts = await readCounts(queue);
-			const groupCounts = await Promise.all(
-				activeStageGroups.map((group) =>
-					readCounts(
-						getScanStageGroupQueue(scanJobId, group.groupInstanceId, id),
-					),
-				),
-			);
 			const stageCounts = taskStatusCounts.filter(
 				(row) => row.stageName === stageName,
 			);
@@ -997,18 +1040,7 @@ const listQueuePendingCountsByScanJobId = async (
 			const launchingCount = getStatusCount("launching");
 			const launchedCount = getStatusCount("launched");
 			const startingCount = getStatusCount("starting");
-			const waitingCount =
-				(counts.waiting || 0) +
-				(counts.prioritized || 0) +
-				(counts.delayed || 0) +
-				groupCounts.reduce(
-					(total, item) =>
-						total +
-						(item.waiting || 0) +
-						(item.prioritized || 0) +
-						(item.delayed || 0),
-					0,
-				);
+			const waitingCount = queuedCount;
 			return {
 				id,
 				title,
@@ -4202,6 +4234,43 @@ const toGenericStageConfig = (stage: ScanPipelineStageConfig) => ({
 	allowAgentExit: stage.allowAgentExit,
 }) as Parameters<typeof createGenericAgentStageDefinition>[0]["config"];
 
+const resolveResearchTaskNameInput = async (input: {
+	scanJobId: string;
+	stageName: string;
+	value: unknown;
+}) => {
+	if (
+		input.stageName !== "finding-validation" &&
+		input.stageName !== "finding-review"
+	) {
+		return input.value;
+	}
+
+	const value = input.value as Record<string, unknown> | null;
+	const candidateId =
+		value && typeof value.candidateId === "string"
+			? value.candidateId
+			: value && typeof value.vulnerabilityCandidateId === "string"
+				? value.vulnerabilityCandidateId
+				: null;
+	if (!candidateId) {
+		return input.value;
+	}
+
+	const candidate = await findVulnerabilityCandidateByIdAndScanJobIdRepo({
+		vulnerabilityCandidateId: candidateId,
+		scanJobId: input.scanJobId,
+	}).catch(() => null);
+	if (!candidate) {
+		return input.value;
+	}
+
+	return {
+		...value,
+		candidate: { title: candidate.title },
+	};
+};
+
 const buildGenericYamlPipeline = (
 	context: FullScanPipelineContext,
 	pipelineId: string,
@@ -4308,11 +4377,22 @@ const buildGenericYamlPipeline = (
 					const input = {
 						...(nextInput as Record<string, unknown>),
 					};
+					const taskNameInput =
+						context.scanJob.scanType === "research"
+							? await resolveResearchTaskNameInput({
+									scanJobId: context.scanJob.scanJobId,
+									stageName: edgeConfig.to,
+									value: input,
+								})
+							: input;
 					const taskName = targetConfig.taskName
-						? String(
-								await renderPipelineTemplate(targetConfig.taskName, {
-									ctx,
-									stageInput: input,
+							? String(
+									await renderPipelineTemplate(targetConfig.taskName, {
+										ctx,
+										stageInput:
+											context.scanJob.scanType === "research"
+												? taskNameInput
+												: input,
 									stageOutput: null,
 									readJsonFile: async (containerPath) =>
 										await readTaskJsonArtifact({
@@ -4322,7 +4402,9 @@ const buildGenericYamlPipeline = (
 									allowedRoots: [fromTaskDir],
 								}),
 							)
-						: `${targetConfig.name} ${index + 1}`;
+						: context.scanJob.scanType === "research"
+							? resolveStageTaskName(edgeConfig.to, taskNameInput)
+							: `${targetConfig.name} ${index + 1}`;
 					const taskId = createTaskIdForDispatchKey(
 						dispatchKeyForItem(index),
 					);
@@ -4385,8 +4467,8 @@ const buildGenericYamlPipeline = (
 								? input.vulnerabilityCandidateId
 								: null,
 						input,
-					});
-					taskIds.push(task.taskId);
+						});
+						taskIds.push(task.taskId);
 				}
 				return taskIds;
 			},
@@ -4934,42 +5016,16 @@ const enqueueRetriedTask = async (scanJobId: string, task: Task) => {
 	await enqueueStageTask(scanJobId, task.stageName, task.taskId);
 };
 
-const forceRemoveStageQueueJob = async (
-	queue: Queue<string>,
-	jobId: string,
-) => {
-	const existingJob = await queue.getJob(jobId).catch(() => null);
-	if (existingJob) {
-		const state = await existingJob.getState().catch(() => null);
-		if (state && state !== "active") {
-			await existingJob.remove().catch(() => {});
-			return;
-		}
-	}
-
-	const client = await queue.client;
-	const jobKey = queue.toKey(jobId);
-	await client
-		.multi()
-		.lrem(queue.toKey("active"), 0, jobId)
-		.lrem(queue.toKey("wait"), 0, jobId)
-		.lrem(queue.toKey("paused"), 0, jobId)
-		.zrem(queue.toKey("delayed"), jobId)
-		.zrem(queue.toKey("prioritized"), jobId)
-		.zrem(queue.toKey("completed"), jobId)
-		.zrem(queue.toKey("failed"), jobId)
-		.zrem(queue.toKey("waiting-children"), jobId)
-		.del(
-			jobKey,
-			`${jobKey}:lock`,
-			`${jobKey}:logs`,
-			`${jobKey}:dependencies`,
-			`${jobKey}:processed`,
-		)
-		.exec();
-};
-
 const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
+	const taskQueue = task.stageGroupInstanceId
+		? getScanStageGroupQueue(
+				scanJobId,
+				task.stageGroupInstanceId,
+				task.stageName,
+		  )
+		: getScanStageQueue(scanJobId, task.stageName);
+	await removeKnownQueueJobsForTask(taskQueue, task).catch(() => {});
+
 	switch (task.stageName) {
 		case SCAN_STAGE_IDS.deltaScope:
 			await Promise.all(
@@ -5174,6 +5230,11 @@ export const cancelScanTask = async (taskId: string) => {
 		patch: { errorMessage: MANUAL_STOP_MESSAGE },
 	});
 	if (!canceledTask) {
+		if (task.status === "canceled") {
+			await Promise.all([
+				removeQueuedTaskForRetry(task.scanJobId, task).catch(() => {}),
+			]);
+		}
 		return await findTaskByIdRepo(taskId);
 	}
 
@@ -5192,6 +5253,7 @@ export const cancelScanJob = async (scanJobId: string) => {
 	await updateScanJobStatusRepo(scanJobId, "canceled", stopMessage).catch(
 		() => {},
 	);
+	const stoppedRuntimes = stopPipelineRuntimesForScanJob(scanJobId);
 
 	const [
 		repositoryTask,
@@ -5253,7 +5315,7 @@ export const cancelScanJob = async (scanJobId: string) => {
 		} as Task).map((jobId) =>
 			forceRemoveStageQueueJob(rootQueue, jobId).catch(() => {}),
 		),
-		...tasksToCancel.map((task) =>
+		...allTasks.map((task) =>
 			removeQueuedTaskForRetry(scanJobId, task).catch(() => {}),
 		),
 		...stageGroups
@@ -5268,11 +5330,30 @@ export const cancelScanJob = async (scanJobId: string) => {
 				),
 			),
 	]);
+	// The scan container may disappear before cancellation reaches this point.
+	// Task snapshots retain the tools image and are a more reliable cleanup image.
+	let scanContainerImage: string | null = null;
+	for (const containerName of containerNames) {
+		if (scanContainerImage) break;
+		const { stdout } = await execAsync(
+			`docker inspect ${containerName} --format '{{.Config.Image}}'`,
+		).catch(() => ({ stdout: "" }));
+		if (stdout.trim()) {
+			scanContainerImage = stdout.trim();
+			break;
+		}
+	}
+	if (!scanContainerImage) {
+		scanContainerImage = await resolveCheckoutToolsDefinition()
+			.then((definition) => definition.imageTag)
+			.catch(() => null);
+	}
 	const stoppedContainers = (
 		await Promise.all(
 			[...containerNames].map((name) => stopScanContainer(name)),
 		)
 	).filter(Boolean).length;
+	await cleanupScanJobCredentialFiles(scanJob, scanContainerImage).catch(() => false);
 
 	await Promise.all([
 		...tasksToCancel.map((task) =>
@@ -5290,6 +5371,7 @@ export const cancelScanJob = async (scanJobId: string) => {
 	return {
 		cancelled: true,
 		scanJobId: scanJob.scanJobId,
+		stoppedRuntimes,
 		stoppedContainers,
 		clearedTasks: tasksToCancel.length,
 	};

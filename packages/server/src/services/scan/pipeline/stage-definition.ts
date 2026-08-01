@@ -3,6 +3,7 @@ import type {
 	PipelineContext,
 	StageContext,
 } from "../stages/full-scan-stage.runtime";
+import type { StructuredOutputSchemaSource } from "./scan-pipeline-schema-contracts";
 
 export type StageRunMode = "serial" | "fanout";
 
@@ -85,6 +86,7 @@ export type StageDefinition<
 	reuseContainer?: boolean;
 	nullableOutput?: boolean;
 	allowAgentExit?: boolean;
+	outputSchema?: StructuredOutputSchemaSource;
 	runtimeConfig?: StageRuntimeConfigGetters;
 	queue?: StageQueueBinding<TPipelineContext, TInput>;
 	validateInput?: (ctx: TStageContext, input: TInput) => Promise<boolean>;
@@ -104,12 +106,18 @@ export type StageDefinition<
 		ctx: TStageContext,
 		input: TInput,
 		output: TOutput,
+		transaction?: unknown,
+		metadata?: StageSuccessMetadata,
 	) => Promise<void>;
 	onFailure?: (
 		ctx: TStageContext,
 		input: TInput,
 		error: unknown,
 	) => Promise<void>;
+};
+
+export type StageSuccessMetadata = {
+	routeKey: string | null;
 };
 
 export const createStageDefinition = <

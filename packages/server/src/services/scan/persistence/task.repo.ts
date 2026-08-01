@@ -25,6 +25,7 @@ import {
 import { computeTaskCost } from "../cost";
 import {
 	mapRunningTaskStage,
+	getResearchRunningTaskPresentation,
 	RUNNING_TASK_VIEW_STATUSES,
 	type RunningTaskStage,
 } from "../running-task-stage";
@@ -39,8 +40,13 @@ import {
 	type CandidateProjectionResultStage,
 } from "./candidate-result-projection.repo";
 import { readCandidateIdFromTaskInputArtifact } from "./task-artifact-resolver";
+import { buildTaskStatusTransitionPatch } from "./task-status-transition";
 
 const CANDIDATE_PRODUCER_STAGE_NAMES = new Set(["scan-target"]);
+
+export type TaskStatusTransaction = Parameters<
+	Parameters<typeof db.transaction>[0]
+>[0];
 
 const resolveCandidateProjectionResultStage = async (
 	tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
@@ -492,6 +498,47 @@ export const listTasksByScanJobIdRepo = async (scanJobId: string) =>
 		.where(eq(tasks.scanJobId, scanJobId))
 		.orderBy(desc(tasks.createdAt));
 
+export const listActiveTasksByScanJobIdRepo = async (scanJobId: string) =>
+	await db
+		.select()
+		.from(tasks)
+		.where(
+			and(
+				eq(tasks.scanJobId, scanJobId),
+				inArray(tasks.status, [
+					"launching",
+					"launched",
+					"starting",
+					"running",
+				]),
+			),
+		)
+		.orderBy(desc(tasks.updatedAt));
+
+export type PendingTaskQueueMetadata = {
+	taskId: string;
+	scanJobId: string;
+	name: string;
+	stageName: string;
+	status: (typeof taskStatusEnum.enumValues)[number];
+	stageGroupInstanceId: string | null;
+};
+
+export const listPendingTaskQueueMetadataByScanJobIdRepo = async (
+	scanJobId: string,
+): Promise<PendingTaskQueueMetadata[]> =>
+	await db
+		.select({
+			taskId: tasks.taskId,
+			scanJobId: tasks.scanJobId,
+			name: tasks.name,
+			stageName: tasks.stageName,
+			status: tasks.status,
+			stageGroupInstanceId: tasks.stageGroupInstanceId,
+		})
+		.from(tasks)
+		.where(and(eq(tasks.scanJobId, scanJobId), eq(tasks.status, "pending")));
+
 export const hasActiveCandidateAnalysisTaskRepo = async (input: {
 	scanJobId: string;
 	vulnerabilityCandidateId: string;
@@ -661,13 +708,21 @@ export const listRunningTaskViewsByScanJobIdRepo = async (
 				[filePath, line]
 					.filter((part) => part !== null && part !== undefined && part !== "")
 					.join(":");
-			const stage = mapRunningTaskStage(stageName);
+			let title = String(value.name || "");
+			let subtitle = "-";
+			const researchPresentation = getResearchRunningTaskPresentation(
+				stageName,
+				String(value.name || ""),
+			);
+			const stage =
+				researchPresentation?.stage ?? mapRunningTaskStage(stageName);
 			if (!stage) {
 				return null;
 			}
-			let title = String(value.name || "");
-			let subtitle = "-";
-			if (stageName === "delta-scope") {
+			if (researchPresentation) {
+				title = researchPresentation.title;
+				subtitle = researchPresentation.subtitle;
+			} else if (stageName === "delta-scope") {
 				title = "Delta Scope";
 				subtitle = "Diff impact function scoping";
 			} else if (stageName === "repository-profile") {
@@ -925,33 +980,19 @@ export const transitionTaskStatusRepo = async (input: {
 	from: Array<(typeof taskStatusEnum.enumValues)[number]>;
 	to: (typeof taskStatusEnum.enumValues)[number];
 	patch?: Partial<typeof tasks.$inferSelect>;
+	terminalRouteKey?: string | null;
+	afterUpdate?: (
+		tx: TaskStatusTransaction,
+		updatedTask: typeof tasks.$inferSelect,
+	) => Promise<void>;
 }) => {
 	const now = new Date().toISOString();
-	const patch = {
-		...input.patch,
-		status: input.to,
-		updatedAt: now,
-		...(input.to === "launching" ||
-		input.to === "launched" ||
-		input.to === "starting" ||
-		input.to === "running"
-			? { startedAt: now, completedAt: null }
-			: {}),
-		...(input.to === "completed" ||
-		input.to === "failed" ||
-		input.to === "exited" ||
-		input.to === "canceled"
-			? { completedAt: now }
-			: {}),
-		...(input.to === "failed" ||
-		input.to === "exited" ||
-		input.to === "canceled"
-			? {
-					downstreamDispatchStatus: "completed" as const,
-					downstreamDispatchedAt: now,
-				}
-			: {}),
-	};
+	const patch = buildTaskStatusTransitionPatch({
+		to: input.to,
+		now,
+		patch: input.patch,
+		terminalRouteKey: input.terminalRouteKey,
+	});
 
 	const updated = await db.transaction(async (tx) => {
 		const previous = await tx
@@ -994,6 +1035,7 @@ export const transitionTaskStatusRepo = async (input: {
 			);
 			await upsertCandidateResultProjectionTx(tx, updatedTask, undefined, resultStage);
 		}
+		await input.afterUpdate?.(tx, updatedTask);
 		return updatedTask;
 	});
 

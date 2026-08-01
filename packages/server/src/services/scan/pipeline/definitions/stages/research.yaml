@@ -4,7 +4,6 @@ research-scope:
   role: scan
   group: research
   concurrency: 1
-  maxConcurrency: 1
   disableable: false
   description: Define the attacker model, trusted domain, protected assets, and success criteria for this research job.
   runtimeConfig:
@@ -12,16 +11,13 @@ research-scope:
     reuseContainer: true
     mode: serial
     cwd: /workspace/repo
-    skills: [research-agent]
+    skills: [research-agent, research-db]
     promptFile: research-scope.prompt.md
     prepareRepository: true
   inputSchema:
     $ref: "#/schemas/ResearchScopeStageInput"
   outputSchema:
     $ref: "#/schemas/ScopeManifest"
-  effects:
-    - type: research-registry
-      operation: persist-scope
 
 surface-map:
   key: surfaceMap
@@ -29,7 +25,6 @@ surface-map:
   role: scan
   group: research
   concurrency: 1
-  maxConcurrency: 1
   disableable: false
   description: Map attacker-facing entrypoints, trust boundaries, sources, sinks, and dependency flows.
   runtimeConfig:
@@ -50,7 +45,6 @@ track-plan:
   role: scan
   group: research
   concurrency: 1
-  maxConcurrency: 1
   description: Select diverse research tracks from surface coverage and Registry state.
   runtimeConfig:
     persistent: false
@@ -63,17 +57,13 @@ track-plan:
     type: object
   outputSchema:
     $ref: "#/schemas/TrackPlan"
-  effects:
-    - type: research-registry
-      operation: persist-track-plan
 
 vulnerability-discovery:
   key: vulnerabilityDiscovery
   name: Vulnerability Discovery
   role: scan
   group: research
-  concurrency: 4
-  maxConcurrency: 4
+  concurrency: 8
   description: Trace attacker-controlled data through one assigned research track.
   runtimeConfig:
     persistent: false
@@ -86,22 +76,18 @@ vulnerability-discovery:
     type: object
   outputSchema:
     $ref: "#/schemas/DiscoveryManifest"
-  effects:
-    - type: research-registry
-      operation: record-discovery
 
 track-review:
   key: trackReview
   name: Track Review
   role: verification
   group: research
-  concurrency: 1
-  maxConcurrency: 1
-  description: Review discovery results and route tracks, candidates, or new surfaces.
+  concurrency: 4
+  description: Review discovery results and route tracks, findings, or new surfaces.
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: serial
+    mode: fanout
     cwd: /workspace/repo
     skills: [research-agent, research-db]
     promptFile: track-review.prompt.md
@@ -109,18 +95,14 @@ track-review:
     type: object
   outputSchema:
     $ref: "#/schemas/TrackReview"
-  effects:
-    - type: research-registry
-      operation: apply-track-review
 
 finding-validation:
   key: findingValidation
   name: Finding Validation
   role: analysis
   group: research
-  concurrency: 4
-  maxConcurrency: 4
-  description: Validate one candidate and characterize the supported capability.
+  concurrency: 8
+  description: Validate one finding and characterize the supported capability.
   runtimeConfig:
     persistent: false
     reuseContainer: true
@@ -132,9 +114,6 @@ finding-validation:
     type: object
   outputSchema:
     $ref: "#/schemas/FindingValidation"
-  effects:
-    - type: research-registry
-      operation: record-finding-validation
 
 finding-review:
   key: findingReview
@@ -142,7 +121,6 @@ finding-review:
   role: verification
   group: research
   concurrency: 4
-  maxConcurrency: 4
   description: Independently challenge one finding validation result.
   runtimeConfig:
     persistent: false
@@ -155,9 +133,6 @@ finding-review:
     type: object
   outputSchema:
     $ref: "#/schemas/FindingReview"
-  effects:
-    - type: research-registry
-      operation: record-finding-review
 
 chain-synthesis:
   key: chainSynthesis
@@ -165,8 +140,7 @@ chain-synthesis:
   role: analysis
   group: research
   concurrency: 1
-  maxConcurrency: 1
-  description: Combine confirmed capabilities into candidate chains and identify gaps.
+  description: Combine confirmed capabilities into exploit chains and identify gaps.
   runtimeConfig:
     persistent: false
     reuseContainer: true
@@ -178,9 +152,6 @@ chain-synthesis:
     type: object
   outputSchema:
     $ref: "#/schemas/ChainSynthesis"
-  effects:
-    - type: research-registry
-      operation: persist-chain
 
 chain-review:
   key: chainReview
@@ -188,8 +159,7 @@ chain-review:
   role: verification
   group: research
   concurrency: 4
-  maxConcurrency: 4
-  description: Audit the continuity and assumptions of one candidate chain.
+  description: Audit the continuity and assumptions of one exploit chain.
   runtimeConfig:
     persistent: false
     reuseContainer: true
@@ -201,9 +171,6 @@ chain-review:
     type: object
   outputSchema:
     $ref: "#/schemas/ChainReview"
-  effects:
-    - type: research-registry
-      operation: apply-chain-review
 
 exploit-validation:
   key: exploitValidation
@@ -211,7 +178,6 @@ exploit-validation:
   role: verification
   group: research
   concurrency: 4
-  maxConcurrency: 4
   description: Perform source-only validation against the configured success criteria.
   runtimeConfig:
     persistent: false
@@ -224,9 +190,6 @@ exploit-validation:
     type: object
   outputSchema:
     $ref: "#/schemas/ExploitValidation"
-  effects:
-    - type: research-registry
-      operation: record-exploit-validation
 
 exploit-review:
   key: exploitReview
@@ -234,7 +197,6 @@ exploit-review:
   role: verification
   group: research
   concurrency: 4
-  maxConcurrency: 4
   description: Independently review the source-only chain validation.
   runtimeConfig:
     persistent: false
@@ -247,23 +209,19 @@ exploit-review:
     type: object
   outputSchema:
     $ref: "#/schemas/ExploitReview"
-  effects:
-    - type: research-registry
-      operation: apply-exploit-review
 
 research-report:
   key: researchReport
   name: Research Report
   role: verification
   group: research
-  concurrency: 1
-  maxConcurrency: 1
+  concurrency: 2
   disableable: false
   description: Produce the final evidence-backed report for the configured research criteria.
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: serial
+    mode: fanout
     cwd: /workspace/repo
     skills: [research-agent, research-db]
     promptFile: research-report.prompt.md
@@ -274,6 +232,3 @@ research-report:
   report:
     path: reports/final-report.md
     required: true
-  effects:
-    - type: research-registry
-      operation: persist-report

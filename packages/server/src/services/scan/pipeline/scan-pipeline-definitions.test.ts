@@ -139,7 +139,7 @@ test("loads research as an independent scan pipeline with local feedback routes"
 	assert.equal(research.stageIds.length, 12);
 	assert.ok(
 		research.edges.some(
-			(edge) => edge.route?.key === "candidate-found" && edge.from === "track-review",
+			(edge) => edge.route?.key === "finding-found" && edge.from === "track-review",
 		),
 	);
 	assert.ok(
@@ -153,12 +153,21 @@ test("loads research as an independent scan pipeline with local feedback routes"
 		.map((edge) => `${edge.from}:${edge.route?.key}`),
 		["exploit-review:confirmed"],
 	);
+	for (const edge of research.edges.filter((item) => item.route)) {
+		const stage = SCAN_PIPELINE_DEFINITIONS.stages.find(
+			(item) => item.id === edge.from,
+		);
+		assert.ok(
+			edge.outputSchema || stage?.outputSchema,
+			`${edge.name} must have an edge or stage output schema`,
+		);
+	}
 	for (const stageId of research.stageIds) {
 		const stage = SCAN_PIPELINE_DEFINITIONS.stages.find(
 			(item) => item.id === stageId,
 		);
 		assert.ok(stage);
-		assert.ok(stage.maxConcurrency === null || stage.maxConcurrency <= 4);
+		assert.equal(stage.maxConcurrency, null);
 	}
 });
 

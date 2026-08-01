@@ -181,7 +181,7 @@ export type ScanPipelineStageConfig = {
 		| {
 				type: "project-candidate-result";
 				resultStage: "analyze" | "critique" | "verify" | "triage";
-		  }
+			}
 		| {
 				type: "research-registry";
 				operation:
@@ -196,7 +196,7 @@ export type ScanPipelineStageConfig = {
 					| "record-exploit-validation"
 					| "apply-exploit-review"
 					| "persist-report";
-		  }
+			}
 	>;
 	report: { path: string; required: boolean } | null;
 	taskName: string | null;

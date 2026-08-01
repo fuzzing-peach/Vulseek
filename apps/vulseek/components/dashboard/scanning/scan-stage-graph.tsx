@@ -4,6 +4,7 @@ import {
 	BaseEdge,
 	Controls,
 	type Edge,
+	EdgeLabelRenderer,
 	type EdgeProps,
 	type EdgeTypes,
 	Handle,
@@ -49,6 +50,8 @@ import { formatScanStageLabel, scanT } from "./scan-i18n";
 type StageGraph = RouterOutputs["scan"]["jobPipeline"];
 type QueueCount = RouterOutputs["scan"]["jobQueueCounts"]["queues"][number];
 type StageGraphNode = StageGraph["nodes"][number];
+type StageGraphEdge = StageGraph["edges"][number];
+type VisibleStageGraphEdge = StageGraphEdge & { routeLabels: string[] };
 type RuntimeStageSetting = {
 	disabled?: boolean;
 	concurrency?: number | null;
@@ -82,6 +85,8 @@ type EdgePointMoveHandler = (
 ) => void;
 type ElkSectionEdgeData = Record<string, unknown> & {
 	points: Point[];
+	kind?: "forward" | "local-loop" | "rework";
+	label?: string;
 	onPointMove?: EdgePointMoveHandler;
 };
 type ElkSectionEdge = Edge<ElkSectionEdgeData, "elkSection">;
@@ -102,6 +107,91 @@ const BACK_EDGE_OFFSET_Y = 28;
 const FORWARD_LONG_EDGE_OFFSET_Y = 30;
 const SELF_EDGE_OFFSET_X = 56;
 const SELF_EDGE_OFFSET_Y = 38;
+const RESEARCH_LEFT_X = GRAPH_PADDING + 12;
+const RESEARCH_RIGHT_X = RESEARCH_LEFT_X + 200;
+const RESEARCH_CENTER_X = RESEARCH_LEFT_X + 220;
+const RESEARCH_LEFT_REVIEW_X = RESEARCH_LEFT_X + NODE_WIDTH + 170;
+const RESEARCH_RIGHT_REVIEW_X = RESEARCH_RIGHT_X + NODE_WIDTH + 170;
+const RESEARCH_REWORK_RAIL_X = RESEARCH_RIGHT_REVIEW_X + NODE_WIDTH + 118;
+const RESEARCH_SCOPE_Y = GRAPH_PADDING + 12;
+const RESEARCH_SURFACE_Y = RESEARCH_SCOPE_Y + 130;
+const RESEARCH_TRACK_PLAN_Y = RESEARCH_SURFACE_Y + 220;
+const RESEARCH_DISCOVERY_Y = RESEARCH_TRACK_PLAN_Y + 130;
+const RESEARCH_FINDING_Y = RESEARCH_DISCOVERY_Y + 230;
+const RESEARCH_CHAIN_Y = RESEARCH_FINDING_Y + 230;
+const RESEARCH_EXPLOIT_Y = RESEARCH_CHAIN_Y + 230;
+const RESEARCH_REPORT_Y = RESEARCH_EXPLOIT_Y + 230;
+const RESEARCH_STAGE_NAMES = {
+	scope: "research-scope",
+	surface: "surface-map",
+	trackPlan: "track-plan",
+	discovery: "vulnerability-discovery",
+	trackReview: "track-review",
+	findingValidation: "finding-validation",
+	findingReview: "finding-review",
+	chainSynthesis: "chain-synthesis",
+	chainReview: "chain-review",
+	exploitValidation: "exploit-validation",
+	exploitReview: "exploit-review",
+	report: "research-report",
+} as const;
+const RESEARCH_LOCAL_LOOPS = new Set<string>([
+	`${RESEARCH_STAGE_NAMES.trackReview}->${RESEARCH_STAGE_NAMES.trackPlan}`,
+	`${RESEARCH_STAGE_NAMES.findingReview}->${RESEARCH_STAGE_NAMES.findingValidation}`,
+	`${RESEARCH_STAGE_NAMES.chainReview}->${RESEARCH_STAGE_NAMES.chainSynthesis}`,
+	`${RESEARCH_STAGE_NAMES.exploitReview}->${RESEARCH_STAGE_NAMES.exploitValidation}`,
+]);
+const RESEARCH_REWORK_EDGES = new Set<string>([
+	`${RESEARCH_STAGE_NAMES.trackReview}->${RESEARCH_STAGE_NAMES.surface}`,
+	`${RESEARCH_STAGE_NAMES.findingReview}->${RESEARCH_STAGE_NAMES.trackPlan}`,
+	`${RESEARCH_STAGE_NAMES.chainReview}->${RESEARCH_STAGE_NAMES.trackPlan}`,
+	`${RESEARCH_STAGE_NAMES.chainReview}->${RESEARCH_STAGE_NAMES.findingValidation}`,
+	`${RESEARCH_STAGE_NAMES.exploitReview}->${RESEARCH_STAGE_NAMES.chainSynthesis}`,
+	`${RESEARCH_STAGE_NAMES.exploitReview}->${RESEARCH_STAGE_NAMES.findingValidation}`,
+]);
+const RESEARCH_MODULES = [
+	{
+		name: "scope",
+		label: "Scope",
+		stageNames: [
+			RESEARCH_STAGE_NAMES.scope,
+			RESEARCH_STAGE_NAMES.surface,
+		],
+	},
+	{
+		name: "track-discovery",
+		label: "Track Discovery",
+		stageNames: [
+			RESEARCH_STAGE_NAMES.trackPlan,
+			RESEARCH_STAGE_NAMES.discovery,
+			RESEARCH_STAGE_NAMES.trackReview,
+		],
+	},
+	{
+		name: "finding",
+		label: "Finding",
+		stageNames: [
+			RESEARCH_STAGE_NAMES.findingValidation,
+			RESEARCH_STAGE_NAMES.findingReview,
+		],
+	},
+	{
+		name: "chain",
+		label: "Chain",
+		stageNames: [
+			RESEARCH_STAGE_NAMES.chainSynthesis,
+			RESEARCH_STAGE_NAMES.chainReview,
+		],
+	},
+	{
+		name: "exploit",
+		label: "Exploit",
+		stageNames: [
+			RESEARCH_STAGE_NAMES.exploitValidation,
+			RESEARCH_STAGE_NAMES.exploitReview,
+		],
+	},
+] as const;
 const DEFAULT_PROFILE_VALUE = "__service_default__";
 const REPOSITORY_STAGE_NAME = "repository-profile";
 const DELTA_SCOPE_STAGE_NAME = "delta-scope";
@@ -294,8 +384,15 @@ const StageNode = ({ data }: NodeProps<StageFlowNode>) => {
 	);
 };
 
+const StageGroupNode = ({ data }: NodeProps<StageFlowNode>) => (
+	<div className="pointer-events-none h-full w-full rounded-lg px-3 pt-3 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+		{data.label}
+	</div>
+);
+
 const NODE_TYPES = {
 	stage: StageNode,
+	group: StageGroupNode,
 } satisfies NodeTypes;
 
 const buildSectionPath = (points: Point[]) => {
@@ -320,6 +417,48 @@ const withFlowEdgeEndpoints = (
 	return [sourcePoint, ...points.slice(1, -1), targetPoint];
 };
 
+const getEdgeLabelPoint = (
+	points: Point[],
+	kind?: ResearchEdgeKind,
+): Point | null => {
+	if (points.length < 2) {
+		return null;
+	}
+	if (kind === "local-loop" && points.length >= 5) {
+		const railStart = points[1];
+		const railEnd = points[2];
+		if (railStart && railEnd && railStart.x === railEnd.x) {
+			return {
+				x: railStart.x - 70,
+				y: railStart.y + (railEnd.y - railStart.y) / 2,
+			};
+		}
+	}
+
+	const longestSegment = points.slice(1).reduce<
+		{ start: Point; end: Point; length: number } | undefined
+	>((longest, end, index) => {
+		const start = points[index];
+		if (!start) {
+			return longest;
+		}
+		const length = Math.abs(end.x - start.x) + Math.abs(end.y - start.y);
+		return !longest || length > longest.length
+			? { start, end, length }
+			: longest;
+	}, undefined);
+	return longestSegment
+		? {
+				x:
+					longestSegment.start.x +
+					(longestSegment.end.x - longestSegment.start.x) / 2,
+				y:
+					longestSegment.start.y +
+					(longestSegment.end.y - longestSegment.start.y) / 2,
+			}
+		: null;
+};
+
 const ElkSectionEdgeComponent = ({
 	data,
 	id,
@@ -338,6 +477,9 @@ const ElkSectionEdgeComponent = ({
 		{ x: targetX, y: targetY },
 	);
 	const onPointMove = data?.onPointMove;
+	const labelPoint = data?.label
+		? getEdgeLabelPoint(renderedPoints, data.kind)
+		: null;
 
 	const handlePointPointerDown =
 		(pointIndex: number) => (event: ReactPointerEvent<SVGCircleElement>) => {
@@ -374,6 +516,18 @@ const ElkSectionEdgeComponent = ({
 				markerEnd={markerEnd}
 				style={style}
 			/>
+			{data?.label && labelPoint ? (
+				<EdgeLabelRenderer>
+					<div
+						className="nodrag nopan pointer-events-none absolute rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800 shadow-sm dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200"
+						style={{
+							transform: `translate(-50%, -50%) translate(${labelPoint.x}px, ${labelPoint.y}px)`,
+						}}
+					>
+						{data.label}
+					</div>
+				</EdgeLabelRenderer>
+			) : null}
 			{renderedPoints.slice(1, -1).map((point, index) => {
 				const pointIndex = index + 1;
 				return (
@@ -639,6 +793,74 @@ const compareStageOrder = (left: StageGraphNode, right: StageGraphNode) => {
 		: leftOrder - rightOrder;
 };
 
+const isResearchStageGraph = (graph: StageGraph) =>
+	graph.pipelineName.toLowerCase().includes("research");
+
+const getResearchNodeAbsolutePositions = (graph: StageGraph) => {
+	const positions = new Map<string, Point>();
+	const positionByStageName: Record<string, Point> = {
+		[RESEARCH_STAGE_NAMES.scope]: {
+			x: RESEARCH_CENTER_X,
+			y: RESEARCH_SCOPE_Y,
+		},
+		[RESEARCH_STAGE_NAMES.surface]: {
+			x: RESEARCH_CENTER_X,
+			y: RESEARCH_SURFACE_Y,
+		},
+		[RESEARCH_STAGE_NAMES.trackPlan]: {
+			x: RESEARCH_LEFT_X,
+			y: RESEARCH_TRACK_PLAN_Y,
+		},
+		[RESEARCH_STAGE_NAMES.discovery]: {
+			x: RESEARCH_LEFT_X,
+			y: RESEARCH_DISCOVERY_Y,
+		},
+		[RESEARCH_STAGE_NAMES.trackReview]: {
+			x: RESEARCH_LEFT_REVIEW_X,
+			y: RESEARCH_DISCOVERY_Y,
+		},
+		[RESEARCH_STAGE_NAMES.findingValidation]: {
+			x: RESEARCH_RIGHT_X,
+			y: RESEARCH_FINDING_Y,
+		},
+		[RESEARCH_STAGE_NAMES.findingReview]: {
+			x: RESEARCH_RIGHT_REVIEW_X,
+			y: RESEARCH_FINDING_Y,
+		},
+		[RESEARCH_STAGE_NAMES.chainSynthesis]: {
+			x: RESEARCH_LEFT_X,
+			y: RESEARCH_CHAIN_Y,
+		},
+		[RESEARCH_STAGE_NAMES.chainReview]: {
+			x: RESEARCH_LEFT_REVIEW_X,
+			y: RESEARCH_CHAIN_Y,
+		},
+		[RESEARCH_STAGE_NAMES.exploitValidation]: {
+			x: RESEARCH_RIGHT_X,
+			y: RESEARCH_EXPLOIT_Y,
+		},
+		[RESEARCH_STAGE_NAMES.exploitReview]: {
+			x: RESEARCH_RIGHT_REVIEW_X,
+			y: RESEARCH_EXPLOIT_Y,
+		},
+		[RESEARCH_STAGE_NAMES.report]: {
+			x: RESEARCH_CENTER_X,
+			y: RESEARCH_REPORT_Y,
+		},
+	};
+
+	for (const node of graph.nodes) {
+		positions.set(
+			node.stageName,
+			positionByStageName[node.stageName] ?? {
+				x: GRAPH_PADDING,
+				y: GRAPH_PADDING + node.order * (NODE_HEIGHT + NODE_GAP_Y),
+			},
+		);
+	}
+	return positions;
+};
+
 const getNodeAbsolutePositions = (graph: StageGraph) => {
 	const nodeByStageName = new Map(
 		graph.nodes.map((node) => [node.stageName, node]),
@@ -698,7 +920,7 @@ const getNodeAbsolutePositions = (graph: StageGraph) => {
 };
 
 const getGroupBounds = (
-	stageNames: string[],
+	stageNames: readonly string[],
 	positions: Map<string, Point>,
 ) => {
 	const memberPositions = stageNames.flatMap((stageName) => {
@@ -757,6 +979,175 @@ const buildLowerCorridorEdgePoints = (source: Point, target: Point) => {
 	const routeY =
 		Math.max(source.y, target.y) + NODE_HEIGHT + FORWARD_LONG_EDGE_OFFSET_Y;
 	return [start, { x: start.x, y: routeY }, { x: end.x, y: routeY }, end];
+};
+
+type ResearchEdgeKind = "forward" | "local-loop" | "rework";
+
+const buildResearchForwardEdgePoints = (source: Point, target: Point) => {
+	if (source.y === target.y) {
+		return buildSideCorridorEdgePoints({
+			source,
+			sourceSide: "right",
+			target,
+			targetSide: "left",
+		});
+	}
+
+	const sourceIsAbove = source.y < target.y;
+	const start = getNodeAnchor(source, sourceIsAbove ? "bottom" : "top");
+	const end = getNodeAnchor(target, sourceIsAbove ? "top" : "bottom");
+	const corridorY = start.y + (end.y - start.y) / 2;
+	return [
+		start,
+		{ x: start.x, y: corridorY },
+		{ x: end.x, y: corridorY },
+		end,
+	];
+};
+
+const buildResearchLocalLoopEdgePoints = (
+	source: Point,
+	target: Point,
+	laneOffset: number,
+) => {
+	if (source.y === target.y) {
+		const start = getNodeAnchor(source, "bottom");
+		const end = getNodeAnchor(target, "bottom");
+		const loopY = source.y + NODE_HEIGHT + 42 + laneOffset;
+		return [
+			start,
+			{ x: start.x, y: loopY },
+			{ x: end.x, y: loopY },
+			end,
+		];
+	}
+
+	const start = getNodeAnchor(source, "right");
+	const end = getNodeAnchor(target, "top");
+	const loopX = RESEARCH_REWORK_RAIL_X - 34 + laneOffset;
+	const targetCorridorY = target.y - 34 - laneOffset;
+	return [
+		start,
+		{ x: loopX, y: start.y },
+		{ x: loopX, y: targetCorridorY },
+		{ x: end.x, y: targetCorridorY },
+		end,
+	];
+};
+
+const buildResearchReworkEdgePoints = (
+	source: Point,
+	target: Point,
+	laneOffset: number,
+) => {
+	const start = getNodeAnchor(source, "right");
+	const end = getNodeAnchor(target, "top");
+	const railX = RESEARCH_REWORK_RAIL_X + laneOffset;
+	const targetCorridorY = target.y - 24 - laneOffset;
+	return [
+		start,
+		{ x: railX, y: start.y },
+		{ x: railX, y: targetCorridorY },
+		{ x: end.x, y: targetCorridorY },
+		end,
+	];
+};
+
+const buildResearchEdgePoints = (input: {
+	source: Point;
+	target: Point;
+	sourceStageName: string;
+	targetStageName: string;
+	edgeKind: ResearchEdgeKind;
+	laneOffset: number;
+}) => {
+	if (input.edgeKind === "local-loop") {
+		return buildResearchLocalLoopEdgePoints(
+			input.source,
+			input.target,
+			input.laneOffset,
+		);
+	}
+	if (input.edgeKind === "rework") {
+		return buildResearchReworkEdgePoints(
+			input.source,
+			input.target,
+			input.laneOffset,
+		);
+	}
+	return buildResearchForwardEdgePoints(input.source, input.target);
+};
+
+const getResearchEdgeKind = (
+	sourceStageName: string,
+	targetStageName: string,
+) => {
+	const key = `${sourceStageName}->${targetStageName}`;
+	if (RESEARCH_LOCAL_LOOPS.has(key)) {
+		return "local-loop" as const;
+	}
+	if (RESEARCH_REWORK_EDGES.has(key)) {
+		return "rework" as const;
+	}
+	return "forward" as const;
+};
+
+const segmentIntersectsNode = (
+	start: Point,
+	end: Point,
+	nodePosition: Point,
+) => {
+	const padding = 6;
+	const left = nodePosition.x - padding;
+	const right = nodePosition.x + NODE_WIDTH + padding;
+	const top = nodePosition.y - padding;
+	const bottom = nodePosition.y + NODE_HEIGHT + padding;
+	if (start.x === end.x) {
+		return (
+			start.x >= left &&
+			start.x <= right &&
+			Math.max(Math.min(start.y, end.y), top) <=
+				Math.min(Math.max(start.y, end.y), bottom)
+		);
+	}
+	if (start.y === end.y) {
+		return (
+			start.y >= top &&
+			start.y <= bottom &&
+			Math.max(Math.min(start.x, end.x), left) <=
+				Math.min(Math.max(start.x, end.x), right)
+		);
+	}
+	return true;
+};
+
+const assertResearchEdgeClear = (input: {
+	edgeId: string;
+	sourceStageName: string;
+	targetStageName: string;
+	points: Point[];
+	positions: Map<string, Point>;
+}) => {
+	for (let pointIndex = 1; pointIndex < input.points.length; pointIndex += 1) {
+		const start = input.points[pointIndex - 1];
+		const end = input.points[pointIndex];
+		if (!start || !end) {
+			continue;
+		}
+		for (const [stageName, position] of input.positions) {
+			if (
+				stageName === input.sourceStageName ||
+				stageName === input.targetStageName
+			) {
+				continue;
+			}
+			if (segmentIntersectsNode(start, end, position)) {
+				throw new Error(
+					`Research edge ${input.edgeId} intersects stage ${stageName}`,
+				);
+			}
+		}
+	}
 };
 
 const buildEdgePoints = (input: {
@@ -919,21 +1310,65 @@ const inferPointSide = (
 	}).side;
 };
 
+const getVisibleStageGraphEdges = (
+	graph: StageGraph,
+	researchGraph: boolean,
+): VisibleStageGraphEdge[] => {
+	if (!researchGraph) {
+		return graph.edges.map((edge) => ({ ...edge, routeLabels: [] }));
+	}
+
+	const edgesByEndpoints = new Map<string, VisibleStageGraphEdge>();
+	for (const edge of graph.edges) {
+		const endpointKey = `${edge.source}->${edge.target}`;
+		const existingEdge = edgesByEndpoints.get(endpointKey);
+		if (existingEdge) {
+			if (
+				edge.routeKey &&
+				!existingEdge.routeLabels.includes(edge.routeKey)
+			) {
+				existingEdge.routeLabels.push(edge.routeKey);
+			}
+			continue;
+		}
+		edgesByEndpoints.set(endpointKey, {
+			...edge,
+			id: `research-edge-${edge.source}-${edge.target}`,
+			routeLabels: edge.routeKey ? [edge.routeKey] : [],
+		});
+	}
+	return [...edgesByEndpoints.values()];
+};
+
 const buildFlowElements = (
 	graph: StageGraph,
 	onEdgePointMove?: EdgePointMoveHandler,
 ) => {
-	const groupById = new Map(graph.groups.map((group) => [group.id, group]));
-	const stagePositions = getNodeAbsolutePositions(graph);
+	const researchGraph = isResearchStageGraph(graph);
+	const visibleEdges = getVisibleStageGraphEdges(graph, researchGraph);
+	const stagePositions = researchGraph
+		? getResearchNodeAbsolutePositions(graph)
+		: getNodeAbsolutePositions(graph);
+	const syntheticResearchGroups = researchGraph
+		? RESEARCH_MODULES.map((module) => ({
+			id: `research-module-${module.name}`,
+			name: module.label,
+			stageNames: module.stageNames,
+		}))
+		: [];
+	const visibleGroups = [...graph.groups, ...syntheticResearchGroups];
+	const visibleGroupById = new Map(
+		visibleGroups.map((group) => [group.id, group]),
+	);
 	const groupBoundsById = new Map(
-		graph.groups.flatMap((group) => {
+		visibleGroups.flatMap((group) => {
 			const bounds = getGroupBounds(group.stageNames, stagePositions);
 			return bounds ? [[group.id, bounds] as const] : [];
 		}),
 	);
 
 	const flowNodes: Node[] = [
-		...graph.groups.flatMap<Node>((group) => {
+		...visibleGroups.flatMap<Node>((group) => {
 			const bounds = groupBoundsById.get(group.id);
 			if (!bounds) {
 				return [];
@@ -965,7 +1400,9 @@ const buildFlowElements = (
 		}),
 		...graph.nodes.map<Node>((node) => {
 			const groupId =
-				node.groupId && groupById.has(node.groupId) ? node.groupId : null;
+				node.groupId && visibleGroupById.has(node.groupId)
+					? node.groupId
+					: null;
 			const groupBounds = groupId ? groupBoundsById.get(groupId) : null;
 			const position = stagePositions.get(node.stageName) ?? {
 				x: GRAPH_PADDING,
@@ -994,18 +1431,47 @@ const buildFlowElements = (
 		}),
 	];
 
-	const flowEdges: ElkSectionEdge[] = graph.edges.map((edge) => {
+	const flowEdges: ElkSectionEdge[] = visibleEdges.map((edge, edgeIndex) => {
 		const source = stagePositions.get(edge.source);
 		const target = stagePositions.get(edge.target);
+		const edgeKind = researchGraph
+			? getResearchEdgeKind(edge.source, edge.target)
+			: "forward";
+		const reworkEdgeIndex = visibleEdges
+			.slice(0, edgeIndex)
+			.filter(
+				(previousEdge) =>
+					getResearchEdgeKind(previousEdge.source, previousEdge.target) ===
+					"rework",
+			).length;
+		const laneOffset = edgeKind === "rework" ? reworkEdgeIndex * 14 : 0;
 		const points =
 			source && target
-				? buildEdgePoints({
-						source,
-						target,
-						sourceStageName: edge.source,
-						targetStageName: edge.target,
-					})
+				? researchGraph
+					? buildResearchEdgePoints({
+							source,
+							target,
+							sourceStageName: edge.source,
+							targetStageName: edge.target,
+							edgeKind,
+							laneOffset,
+						})
+					: buildEdgePoints({
+							source,
+							target,
+							sourceStageName: edge.source,
+							targetStageName: edge.target,
+						})
 				: [];
+		if (researchGraph) {
+			assertResearchEdgeClear({
+				edgeId: edge.id,
+				sourceStageName: edge.source,
+				targetStageName: edge.target,
+				points,
+				positions: stagePositions,
+			});
+		}
 		const sourceSide = inferPointSide(points[0], source ?? { x: 0, y: 0 });
 		const targetSide = inferPointSide(
 			points[points.length - 1],
@@ -1020,6 +1486,13 @@ const buildFlowElements = (
 		const isInactiveEdge =
 			(sourceNode && getNodeRuntimeBoolean(sourceNode, "effectiveDisabled")) ||
 			(targetNode && getNodeRuntimeBoolean(targetNode, "effectiveDisabled"));
+		const edgeColor = isInactiveEdge
+			? "hsl(var(--muted-foreground) / 0.28)"
+			: edgeKind === "local-loop"
+				? "hsl(38 92% 45%)"
+				: edgeKind === "rework"
+					? "hsl(var(--muted-foreground) / 0.55)"
+					: "hsl(var(--foreground) / 0.62)";
 		return {
 			id: edge.id,
 			source: edge.source,
@@ -1031,22 +1504,23 @@ const buildFlowElements = (
 			zIndex: 1,
 			data: {
 				points,
+				kind: edgeKind,
+				label:
+					edge.routeLabels.length > 1
+						? edge.routeLabels.join(" / ")
+						: undefined,
 				onPointMove: onEdgePointMove,
 			},
 			markerEnd: {
 				type: MarkerType.ArrowClosed,
 				width: 16,
 				height: 16,
-				color: isInactiveEdge
-					? "hsl(var(--muted-foreground) / 0.28)"
-					: "hsl(var(--foreground) / 0.62)",
+				color: edgeColor,
 			},
 			style: {
-				strokeWidth: isInactiveEdge ? 1.2 : 1.5,
-				stroke: isInactiveEdge
-					? "hsl(var(--muted-foreground) / 0.28)"
-					: "hsl(var(--foreground) / 0.62)",
-				strokeDasharray: "6 6",
+				strokeWidth: isInactiveEdge ? 1.2 : edgeKind === "local-loop" ? 2 : 1.5,
+				stroke: edgeColor,
+				strokeDasharray: edgeKind === "forward" ? "6 6" : undefined,
 			},
 		};
 	});
@@ -1144,6 +1618,7 @@ const ScanStageGraphPanel = ({
 				setElements(nextElements);
 			}
 		} catch (nextError) {
+			console.error("Failed to layout scan stage graph", nextError);
 			if (!isCancelled) {
 				setElements(EMPTY_FLOW_ELEMENTS);
 				setLayoutError(
@@ -1193,6 +1668,7 @@ const ScanStageGraphPanel = ({
 					</div>
 				) : (
 					<ReactFlow
+						key={`stage-graph-${effectiveGraph?.pipelineName ?? "empty"}-${elements.nodes.length}`}
 						className="scan-stage-graph-flow text-foreground"
 						nodes={elements.nodes}
 						edges={elements.edges}
@@ -1206,6 +1682,7 @@ const ScanStageGraphPanel = ({
 						panOnScroll={false}
 						zoomOnScroll
 						zoomOnPinch
+						minZoom={effectiveGraph && isResearchStageGraph(effectiveGraph) ? 0.1 : 0.5}
 						onNodeClick={(_event, node) => {
 							const stageNode = node.data?.stageNode;
 							if (stageNode) {
@@ -1360,7 +1837,7 @@ export const FullScanStageGraphPreview = ({
 							: scanT(t, "scan.scanType.full", "Full Scan"),
 				},
 			)}
-			heightClassName="h-[360px]"
+			heightClassName={scanType === "research" ? "h-[600px]" : "h-[360px]"}
 			scanRuntimeSettings={scanRuntimeSettings}
 			agentProfiles={agentProfiles}
 			onStageSettingSave={handleStageSettingSave}

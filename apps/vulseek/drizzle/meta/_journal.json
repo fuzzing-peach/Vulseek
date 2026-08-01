@@ -1520,6 +1520,34 @@
       "when": 1783449000000,
       "tag": "0216_research_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 217,
+      "version": "7",
+      "when": 1784822814802,
+      "tag": "0217_research_findings",
+      "breakpoints": true
+    },
+    {
+      "idx": 218,
+      "version": "7",
+      "when": 1784866951211,
+      "tag": "0218_reconcile_research_registry_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 219,
+      "version": "7",
+      "when": 1785160443835,
+      "tag": "0219_research_entity_claims",
+      "breakpoints": true
+    },
+    {
+      "idx": 220,
+      "version": "7",
+      "when": 1785161443835,
+      "tag": "0220_agent_owned_research_registry",
+      "breakpoints": true
     }
   ]
 }

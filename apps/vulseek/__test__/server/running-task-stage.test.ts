@@ -1,5 +1,7 @@
 import {
 	mapRunningTaskStage,
+	getResearchRunningTaskPresentation,
+	RESEARCH_RUNNING_TASK_STAGES,
 	RUNNING_TASK_VIEW_STATUSES,
 } from "@vulseek/server/services/scan/running-task-stage";
 import { describe, expect, it } from "vitest";
@@ -11,6 +13,45 @@ describe("mapRunningTaskStage", () => {
 		);
 		expect(mapRunningTaskStage("identify-target")).toBe("identify-target");
 		expect(mapRunningTaskStage("scan-target")).toBe("scan-target");
+	});
+
+	it("includes every Research Pipeline stage", () => {
+		expect(RESEARCH_RUNNING_TASK_STAGES).toEqual([
+			"research-scope",
+			"surface-map",
+			"track-plan",
+			"vulnerability-discovery",
+			"track-review",
+			"finding-validation",
+			"finding-review",
+			"chain-synthesis",
+			"chain-review",
+			"exploit-validation",
+			"exploit-review",
+			"research-report",
+		]);
+		for (const stage of RESEARCH_RUNNING_TASK_STAGES) {
+			expect(mapRunningTaskStage(stage)).toBe(stage);
+		}
+		expect(
+			getResearchRunningTaskPresentation(
+				"research-scope",
+				"Research Scope: WordPress",
+			),
+		).toEqual({
+			title: "Research Scope: WordPress",
+			subtitle: "Research Scope",
+			stage: "research-scope",
+		});
+		for (const stage of RESEARCH_RUNNING_TASK_STAGES) {
+			expect(getResearchRunningTaskPresentation(stage, "Research task")).toEqual(
+				{
+					title: "Research task",
+					subtitle: expect.any(String),
+					stage,
+				},
+			);
+		}
 	});
 
 	it("rejects legacy stage IDs", () => {

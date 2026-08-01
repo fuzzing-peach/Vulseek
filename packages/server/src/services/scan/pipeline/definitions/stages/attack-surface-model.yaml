@@ -5,7 +5,6 @@ attack-surface-model:
   role: scan
   group: full-scan
   concurrency: 4
-  maxConcurrency: 32
   disableable: true
   description: Module-level threat and attack-surface modeling.
   runtimeConfig:

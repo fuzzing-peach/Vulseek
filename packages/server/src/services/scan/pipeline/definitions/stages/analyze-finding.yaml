@@ -5,7 +5,6 @@ analyze-finding:
   role: analysis
   group: review
   concurrency: 2
-  maxConcurrency: 16
   disableable: true
   description: Candidate analysis and critic routing.
   runtimeConfig:

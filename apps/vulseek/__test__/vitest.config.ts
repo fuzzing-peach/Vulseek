@@ -1,5 +1,4 @@
 import path from "node:path";
-import tsconfigPaths from "vite-tsconfig-paths";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -13,9 +12,9 @@ export default defineConfig({
 			NODE: "test",
 		},
 	},
-	plugins: [tsconfigPaths()],
 	resolve: {
 		alias: {
+			"@": path.resolve(__dirname, ".."),
 			"@vulseek/server": path.resolve(
 				__dirname,
 				"../../../packages/server/src",

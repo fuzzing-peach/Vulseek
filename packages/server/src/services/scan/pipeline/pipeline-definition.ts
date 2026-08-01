@@ -191,18 +191,27 @@ export const getStageRouteOutputSchemas = <
 	stageName: PipelineStageName,
 ): StageContext["routeOutputSchemas"] => {
 	const edges = getDownstreamEdges(pipeline, stageName);
-	const routedEdges = edges.filter((edge) => edge.route && edge.outputSchema);
+	const stageOutputSchema = getPipelineStage(pipeline, stageName)?.outputSchema;
+	const routedEdges = edges.filter((edge) => edge.route);
 	if (routedEdges.length === 0) {
 		return undefined;
 	}
-	return routedEdges.map((edge) => ({
-		routeKey: edge.route!.key,
-		description:
-			edge.outputSchemaDescription ||
-			`Output for route ${edge.route!.key} to ${edge.to.name}`,
-		schema: edge.outputSchema!,
-		default: edge.route?.default,
-	}));
+	return routedEdges.map((edge) => {
+		const schema = edge.outputSchema ?? stageOutputSchema;
+		if (!schema) {
+			throw new Error(
+				`Routed stage ${stageName} route ${edge.route!.key} has no edge or stage output schema`,
+			);
+		}
+		return {
+			routeKey: edge.route!.key,
+			description:
+				edge.outputSchemaDescription ||
+				`Output for route ${edge.route!.key} to ${edge.to.name}`,
+			schema,
+			default: edge.route?.default,
+		};
+	});
 };
 
 export const validatePipelineRouteConfiguration = <

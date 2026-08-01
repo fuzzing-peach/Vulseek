@@ -34,6 +34,7 @@ dist.root-owned.*
 /vulseek-data/
 /vulseek-data-dev/
 /vulseek-data-release/
+/.vulseek-secrets/
 
 # Local permission-recovery backups
 .node-modules-root-owned-backups/

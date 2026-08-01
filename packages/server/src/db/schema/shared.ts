@@ -152,6 +152,54 @@ export const buildDefaultScanStageSettings = (
 		agentProfileId: agentProfileId ?? null,
 		concurrency: 1,
 	},
+	"research-scope": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 1,
+	},
+	"surface-map": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 1,
+	},
+	"track-plan": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 1,
+	},
+	"vulnerability-discovery": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	"track-review": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 1,
+	},
+	"finding-validation": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	"finding-review": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	"chain-synthesis": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 1,
+	},
+	"chain-review": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	"exploit-validation": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	"exploit-review": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 4,
+	},
+	"research-report": {
+		agentProfileId: agentProfileId ?? null,
+		concurrency: 1,
+	},
 });
 
 export const HealthCheckSwarmSchema = z

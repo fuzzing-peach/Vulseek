@@ -84,7 +84,6 @@ research:
       input:
         scopePath: "$input.scopePath"
         surfaceMapPath: "$input.surfaceMapPath"
-        reviewPath: "$output.reviewPath"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
@@ -92,7 +91,7 @@ research:
         - from: "$input.surfaceMapPath"
           to: inputs/surface-map.json
           inputField: surfaceMapPath
-        - from: "$output.reviewPath"
+        - from: "$output"
           to: inputs/track-review.json
           inputField: reviewPath
     - name: track-review-to-surface-map
@@ -103,28 +102,34 @@ research:
         key: new-surface
       input:
         scopePath: "$input.scopePath"
-        reviewPath: "$output.reviewPath"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
-        - from: "$output.reviewPath"
+        - from: "$output"
           to: inputs/track-review.json
           inputField: reviewPath
     - name: track-review-to-finding-validation
       from: track-review
       to: finding-validation
       mode: fanOut
-      foreach: "$.candidateFindingIds[*]"
+      foreach: "$.findingIds[*]"
       route:
-        key: candidate-found
+        key: finding-found
       input:
         scopePath: "$input.scopePath"
-        candidateId: "$item"
+        surfaceMapPath: "$input.surfaceMapPath"
+        findingId: "$item"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
+        - from: "$input.surfaceMapPath"
+          to: inputs/surface-map.json
+          inputField: surfaceMapPath
+        - from: "$output"
+          to: inputs/track-review.json
+          inputField: reviewPath
     - name: track-review-exhausted-to-track-plan
       from: track-review
       to: track-plan
@@ -134,7 +139,6 @@ research:
       input:
         scopePath: "$input.scopePath"
         surfaceMapPath: "$input.surfaceMapPath"
-        reviewPath: "$output.reviewPath"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
@@ -142,7 +146,26 @@ research:
         - from: "$input.surfaceMapPath"
           to: inputs/surface-map.json
           inputField: surfaceMapPath
-        - from: "$output.reviewPath"
+        - from: "$output"
+          to: inputs/track-review.json
+          inputField: reviewPath
+    - name: track-review-blocked-to-track-plan
+      from: track-review
+      to: track-plan
+      mode: map
+      route:
+        key: blocked
+      input:
+        scopePath: "$input.scopePath"
+        surfaceMapPath: "$input.surfaceMapPath"
+      artifacts:
+        - from: "$input.scopePath"
+          to: inputs/scope.json
+          inputField: scopePath
+        - from: "$input.surfaceMapPath"
+          to: inputs/surface-map.json
+          inputField: surfaceMapPath
+        - from: "$output"
           to: inputs/track-review.json
           inputField: reviewPath
     - name: finding-validation-to-finding-review
@@ -151,13 +174,16 @@ research:
       mode: map
       input:
         scopePath: "$input.scopePath"
-        candidateId: "$input.candidateId"
-        validationPath: "$output.validationPath"
+        findingId: "$input.findingId"
+        surfaceMapPath: "$input.surfaceMapPath"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
-        - from: "$output.validationPath"
+        - from: "$input.surfaceMapPath"
+          to: inputs/surface-map.json
+          inputField: surfaceMapPath
+        - from: "$output"
           to: inputs/finding-validation.json
           inputField: validationPath
     - name: finding-review-to-finding-validation
@@ -169,12 +195,16 @@ research:
         default: true
       input:
         scopePath: "$input.scopePath"
-        candidateId: "$input.candidateId"
+        findingId: "$input.findingId"
+        surfaceMapPath: "$input.surfaceMapPath"
         validationPath: "$input.validationPath"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
+        - from: "$input.surfaceMapPath"
+          to: inputs/surface-map.json
+          inputField: surfaceMapPath
         - from: "$input.validationPath"
           to: inputs/finding-validation.json
           inputField: validationPath
@@ -186,12 +216,15 @@ research:
         key: false-positive
       input:
         scopePath: "$input.scopePath"
-        reviewPath: "$output.reviewPath"
+        surfaceMapPath: "$input.surfaceMapPath"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
-        - from: "$output.reviewPath"
+        - from: "$input.surfaceMapPath"
+          to: inputs/surface-map.json
+          inputField: surfaceMapPath
+        - from: "$output"
           to: inputs/finding-review.json
           inputField: reviewPath
     - name: finding-review-to-chain-synthesis
@@ -202,12 +235,15 @@ research:
         key: confirmed
       input:
         scopePath: "$input.scopePath"
-        reviewPath: "$output.reviewPath"
+        surfaceMapPath: "$input.surfaceMapPath"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
-        - from: "$output.reviewPath"
+        - from: "$input.surfaceMapPath"
+          to: inputs/surface-map.json
+          inputField: surfaceMapPath
+        - from: "$output"
           to: inputs/finding-review.json
           inputField: reviewPath
     - name: chain-synthesis-to-chain-review
@@ -217,11 +253,15 @@ research:
       foreach: "$.chains[*]"
       input:
         scopePath: "$input.scopePath"
+        surfaceMapPath: "$input.surfaceMapPath"
         chain: "$item"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
+        - from: "$input.surfaceMapPath"
+          to: inputs/surface-map.json
+          inputField: surfaceMapPath
     - name: chain-review-to-chain-synthesis
       from: chain-review
       to: chain-synthesis
@@ -231,13 +271,16 @@ research:
         default: true
       input:
         scopePath: "$input.scopePath"
+        surfaceMapPath: "$input.surfaceMapPath"
         chain: "$input.chain"
-        reviewPath: "$output.reviewPath"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
-        - from: "$output.reviewPath"
+        - from: "$input.surfaceMapPath"
+          to: inputs/surface-map.json
+          inputField: surfaceMapPath
+        - from: "$output"
           to: inputs/chain-review.json
           inputField: reviewPath
     - name: chain-review-to-track-plan
@@ -248,13 +291,16 @@ research:
         key: primitive-gap
       input:
         scopePath: "$input.scopePath"
+        surfaceMapPath: "$input.surfaceMapPath"
         chain: "$input.chain"
-        reviewPath: "$output.reviewPath"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
-        - from: "$output.reviewPath"
+        - from: "$input.surfaceMapPath"
+          to: inputs/surface-map.json
+          inputField: surfaceMapPath
+        - from: "$output"
           to: inputs/chain-review.json
           inputField: reviewPath
     - name: chain-review-to-finding-validation
@@ -265,13 +311,16 @@ research:
         key: invalid-finding
       input:
         scopePath: "$input.scopePath"
-        candidateId: "$input.chain.invalidCandidateId"
-        reviewPath: "$output.reviewPath"
+        surfaceMapPath: "$input.surfaceMapPath"
+        findingId: "$output.invalidFindingId"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
-        - from: "$output.reviewPath"
+        - from: "$input.surfaceMapPath"
+          to: inputs/surface-map.json
+          inputField: surfaceMapPath
+        - from: "$output"
           to: inputs/chain-review.json
           inputField: reviewPath
     - name: chain-review-to-exploit-validation
@@ -282,13 +331,16 @@ research:
         key: accepted
       input:
         scopePath: "$input.scopePath"
+        surfaceMapPath: "$input.surfaceMapPath"
         chain: "$input.chain"
-        reviewPath: "$output.reviewPath"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
-        - from: "$output.reviewPath"
+        - from: "$input.surfaceMapPath"
+          to: inputs/surface-map.json
+          inputField: surfaceMapPath
+        - from: "$output"
           to: inputs/chain-review.json
           inputField: reviewPath
     - name: exploit-validation-to-exploit-review
@@ -297,13 +349,16 @@ research:
       mode: map
       input:
         scopePath: "$input.scopePath"
+        surfaceMapPath: "$input.surfaceMapPath"
         chain: "$input.chain"
-        validationPath: "$output.validationPath"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
-        - from: "$output.validationPath"
+        - from: "$input.surfaceMapPath"
+          to: inputs/surface-map.json
+          inputField: surfaceMapPath
+        - from: "$output"
           to: inputs/exploit-validation.json
           inputField: validationPath
     - name: exploit-review-to-exploit-validation
@@ -315,13 +370,16 @@ research:
         default: true
       input:
         scopePath: "$input.scopePath"
+        surfaceMapPath: "$input.surfaceMapPath"
         chain: "$input.chain"
-        reviewPath: "$output.reviewPath"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
-        - from: "$output.reviewPath"
+        - from: "$input.surfaceMapPath"
+          to: inputs/surface-map.json
+          inputField: surfaceMapPath
+        - from: "$output"
           to: inputs/exploit-review.json
           inputField: reviewPath
     - name: exploit-review-to-chain-synthesis
@@ -332,12 +390,16 @@ research:
         key: chain-revision
       input:
         scopePath: "$input.scopePath"
-        reviewPath: "$output.reviewPath"
+        surfaceMapPath: "$input.surfaceMapPath"
+        chain: "$input.chain"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
-        - from: "$output.reviewPath"
+        - from: "$input.surfaceMapPath"
+          to: inputs/surface-map.json
+          inputField: surfaceMapPath
+        - from: "$output"
           to: inputs/exploit-review.json
           inputField: reviewPath
     - name: exploit-review-to-finding-validation
@@ -348,13 +410,16 @@ research:
         key: finding-revalidation
       input:
         scopePath: "$input.scopePath"
-        candidateId: "$input.chain.invalidCandidateId"
-        reviewPath: "$output.reviewPath"
+        surfaceMapPath: "$input.surfaceMapPath"
+        findingId: "$output.invalidFindingId"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
-        - from: "$output.reviewPath"
+        - from: "$input.surfaceMapPath"
+          to: inputs/surface-map.json
+          inputField: surfaceMapPath
+        - from: "$output"
           to: inputs/exploit-review.json
           inputField: reviewPath
     - name: exploit-review-to-research-report
@@ -366,12 +431,11 @@ research:
       input:
         scopePath: "$input.scopePath"
         chain: "$input.chain"
-        reviewPath: "$output.reviewPath"
       artifacts:
         - from: "$input.scopePath"
           to: inputs/scope.json
           inputField: scopePath
-        - from: "$output.reviewPath"
+        - from: "$output"
           to: inputs/exploit-review.json
           inputField: reviewPath
   groups: []

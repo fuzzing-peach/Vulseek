@@ -45,7 +45,7 @@
     "@octokit/rest": "^20.1.2",
     "@oslojs/crypto": "1.0.1",
     "@oslojs/encoding": "1.1.0",
-    "@pydantic/genai-prices": "^0.0.67",
+    "@pydantic/genai-prices": "^0.0.72",
     "@react-email/components": "^0.0.21",
     "@trpc/server": "^10.45.2",
     "adm-zip": "^0.5.16",
@@ -90,7 +90,7 @@
     "zod-to-json-schema": "3.24.5"
   },
   "devDependencies": {
-	"@agentclientprotocol/sdk": "1.2.1",
+    "@agentclientprotocol/sdk": "1.2.1",
     "@types/adm-zip": "^0.5.7",
     "@types/bcrypt": "5.0.2",
     "@types/dockerode": "3.3.23",

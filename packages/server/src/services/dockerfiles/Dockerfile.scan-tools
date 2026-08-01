@@ -83,9 +83,10 @@ RUN --mount=type=cache,id=vulseek-pip-cache,target=/root/.cache/pip,sharing=lock
 RUN --mount=type=cache,id=vulseek-pip-cache,target=/root/.cache/pip,sharing=locked \
     python3 -m venv /opt/vulseek-venv \
     && /opt/vulseek-venv/bin/pip install --upgrade pip \
-    && /opt/vulseek-venv/bin/pip install \
-      jsonschema \
-      tree-sitter \
+	    && /opt/vulseek-venv/bin/pip install \
+	      jsonschema \
+	      'psycopg[binary]>=3.2,<4' \
+	      tree-sitter \
       tree-sitter-c \
       tree-sitter-cpp
 

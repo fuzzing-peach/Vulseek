@@ -184,3 +184,95 @@ test("validateJsonSchemaContractArtifacts validates referenced artifact JSON con
 		/output\.modules\[\].*JSON Schema validation failed/,
 	);
 });
+
+test("validateJsonSchemaContractArtifacts validates paths nested inside an artifact", async () => {
+	const contract = createJsonSchemaContract({
+		schemas: {
+			Finding: {
+				type: "object",
+				required: ["findingId"],
+				properties: {
+					findingId: { type: "string" },
+				},
+				additionalProperties: false,
+			},
+			DiscoveryReport: {
+				type: "object",
+				required: ["findingPaths"],
+				properties: {
+					findingPaths: {
+						type: "array",
+						items: {
+							$pathOf: "#/schemas/Finding",
+						},
+					},
+				},
+				additionalProperties: false,
+			},
+			DiscoveryManifest: {
+				type: "object",
+				required: ["discoveryReportPath"],
+				properties: {
+					discoveryReportPath: {
+						$pathOf: "#/schemas/DiscoveryReport",
+					},
+				},
+				additionalProperties: false,
+			},
+		},
+		schema: {
+			$ref: "#/schemas/DiscoveryManifest",
+		},
+	});
+	const artifacts = new Map<string, unknown>([
+		[
+			"/task/discovery-report.json",
+			{
+				findingPaths: [
+					"/task/findings/one.json",
+					"/task/findings/two.json",
+				],
+			},
+		],
+		["/task/findings/one.json", { findingId: "track:one" }],
+		["/task/findings/two.json", { findingId: "track:two" }],
+	]);
+	const reads: string[] = [];
+
+	assert.deepEqual(
+		getJsonSchemaArtifactAnnotations(contract).map(
+			(annotation) => annotation.path,
+		),
+		[
+			"output.discoveryReportPath",
+			"artifact.findingPaths[]",
+		],
+	);
+
+	await validateJsonSchemaContractArtifacts(
+		contract,
+		{ discoveryReportPath: "/task/discovery-report.json" },
+		async (artifactPath) => {
+			reads.push(artifactPath);
+			const artifact = artifacts.get(artifactPath);
+			assert.notEqual(artifact, undefined);
+			return artifact;
+		},
+	);
+	assert.deepEqual(reads, [
+		"/task/discovery-report.json",
+		"/task/findings/one.json",
+		"/task/findings/two.json",
+	]);
+
+	artifacts.set("/task/findings/two.json", { findingId: 42 });
+	await assert.rejects(
+		() =>
+			validateJsonSchemaContractArtifacts(
+				contract,
+				{ discoveryReportPath: "/task/discovery-report.json" },
+				async (artifactPath) => artifacts.get(artifactPath),
+			),
+		/artifact\.findingPaths\[\].*JSON Schema validation failed/,
+	);
+});

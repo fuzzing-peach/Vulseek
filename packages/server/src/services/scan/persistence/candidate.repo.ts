@@ -39,6 +39,11 @@ const candidateMetadataKey = (
 	vulnerabilityCandidateId: string,
 ) => `${scanJobId}\n${vulnerabilityCandidateId}`;
 
+export type CandidateSyncTransaction = Pick<
+	typeof db,
+	"select" | "insert" | "delete"
+>;
+
 const listCandidateMetadataByIds = async (
 	candidates: Array<{ scanJobId: string; vulnerabilityCandidateId: string }>,
 ) => {
@@ -139,11 +144,12 @@ const withCandidateMetadata = async <
 
 export const upsertVulnerabilityCandidatesRepo = async (
 	candidates: PersistedVulnerabilityCandidateInput[],
+	executor: CandidateSyncTransaction = db,
 ) => {
 	if (candidates.length === 0) {
 		return;
 	}
-	await db
+	await executor
 		.insert(vulnerabilityCandidates)
 		.values(
 			candidates.map((candidate) => ({
@@ -188,6 +194,7 @@ export const deleteStaleVulnerabilityCandidatesForProducerTaskRepo = async (
 		producerTaskId: string;
 		keepCandidateIds: string[];
 	},
+	executor: CandidateSyncTransaction = db,
 ) => {
 	const uniqueIds = [...new Set(input.keepCandidateIds)];
 	const conditions = [eq(vulnerabilityCandidates.producerTaskId, input.producerTaskId)];
@@ -196,15 +203,16 @@ export const deleteStaleVulnerabilityCandidatesForProducerTaskRepo = async (
 			notInArray(vulnerabilityCandidates.vulnerabilityCandidateId, uniqueIds),
 		);
 	}
-	await db.delete(vulnerabilityCandidates).where(and(...conditions));
+	await executor.delete(vulnerabilityCandidates).where(and(...conditions));
 };
 
 export const syncVulnerabilityCandidatesFromProducerTask = async (
 	taskId: string,
+	executor: CandidateSyncTransaction = db,
 ) =>
 	await syncVulnerabilityCandidatesFromProducerTaskWithDeps(taskId, {
 		findTaskById: async (id) =>
-			await db
+			await executor
 				.select()
 				.from(tasks)
 				.where(eq(tasks.taskId, id))
@@ -220,9 +228,14 @@ export const syncVulnerabilityCandidatesFromProducerTask = async (
 					return task;
 				}),
 		readTaskJsonArtifact: readTaskJsonArtifactForTask,
-		upsertCandidates: upsertVulnerabilityCandidatesRepo,
+		upsertCandidates: async (candidates) =>
+			await upsertVulnerabilityCandidatesRepo(candidates, executor),
 		deleteStaleCandidatesForProducerTask:
-			deleteStaleVulnerabilityCandidatesForProducerTaskRepo,
+			async (input) =>
+				await deleteStaleVulnerabilityCandidatesForProducerTaskRepo(
+					input,
+					executor,
+				),
 	});
 
 export const backfillVulnerabilityCandidatesFromTasks = async (

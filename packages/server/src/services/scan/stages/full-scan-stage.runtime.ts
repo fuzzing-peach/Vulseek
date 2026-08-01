@@ -288,7 +288,7 @@ export const resolveStageConcurrencySetting = async (
 			fallback(settings) ||
 			1,
 	);
-	return settings.scanType === "research" ? Math.min(4, concurrency) : concurrency;
+	return concurrency;
 };
 
 export const isFullScanStageActive = async (

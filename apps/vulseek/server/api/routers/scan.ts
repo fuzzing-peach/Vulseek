@@ -18,6 +18,11 @@ import {
 	findLatestScanEvaluationResult,
 	findRunningCheckoutTask,
 	authorizeScanJobAccess,
+	listExploitChainsPageRepo,
+	listExploitPrimitivesPageRepo,
+	listResearchFindingsPageRepo,
+	listResearchTracksPageRepo,
+	findResearchFindingRepo,
 	findScanJobById,
 	findScanJobResultSummary,
 	findScanJobStageGraph,
@@ -72,6 +77,7 @@ import {
 import type { ScanQueueJob } from "@/server/queues/queue-types";
 import { scanEvaluationsQueue, scansQueue } from "@/server/queues/queueSetup";
 import { jobRuntimeStatusStore } from "../../scan/job-runtime-cache";
+import { apiFindResearchRegistryPageByScanJob } from "../schemas/research-registry";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 
 const apiFindVulnerabilityCandidatesPageByScanJob = z
@@ -848,6 +854,45 @@ export const scanRouter = createTRPCRouter({
 			);
 		}),
 
+	researchTracks: protectedProcedure
+		.input(apiFindResearchRegistryPageByScanJob)
+		.query(async ({ input, ctx }) => {
+			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
+			return await listResearchTracksPageRepo(input);
+		}),
+
+	researchFindings: protectedProcedure
+		.input(apiFindResearchRegistryPageByScanJob)
+		.query(async ({ input, ctx }) => {
+			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
+			const scanJob = await findScanJobById(input.scanJobId);
+			if (scanJob.scanType !== "research") return { items: [], total: 0, page: 1, pageSize: input.pageSize, totalPages: 1 };
+			return await listResearchFindingsPageRepo(input);
+		}),
+
+	researchFinding: protectedProcedure
+		.input(z.object({ scanJobId: z.string().min(1), findingId: z.string().min(1) }))
+		.query(async ({ input, ctx }) => {
+			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
+			const scanJob = await findScanJobById(input.scanJobId);
+			if (scanJob.scanType !== "research") return null;
+			return await findResearchFindingRepo(input);
+		}),
+
+	exploitPrimitives: protectedProcedure
+		.input(apiFindResearchRegistryPageByScanJob)
+		.query(async ({ input, ctx }) => {
+			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
+			return await listExploitPrimitivesPageRepo(input);
+		}),
+
+	exploitChains: protectedProcedure
+		.input(apiFindResearchRegistryPageByScanJob)
+		.query(async ({ input, ctx }) => {
+			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
+			return await listExploitChainsPageRepo(input);
+		}),
+
 	startEvaluation: protectedProcedure
 		.input(apiStartScanEvaluation)
 		.mutation(async ({ input, ctx }) => {
@@ -1352,30 +1397,10 @@ export const scanRouter = createTRPCRouter({
 	terminalTasks: protectedProcedure
 		.input(apiFindScanJobTerminalTasksPage)
 		.query(async ({ input, ctx }) => {
-			const scanJob = await findScanJobById(input.scanJobId);
-			let organizationId: string | undefined;
-			if (scanJob.applicationId) {
-				const application = await findApplicationById(scanJob.applicationId);
-				organizationId = application.environment.project.organizationId;
-			}
-			if (scanJob.composeId) {
-				const compose = await findComposeById(scanJob.composeId);
-				organizationId = compose.environment.project.organizationId;
-			}
-			if (!organizationId) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Invalid scan job target",
-				});
-			}
-
-			if (organizationId !== ctx.session.activeOrganizationId) {
-				throw new TRPCError({
-					code: "UNAUTHORIZED",
-					message: "You are not authorized to access tasks for this scan job",
-				});
-			}
-
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 			return await findScanJobTerminalTasksPage(input);
 		}),
 

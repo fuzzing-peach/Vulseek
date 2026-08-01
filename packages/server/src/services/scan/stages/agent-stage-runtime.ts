@@ -56,6 +56,7 @@ export const launchAgentStageRuntime = async (input: {
 	scanJob: ScanJob;
 	containerNameParts?: Array<string | null | undefined>;
 	codexHomeName?: string;
+	reuseContainer?: boolean;
 }) => {
 	const runtime = await resolveAgentStageRuntime(input);
 	await bindTaskRuntimeRepo({
@@ -75,7 +76,7 @@ export const launchAgentStageRuntime = async (input: {
 		stageRootInContainer: runtime.stageRootInContainer,
 		taskRealRootInContainer: runtime.taskRealRootInContainer,
 		persistent: input.ctx.persistent,
-		reuseContainer: input.ctx.reuseContainer,
+		reuseContainer: input.reuseContainer ?? input.ctx.reuseContainer,
 	});
 	return runtime;
 };

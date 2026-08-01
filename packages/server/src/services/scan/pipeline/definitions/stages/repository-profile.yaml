@@ -5,7 +5,6 @@ repository-profile:
   role: scan
   group: full-scan
   concurrency: 1
-  maxConcurrency: 8
   disableable: false
   description: Repository-wide runtime and security surface profiling.
   runtimeConfig:

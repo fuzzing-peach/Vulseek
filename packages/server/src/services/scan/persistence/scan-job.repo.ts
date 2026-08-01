@@ -11,6 +11,7 @@ import {
 } from "../pipeline/scan-pipeline-definitions";
 import { normalizeScanRuntimeSettings } from "../runtime-settings";
 import { getPipelineIdForScanType, type ScanType } from "../scan-type";
+import { resolveStageTaskName } from "../stage-task-name";
 import { createTaskRepo } from "./task.repo";
 
 const selectScanJobWithRepositoryTaskStatus = {
@@ -75,6 +76,17 @@ export const findScanJobByIdRepo = async (scanJobId: string) => {
 	}
 	return scanJob;
 };
+
+export const findScanJobRuntimeControlRepo = async (scanJobId: string) =>
+	await db
+		.select({
+			status: scanJobs.status,
+			scanRuntimeSettings: scanJobs.scanRuntimeSettings,
+		})
+		.from(scanJobs)
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.limit(1)
+		.then((rows) => rows[0] ?? null);
 
 export const sumClaudeCodeCachedReadTokensByScanJobIdRepo = async (
 	scanJobId: string,
@@ -185,8 +197,14 @@ export const createScanJobRepo = async (input: {
 
 	await createTaskRepo({
 		scanJobId: created[0].scanJobId,
-			name: pipelineDefinitions.pipelines[pipelineId]!.rootStageId,
-			stageName: pipelineDefinitions.pipelines[pipelineId]!.rootStageId,
+		name:
+			input.scanType === "research"
+				? resolveStageTaskName(
+					pipelineDefinitions.pipelines[pipelineId]!.rootStageId,
+					{ researchScope: input.researchScope ?? {} },
+				)
+				: pipelineDefinitions.pipelines[pipelineId]!.rootStageId,
+		stageName: pipelineDefinitions.pipelines[pipelineId]!.rootStageId,
 		status: "pending",
 		input:
 			input.scanType === "research"

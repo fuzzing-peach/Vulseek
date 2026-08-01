@@ -7,6 +7,7 @@ export type JsonSchemaArtifactAnnotation = {
 	kind: "path" | "path_list";
 	jsonSchema: JsonSchemaObject;
 	valueAnnotations: JsonSchemaValueAnnotation[];
+	artifactAnnotations: JsonSchemaArtifactAnnotation[];
 };
 
 export type JsonSchemaValueAnnotation =
@@ -299,7 +300,7 @@ const normalizePathOfSchema = (input: {
 		const artifactSchema = normalizeJsonSchema({
 			schema: artifactSchemaSource,
 			schemas: input.schemas,
-			path: input.path,
+			path: "artifact",
 		});
 		return {
 			schema: { type: "string" },
@@ -312,6 +313,7 @@ const normalizePathOfSchema = (input: {
 						artifactSchemaSource,
 						input.schemas,
 					),
+					artifactAnnotations: artifactSchema.artifactAnnotations,
 				},
 			],
 			valueAnnotations: [],
@@ -408,7 +410,16 @@ export const createJsonSchemaContract = (input: {
 
 export const getJsonSchemaArtifactAnnotations = (
 	contract: JsonSchemaContract,
-) => contract.artifactAnnotations;
+) => {
+	const flatten = (
+		annotations: readonly JsonSchemaArtifactAnnotation[],
+	): JsonSchemaArtifactAnnotation[] =>
+		annotations.flatMap((annotation) => [
+			annotation,
+			...flatten(annotation.artifactAnnotations),
+		]);
+	return flatten(contract.artifactAnnotations);
+};
 
 export const getJsonSchemaValueAnnotations = (
 	contract: JsonSchemaContract,
@@ -420,7 +431,7 @@ export const validateJsonSchemaContract = (
 ) => contract.validate(value);
 
 const readOutputPath = (value: unknown, annotationPath: string) => {
-	const path = annotationPath.replace(/^output\.?/, "");
+	const path = annotationPath.replace(/^(?:output|artifact)\.?/, "");
 	if (!path) {
 		return value;
 	}
@@ -450,28 +461,40 @@ export const validateJsonSchemaContractArtifacts = async (
 	value: unknown,
 	readArtifactJson: (artifactPath: string) => Promise<unknown>,
 ) => {
-	for (const annotation of contract.artifactAnnotations) {
-		const artifactPaths = readOutputPath(value, annotation.path);
-		const paths =
-			annotation.kind === "path_list" ? artifactPaths : [artifactPaths];
-		if (!Array.isArray(paths)) {
-			throw new Error(`${annotation.path} must be an array of artifact paths`);
-		}
-		for (const artifactPath of paths) {
-			if (typeof artifactPath !== "string" || artifactPath.length === 0) {
-				throw new Error(`${annotation.path} must contain artifact path strings`);
+	const validateAnnotations = async (
+		annotations: readonly JsonSchemaArtifactAnnotation[],
+		rootValue: unknown,
+	): Promise<void> => {
+		for (const annotation of annotations) {
+			const artifactPaths = readOutputPath(rootValue, annotation.path);
+			const paths =
+				annotation.kind === "path_list" ? artifactPaths : [artifactPaths];
+			if (!Array.isArray(paths)) {
+				throw new Error(`${annotation.path} must be an array of artifact paths`);
 			}
-			const artifactJson = await readArtifactJson(artifactPath);
-			try {
-				validateAgainstJsonSchema(annotation.jsonSchema, artifactJson);
-				continue;
-			} catch (error) {
-				throw new Error(
-					`${annotation.path} artifact ${artifactPath} ${error instanceof Error ? error.message : String(error)}`,
+			for (const artifactPath of paths) {
+				if (typeof artifactPath !== "string" || artifactPath.length === 0) {
+					throw new Error(
+						`${annotation.path} must contain artifact path strings`,
+					);
+				}
+				const artifactJson = await readArtifactJson(artifactPath);
+				try {
+					validateAgainstJsonSchema(annotation.jsonSchema, artifactJson);
+				} catch (error) {
+					throw new Error(
+						`${annotation.path} artifact ${artifactPath} ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+				await validateAnnotations(
+					annotation.artifactAnnotations,
+					artifactJson,
 				);
 			}
 		}
-	}
+	};
+
+	await validateAnnotations(contract.artifactAnnotations, value);
 };
 
 export const validateStructuredOutputSchemaSource = <T = unknown>(

@@ -131,7 +131,13 @@ export const CreateScanDialog = ({
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
 			<DialogTrigger asChild>{trigger}</DialogTrigger>
-			<DialogContent className="sm:max-w-3xl">
+			<DialogContent
+				className={
+					scanType === "research"
+						? "max-h-[92vh] overflow-y-auto sm:max-w-4xl"
+						: "sm:max-w-3xl"
+				}
+			>
 				<DialogHeader>
 					<DialogTitle>{title}</DialogTitle>
 					<DialogDescription>{description}</DialogDescription>

@@ -1,7 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { BotIcon, Pencil } from "lucide-react";
+import { BotIcon, ChevronDown, ChevronRight, Pencil } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
@@ -43,6 +43,11 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { api } from "@/utils/api";
+import {
+	buildPipelineStageTree,
+	getStageSelectionState,
+	toggleStageSelection,
+} from "./scan-stage-settings-tree";
 
 type AgentProfileOption = {
 	agentProfileId: string;
@@ -78,6 +83,14 @@ const titleCase = (value: string) =>
 	value
 		.replace(/[-_]/g, " ")
 		.replace(/\b\w/g, (char) => char.toUpperCase());
+
+const PIPELINE_TITLES: Record<string, string> = {
+	full: "Full Scan",
+	delta: "Delta Scan",
+	research: "Research Scan",
+};
+
+const PIPELINE_ORDER = ["full", "delta", "research"];
 
 const StageSettingsFormSchema = z.object({
 	agentProfileId: z.string().min(1),
@@ -123,6 +136,9 @@ export const ScanStageSettingsPanel = ({
 	const [checkedStageNames, setCheckedStageNames] = useState<Set<string>>(
 		new Set(),
 	);
+	const [expandedPipelineIds, setExpandedPipelineIds] = useState<Set<string>>(
+		new Set(),
+	);
 	const [isBatchEditOpen, setIsBatchEditOpen] = useState(false);
 	const [isSaving, setIsSaving] = useState(false);
 	const { data: pipelineDefinitions, isLoading: isLoadingPipelineDefinitions } =
@@ -141,14 +157,23 @@ export const ScanStageSettingsPanel = ({
 			})) ?? [],
 		[pipelineDefinitions],
 	);
-	const stageGroups = useMemo(
+	const pipelines = useMemo(
 		() =>
-			Array.from(new Set(stages.map((stage) => stage.group))).map((group) => ({
-				id: group,
-				title: titleCase(group),
-				description: `Stages in the ${titleCase(group)} group from scan pipeline definitions.`,
-			})),
-		[stages],
+			Object.values(pipelineDefinitions?.pipelines ?? {})
+				.map((pipeline) => ({
+					id: pipeline.id,
+					name: PIPELINE_TITLES[pipeline.id] ?? titleCase(pipeline.name),
+					stageIds: pipeline.stageIds,
+				}))
+				.sort((left, right) => {
+					const leftOrder = PIPELINE_ORDER.indexOf(left.id);
+					const rightOrder = PIPELINE_ORDER.indexOf(right.id);
+					return (
+						(leftOrder === -1 ? Number.MAX_SAFE_INTEGER : leftOrder) -
+						(rightOrder === -1 ? Number.MAX_SAFE_INTEGER : rightOrder)
+					);
+				}),
+		[pipelineDefinitions],
 	);
 	const enabledProfiles = useMemo(
 		() => agentProfiles?.filter((profile) => profile.isEnabled) ?? [],
@@ -175,32 +200,28 @@ export const ScanStageSettingsPanel = ({
 		checkedStageNames.size > 0 && checkedStageNames.size < stages.length;
 
 	const toggleAll = (checked: boolean) => {
-		setCheckedStageNames(
-			checked ? new Set(stages.map((s) => s.stageName)) : new Set(),
+		setCheckedStageNames((previous) =>
+			toggleStageSelection(
+				previous,
+				stages.map((stage) => stage.stageName),
+				checked,
+			),
 		);
 	};
 
 	const toggleStage = (stageName: string, checked: boolean) => {
-		setCheckedStageNames((prev) => {
-			const next = new Set(prev);
-			if (checked) next.add(stageName);
-			else next.delete(stageName);
-			return next;
-		});
+		setCheckedStageNames((previous) =>
+			toggleStageSelection(previous, [stageName], checked),
+		);
 	};
 
-	const toggleStageGroup = (
-		group: StageDefinition["group"],
-		checked: boolean,
-	) => {
-		const groupStageNames = stages.filter((stage) => stage.group === group).map(
-			(stage) => stage.stageName,
-		);
-		setCheckedStageNames((prev) => {
-			const next = new Set(prev);
-			for (const stageName of groupStageNames) {
-				if (checked) next.add(stageName);
-				else next.delete(stageName);
+	const togglePipeline = (pipelineId: string) => {
+		setExpandedPipelineIds((previous) => {
+			const next = new Set(previous);
+			if (next.has(pipelineId)) {
+				next.delete(pipelineId);
+			} else {
+				next.add(pipelineId);
 			}
 			return next;
 		});
@@ -227,22 +248,16 @@ export const ScanStageSettingsPanel = ({
 		[target, enabledProfiles, stages],
 	);
 
-	const groupedRows = useMemo(
+	const pipelineTree = useMemo(
 		() =>
-			stageGroups.map((group) => {
-				const groupRows = rows.filter((stage) => stage.group === group.id);
-				const checkedCount = groupRows.filter((stage) =>
-					checkedStageNames.has(stage.stageName),
-				).length;
-				return {
-					...group,
-					rows: groupRows,
-					checkedCount,
-					allChecked: checkedCount === groupRows.length && groupRows.length > 0,
-					someChecked: checkedCount > 0 && checkedCount < groupRows.length,
-				};
-			}),
-		[checkedStageNames, rows, stageGroups],
+			buildPipelineStageTree(pipelines, rows).map((pipeline) => ({
+				...pipeline,
+				selection: getStageSelectionState(
+					checkedStageNames,
+					pipeline.stageIds,
+				),
+			})),
+		[checkedStageNames, pipelines, rows],
 	);
 
 	useEffect(() => {
@@ -312,145 +327,178 @@ export const ScanStageSettingsPanel = ({
 				</CardDescription>
 			</CardHeader>
 			<CardContent>
-				{checkedStageNames.size > 0 && (
-					<div className="mb-5 flex flex-col gap-3 rounded-xl border bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between">
-						<div>
-							<div className="text-sm font-medium">
-								{checkedStageNames.size} stage
-								{checkedStageNames.size > 1 ? "s" : ""} selected
-							</div>
-							<div className="text-xs text-muted-foreground">
-								Apply one agent profile across selected stages; concurrency stays
-								unchanged.
-							</div>
-						</div>
-						<Button
-							type="button"
-							size="sm"
-							onClick={() => {
-								batchForm.reset({
-									agentProfileId: enabledProfiles[0]?.agentProfileId ?? "",
-								});
-								setIsBatchEditOpen(true);
-							}}
-						>
-							Edit Selected ({checkedStageNames.size})
-						</Button>
-					</div>
-				)}
-				<div className="mb-4 flex items-center justify-between rounded-lg border px-3 py-2">
-					<div className="flex items-center gap-3">
+				<div className="mb-4 flex h-16 items-center justify-between gap-3 overflow-hidden rounded-xl border bg-muted/20 px-3">
+					<div className="flex min-w-0 items-center gap-3">
 						<Checkbox
 							checked={allChecked || (someChecked ? "indeterminate" : false)}
 							onCheckedChange={(v) => toggleAll(Boolean(v))}
 							aria-label="Select all stages"
 						/>
-						<div>
+						<div className="min-w-0">
 							<div className="text-sm font-medium">All stages</div>
-							<div className="text-xs text-muted-foreground">
+							<div className="hidden truncate text-xs text-muted-foreground sm:block">
 								Select every visible stage for batch profile edits.
 							</div>
 						</div>
 					</div>
-					<Badge variant="secondary">{stages.length}</Badge>
+					<div className="flex shrink-0 items-center gap-2">
+						{checkedStageNames.size > 0 ? (
+							<>
+								<Badge variant="secondary" className="hidden sm:inline-flex">
+									{checkedStageNames.size} selected
+								</Badge>
+								<Button
+									type="button"
+									size="sm"
+									aria-label={`Edit ${checkedStageNames.size} selected stages`}
+									onClick={() => {
+										batchForm.reset({
+											agentProfileId:
+												enabledProfiles[0]?.agentProfileId ?? "",
+										});
+										setIsBatchEditOpen(true);
+									}}
+								>
+									<span aria-hidden="true" className="hidden sm:inline">
+										Edit Selected
+									</span>
+									<span aria-hidden="true" className="sm:hidden">
+										Edit
+									</span>{" "}
+									<span aria-hidden="true">({checkedStageNames.size})</span>
+								</Button>
+							</>
+						) : (
+							<Badge variant="secondary">{stages.length} stages</Badge>
+						)}
+					</div>
 				</div>
 
-				<div className="grid gap-5">
-					{groupedRows.map((group) => (
-						<section key={group.id} className="rounded-2xl border bg-card p-4">
-							<div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-								<div className="flex items-start gap-3">
+				<div className="overflow-hidden rounded-xl border bg-card">
+					{pipelineTree.map((pipeline, pipelineIndex) => {
+						const expanded = expandedPipelineIds.has(pipeline.id);
+						return (
+							<section
+								key={pipeline.id}
+								className={pipelineIndex > 0 ? "border-t" : undefined}
+							>
+								<div className="flex h-14 items-center gap-2 px-3 transition-colors hover:bg-muted/35">
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon"
+										className="size-8 shrink-0"
+										onClick={() => togglePipeline(pipeline.id)}
+										aria-label={`${expanded ? "Collapse" : "Expand"} ${pipeline.name}`}
+										aria-expanded={expanded}
+									>
+										{expanded ? (
+											<ChevronDown className="size-4" />
+										) : (
+											<ChevronRight className="size-4" />
+										)}
+									</Button>
 									<Checkbox
-										className="mt-1"
-										checked={
-											group.allChecked ||
-											(group.someChecked ? "indeterminate" : false)
-										}
-										onCheckedChange={(v) =>
-											toggleStageGroup(group.id, Boolean(v))
-										}
-										aria-label={`Select ${group.title}`}
-									/>
-									<div>
-										<div className="flex flex-wrap items-center gap-2">
-											<h3 className="font-semibold">{group.title}</h3>
-											<Badge variant="outline">
-												{group.rows.length} stages
-											</Badge>
-											{group.checkedCount > 0 ? (
+									checked={
+										pipeline.selection.allChecked ||
+										(pipeline.selection.someChecked
+											? "indeterminate"
+											: false)
+									}
+									onCheckedChange={(v) =>
+										setCheckedStageNames((previous) =>
+											toggleStageSelection(
+												previous,
+												pipeline.stageIds,
+												Boolean(v),
+											),
+										)
+									}
+									aria-label={`Select ${pipeline.name}`}
+								/>
+									<button
+										type="button"
+										className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left"
+										onClick={() => togglePipeline(pipeline.id)}
+									>
+										<span className="truncate text-sm font-semibold">
+											{pipeline.name}
+										</span>
+										<span className="flex shrink-0 items-center gap-2">
+											{pipeline.selection.checkedCount > 0 ? (
 												<Badge variant="secondary">
-													{group.checkedCount} selected
+													{pipeline.selection.checkedCount} selected
 												</Badge>
 											) : null}
-										</div>
-										<p className="mt-1 text-sm text-muted-foreground">
-											{group.description}
-										</p>
-									</div>
+											<Badge variant="outline">
+												{pipeline.stages.length} stages
+											</Badge>
+										</span>
+									</button>
 								</div>
-							</div>
 
-							<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-								{group.rows.map((stage) => (
+								{expanded ? (
+									<div className="border-t bg-muted/10">
+										{pipeline.stages.map((stage) => (
 									<div
-										key={stage.stageName}
-										className="rounded-xl border bg-background p-3 transition-colors hover:border-primary/40"
+											key={`${pipeline.id}-${stage.stageName}`}
+											className="flex min-h-16 items-center gap-3 border-t px-3 pl-12 first:border-t-0 hover:bg-muted/25"
 									>
-										<div className="flex items-start justify-between gap-3">
-											<div className="flex min-w-0 items-start gap-3">
 												<Checkbox
-													className="mt-1"
 													checked={checkedStageNames.has(stage.stageName)}
 													onCheckedChange={(v) =>
 														toggleStage(stage.stageName, Boolean(v))
 													}
 													aria-label={`Select ${stage.label}`}
 												/>
-												<div className="min-w-0">
-													<div className="truncate text-sm font-semibold">
+												<div className="min-w-0 flex-1">
+													<div className="flex min-w-0 items-center gap-2">
+														<span className="truncate text-sm font-medium">
 														{stage.label}
-													</div>
+														</span>
 													{!stage.disableable ? (
-														<Badge variant="secondary" className="mt-1">
+														<Badge variant="secondary" className="shrink-0">
 															Required
 														</Badge>
 													) : null}
-													<div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-														{stage.description}
+													</div>
+													<div className="truncate text-xs text-muted-foreground">
+														{stage.stageName}
 													</div>
 												</div>
+												<div className="hidden w-40 shrink-0 md:block">
+													<div className="text-[11px] text-muted-foreground">
+														Profile
+													</div>
+													<div className="truncate text-sm font-medium">
+														{stage.agentProfileName}
+													</div>
+												</div>
+												<div className="hidden w-24 shrink-0 sm:block">
+													<div className="text-[11px] text-muted-foreground">
+														Concurrency
+													</div>
+													<div className="text-sm font-medium">
+														{stage.concurrency} / {stage.maxConcurrency}
+													</div>
 											</div>
 											<Button
 												type="button"
-												variant="secondary"
-												size="sm"
-												className="shrink-0"
+												variant="ghost"
+												size="icon"
+												className="size-8 shrink-0"
 												onClick={() => setSelectedStageName(stage.stageName)}
+												aria-label={`Edit ${stage.label}`}
 											>
 												<Pencil className="size-4" />
 											</Button>
-										</div>
-										<div className="mt-4 grid grid-cols-2 gap-2 text-xs">
-											<div className="rounded-lg bg-muted/40 px-2 py-2">
-												<div className="text-muted-foreground">Profile</div>
-												<div className="mt-1 truncate font-medium">
-													{stage.agentProfileName}
-												</div>
-											</div>
-											<div className="rounded-lg bg-muted/40 px-2 py-2">
-												<div className="text-muted-foreground">
-													Concurrency
-												</div>
-												<div className="mt-1 font-medium">
-													{stage.concurrency} / {stage.maxConcurrency}
-												</div>
-											</div>
-										</div>
 									</div>
-								))}
-							</div>
-						</section>
-					))}
+										))}
+									</div>
+								) : null}
+							</section>
+						);
+					})}
 				</div>
 
 				<Dialog

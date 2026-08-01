@@ -1,10 +1,154 @@
+type TaskNameRecord = Record<string, unknown>;
+
+const asRecord = (value: unknown): TaskNameRecord | null =>
+	value && typeof value === "object" ? (value as TaskNameRecord) : null;
+
+const compactResearchSubject = (value: unknown): string | null => {
+	if (typeof value !== "string") {
+		return null;
+	}
+
+	const compact = value.trim().replace(/\s+/g, " ");
+	if (!compact) {
+		return null;
+	}
+	return compact.length > 120 ? `${compact.slice(0, 117)}...` : compact;
+};
+
+const describeResearchSubject = (
+	value: unknown,
+	seen = new Set<TaskNameRecord>(),
+): string | null => {
+	const direct = compactResearchSubject(value);
+	if (direct) {
+		return direct;
+	}
+
+	const record = asRecord(value);
+	if (!record || seen.has(record)) {
+		return null;
+	}
+	seen.add(record);
+
+	for (const key of [
+		"title",
+		"name",
+		"objective",
+		"family",
+		"description",
+		"id",
+		"candidateId",
+		"findingId",
+		"rootCauseKey",
+		"trackKey",
+		"chainId",
+	]) {
+		const subject = compactResearchSubject(record[key]);
+		if (subject) {
+			return subject;
+		}
+	}
+
+	for (const key of [
+		"candidate",
+		"finding",
+		"chain",
+		"track",
+		"analysisResult",
+		"confirmedPrimitive",
+	]) {
+		const subject = describeResearchSubject(record[key], seen);
+		if (subject) {
+			return subject;
+		}
+	}
+
+	return null;
+};
+
+const researchSubjectFromInput = (
+	input: unknown,
+	keys: string[],
+): string | null => {
+	const record = asRecord(input);
+	if (!record) {
+		return null;
+	}
+
+	for (const key of keys) {
+		const subject = describeResearchSubject(record[key]);
+		if (subject) {
+			return subject;
+		}
+	}
+
+	return describeResearchSubject(record);
+};
+
 export const resolveStageTaskName = <TInput>(
 	stageName: string,
 	input: TInput,
 ): string => {
-	const record =
-		(input as Record<string, unknown> | null | undefined) || undefined;
+	const record = asRecord(input);
 	switch (stageName) {
+		case "research-scope": {
+			const subject = researchSubjectFromInput(input, ["researchScope"]);
+			return subject
+				? `Define research scope: ${subject}`
+				: "Define research scope";
+		}
+		case "surface-map":
+			return "Map attack surface";
+		case "track-plan":
+			return "Plan research tracks";
+		case "vulnerability-discovery": {
+			const subject = researchSubjectFromInput(input, ["track"]);
+			return subject
+				? `Investigate track: ${subject}`
+				: "Investigate research track";
+		}
+		case "track-review": {
+			const subject = researchSubjectFromInput(input, ["track"]);
+			return subject ? `Review track: ${subject}` : "Review research track";
+		}
+		case "finding-validation": {
+			const subject = researchSubjectFromInput(input, ["finding"]);
+			return subject
+				? `Validate finding: ${subject}`
+				: "Validate finding";
+		}
+		case "finding-review": {
+			const subject = researchSubjectFromInput(input, ["finding"]);
+			return subject ? `Review finding: ${subject}` : "Review finding";
+		}
+		case "chain-synthesis": {
+			const subject = researchSubjectFromInput(input, ["chain"]);
+			return subject
+				? `Synthesize chain: ${subject}`
+				: "Synthesize exploit chains";
+		}
+		case "chain-review": {
+			const subject = researchSubjectFromInput(input, ["chain"]);
+			return subject ? `Review chain: ${subject}` : "Review exploit chain";
+		}
+		case "exploit-validation": {
+			const subject = researchSubjectFromInput(input, ["chain"]);
+			return subject
+				? `Validate exploit chain: ${subject}`
+				: "Validate exploit chain";
+		}
+		case "exploit-review": {
+			const subject = researchSubjectFromInput(input, ["chain"]);
+			return subject
+				? `Review exploit chain: ${subject}`
+				: "Review exploit chain";
+		}
+		case "research-report": {
+			const subject = researchSubjectFromInput(input, ["chain"]);
+			return subject
+				? `Write research report: ${subject}`
+				: "Write research report";
+		}
 		case "delta-scope":
 			return "delta-scope";
 		case "repository-profile":

@@ -5,7 +5,6 @@ identify-target:
   role: scan
   group: full-scan
   concurrency: 4
-  maxConcurrency: 32
   disableable: true
   description: Identify route, handler, parser, function, and other scan targets.
   runtimeConfig:

@@ -5,7 +5,6 @@ delta-scope:
   role: scan
   group: delta
   concurrency: 1
-  maxConcurrency: 8
   disableable: false
   description: Scope changed repository targets for a delta scan.
   runtimeConfig:

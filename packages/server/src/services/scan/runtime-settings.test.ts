@@ -1,14 +1,77 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { buildDefaultScanStageSettings } from "../../db/schema/shared";
 import {
 	buildCompleteScanRuntimeSettings,
 	buildEffectiveDisabledStageSet,
+	createRuntimeSettingsFunctions,
+	createRuntimeSettingsPolicy,
 	DELTA_SCAN_STAGE_IDS,
 	FULL_SCAN_STAGE_IDS,
 	getRuntimeStageConcurrency,
 	isRuntimeStageDisableable,
 	normalizeScanRuntimeSettings,
+	RESEARCH_SCAN_STAGE_IDS,
 } from "./runtime-settings";
+import { loadScanPipelineDefinitions } from "./pipeline/scan-pipeline-definitions";
+
+test("runtime settings operations load pipeline definitions once per call", () => {
+	const definitions = loadScanPipelineDefinitions();
+	let loadCount = 0;
+	const runtimeSettings = createRuntimeSettingsFunctions(() => {
+		loadCount += 1;
+		return definitions;
+	});
+
+	runtimeSettings.normalize({
+		stages: Object.fromEntries(
+			RESEARCH_SCAN_STAGE_IDS.map((stageName) => [
+				stageName,
+				{ disabled: false, concurrency: 1 },
+			]),
+		),
+	});
+	assert.equal(loadCount, 1);
+
+	loadCount = 0;
+	runtimeSettings.buildEffectiveDisabledStageSet({
+		settings: {},
+		edges: definitions.pipelines.research.edges.map((edge) => ({
+			source: edge.from,
+		target: edge.to,
+	})),
+		stageNames: definitions.pipelines.research.stageIds,
+		rootStageName: definitions.pipelines.research.rootStageId,
+	});
+	assert.equal(loadCount, 1);
+
+	loadCount = 0;
+	runtimeSettings.buildComplete({ scanType: "research" });
+	assert.equal(loadCount, 1);
+});
+
+test("preloaded research stage policy builds without YAML parsing overhead", () => {
+	const definitions = loadScanPipelineDefinitions();
+	const policy = createRuntimeSettingsPolicy(definitions);
+	const startedAt = performance.now();
+	for (let index = 0; index < 100; index += 1) {
+		policy.buildEffectiveDisabledStageSet({
+			settings: {},
+			edges: definitions.pipelines.research.edges.map((edge) => ({
+			source: edge.from,
+			target: edge.to,
+		})),
+			stageNames: definitions.pipelines.research.stageIds,
+			rootStageName: definitions.pipelines.research.rootStageId,
+		});
+	}
+	const averageElapsedMs = (performance.now() - startedAt) / 100;
+
+	assert.ok(
+		averageElapsedMs < 5,
+		`expected preloaded policy under 5ms, got ${averageElapsedMs.toFixed(2)}ms`,
+	);
+});
 
 test("runtime stage ids and defaults are derived from YAML definitions", () => {
 	assert.deepEqual(FULL_SCAN_STAGE_IDS, [
@@ -32,6 +95,31 @@ test("runtime stage ids and defaults are derived from YAML definitions", () => {
 	assert.equal(getRuntimeStageConcurrency("scan-target"), 4);
 	assert.equal(getRuntimeStageConcurrency("triage-finding"), 1);
 	assert.equal(getRuntimeStageConcurrency("unknown-stage"), 1);
+});
+
+test("default scan stage settings include every research stage", () => {
+	const settings = buildDefaultScanStageSettings("research-profile");
+	const expectedConcurrency: Record<string, number> = {
+		"research-scope": 1,
+		"surface-map": 1,
+		"track-plan": 1,
+		"vulnerability-discovery": 4,
+		"track-review": 1,
+		"finding-validation": 4,
+		"finding-review": 4,
+		"chain-synthesis": 1,
+		"chain-review": 4,
+		"exploit-validation": 4,
+		"exploit-review": 4,
+		"research-report": 1,
+	};
+
+	for (const stageName of RESEARCH_SCAN_STAGE_IDS) {
+		assert.deepEqual(settings[stageName], {
+			agentProfileId: "research-profile",
+			concurrency: expectedConcurrency[stageName],
+		});
+	}
 });
 
 test("normalizeScanRuntimeSettings honors disableable=false from YAML", () => {

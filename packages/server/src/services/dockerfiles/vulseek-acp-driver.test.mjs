@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -133,6 +134,260 @@ rl.on("line", (line) => {
 	assert.equal(JSON.parse(await readFile(outputPath, "utf-8")).output, null);
 });
 
+test("ACP driver does not invent output for a non-nullable end_turn", async () => {
+	const dir = await mkdtemp(path.join(tmpdir(), "vulseek-acp-missing-output-"));
+	const adapterPath = path.join(dir, "fake-adapter.mjs");
+	const inputPath = path.join(dir, "input.json");
+	const outputPath = path.join(dir, "output.json");
+	const stdoutPath = path.join(dir, "stdout");
+
+	await writeFile(
+		adapterPath,
+		`
+import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin });
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {}, close: {} } } } });
+  if (message.method === "session/new") send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "thread-no-output" } });
+  if (message.method === "session/prompt") send({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+  if (message.method === "session/close") { send({ jsonrpc: "2.0", id: message.id, result: {} }); process.exit(0); }
+});
+`,
+		"utf-8",
+	);
+	await writeFile(
+		inputPath,
+		JSON.stringify({
+			taskId: "task-no-output",
+			provider: "codex",
+			cwd: dir,
+			prompt: "Return without writing the required structured output",
+			adapterCommand: process.execPath,
+			adapterArgs: [adapterPath],
+			stdoutPath,
+			structuredOutputResultPathInContainer: outputPath,
+			nullableOutput: false,
+		}),
+		"utf-8",
+	);
+
+	const result = await run(
+		process.execPath,
+		[
+			path.resolve(
+				process.cwd(),
+				"packages/server/src/services/dockerfiles/vulseek-acp-driver.mjs",
+			),
+			inputPath,
+		],
+		{
+			cwd: process.cwd(),
+			env: {
+				...process.env,
+				VULSEEK_AGENT_EVENTS_PATH: path.resolve(
+					process.cwd(),
+					"vendor/claude-replay/src/agent-events.mjs",
+				),
+			},
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
+
+	assert.notEqual(result.code, 0);
+	const events = await readEvents(stdoutPath);
+	assert.equal(
+		events.findLast((event) => event.type === "task_done")?.stopReason,
+		"end_turn",
+	);
+	assert.equal(
+		events.findLast((event) => event.type === "task_done")?.status,
+		"failed",
+	);
+	assert.match(
+		events.findLast((event) => event.type === "log")?.message || "",
+		/without required output\.json/,
+	);
+	assert.equal(existsSync(outputPath), false);
+});
+
+test("ACP driver waits for a delayed atomic output rename", async () => {
+	const dir = await mkdtemp(path.join(tmpdir(), "vulseek-acp-delayed-output-"));
+	const adapterPath = path.join(dir, "fake-adapter.mjs");
+	const inputPath = path.join(dir, "input.json");
+	const outputPath = path.join(dir, "output.json");
+	const stdoutPath = path.join(dir, "stdout");
+
+	await writeFile(
+		adapterPath,
+		`
+import fs from "node:fs";
+import readline from "node:readline";
+const outputPath = process.argv[2];
+const rl = readline.createInterface({ input: process.stdin });
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {}, close: {} } } } });
+  if (message.method === "session/new") send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "thread-delayed-output" } });
+  if (message.method === "session/prompt") {
+    send({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+    setTimeout(() => {
+      const temporaryPath = outputPath + ".tmp";
+      fs.writeFileSync(temporaryPath, JSON.stringify({ route: null, exit: false, output: {} }));
+      fs.renameSync(temporaryPath, outputPath);
+    }, 100);
+  }
+  if (message.method === "session/close") { send({ jsonrpc: "2.0", id: message.id, result: {} }); process.exit(0); }
+});
+`,
+		"utf-8",
+	);
+	await writeFile(
+		inputPath,
+		JSON.stringify({
+			taskId: "task-delayed-output",
+			provider: "codex",
+			cwd: dir,
+			prompt: "Write the result after a short atomic rename delay",
+			adapterCommand: process.execPath,
+			adapterArgs: [adapterPath, outputPath],
+			stdoutPath,
+			structuredOutputResultPathInContainer: outputPath,
+			structuredOutputGracePeriodMs: 1_000,
+			nullableOutput: false,
+		}),
+		"utf-8",
+	);
+
+	const result = await run(
+		process.execPath,
+		[
+			path.resolve(
+				process.cwd(),
+				"packages/server/src/services/dockerfiles/vulseek-acp-driver.mjs",
+			),
+			inputPath,
+		],
+		{
+			cwd: process.cwd(),
+			env: {
+				...process.env,
+				VULSEEK_AGENT_EVENTS_PATH: path.resolve(
+					process.cwd(),
+					"vendor/claude-replay/src/agent-events.mjs",
+				),
+			},
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
+
+	assert.equal(result.code, 0, result.stderr);
+	assert.deepEqual(JSON.parse(await readFile(outputPath, "utf-8")), {
+		route: null,
+		exit: false,
+		output: {},
+	});
+});
+
+test("ACP driver recovers a missing structured output with one follow-up prompt", async () => {
+	const dir = await mkdtemp(path.join(tmpdir(), "vulseek-acp-output-recovery-"));
+	const adapterPath = path.join(dir, "fake-adapter.mjs");
+	const inputPath = path.join(dir, "input.json");
+	const outputPath = path.join(dir, "output.json");
+	const requestLogPath = path.join(dir, "requests.jsonl");
+	const stdoutPath = path.join(dir, "stdout");
+
+	await writeFile(
+		adapterPath,
+		`
+import fs from "node:fs";
+import readline from "node:readline";
+const outputPath = process.argv[2];
+const requestLogPath = process.argv[3];
+let promptCount = 0;
+const rl = readline.createInterface({ input: process.stdin });
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {}, close: {} } } } });
+  if (message.method === "session/new") send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "thread-recovery" } });
+  if (message.method === "session/prompt") {
+    promptCount += 1;
+    fs.appendFileSync(requestLogPath, JSON.stringify({ promptCount, text: message.params.prompt[0].text }) + "\\n");
+    if (promptCount === 2) fs.writeFileSync(outputPath, JSON.stringify({ route: null, exit: false, output: { recovered: true } }));
+    send({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+  }
+  if (message.method === "session/close") { send({ jsonrpc: "2.0", id: message.id, result: {} }); process.exit(0); }
+});
+`,
+		"utf-8",
+	);
+	await writeFile(
+		inputPath,
+		JSON.stringify({
+			taskId: "task-output-recovery",
+			provider: "codex",
+			cwd: dir,
+			prompt: "Analyze and write the required result",
+			adapterCommand: process.execPath,
+			adapterArgs: [adapterPath, outputPath, requestLogPath],
+			stdoutPath,
+			structuredOutputResultPathInContainer: outputPath,
+			structuredOutputSchemaPathInContainer: path.join(dir, "output.schema.json"),
+			structuredOutputGracePeriodMs: 20,
+			structuredOutputRecoveryAttempts: 1,
+			nullableOutput: false,
+		}),
+		"utf-8",
+	);
+
+	const result = await run(
+		process.execPath,
+		[
+			path.resolve(
+				process.cwd(),
+				"packages/server/src/services/dockerfiles/vulseek-acp-driver.mjs",
+			),
+			inputPath,
+		],
+		{
+			cwd: process.cwd(),
+			env: {
+				...process.env,
+				VULSEEK_AGENT_EVENTS_PATH: path.resolve(
+					process.cwd(),
+					"vendor/claude-replay/src/agent-events.mjs",
+				),
+			},
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
+
+	assert.equal(result.code, 0, result.stderr);
+	assert.deepEqual(JSON.parse(await readFile(outputPath, "utf-8")), {
+		route: null,
+		exit: false,
+		output: { recovered: true },
+	});
+	const prompts = (await readFile(requestLogPath, "utf-8"))
+		.trim()
+		.split("\n")
+		.map(JSON.parse);
+	assert.equal(prompts.length, 2);
+	assert.match(prompts[1].text, /required structured output file/);
+	const events = await readEvents(stdoutPath);
+	assert.equal(
+		events.some(
+			(event) =>
+				event.type === "log" &&
+				event.message === "structured output recovery prompt",
+		),
+		true,
+	);
+});
+
 for (const scenario of [
 	{
 		name: "resumes the current task session before considering fork",
@@ -140,13 +395,18 @@ for (const scenario of [
 			threadId: "current-thread",
 			sessionMode: "fork",
 			parentSessionId: "parent-thread",
+			nullableOutput: true,
 		},
 		expectedMethod: "session/resume",
 		expectedSessionId: "current-thread",
 	},
 	{
 		name: "forks the parent when no current session exists",
-		input: { sessionMode: "fork", parentSessionId: "parent-thread" },
+		input: {
+			sessionMode: "fork",
+			parentSessionId: "parent-thread",
+			nullableOutput: true,
+		},
 		expectedMethod: "session/fork",
 		expectedSessionId: "forked-thread",
 	},
@@ -239,6 +499,76 @@ rl.on("line", (line) => {
 	});
 }
 
+test("ACP driver inherits Research database context", async () => {
+	const dir = await mkdtemp(path.join(tmpdir(), "vulseek-acp-research-db-"));
+	const adapterPath = path.join(dir, "fake-adapter.mjs");
+	const environmentPath = path.join(dir, "adapter-environment.json");
+	const inputPath = path.join(dir, "input.json");
+	await writeFile(
+		adapterPath,
+		`
+import fs from "node:fs";
+import readline from "node:readline";
+fs.writeFileSync(process.argv[2], JSON.stringify({
+  databaseUrl: process.env.VULSEEK_RESEARCH_DATABASE_URL || null,
+}));
+const rl = readline.createInterface({ input: process.stdin });
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {}, fork: {}, close: {} } } } });
+  if (message.method === "session/new") send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "thread-secret" } });
+  if (message.method === "session/prompt") send({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+  if (message.method === "session/close") { send({ jsonrpc: "2.0", id: message.id, result: {} }); process.exit(0); }
+});
+`,
+		"utf-8",
+	);
+	await writeFile(
+		inputPath,
+		JSON.stringify({
+			taskId: "task-research-db",
+			provider: "codex",
+			cwd: dir,
+			prompt: "Inspect the repository",
+			adapterCommand: process.execPath,
+			adapterArgs: [adapterPath, environmentPath],
+			stdoutPath: path.join(dir, "stdout"),
+			structuredOutputResultPathInContainer: path.join(dir, "output.json"),
+			nullableOutput: true,
+		}),
+		"utf-8",
+	);
+
+	const result = await run(
+		process.execPath,
+		[
+			path.resolve(
+				process.cwd(),
+				"packages/server/src/services/dockerfiles/vulseek-acp-driver.mjs",
+			),
+			inputPath,
+		],
+		{
+			cwd: process.cwd(),
+				env: {
+				...process.env,
+				VULSEEK_RESEARCH_DATABASE_URL: "postgresql://research-user:research-password@db/research",
+				VULSEEK_AGENT_EVENTS_PATH: path.resolve(
+					process.cwd(),
+					"vendor/claude-replay/src/agent-events.mjs",
+				),
+			},
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
+
+	assert.equal(result.code, 0, result.stderr);
+	assert.deepEqual(JSON.parse(await readFile(environmentPath, "utf-8")), {
+		databaseUrl: "postgresql://research-user:research-password@db/research",
+	});
+});
+
 test("ACP driver reuses one session for persistent queued tasks", async () => {
 	const dir = await mkdtemp(path.join(tmpdir(), "vulseek-acp-persistent-"));
 	const adapterPath = path.join(dir, "fake-adapter.mjs");
@@ -277,6 +607,7 @@ rl.on("line", (line) => {
 		adapterArgs: [adapterPath, requestLogPath],
 		stdoutPath: path.join(runtimeDir, "stdout"),
 		structuredOutputResultPathInContainer: path.join(runtimeDir, "output.json"),
+		nullableOutput: true,
 		taskStageRootInContainer: runtimeDir,
 		taskAliasRootInContainer: path.join(dir, "task"),
 	});

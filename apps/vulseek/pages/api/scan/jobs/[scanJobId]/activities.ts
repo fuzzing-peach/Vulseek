@@ -1,10 +1,9 @@
-import { promises as fs } from "node:fs";
 import {
 	type AgentTaskRuntime,
+	driverStdoutTailReader,
 	findRunningAgentTaskRuntimesByScanJobId,
 	findScanJobOrganizationId,
 	findScanJobStatusById,
-	parseDriverStdout,
 	validateRequest,
 } from "@vulseek/server";
 import type { NextApiRequest, NextApiResponse } from "next";
@@ -18,16 +17,17 @@ const sendEvent = (res: NextApiResponse, event: string, payload: unknown) => {
 };
 
 const readSnapshot = async (filePath: string) => {
-	try {
-		const content = await fs.readFile(filePath, "utf-8");
-		const protocol = parseDriverStdout(content);
-		return {
+	const protocol = await driverStdoutTailReader.read(filePath);
+	return {
+		activity: protocol.latestActivity,
+		signature: JSON.stringify({
 			activity: protocol.latestActivity,
-			signature: `${content.length}:${content.slice(-256)}`,
-		};
-	} catch {
-		return null;
-	}
+			usage: protocol.latestUsage,
+			task: protocol.latestTask,
+			log: protocol.latestLog,
+			exitCode: protocol.exitCode,
+		}),
+	};
 };
 
 const metadataFor = (runtime: AgentTaskRuntime): AgentActivityMetadata => ({
@@ -79,7 +79,6 @@ export default async function handler(
 	let closed = false;
 	const cleanup = () => {
 		closed = true;
-		clearInterval(poll);
 		clearInterval(heartbeat);
 	};
 	const loadTasks = async () =>
@@ -121,17 +120,21 @@ export default async function handler(
 			res.end();
 		}
 	};
-	const poll = setInterval(
-		() =>
-			void publish().catch((error) => {
-				sendEvent(res, "activity_error", {
-					message: error instanceof Error ? error.message : String(error),
-				});
-			}),
-		1000,
-	);
+	const schedulePoll = () => {
+		if (closed) return;
+		setTimeout(() => {
+			void publish()
+				.catch((error) => {
+					sendEvent(res, "activity_error", {
+						message: error instanceof Error ? error.message : String(error),
+					});
+				})
+				.finally(schedulePoll);
+		}, 1000);
+	};
 	const heartbeat = setInterval(() => res.write(": keepalive\n\n"), 15_000);
 	req.on("close", cleanup);
 	await publish(true);
 	if (closed) return;
+	schedulePoll();
 }

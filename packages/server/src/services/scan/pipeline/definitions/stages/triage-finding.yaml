@@ -5,7 +5,6 @@ triage-finding:
   role: verification
   group: review
   concurrency: 1
-  maxConcurrency: 8
   disableable: true
   description: Final security classification and severity.
   runtimeConfig:

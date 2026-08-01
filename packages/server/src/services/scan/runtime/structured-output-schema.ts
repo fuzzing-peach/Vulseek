@@ -173,5 +173,10 @@ export const buildStructuredOutputPromptSuffix = (
 		"```json",
 		JSON.stringify(jsonSchema, null, 2),
 		"```",
+		"",
+		"FINAL CHECK BEFORE ENDING THIS TURN:",
+		`1. Write the complete JSON envelope to ${outputFilePath}; do not rely on the chat response to provide it.`,
+		`2. Re-open ${outputFilePath} and validate it against ${schemaFilePath}.`,
+		`3. If the file is missing or invalid, fix it and validate again. Only then end the turn.`,
 	].join("\n");
 };

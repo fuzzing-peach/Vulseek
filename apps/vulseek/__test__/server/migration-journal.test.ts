@@ -26,8 +26,8 @@ describe("migration journal", () => {
 			.filter((tag) => !journalTags.has(tag))
 			.sort();
 
-		expect(journal.entries).toHaveLength(217);
-		expect(journal.entries.at(-1)?.tag).toBe("0216_research_registry");
+		expect(journal.entries).toHaveLength(221);
+		expect(journal.entries.at(-1)?.tag).toBe("0220_agent_owned_research_registry");
 		expect(unregisteredTags).toEqual(["0057_damp_prism"]);
 		expect(journal.entries.map((entry) => entry.idx)).toEqual(
 			journal.entries.map((_, index) => index),
@@ -35,6 +35,37 @@ describe("migration journal", () => {
 		expect(journal.entries.map((entry) => entry.when)).toEqual(
 			journal.entries.map((entry) => entry.when).sort((a, b) => a - b),
 		);
+	});
+
+	it("removes claims and event history while retaining entity revisions", () => {
+		const drizzleDirectory = join(
+			dirname(fileURLToPath(import.meta.url)),
+			"../../drizzle",
+		);
+		const migration = readFileSync(
+			join(drizzleDirectory, "0220_agent_owned_research_registry.sql"),
+			"utf8",
+		);
+		const schema = readFileSync(
+			join(
+				dirname(fileURLToPath(import.meta.url)),
+				"../../../../packages/server/src/db/schema/research.ts",
+			),
+			"utf8",
+		);
+
+		for (const table of [
+			"research_entity_claims",
+			"research_track_events",
+			"research_finding_events",
+			"exploit_primitive_events",
+			"exploit_chain_events",
+		]) {
+			expect(migration).toContain(`DROP TABLE IF EXISTS \"${table}\"`);
+			expect(schema).not.toContain(`export const ${table}`);
+		}
+		expect(schema).not.toContain("currentTaskId");
+		expect(schema).toContain("revision: integer(\"revision\")");
 	});
 
 	it("migrates prompt file names stored in pipeline snapshots", () => {

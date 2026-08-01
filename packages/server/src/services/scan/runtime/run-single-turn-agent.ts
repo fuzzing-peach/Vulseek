@@ -1,4 +1,6 @@
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { getGlobalContainerEnvironmentPairs } from "../../../utils/docker/utils";
 import { execAsync } from "../../../utils/process/execAsync";
@@ -21,7 +23,6 @@ import {
 	AGENT_RUNTIME_FILE_NAMES,
 	initializeAgentRuntimeFiles,
 } from "./agent-runtime-files";
-import { sanitizeCodexAcpConfigToml } from "./codex-config-compat";
 import { installRuntimeSkillsInContainer } from "./runtime-skills";
 import {
 	buildStructuredOutputEnvelopeJsonSchema,
@@ -133,8 +134,6 @@ const CODEX_AUTO_APPROVE_CONFIG_TOML = [
 	`sandbox_mode = "danger-full-access"`,
 	"",
 ].join("\n");
-const AGENT_HOME_HOST_MOUNT_PATH = "/host-agent-home";
-
 const resolveAgentAuthMode = (
 	agentProfile: AgentProfileLike | null | undefined,
 ) => (agentProfile?.authMode === "host_home" ? "host_home" : "api_key");
@@ -142,22 +141,6 @@ const resolveAgentAuthMode = (
 const resolveAgentHomeHostPath = (
 	agentProfile: AgentProfileLike | null | undefined,
 ) => agentProfile?.homePath?.trim() || "";
-
-const buildAgentHomeHostMountArg = (
-	agentProfile: AgentProfileLike | null | undefined,
-) => {
-	if (!agentProfile) {
-		return "";
-	}
-	if (resolveAgentAuthMode(agentProfile) !== "host_home") {
-		return "";
-	}
-	const hostPath = resolveAgentHomeHostPath(agentProfile);
-	if (!hostPath) {
-		return "";
-	}
-	return `-v '${escapeSingleQuotes(hostPath)}:${AGENT_HOME_HOST_MOUNT_PATH}:ro'`;
-};
 
 const withCodexAutoApproveConfigToml = (configToml: string) => {
 	const defaults: string[] = [];
@@ -173,64 +156,30 @@ const withCodexAutoApproveConfigToml = (configToml: string) => {
 	return joinTomlBlocks(`${defaults.join("\n")}\n`, configToml);
 };
 
-const stripProfileControlledCodexConfigToml = (configToml: string) => {
-	let seenTable = false;
-	return configToml
-		.split(/\r?\n/)
-		.filter((line) => {
-			const trimmed = line.trim();
-			if (/^\[.*\]\s*$/.test(trimmed)) {
-				seenTable = true;
-			}
-			return (
-				seenTable ||
-				!/^\s*(approval_policy|sandbox_mode|model|model_reasoning_effort)\s*=/.test(
-					line,
-				)
-			);
-		})
-		.join("\n");
-};
-
-const withCodexProfileRuntimeConfig = (
-	configToml: string,
-	agentProfile: AgentProfileLike,
-) => {
-	const profileConfig = [
-		`approval_policy = "never"`,
-		`sandbox_mode = "danger-full-access"`,
-		`model = "${agentProfile.model}"`,
-		...(agentProfile.thinkingLevelEnabled
-			? [`model_reasoning_effort = "${agentProfile.thinkingLevel}"`]
-			: []),
-	].join("\n");
-
-	return joinTomlBlocks(
-		profileConfig,
-		sanitizeCodexAcpConfigToml(
-			stripProfileControlledCodexConfigToml(configToml),
-		),
-	);
-};
-
-const buildCodexConfigToml = (agentProfile: AgentProfileLike) => {
+export const buildCodexConfigToml = (agentProfile: AgentProfileLike) => {
 	const providerName = sanitizeProviderName(agentProfile.agentProfileId);
 	const reasoningConfig = agentProfile.thinkingLevelEnabled
 		? [`model_reasoning_effort = "${agentProfile.thinkingLevel}"`]
 		: [];
+	const providerConfig =
+		resolveAgentAuthMode(agentProfile) === "api_key"
+			? [
+					`model_provider = "${providerName}"`,
+					`preferred_auth_method = "apikey"`,
+					"",
+					`[model_providers.${providerName}]`,
+					`name = "${providerName}"`,
+					`base_url = "${agentProfile.baseUrl}"`,
+					`wire_api = "responses"`,
+					"",
+				]
+			: [];
 
 	return withCodexAutoApproveConfigToml(
 		[
 			`model = "${agentProfile.model}"`,
 			...reasoningConfig,
-			`model_provider = "${providerName}"`,
-			`preferred_auth_method = "apikey"`,
-			"",
-			`[model_providers.${providerName}]`,
-			`name = "${providerName}"`,
-			`base_url = "${agentProfile.baseUrl}"`,
-			`wire_api = "responses"`,
-			"",
+			...providerConfig,
 		].join("\n"),
 	);
 };
@@ -284,37 +233,45 @@ const buildCodexAuthJson = (agentProfile: AgentProfileLike) =>
 		2,
 	);
 
-const copyMountedFileToContainer = async (input: {
+const copyHostFileToContainer = async (input: {
 	containerName: string;
 	sourcePath: string;
 	targetPath: string;
 	description: string;
 }) => {
-	await execAsync(
-		`docker exec ${input.containerName} bash -lc "test -s '${escapeSingleQuotes(
-			input.sourcePath,
-		)}' || { echo 'Missing ${escapeSingleQuotes(
-			input.description,
-		)}: ${escapeSingleQuotes(
-			input.sourcePath,
-		)}' >&2; exit 1; }; mkdir -p '${escapeSingleQuotes(
-			path.posix.dirname(input.targetPath),
-		)}' && cp -a '${escapeSingleQuotes(input.sourcePath)}' '${escapeSingleQuotes(
-			input.targetPath,
-		)}'"`,
+	const sourceDirectory = path.dirname(input.sourcePath);
+	const sourceFile = path.basename(input.sourcePath);
+	const helperName = `${input.containerName}-credential-copy-${randomUUID().slice(0, 8)}`;
+	const localCopyPath = path.join(
+		tmpdir(),
+		`vulseek-credential-copy-${randomUUID().slice(0, 8)}-${sourceFile}`,
 	);
-};
+	const { stdout: imageOutput } = await execAsync(
+		`docker inspect ${input.containerName} --format '{{.Config.Image}}'`,
+	);
+	const image = imageOutput.trim();
+	if (!image) {
+		throw new Error(`Unable to resolve image for ${input.containerName}`);
+	}
 
-const loadMountedCodexHomeSourceConfigToml = async (
-	containerName: string,
-	sourceDir: string,
-) => {
-	const { stdout } = await execAsync(
-		`docker exec ${containerName} bash -lc "cat '${escapeSingleQuotes(
-			path.posix.join(sourceDir, "config.toml"),
-		)}' 2>/dev/null || true"`,
-	);
-	return stdout;
+	try {
+		await execAsync(
+			`docker create --name ${helperName} -v '${escapeSingleQuotes(sourceDirectory)}:/host-credential:ro' '${escapeSingleQuotes(image)}' bash -lc 'sleep 30'`,
+		);
+		await execAsync(
+			`docker cp ${helperName}:'/host-credential/${escapeSingleQuotes(sourceFile)}' '${escapeSingleQuotes(localCopyPath)}'`,
+		);
+		await execAsync(
+			`docker cp '${escapeSingleQuotes(localCopyPath)}' ${input.containerName}:'${escapeSingleQuotes(input.targetPath)}'`,
+		);
+	} catch (error) {
+		throw new Error(
+			`Unable to copy ${input.description} from ${input.sourcePath}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	} finally {
+		await fs.unlink(localCopyPath).catch(() => {});
+		await execAsync(`docker rm -f ${helperName}`).catch(() => {});
+	}
 };
 
 const parseAgentProfileEnvPairs = (agentProfile: AgentProfileLike) =>
@@ -658,13 +615,9 @@ const copyCodexAssetsToContainerHome = async (
 						"Codex host home auth mode is enabled but no home path was configured on the agent profile.",
 					);
 				}
-				const sourceConfigToml = await loadMountedCodexHomeSourceConfigToml(
+				await copyHostFileToContainer({
 					containerName,
-					AGENT_HOME_HOST_MOUNT_PATH,
-				);
-				await copyMountedFileToContainer({
-					containerName,
-					sourcePath: path.posix.join(AGENT_HOME_HOST_MOUNT_PATH, "auth.json"),
+					sourcePath: path.join(hostPath, "auth.json"),
 					targetPath: path.posix.join(codexHome, "auth.json"),
 					description: "Codex host home auth.json",
 				});
@@ -672,7 +625,7 @@ const copyCodexAssetsToContainerHome = async (
 					containerName,
 					`${codexHome}/config.toml`,
 					joinTomlBlocks(
-						withCodexProfileRuntimeConfig(sourceConfigToml, agentProfile),
+						buildCodexConfigToml(agentProfile),
 						mcpConfigToml,
 					),
 				);
@@ -914,12 +867,12 @@ const copyClaudeAssetsToContainerHome = async (
 				"Claude Code host home auth mode is enabled but no home path was configured on the agent profile.",
 			);
 		}
-		await copyMountedFileToContainer({
+		await copyHostFileToContainer({
 			containerName,
-			sourcePath: path.posix.join(AGENT_HOME_HOST_MOUNT_PATH, "settings.json"),
-			targetPath: path.posix.join(claudeHome, "settings.json"),
+			sourcePath: path.join(hostPath, ".credentials.json"),
+			targetPath: path.posix.join(claudeHome, ".credentials.json"),
 			description:
-				"Claude Code host home settings.json. Configure homePath as the host user home directory.",
+				"Claude Code host home .credentials.json. Configure homePath as the Claude config directory.",
 		});
 	}
 
@@ -971,9 +924,35 @@ export type RunSingleTurnAgentResult = {
 	threadId: string | null;
 };
 
+export const buildResearchContainerEnvPairs = (
+	scanType: ScanJob["scanType"],
+	scanJobId: string,
+	taskId: string,
+) =>
+	scanType === "research"
+		? [
+				`VULSEEK_SCAN_JOB_ID=${scanJobId}`,
+				`VULSEEK_TASK_ID=${taskId}`,
+				"VULSEEK_RESEARCH_DATABASE_URL",
+			]
+		: [];
+
+export const requireResearchDatabaseContext = (
+	scanType: ScanJob["scanType"],
+	environment: Record<string, string | undefined>,
+) => {
+	if (scanType === "research" && !environment.VULSEEK_RESEARCH_DATABASE_URL?.trim()) {
+		throw new Error(
+			"Research database context is not configured; set VULSEEK_RESEARCH_DATABASE_URL before starting Research tasks",
+		);
+	}
+};
+
 const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 	const { imageTag, projectName, serviceName, target } =
 		await resolveScanExecutionContext(input.scanJob);
+	requireResearchDatabaseContext(input.scanJob.scanType, process.env);
+	const globalContainerEnvPairs = getGlobalContainerEnvironmentPairs();
 	const agentsDir = await resolveAgentsDirectory();
 	const hostProfileDir = await resolveProjectProfileHostPath({
 		projectName,
@@ -985,19 +964,14 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 	});
 	await fs.mkdir(input.stageDirPath, { recursive: true });
 	const containerEnvPairs = [
-		...getGlobalContainerEnvironmentPairs(),
+		...globalContainerEnvPairs,
 		`VULSEEK_PROJECT_PROFILE_DIR=${mountedProfileDir}`,
 		`VULSEEK_PROJECT_CACHE_DIR=${path.posix.join(mountedProfileDir, "cache")}`,
-		...(input.scanJob.scanType === "research"
-			? [
-					`VULSEEK_SCAN_JOB_ID=${input.scanJob.scanJobId}`,
-					`VULSEEK_TASK_ID=${input.taskId || ""}`,
-					`VULSEEK_RESEARCH_BROKER_URL=${process.env.VULSEEK_RESEARCH_BROKER_URL?.trim() || `http://172.17.0.1:${process.env.PORT || "3000"}/api`}`,
-					...(process.env.VULSEEK_RESEARCH_BROKER_TOKEN?.trim()
-						? [`VULSEEK_RESEARCH_BROKER_TOKEN=${process.env.VULSEEK_RESEARCH_BROKER_TOKEN.trim()}`]
-						: []),
-				]
-			: []),
+		...buildResearchContainerEnvPairs(
+			input.scanJob.scanType,
+			input.scanJob.scanJobId,
+			input.taskId || "",
+		),
 	];
 	const runtimeFileNames = AGENT_RUNTIME_FILE_NAMES;
 	const containerNetworkArg = await resolveCurrentDockerNetworkArg();
@@ -1029,7 +1003,6 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 			mountDescription: `host_path:${hostProfileDir}`,
 			dockerMountArg: `-v '${escapeSingleQuotes(hostProfileDir)}':${mountedProfileDir}`,
 		},
-		agentHomeHostMountArg: buildAgentHomeHostMountArg(input.agentProfile),
 		agentHome: {
 			codexContainerDir: CODEX_HOME_IN_CONTAINER,
 			claudeContainerDir: CLAUDE_HOME_IN_CONTAINER,
@@ -1112,7 +1085,7 @@ export const startContainer = async (input: StageContainerInput) => {
 				containerName: input.containerName,
 				taskId: input.taskId,
 				logPath,
-				command: `docker run -d --init --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.memoryArgs} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.agentHomeHostMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
+				command: `docker run -d --init --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.memoryArgs} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
 			}),
 	);
 
@@ -1996,23 +1969,6 @@ export const runSingleTurnAgentInContainer = async (
 					: parseAgentProfileEnvPairs(input.agentProfile),
 			)
 		: {};
-	const researchBrokerEnv =
-		input.scanJob.scanType === "research"
-			? {
-					VULSEEK_SCAN_JOB_ID: input.scanJob.scanJobId,
-					VULSEEK_TASK_ID: input.taskId || "",
-					VULSEEK_RESEARCH_BROKER_URL:
-						process.env.VULSEEK_RESEARCH_BROKER_URL?.trim() ||
-						`http://172.17.0.1:${process.env.PORT || "3000"}/api`,
-					...(process.env.VULSEEK_RESEARCH_BROKER_TOKEN?.trim()
-						? {
-								VULSEEK_RESEARCH_BROKER_TOKEN:
-									process.env.VULSEEK_RESEARCH_BROKER_TOKEN.trim(),
-							}
-						: {}),
-				}
-			: {};
-	const effectiveAdapterEnv = { ...adapterEnv, ...researchBrokerEnv };
 	const buildDriverTaskInput = () => ({
 		taskId: input.taskId || undefined,
 		provider:
@@ -2020,10 +1976,14 @@ export const runSingleTurnAgentInContainer = async (
 		cwd: input.cwd,
 		prompt: promptWithOutputSchema,
 		threadId: existingTaskThreadId || input.laneThreadId || null,
-		adapterEnv: effectiveAdapterEnv,
+		adapterEnv,
 		taskStageRootInContainer,
 		taskAliasRootInContainer: TASK_ALIAS_ROOT_IN_CONTAINER,
 		structuredOutputResultPathInContainer,
+		structuredOutputSchemaPathInContainer:
+			structuredOutputSchemaAgentPathInContainer,
+		structuredOutputGracePeriodMs: 2_000,
+		structuredOutputRecoveryAttempts: 1,
 		nullableOutput: Boolean(input.nullableOutput),
 		allowAgentExit: Boolean(input.allowAgentExit),
 		model: input.agentProfile?.model || null,

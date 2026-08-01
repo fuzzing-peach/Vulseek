@@ -182,7 +182,19 @@ export type AgentTaskRuntime = {
 		| "analyze-finding"
 		| "critique-finding"
 		| "verify-finding"
-		| "triage-finding";
+		| "triage-finding"
+		| "research-scope"
+		| "surface-map"
+		| "track-plan"
+		| "vulnerability-discovery"
+		| "track-review"
+		| "finding-validation"
+		| "finding-review"
+		| "chain-synthesis"
+		| "chain-review"
+		| "exploit-validation"
+		| "exploit-review"
+		| "research-report";
 	status: string;
 	containerName: string | null;
 	sessionId: string | null;
@@ -222,8 +234,9 @@ type AgentTaskRuntimeSource = Pick<
 
 const buildAgentTaskRuntime = async (
 	task: AgentTaskRuntimeSource,
+	baseDirOverride?: string,
 ): Promise<AgentTaskRuntime> => {
-	const baseDir = await resolveScanJobBaseDir(task.scanJobId);
+	const baseDir = baseDirOverride ?? (await resolveScanJobBaseDir(task.scanJobId));
 	const runtimeDir = resolveScanStageTaskRuntimeDir(
 		baseDir,
 		task.stageName,
@@ -257,6 +270,20 @@ const buildAgentTaskRuntime = async (
 		case "triage-finding":
 			taskKind = "triage-finding";
 			break;
+		case "research-scope":
+		case "surface-map":
+		case "track-plan":
+		case "vulnerability-discovery":
+		case "track-review":
+		case "finding-validation":
+		case "finding-review":
+		case "chain-synthesis":
+		case "chain-review":
+		case "exploit-validation":
+		case "exploit-review":
+		case "research-report":
+			taskKind = task.stageName as AgentTaskRuntime["taskKind"];
+			break;
 	}
 
 	return {
@@ -277,7 +304,10 @@ export const findRunningAgentTaskRuntimesByScanJobId = async (
 	scanJobId: string,
 ): Promise<AgentTaskRuntime[]> => {
 	const runningTasks = await listRunningTaskRuntimeMetadataRepo(scanJobId);
-	return await Promise.all(runningTasks.map(buildAgentTaskRuntime));
+	const baseDir = await resolveScanJobBaseDir(scanJobId);
+	return await Promise.all(
+		runningTasks.map((task) => buildAgentTaskRuntime(task, baseDir)),
+	);
 };
 
 export const listRunningScanJobsByOrganizationId = async (

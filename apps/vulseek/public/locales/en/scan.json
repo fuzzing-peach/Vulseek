@@ -285,7 +285,7 @@
 	"scan.field.updated": "Updated",
 	"scan.field.started": "Started",
 	"scan.field.completed": "Completed",
-	"scan.field.inputCacheRead": "Input / Cache Read",
+	"scan.field.inputCacheRead": "Input Tokens / Cache Read",
 	"scan.field.outputTokens": "Output Tokens",
 	"scan.field.totalTokens": "Total Tokens",
 	"scan.field.thoughtTokens": "Thought Tokens",

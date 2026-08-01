@@ -947,7 +947,7 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 												label={scanT(
 													t,
 													"scan.field.inputCacheRead",
-													"Input / Cache Read",
+													"Input Tokens / Cache Read",
 												)}
 												value={formatTokenUsageWithCache(
 													t,
@@ -957,7 +957,7 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 												copyLabel={scanT(
 													t,
 													"scan.field.inputCacheRead",
-													"Input / Cache Read",
+													"Input Tokens / Cache Read",
 												)}
 											/>
 											<DetailField

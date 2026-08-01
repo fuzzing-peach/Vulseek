@@ -210,8 +210,8 @@ importers:
         specifier: ^13.9.0
         version: 13.9.0
       '@pydantic/genai-prices':
-        specifier: ^0.0.67
-        version: 0.0.67
+        specifier: ^0.0.72
+        version: 0.0.72
       '@radix-ui/react-accordion':
         specifier: 1.1.2
         version: 1.1.2(@types/react-dom@18.3.0)(@types/react@18.3.5)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
@@ -652,8 +652,8 @@ importers:
         specifier: 1.1.0
         version: 1.1.0
       '@pydantic/genai-prices':
-        specifier: ^0.0.67
-        version: 0.0.67
+        specifier: ^0.0.72
+        version: 0.0.72
       '@react-email/components':
         specifier: ^0.0.21
         version: 0.0.21(@types/react@18.3.5)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
@@ -3002,8 +3002,8 @@ packages:
   '@protobufjs/utf8@1.1.0':
     resolution: {integrity: sha512-Vvn3zZrhQZkkBE8LSuW3em98c0FwgO4nxzv6OdSxPKJIEKY2bGbHn+mhGIPerzI4twdxaP8/0+06HBpwf345Lw==}
 
-  '@pydantic/genai-prices@0.0.67':
-    resolution: {integrity: sha512-M2owW6tBu7Wiv5lUDCX2CS7KjRDsnM1tnUKGqiKNcfuQjn2nyYq5lkiGCSHOL+hH23sb0odHhkH2DjOHFIStFA==}
+  '@pydantic/genai-prices@0.0.72':
+    resolution: {integrity: sha512-HColu0MorlFM0ftL85lJHSQ2Sto82hWzwoaTwcfcCwoZrgvDZ102BimfWzNujsReZEMjdy71VPw4hfJnpWbOpQ==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -10377,7 +10377,7 @@ snapshots:
 
   '@protobufjs/utf8@1.1.0': {}
 
-  '@pydantic/genai-prices@0.0.67':
+  '@pydantic/genai-prices@0.0.72':
     dependencies:
       yargs: 17.7.2
 

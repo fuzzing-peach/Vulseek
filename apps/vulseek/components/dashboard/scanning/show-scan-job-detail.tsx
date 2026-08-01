@@ -46,6 +46,11 @@ import {
 	LiveTaskActivityButton,
 } from "@/components/dashboard/scanning/live-task-activity";
 import { ScanMonitoring } from "@/components/dashboard/scanning/scan-monitoring";
+import { ResearchRegistryPanels } from "@/components/dashboard/scanning/research-registry-panels";
+import {
+	getResearchRegistryTabs,
+	isResearchRegistryTab,
+} from "@/components/dashboard/scanning/research-registry-tabs";
 import {
 	type ScanRuntimeSettingsDraft,
 	ScanStageGraph,
@@ -131,6 +136,10 @@ type ScanJobTab =
 	| "evaluate"
 	| "tasks"
 	| "candidates"
+	| "findings"
+	| "tracks"
+	| "primitives"
+	| "chains"
 	| "monitoring"
 	| "files";
 type ScanResultSummary = RouterOutputs["scan"]["resultSummary"];
@@ -365,6 +374,7 @@ const resolveRequestedTab = (
 		rawTab === "evaluate" ||
 		rawTab === "tasks" ||
 		rawTab === "candidates" ||
+		isResearchRegistryTab(rawTab) ||
 		rawTab === "monitoring" ||
 		rawTab === "files"
 	) {
@@ -770,6 +780,18 @@ const RUNNING_TASK_STAGE_ORDER: Record<string, number> = {
 	"critique-finding": 6,
 	"verify-finding": 7,
 	"triage-finding": 8,
+	"research-scope": 9,
+	"surface-map": 10,
+	"track-plan": 11,
+	"vulnerability-discovery": 12,
+	"track-review": 13,
+	"finding-validation": 14,
+	"finding-review": 15,
+	"chain-synthesis": 16,
+	"chain-review": 17,
+	"exploit-validation": 18,
+	"exploit-review": 19,
+	"research-report": 20,
 };
 
 const TASK_STAGE_OPTION_BY_STAGE_NAME: Record<string, string> = {
@@ -1581,7 +1603,10 @@ export const ShowScanJobDetail = ({
 	const { activitiesByTaskId, connectedTaskIds: activityConnectedTaskIds } =
 		useAgentActivities({
 			scanJobId,
-			enabled: !!scanJobId && shouldLoadJobActivities,
+			enabled:
+				!!scanJobId &&
+				shouldLoadJobActivities &&
+				(runningTasksData?.tasks.length ?? 0) > 0,
 		});
 	const { data: selectedFile, isLoading: isLoadingSelectedFile } =
 		api.scan.readFile.useQuery(
@@ -1625,8 +1650,13 @@ export const ShowScanJobDetail = ({
 	}, [scanJob?.note]);
 
 	const requestedTab = useMemo(
-		() => resolveRequestedTab(router.query.tab),
-		[router.query.tab],
+		() => {
+			const tab = resolveRequestedTab(router.query.tab);
+			if (scanJob?.scanType === "research" && tab === "candidates") return "findings";
+			if (scanJob && scanJob.scanType !== "research" && tab === "findings") return "overview";
+			return tab;
+		},
+		[router.query.tab, scanJob],
 	);
 
 	const isNoteDirty = (scanJob?.note ?? "") !== noteDraft;
@@ -1639,6 +1669,14 @@ export const ShowScanJobDetail = ({
 		scanJob?.status === "paused";
 	const canEvaluateScanJob =
 		serviceType === "application" && Boolean(scanJob?.applicationId);
+	const researchRegistryTabs = getResearchRegistryTabs(scanJob?.scanType);
+
+	useEffect(() => {
+		if (scanJob && scanJob.scanType !== "research" && isResearchRegistryTab(activeTab)) {
+			setActiveTab("overview");
+		}
+	}, [activeTab, scanJob]);
+
 	const refreshScanJobViews = async () => {
 		await Promise.all([
 			utils.scan.jobOverview.invalidate({ scanJobId }),
@@ -2741,13 +2779,26 @@ export const ShowScanJobDetail = ({
 					</CardDescription>
 				</CardHeader>
 				<CardContent>
-					<Tabs
-						value={activeTab}
-						onValueChange={(value) => {
-							setActiveTab(value as ScanJobTab);
-						}}
-						className="w-full"
-					>
+						<Tabs
+							value={activeTab}
+							onValueChange={(value) => {
+								const nextTab = value as ScanJobTab;
+								setActiveTab(nextTab);
+								void router.replace(
+									{
+										pathname: router.pathname,
+										query: applyCandidateListQueryState(
+											router.query,
+											currentCandidateListState,
+											nextTab,
+										),
+									},
+									undefined,
+									{ shallow: true },
+								);
+							}}
+							className="w-full"
+						>
 						<TabsList className="flex h-auto min-h-10 w-full justify-start gap-1 overflow-x-auto p-1 sm:gap-2">
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="overview">
 								{scanT(t, "scan.job.tabs.overview", "Overview")}
@@ -2756,9 +2807,20 @@ export const ShowScanJobDetail = ({
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="tasks">
 								{scanT(t, "scan.job.tabs.tasks", "阶段任务")}
 							</TabsTrigger>
-							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="candidates">
-								{scanT(t, "scan.job.tabs.candidates", "Candidates")}
-							</TabsTrigger>
+			{scanJob?.scanType !== "research" ? (
+				<TabsTrigger className="shrink-0 px-2 sm:px-3" value="candidates">
+					{scanT(t, "scan.job.tabs.candidates", "Candidates")}
+				</TabsTrigger>
+			) : null}
+							{researchRegistryTabs.map((tab) => (
+								<TabsTrigger
+									key={tab.value}
+									className="shrink-0 px-2 sm:px-3"
+									value={tab.value}
+								>
+									{tab.label}
+								</TabsTrigger>
+							))}
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="monitoring">
 								{scanT(t, "scan.monitoring.title", "Monitoring")}
 							</TabsTrigger>
@@ -3028,7 +3090,7 @@ export const ShowScanJobDetail = ({
 														{scanT(
 															t,
 															"scan.field.inputCacheRead",
-															"Input / Cache Read",
+															"Input Tokens / Cache Read",
 														)}
 													</div>
 													<div className="font-medium">
@@ -3401,6 +3463,7 @@ export const ShowScanJobDetail = ({
 							)}
 						</TabsContent>
 
+						{scanJob?.scanType !== "research" ? (
 						<TabsContent value="candidates" className="pt-4">
 							{isLoadingCandidates && !candidates ? (
 								<div className="flex items-center gap-2 text-muted-foreground">
@@ -4225,6 +4288,15 @@ export const ShowScanJobDetail = ({
 								</div>
 							)}
 						</TabsContent>
+						) : null}
+
+						{scanJob?.scanType === "research" ? (
+							<ResearchRegistryPanels
+								scanJobId={scanJobId}
+								activeTab={activeTab}
+								live={!isTerminalScanJobStatus(scanJob.status)}
+							/>
+						) : null}
 
 						<TabsContent value="monitoring" className="pt-4">
 							<ScanMonitoring mode="job" scanJobId={scanJobId} />

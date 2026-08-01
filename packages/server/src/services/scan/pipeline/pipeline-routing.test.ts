@@ -10,19 +10,27 @@ import {
 	validatePipelineRouteConfiguration,
 } from "./pipeline-definition";
 import { createStageDefinition } from "./stage-definition";
+import type { StructuredOutputSchemaSource } from "./scan-pipeline-schema-contracts";
 
-const makeStage = (name: string) =>
+const makeStage = (
+	name: string,
+	outputSchema?: StructuredOutputSchemaSource,
+) =>
 	createStageDefinition<PipelineContext, unknown, unknown>({
 		id: name,
 		name,
 		mode: "serial",
+		outputSchema,
 		run: async () => ({
 			completion: "immediate",
 			rawOutput: "{}",
 		}),
 	});
 
-const fromStage = makeStage("from");
+const stageOutputSchema = z.object({
+	kind: z.string(),
+});
+const fromStage = makeStage("from", stageOutputSchema);
 const buildStage = makeStage("build");
 const criticStage = makeStage("critic");
 const verifyStage = makeStage("verify");
@@ -126,7 +134,7 @@ test("selectDownstreamEdgesForRoute selects matching route and only defaults wit
 	assert.equal(fallback.fallback, true);
 });
 
-test("getStageRouteOutputSchemas exposes edge-specific output schemas", () => {
+test("getStageRouteOutputSchemas exposes edge schemas and falls back to stage schema", () => {
 	const pipeline = createPipelineDefinition({
 		name: "route-schema-test",
 		stages: [fromStage, buildStage, criticStage, verifyStage] as const,
@@ -156,7 +164,7 @@ test("getStageRouteOutputSchemas exposes edge-specific output schemas", () => {
 	});
 
 	const routeSchemas = getStageRouteOutputSchemas(pipeline, "from");
-	assert.equal(routeSchemas?.length, 2);
+	assert.equal(routeSchemas?.length, 3);
 	assert.deepEqual(
 		routeSchemas?.map((item) => ({
 			routeKey: item.routeKey,
@@ -174,6 +182,35 @@ test("getStageRouteOutputSchemas exposes edge-specific output schemas", () => {
 				description: "Output for route critic to critic",
 				default: undefined,
 			},
+			{
+				routeKey: "verify",
+				description: "Output for route verify to verify",
+				default: undefined,
+			},
 		],
+	);
+	assert.equal(routeSchemas?.[0]?.schema, buildSchema);
+	assert.equal(routeSchemas?.[1]?.schema, criticSchema);
+	assert.equal(routeSchemas?.[2]?.schema, stageOutputSchema);
+});
+
+test("getStageRouteOutputSchemas rejects routed edges without any output schema", () => {
+	const routeSource = makeStage("route-source");
+	const pipeline = createPipelineDefinition({
+		name: "missing-route-schema-test",
+		stages: [routeSource, buildStage] as const,
+		edges: [
+			createPipelineEdge({
+				name: "route-source-to-build",
+				from: routeSource,
+				to: buildStage,
+				route: { key: "build", default: true },
+			}),
+		] as const,
+	});
+
+	assert.throws(
+		() => getStageRouteOutputSchemas(pipeline, "route-source"),
+		/no edge or stage output schema/,
 	);
 });

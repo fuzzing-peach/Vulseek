@@ -241,6 +241,57 @@ const writeNullableOutput = async (input, stopReason) => {
 	}
 };
 
+const hasStructuredOutputEnvelope = (value) =>
+	value &&
+	typeof value === "object" &&
+	!Array.isArray(value) &&
+	Object.prototype.hasOwnProperty.call(value, "route") &&
+	Object.prototype.hasOwnProperty.call(value, "exit") &&
+	Object.prototype.hasOwnProperty.call(value, "output");
+
+const inspectStructuredOutput = async (filePath) => {
+	if (!filePath) return { exists: false, validJson: false, validEnvelope: false };
+	try {
+		const value = JSON.parse(await fs.readFile(filePath, "utf-8"));
+		return { exists: true, validJson: true, validEnvelope: hasStructuredOutputEnvelope(value) };
+	} catch (error) {
+		const exists = await fs
+			.stat(filePath)
+			.then(() => true)
+			.catch(() => false);
+		return { exists, validJson: false, validEnvelope: false };
+	}
+};
+
+const waitForStructuredOutput = async (input, stopReason) => {
+	if (stopReason !== "end_turn" || !input.structuredOutputResultPathInContainer) {
+		return true;
+	}
+	const timeoutMs = Math.max(
+		0,
+		Number(input.structuredOutputGracePeriodMs ?? 2_000),
+	);
+	const deadline = Date.now() + timeoutMs;
+	do {
+		const inspection = await inspectStructuredOutput(
+			input.structuredOutputResultPathInContainer,
+		);
+		if (inspection.validEnvelope) return true;
+		if (Date.now() >= deadline) break;
+		await sleep(50);
+	} while (true);
+	return false;
+};
+
+const structuredOutputRecoveryPrompt = (input) =>
+	[
+		"The previous turn ended before the required structured output file was written.",
+		"Do not continue repository analysis and do not answer with prose.",
+		`Immediately write the complete JSON envelope to ${input.structuredOutputResultPathInContainer}.`,
+		`Use ${input.structuredOutputSchemaPathInContainer || "/task/output.schema.json"} as the source of truth, then reopen the file and validate it before ending this turn.`,
+		"Use the current task's required route, exit, and output values; do not invent or omit required fields.",
+	].join("\n");
+
 const assertCapability = (capabilities, name) => {
 	const session =
 		capabilities?.sessionCapabilities || capabilities?.session || {};
@@ -283,17 +334,18 @@ const run = async () => {
 	const command =
 		initialInput.adapterCommand ||
 		(initialInput.provider === "claude" ? "claude-agent-acp" : "codex-acp");
+	const adapterEnvironment = {
+		...process.env,
+		...(initialInput.adapterEnv || {}),
+		...(initialInput.agentHomePathInContainer
+			? initialInput.provider === "claude"
+				? { CLAUDE_CONFIG_DIR: initialInput.agentHomePathInContainer }
+				: { CODEX_HOME: initialInput.agentHomePathInContainer }
+			: {}),
+	};
 	const child = spawn(command, initialInput.adapterArgs || [], {
 		stdio: ["pipe", "pipe", "pipe"],
-		env: {
-			...process.env,
-			...(initialInput.adapterEnv || {}),
-			...(initialInput.agentHomePathInContainer
-				? initialInput.provider === "claude"
-					? { CLAUDE_CONFIG_DIR: initialInput.agentHomePathInContainer }
-					: { CODEX_HOME: initialInput.agentHomePathInContainer }
-				: {}),
-		},
+		env: adapterEnvironment,
 	});
 	child.stderr.on("data", (chunk) => {
 		void appendProtocolEvent(activeInput.stdoutPath, {
@@ -416,40 +468,97 @@ const run = async () => {
 				kind: "prompt",
 				label: "Starting",
 			});
-			promptActive = true;
-			let response;
-			try {
-				response = await withTimeout(
-					ctx.request(acp.methods.agent.session.prompt, {
-						sessionId: sessionIdRef.current,
-						prompt: [{ type: "text", text: taskInput.prompt }],
-					}),
-					Number(taskInput.promptTimeoutMs || PROMPT_TIMEOUT_MS),
-					cancel,
+			const requestPrompt = async (promptText) => {
+				promptActive = true;
+				try {
+					const response = await withTimeout(
+						ctx.request(acp.methods.agent.session.prompt, {
+							sessionId: sessionIdRef.current,
+							prompt: [{ type: "text", text: promptText }],
+						}),
+						Number(taskInput.promptTimeoutMs || PROMPT_TIMEOUT_MS),
+						cancel,
+					);
+					await snapshots.flush();
+					const usage = asRecord(response.usage);
+					if (Object.keys(usage).length) {
+						await appendProtocolEvent(taskInput.stdoutPath, {
+							type: "usage",
+							usage,
+						});
+					}
+					return response;
+				} catch (error) {
+					await snapshots.immediate("error", {
+						kind: "error",
+						label: "Error",
+						detail: error.message,
+					});
+					await writeTaskEvent(taskInput, {
+						type: "task_done",
+						taskId: taskInput.taskId || null,
+						status: "failed",
+						error: error.message,
+					});
+					throw error;
+				} finally {
+					promptActive = false;
+				}
+			};
+
+			let response = await requestPrompt(taskInput.prompt);
+			let structuredOutputExists = await waitForStructuredOutput(
+				taskInput,
+				response.stopReason,
+			);
+			const recoveryAttempts = taskInput.nullableOutput
+				? 0
+				: Math.max(0, Number(taskInput.structuredOutputRecoveryAttempts ?? 1));
+			for (let attempt = 1; !structuredOutputExists && attempt <= recoveryAttempts; attempt += 1) {
+				await appendProtocolEvent(taskInput.stdoutPath, {
+					type: "log",
+					level: "warn",
+					source: "driver",
+					message: "structured output recovery prompt",
+					diagnostics: { attempt, maxAttempts: recoveryAttempts },
+				});
+				await snapshots.immediate("running", {
+					kind: "writing",
+					label: "Writing required output",
+				});
+				response = await requestPrompt(structuredOutputRecoveryPrompt(taskInput));
+				structuredOutputExists = await waitForStructuredOutput(
+					taskInput,
+					response.stopReason,
 				);
-			} catch (error) {
-				await snapshots.immediate("error", {
-					kind: "error",
-					label: "Error",
-					detail: error.message,
+			}
+			if (!structuredOutputExists && !taskInput.nullableOutput) {
+				const message = "ACP prompt completed without required output.json";
+				await appendProtocolEvent(taskInput.stdoutPath, {
+					type: "log",
+					level: "error",
+					source: "driver",
+					message,
+					diagnostics: {
+						taskId: taskInput.taskId || null,
+						stopReason: response.stopReason,
+						outputPath: taskInput.structuredOutputResultPathInContainer,
+						gracePeriodMs: Number(taskInput.structuredOutputGracePeriodMs ?? 2_000),
+					},
 				});
 				await writeTaskEvent(taskInput, {
 					type: "task_done",
 					taskId: taskInput.taskId || null,
 					status: "failed",
-					error: error.message,
+					error: message,
+					stopReason: response.stopReason,
 				});
-				throw error;
-			} finally {
-				promptActive = false;
-			}
-			await snapshots.flush();
-			const usage = asRecord(response.usage);
-			if (Object.keys(usage).length) {
-				await appendProtocolEvent(taskInput.stdoutPath, {
-					type: "usage",
-					usage,
+				await snapshots.immediate("error", {
+					kind: "error",
+					label: "Missing structured output",
+					detail: message,
 				});
+				throw new Error(message);
 			}
 			await writeNullableOutput(taskInput, response.stopReason);
 			await writeTaskEvent(taskInput, {

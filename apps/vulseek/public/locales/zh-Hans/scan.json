@@ -285,7 +285,7 @@
 	"scan.field.updated": "更新时间",
 	"scan.field.started": "开始时间",
 	"scan.field.completed": "完成时间",
-	"scan.field.inputCacheRead": "输入 / 缓存读取",
+	"scan.field.inputCacheRead": "输入 Tokens / 缓存读取",
 	"scan.field.outputTokens": "输出 Tokens",
 	"scan.field.totalTokens": "总 Tokens",
 	"scan.field.thoughtTokens": "思考 Tokens",

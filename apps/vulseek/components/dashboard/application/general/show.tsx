@@ -1,5 +1,5 @@
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import { Ban, GitBranch, Shield, Terminal } from "lucide-react";
+import { Ban, GitBranch, Shield, Telescope, Terminal } from "lucide-react";
 import { useRouter } from "next/router";
 import { useTranslation } from "next-i18next";
 import { toast } from "sonner";
@@ -180,7 +180,7 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 								refetch();
 							}).catch(() => toast.error(scanT(t, "scan.actions.researchScanStartError", "Error starting research scan")));
 						}}
-						trigger={<Button variant="default" isLoading={isCreatingScanJob} className={SCAN_BUTTON_CLASS_NAME}><Shield className="size-4 mr-1" />{scanT(t, "scan.actions.researchScan", "Research Scan")}</Button>}
+						trigger={<Button variant="default" isLoading={isCreatingScanJob} className={SCAN_BUTTON_CLASS_NAME}><Telescope className="size-4 mr-1" />{scanT(t, "scan.actions.researchScan", "Research Scan")}</Button>}
 					/>
 					<CreateScanDialog
 							title={scanT(t, "scan.actions.deltaScan", "Delta Scan")}

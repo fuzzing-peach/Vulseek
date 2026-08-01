@@ -26,6 +26,7 @@ import {
 } from "../pipeline/scan-pipeline-definitions";
 import { TRPCError } from "@trpc/server";
 import { findScanJobOrganizationIdRepo } from "../persistence/scan-job-access.repo";
+import { wakePipelineRuntimesForScanJob } from "../pipeline/pipeline-runner";
 
 export const authorizeScanJobAccess = async (
 	scanJobId: string,
@@ -96,11 +97,14 @@ export const updateScanJobNote = async (
 export const updateScanJobRuntimeSettings = async (
 	scanJobId: string,
 	scanRuntimeSettings: unknown,
-) =>
-	await updateScanJobRuntimeSettingsRepo(
+	) => {
+	const updated = await updateScanJobRuntimeSettingsRepo(
 		scanJobId,
 		normalizeScanRuntimeSettings(scanRuntimeSettings),
 	);
+	wakePipelineRuntimesForScanJob(scanJobId);
+	return updated;
+};
 
 export const updateScanJobPipelineDefinitionSnapshot = async (
 	scanJobId: string,

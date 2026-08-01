@@ -1,6 +1,8 @@
 import { bindTaskRuntimeRepo } from "../persistence/task.repo";
-import { syncVulnerabilityCandidatesFromProducerTask } from "../persistence/candidate.repo";
-import { applyResearchRegistryEffect } from "../persistence/research-registry.repo";
+import {
+	syncVulnerabilityCandidatesFromProducerTask,
+	type CandidateSyncTransaction,
+} from "../persistence/candidate.repo";
 import {
 	createStageDefinition,
 	type StageDefinition,
@@ -12,6 +14,7 @@ import type { YamlPipelineStage } from "../pipeline/yaml-pipeline-runtime";
 import { NEVER_REUSE_TASK_PROMPT_LINES } from "../prompts/task-isolation.prompt";
 import {
 	readTaskJsonArtifact,
+	replaceTaskJsonArtifact,
 	taskArtifactHostPath,
 	writeTaskJsonArtifact,
 } from "../artifacts/task-artifact-paths";
@@ -25,6 +28,7 @@ import { applySchemaTransforms } from "../pipeline/scan-pipeline-schema-transfor
 import { DEFAULT_DELTA_COMMIT_WINDOW } from "../constants";
 import { getResearchMinimumDurationMs } from "../scan-type";
 import { updateScanJobTargetContextRepo } from "../persistence/scan-job.repo";
+import { findResearchTrackIdentityRepo } from "../persistence/research-track.repo";
 import { prepareRepositoryForScanInContainer } from "../repository/prepare-repository";
 import { runSingleTurnAgentInContainer } from "../runtime/run-single-turn-agent";
 import {
@@ -40,8 +44,36 @@ import {
 	type StageContext,
 } from "./full-scan-stage.runtime";
 import type { ScanJob } from "../types";
+import {
+	assertResearchTrackIdentity,
+	enrichResearchTrackInput,
+} from "./research-track-input";
 
 type GenericStageContext = StageContext & { scanJob?: ScanJob };
+
+export const resolveStageReuseContainer = (
+	scanType: ScanJob["scanType"],
+	configured: boolean,
+) => (scanType === "research" ? false : configured);
+
+export const resolveStageContainerNameParts = (
+	scanType: ScanJob["scanType"],
+	taskId: string,
+	configured: Array<string | null | undefined> | undefined,
+) =>
+	scanType === "research"
+		? [...(configured || []), taskId]
+		: configured;
+
+const buildResearchTaskContext = (
+	ctx: GenericStageContext,
+	stageInput: unknown,
+) => ({
+	taskId: ctx.taskId,
+	scanJobId: ctx.scanJobId,
+	stageName: ctx.stageName,
+	stageInput,
+});
 
 const toPromptValues = (value: unknown): Record<string, string | number> => {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -118,6 +150,7 @@ export const createGenericAgentStageDefinition = <
 		reuseContainer: input.config.runtime.reuseContainer ?? undefined,
 		nullableOutput: input.config.runtime.nullableOutput ?? undefined,
 		allowAgentExit: input.config.allowAgentExit,
+		outputSchema: input.outputSchema,
 		queue: input.queue,
 		getDesiredConcurrency: async (ctx) =>
 			await resolveStageConcurrencySetting(
@@ -129,10 +162,20 @@ export const createGenericAgentStageDefinition = <
 			const stageCtx = ctx as GenericStageContext;
 			const scanJob = stageCtx.scanJob;
 			if (!scanJob) throw new Error("Generic stage requires scanJob context");
+			const reuseContainer = resolveStageReuseContainer(
+				scanJob.scanType,
+				stageCtx.reuseContainer,
+			);
+			const containerNameParts = resolveStageContainerNameParts(
+				scanJob.scanType,
+				stageCtx.taskId,
+				input.config.containerNameParts,
+			);
 			const runtime = await launchAgentStageRuntime({
 				ctx: stageCtx,
 				scanJob,
-				containerNameParts: input.config.containerNameParts,
+				containerNameParts,
+				reuseContainer,
 			});
 			if (input.config.runtime.prepareRepository) {
 				const repositoryState = await prepareRepositoryForScanInContainer({
@@ -160,19 +203,44 @@ export const createGenericAgentStageDefinition = <
 			const stageCtx = ctx as GenericStageContext;
 			const scanJob = stageCtx.scanJob;
 			if (!scanJob) throw new Error("Generic stage requires scanJob context");
+			const effectiveStageInput =
+				scanJob.scanType === "research"
+					? await enrichResearchTrackInput({
+							stageName: stageCtx.stageName,
+							stageInput,
+							resolveTrack: (trackKey, approachFamily) =>
+								findResearchTrackIdentityRepo({
+									scanJobId: stageCtx.scanJobId,
+									trackKey,
+									approachFamily,
+								}),
+						})
+					: stageInput;
+			const containerNameParts = resolveStageContainerNameParts(
+				scanJob.scanType,
+				stageCtx.taskId,
+				input.config.containerNameParts,
+			);
 			const runtime = await resolveAgentStageRuntime({
 				ctx: stageCtx,
-				containerNameParts: input.config.containerNameParts,
+				containerNameParts,
 			});
 			await writeTaskJsonArtifact({
 				taskDir: await stageCtx.taskDir(),
 				relativePath: "inputs/task-input.json",
-				value: stageInput,
+				value: effectiveStageInput,
 			});
+			if (scanJob.scanType === "research") {
+				await replaceTaskJsonArtifact({
+					taskDir: await stageCtx.taskDir(),
+					containerPath: "/task/task-context.json",
+					value: buildResearchTaskContext(stageCtx, effectiveStageInput),
+				});
+			}
 			const promptTemplate = await resolveStageRuntimePromptTemplate(stageCtx);
 			const promptValues = await resolvePromptValues(
 				stageCtx,
-				stageInput,
+				effectiveStageInput,
 				input.config,
 			);
 			const result = await runSingleTurnAgentInContainer({
@@ -187,7 +255,10 @@ export const createGenericAgentStageDefinition = <
 				taskStageRootInContainer: runtime.taskStageRootInContainer,
 				taskRealRootInContainer: runtime.taskRealRootInContainer,
 				persistent: stageCtx.persistent,
-				reuseContainer: stageCtx.reuseContainer,
+				reuseContainer: resolveStageReuseContainer(
+					scanJob.scanType,
+					stageCtx.reuseContainer,
+				),
 				groupedPersistent: stageCtx.groupedPersistent,
 				allowAgentExit: input.config.allowAgentExit,
 				laneThreadId: stageCtx.laneThreadId,
@@ -212,6 +283,20 @@ export const createGenericAgentStageDefinition = <
 			try {
 				const taskDir = await _ctx.taskDir();
 				let output = JSON.parse(rawOutput) as unknown;
+				const scanJob = (_ctx as GenericStageContext).scanJob;
+				if (scanJob?.scanType === "research") {
+					await assertResearchTrackIdentity({
+						stageName: _ctx.stageName,
+						stageInput: _stageInput,
+						stageOutput: output,
+						resolveTrack: (trackKey, approachFamily) =>
+							findResearchTrackIdentityRepo({
+								scanJobId: _ctx.scanJobId,
+								trackKey,
+								approachFamily,
+							}),
+					});
+				}
 				if (input.outputSchema && isJsonSchemaContract(input.outputSchema)) {
 					output = await applySchemaTransforms({
 						contract: input.outputSchema,
@@ -248,18 +333,13 @@ export const createGenericAgentStageDefinition = <
 				);
 			}
 		},
-		onSuccess: async (ctx, stageInput, output) => {
-			for (const effect of input.config.effects) {
-				if (effect.type === "sync-candidates") {
-					await syncVulnerabilityCandidatesFromProducerTask(ctx.taskId);
-				}
-				if (effect.type === "research-registry") {
-					await applyResearchRegistryEffect({
-						ctx,
-						operation: effect.operation,
-						stageInput,
-						output,
-					});
+		onSuccess: async (ctx, _stageInput, _output, transaction) => {
+				for (const effect of input.config.effects) {
+					if (effect.type === "sync-candidates") {
+						await syncVulnerabilityCandidatesFromProducerTask(
+							ctx.taskId,
+							transaction as CandidateSyncTransaction | undefined,
+						);
 				}
 			}
 		},

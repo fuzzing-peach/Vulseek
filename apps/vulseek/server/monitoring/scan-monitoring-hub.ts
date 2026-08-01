@@ -5,9 +5,8 @@ import {
 	findRunningAgentTaskRuntimesByScanJobId,
 	listRunningScanJobsByOrganizationId,
 	parseAgentUsageSnapshot,
-	parseDriverStdout,
+	driverStdoutTailReader,
 } from "@vulseek/server";
-import { promises as fs } from "node:fs";
 
 const SAMPLE_INTERVAL_MS = 1300;
 const RECONCILE_INTERVAL_MS = 5000;
@@ -211,8 +210,8 @@ class TaskSampler {
 		if (this.sampling) return;
 		this.sampling = true;
 		try {
-			const protocol = parseDriverStdout(
-				await fs.readFile(this.runtime.stdoutPath, "utf-8").catch(() => ""),
+			const protocol = await driverStdoutTailReader.read(
+				this.runtime.stdoutPath,
 			);
 			const usage = parseAgentUsageSnapshot(protocol.latestUsage);
 			const container = this.runtime.containerName

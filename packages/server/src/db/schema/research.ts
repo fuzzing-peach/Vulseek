@@ -1,4 +1,12 @@
-import { index, integer, jsonb, pgTable, text, uniqueIndex } from "drizzle-orm/pg-core";
+import {
+	index,
+	integer,
+	jsonb,
+	pgTable,
+	primaryKey,
+	text,
+	uniqueIndex,
+} from "drizzle-orm/pg-core";
 import { nanoid } from "nanoid";
 import { scanJobs, tasks } from "./scan";
 
@@ -22,15 +30,12 @@ export const researchTracks = pgTable(
 		status: text("status").notNull().default("queued"),
 		coverage: jsonb("coverage").$type<Record<string, unknown>>().notNull().default({}),
 		evidenceRefs: jsonb("evidenceRefs").$type<string[]>().notNull().default([]),
-		candidateFindingIds: jsonb("candidateFindingIds").$type<string[]>().notNull().default([]),
+		findingIds: jsonb("findingIds").$type<string[]>().notNull().default([]),
 		blockReason: text("blockReason"),
 		reopenCondition: text("reopenCondition"),
 		nextStep: text("nextStep"),
 		iteration: integer("iteration").notNull().default(0),
-		currentTaskId: text("currentTaskId").references(() => tasks.taskId, {
-			onDelete: "set null",
-		}),
-		revision: integer("revision").notNull().default(0),
+			revision: integer("revision").notNull().default(0),
 		createdAt: text("createdAt").notNull().$defaultFn(timestamp),
 		updatedAt: text("updatedAt").notNull().$defaultFn(timestamp),
 	},
@@ -41,34 +46,56 @@ export const researchTracks = pgTable(
 	],
 );
 
-export const researchTrackEvents = pgTable(
-	"research_track_events",
+export type ResearchFindingContent = {
+	findingId: string;
+	trackKey: string;
+	title: string;
+	description: string;
+	vulnerabilityClass: string | null;
+	location: {
+		filePath: string;
+		line: number | null;
+		symbol: string | null;
+	};
+	claim: string;
+	rootCauseKey: string;
+	source: Record<string, unknown>;
+	sink: Record<string, unknown>;
+	attackerControl: string;
+	trustBoundaryCrossings: Record<string, unknown>[];
+	preconditions: string[];
+	evidence: Array<Record<string, unknown>>;
+	quickDisproofAttempt: string;
+	confidence: number;
+};
+
+export const researchFindings = pgTable(
+	"research_findings",
 	{
-		eventId: text("eventId")
-			.notNull()
-			.primaryKey()
-			.$defaultFn(() => nanoid()),
 		scanJobId: text("scanJobId")
 			.notNull()
 			.references(() => scanJobs.scanJobId, { onDelete: "cascade" }),
+		findingId: text("findingId").notNull(),
 		trackId: text("trackId")
 			.notNull()
 			.references(() => researchTracks.trackId, { onDelete: "cascade" }),
-			eventType: text("eventType").notNull(),
-		actorTaskId: text("actorTaskId").references(() => tasks.taskId, {
+		producerTaskId: text("producerTaskId").references(() => tasks.taskId, {
 			onDelete: "set null",
 		}),
-		sourceStage: text("sourceStage").notNull(),
-		expectedRevision: integer("expectedRevision"),
-		resultingRevision: integer("resultingRevision").notNull(),
-		payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
-		evidenceRefs: jsonb("evidenceRefs").$type<string[]>().notNull().default([]),
-		idempotencyKey: text("idempotencyKey").notNull().unique(),
+		content: jsonb("content").$type<ResearchFindingContent>().notNull(),
+		status: text("status").notNull().default("discovered"),
+		latestValidationVerdict: text("latestValidationVerdict"),
+		latestReviewDecision: text("latestReviewDecision"),
+		requiredEvidence: jsonb("requiredEvidence").$type<string[]>().notNull().default([]),
+		revision: integer("revision").notNull().default(0),
 		createdAt: text("createdAt").notNull().$defaultFn(timestamp),
+		updatedAt: text("updatedAt").notNull().$defaultFn(timestamp),
 	},
 	(table) => [
-		index("research_track_events_track_idx").on(table.trackId, table.createdAt),
-		index("research_track_events_job_idx").on(table.scanJobId, table.createdAt),
+		primaryKey({ columns: [table.scanJobId, table.findingId] }),
+		index("research_findings_scan_job_idx").on(table.scanJobId, table.updatedAt),
+		index("research_findings_status_idx").on(table.scanJobId, table.status),
+		index("research_findings_track_idx").on(table.scanJobId, table.trackId),
 	],
 );
 
@@ -82,7 +109,7 @@ export const exploitPrimitives = pgTable(
 		scanJobId: text("scanJobId")
 			.notNull()
 			.references(() => scanJobs.scanJobId, { onDelete: "cascade" }),
-			candidateId: text("candidateId").notNull(),
+		findingId: text("findingId").notNull(),
 			name: text("name").notNull(),
 			capability: text("capability").notNull(),
 		requiredInput: jsonb("requiredInput").$type<Record<string, unknown>>().notNull().default({}),
@@ -96,36 +123,8 @@ export const exploitPrimitives = pgTable(
 	},
 	(table) => [
 		index("exploit_primitives_scan_job_idx").on(table.scanJobId, table.updatedAt),
-		index("exploit_primitives_candidate_idx").on(table.scanJobId, table.candidateId),
+		index("exploit_primitives_finding_idx").on(table.scanJobId, table.findingId),
 	],
-);
-
-export const exploitPrimitiveEvents = pgTable(
-	"exploit_primitive_events",
-	{
-		eventId: text("eventId")
-			.notNull()
-			.primaryKey()
-			.$defaultFn(() => nanoid()),
-		scanJobId: text("scanJobId")
-			.notNull()
-			.references(() => scanJobs.scanJobId, { onDelete: "cascade" }),
-		primitiveId: text("primitiveId")
-			.notNull()
-			.references(() => exploitPrimitives.primitiveId, { onDelete: "cascade" }),
-		eventType: text("eventType").notNull(),
-		actorTaskId: text("actorTaskId").references(() => tasks.taskId, {
-			onDelete: "set null",
-		}),
-		sourceStage: text("sourceStage").notNull(),
-		expectedRevision: integer("expectedRevision"),
-		resultingRevision: integer("resultingRevision").notNull(),
-		payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
-		evidenceRefs: jsonb("evidenceRefs").$type<string[]>().notNull().default([]),
-		idempotencyKey: text("idempotencyKey").notNull().unique(),
-		createdAt: text("createdAt").notNull().$defaultFn(timestamp),
-	},
-	(table) => [index("exploit_primitive_events_idx").on(table.primitiveId, table.createdAt)],
 );
 
 export const exploitChains = pgTable(
@@ -156,32 +155,4 @@ export const exploitChains = pgTable(
 		index("exploit_chains_scan_job_idx").on(table.scanJobId, table.updatedAt),
 		index("exploit_chains_key_idx").on(table.scanJobId, table.chainKey),
 	],
-);
-
-export const exploitChainEvents = pgTable(
-	"exploit_chain_events",
-	{
-		eventId: text("eventId")
-			.notNull()
-			.primaryKey()
-			.$defaultFn(() => nanoid()),
-		scanJobId: text("scanJobId")
-			.notNull()
-			.references(() => scanJobs.scanJobId, { onDelete: "cascade" }),
-		chainId: text("chainId")
-			.notNull()
-			.references(() => exploitChains.chainId, { onDelete: "cascade" }),
-		eventType: text("eventType").notNull(),
-		actorTaskId: text("actorTaskId").references(() => tasks.taskId, {
-			onDelete: "set null",
-		}),
-		sourceStage: text("sourceStage").notNull(),
-		expectedRevision: integer("expectedRevision"),
-		resultingRevision: integer("resultingRevision").notNull(),
-		payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
-		evidenceRefs: jsonb("evidenceRefs").$type<string[]>().notNull().default([]),
-		idempotencyKey: text("idempotencyKey").notNull().unique(),
-		createdAt: text("createdAt").notNull().$defaultFn(timestamp),
-	},
-	(table) => [index("exploit_chain_events_idx").on(table.chainId, table.createdAt)],
 );
