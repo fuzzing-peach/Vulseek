@@ -30,6 +30,10 @@ const effectSchema = z.discriminatedUnion("type", [
 			"persist-report",
 		]),
 	}),
+	z.object({
+		type: z.literal("tob-goal-registry"),
+		operation: z.enum(["persist-candidate", "apply-judge", "apply-dedup"]),
+	}),
 ]);
 
 const reportSchema = z.object({
@@ -48,6 +52,8 @@ const runtimeSchema = z.object({
 	prompt: z.string().nullable().optional(),
 	promptFile: z.string().min(1).nullable().optional(),
 	prepareRepository: z.boolean().optional().default(false),
+	/** When true, append Security Policy file path instruction to the agent prompt. */
+	includePolicy: z.boolean().optional().default(false),
 });
 
 const stageSchema = z.object({
@@ -200,4 +206,5 @@ export const YAML_PIPELINE_EFFECT_TYPES = [
 	"sync-candidates",
 	"project-candidate-result",
 	"research-registry",
+	"tob-goal-registry",
 ] as const;

@@ -8,6 +8,7 @@ export const SCAN_PIPELINE_IDS = {
 	full: "full",
 	delta: "delta",
 	research: "research",
+	"tob-goal": "tob-goal",
 } as const;
 
 const stageRoleSchema = z.enum(["scan", "analysis", "verification"]);
@@ -27,6 +28,8 @@ const stageRuntimeConfigSchema = z
 		inputArtifacts: z.record(z.unknown()).nullable().optional(),
 		outputSchema: z.record(z.unknown()).nullable().optional(),
 		prepareRepository: z.boolean().default(false),
+		/** When true, append Security Policy file path instruction to the agent prompt. */
+		includePolicy: z.boolean().default(false),
 	})
 	.default({});
 
@@ -84,6 +87,14 @@ const stageConfigSchema = z.object({
 						"record-exploit-validation",
 						"apply-exploit-review",
 						"persist-report",
+					]),
+				}),
+				z.object({
+					type: z.literal("tob-goal-registry"),
+					operation: z.enum([
+						"persist-candidate",
+						"apply-judge",
+						"apply-dedup",
 					]),
 				}),
 			]),
@@ -155,8 +166,8 @@ const scanPipelineDefinitionsSourceSchema = z.object({
 				Boolean(pipelines.full && pipelines.delta && pipelines.research),
 			{
 				message: "pipelines must define full, delta, and research",
-				},
-			),
+			},
+		),
 });
 
 export type ScanStageRole = z.infer<typeof stageRoleSchema>;
@@ -197,6 +208,10 @@ export type ScanPipelineStageConfig = {
 					| "apply-exploit-review"
 					| "persist-report";
 			}
+		| {
+				type: "tob-goal-registry";
+				operation: "persist-candidate" | "apply-judge" | "apply-dedup";
+			}
 	>;
 	report: { path: string; required: boolean } | null;
 	taskName: string | null;
@@ -218,6 +233,8 @@ export type ScanStageRuntimeConfig = {
 	inputArtifacts: Record<string, unknown> | null;
 	outputSchema: Record<string, unknown> | null;
 	prepareRepository?: boolean;
+	/** When true, append Security Policy file path instruction to the agent prompt. */
+	includePolicy?: boolean;
 };
 
 export type ScanPipelineEdgeConfig = {
@@ -258,6 +275,7 @@ export type ScanPipelineMap = {
 	full: ScanPipelineConfig;
 	delta: ScanPipelineConfig;
 	research: ScanPipelineConfig;
+	"tob-goal"?: ScanPipelineConfig;
 } & Record<string, ScanPipelineConfig>;
 
 export type ScanPipelineDefinitions = {
@@ -605,6 +623,7 @@ const normalizeStageRuntimeConfig = (
 	inputArtifacts: config.inputArtifacts ?? null,
 	outputSchema: config.outputSchema ?? null,
 	prepareRepository: config.prepareRepository ?? false,
+	includePolicy: config.includePolicy ?? false,
 });
 
 const assertUnique = (values: string[], label: string) => {
@@ -690,10 +709,19 @@ const validatePipelineTopology = (
 				`Pipeline ${pipelineId} stage ${source} must define exactly one default route`,
 			);
 		}
-		assertUnique(
-			edges.map((edge) => edge.route?.key).filter((key): key is string => Boolean(key)),
-			`${pipelineId} ${source} route key`,
+		// Same route key may fan to multiple targets (e.g. candidate → judge + surface).
+		// Defaults must still identify a single route key.
+		const defaultKeys = new Set(
+			edges
+				.filter((edge) => edge.route?.default)
+				.map((edge) => edge.route?.key)
+				.filter((key): key is string => Boolean(key)),
 		);
+		if (defaultKeys.size !== 1) {
+			throw new Error(
+				`Pipeline ${pipelineId} stage ${source} default routes must share one route key`,
+			);
+		}
 	}
 };
 

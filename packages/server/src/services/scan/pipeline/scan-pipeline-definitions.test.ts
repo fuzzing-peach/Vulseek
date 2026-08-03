@@ -358,6 +358,7 @@ pipelines:
 		inputArtifacts: null,
 		outputSchema: null,
 		prepareRepository: false,
+		includePolicy: false,
 	});
 	assert.equal(definitions.schemas.Module?.type, "object");
 	assert.deepEqual(definitions.stages[0]?.outputSchema, {

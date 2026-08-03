@@ -1,0 +1,165 @@
+GoalThreatDirection:
+  type: object
+  additionalProperties: false
+  properties:
+    focus: { type: string, minLength: 1 }
+    attackerModel: { type: string, minLength: 1 }
+    nonGoals: { type: array, items: { type: string } }
+    notes: { type: string }
+  required: [focus, attackerModel]
+
+GoalSpec:
+  type: object
+  additionalProperties: false
+  properties:
+    goalId: { type: string, minLength: 1 }
+    title: { type: string, minLength: 1 }
+    successCriteria: { type: string, minLength: 1 }
+    nonGoals: { type: array, items: { type: string } }
+    attackerModel: { type: string, minLength: 1 }
+    stopCondition: { type: string, minLength: 1 }
+    persistenceLanguage: { type: string, minLength: 1 }
+    redTeamClosedLoopholes: { type: array, items: { type: string } }
+    goalPrompt: { type: string, minLength: 1 }
+  required:
+    - goalId
+    - title
+    - successCriteria
+    - nonGoals
+    - attackerModel
+    - stopCondition
+    - persistenceLanguage
+    - redTeamClosedLoopholes
+    - goalPrompt
+
+GoalCraftOutput:
+  type: object
+  additionalProperties: false
+  properties:
+    goalSpecPath: { type: string, minLength: 1 }
+    goalSpec: { $ref: "#/schemas/GoalSpec" }
+  required: [goalSpecPath, goalSpec]
+
+HuntGoal:
+  type: object
+  additionalProperties: false
+  properties:
+    huntGoalId: { type: string, minLength: 1 }
+    title: { type: string, minLength: 1 }
+    objective: { type: string, minLength: 1 }
+    focusPaths: { type: array, items: { type: string } }
+    riskPathways: { type: array, items: { type: string } }
+    rationale: { type: string }
+    partitionDimension: { type: string }
+  required: [huntGoalId, title, objective]
+
+SurfaceDispatch:
+  type: object
+  additionalProperties: false
+  properties:
+    globalExhausted: { type: boolean }
+    exhaustionReason: { type: string }
+    partitionDimension: { type: string }
+    huntGoals:
+      type: array
+      items: { $ref: "#/schemas/HuntGoal" }
+  required: [globalExhausted, huntGoals]
+
+GoalCandidateFinding:
+  type: object
+  additionalProperties: false
+  properties:
+    candidateId: { type: string, minLength: 1 }
+    huntGoalId: { type: string, minLength: 1 }
+    title: { type: string, minLength: 1 }
+    description: { type: string, minLength: 1 }
+    vulnerabilityClass: { type: string }
+    location:
+      type: object
+      additionalProperties: false
+      properties:
+        filePath: { type: string, minLength: 1 }
+        line: { type: ["integer", "null"] }
+        symbol: { type: ["string", "null"] }
+      required: [filePath]
+    claim: { type: string, minLength: 1 }
+    rootCauseKey: { type: string, minLength: 1 }
+    evidence: { type: array, items: { type: object } }
+    attackerControl: { type: string }
+    preconditions: { type: array, items: { type: string } }
+    quickDisproofAttempt: { type: string }
+    confidence: { type: number }
+  required:
+    - candidateId
+    - huntGoalId
+    - title
+    - description
+    - location
+    - claim
+    - rootCauseKey
+
+GoalExhaustionDeclaration:
+  type: object
+  additionalProperties: false
+  properties:
+    huntGoalId: { type: string, minLength: 1 }
+    exhausted: { type: boolean, const: true }
+    methodsTried: { type: array, items: { type: string } }
+    coveredPaths: { type: array, items: { type: string } }
+    reason: { type: string, minLength: 1 }
+  required: [huntGoalId, exhausted, methodsTried, coveredPaths, reason]
+
+GoalHuntOutput:
+  type: object
+  additionalProperties: false
+  properties:
+    outcome: { type: string, enum: [candidate, exhausted] }
+    candidate:
+      anyOf:
+        - { $ref: "#/schemas/GoalCandidateFinding" }
+        - { type: "null" }
+    exhaustion:
+      anyOf:
+        - { $ref: "#/schemas/GoalExhaustionDeclaration" }
+        - { type: "null" }
+  required: [outcome]
+
+GoalJudgeVerdict:
+  type: object
+  additionalProperties: false
+  properties:
+    candidateId: { type: string, minLength: 1 }
+    decision: { type: string, enum: [confirmed, rejected, needs-more-evidence] }
+    summary: { type: string, minLength: 1 }
+    attackPathValid: { type: boolean }
+    pocFeasible: { type: boolean }
+    reasons: { type: array, items: { type: string } }
+  required: [candidateId, decision, summary, attackPathValid, pocFeasible, reasons]
+
+GoalDedupResult:
+  type: object
+  additionalProperties: false
+  properties:
+    candidateId: { type: string, minLength: 1 }
+    novelty: { type: string, enum: [novel, duplicate, known-fixed, unknown] }
+    summary: { type: string, minLength: 1 }
+    references: { type: array, items: { type: string } }
+  required: [candidateId, novelty, summary, references]
+
+SurfaceFeedback:
+  type: object
+  additionalProperties: false
+  properties:
+    kind:
+      type: string
+      enum:
+        - hunt-candidate
+        - hunt-exhausted
+        - judge-reject
+        - dedup-reject
+        - dedup-novel
+    huntGoalId: { type: string }
+    candidateId: { type: ["string", "null"] }
+    summary: { type: string }
+    payload: { type: object }
+  required: [kind, summary]

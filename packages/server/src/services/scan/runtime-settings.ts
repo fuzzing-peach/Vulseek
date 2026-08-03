@@ -41,10 +41,19 @@ export const RESEARCH_SCAN_STAGE_IDS = [
 	"research-report",
 ];
 
+export const TOB_GOAL_SCAN_STAGE_IDS = [
+	"goal-craft",
+	"goal-surface",
+	"goal-hunt",
+	"goal-judge",
+	"goal-dedup",
+];
+
 const RUNTIME_STAGE_IDS = [
 	...FULL_SCAN_STAGE_IDS,
 	...DELTA_SCAN_STAGE_IDS,
 	...RESEARCH_SCAN_STAGE_IDS,
+	...TOB_GOAL_SCAN_STAGE_IDS,
 ];
 
 export const FULL_SCAN_STAGE_ID_SET = new Set<string>(FULL_SCAN_STAGE_IDS);
@@ -72,11 +81,13 @@ const createRuntimeStageMetadata = (definitions: RuntimeDefinitions) => {
 		...definitions.pipelines.full.stageIds,
 		...definitions.pipelines.delta.stageIds,
 		...definitions.pipelines.research.stageIds,
+		...(definitions.pipelines["tob-goal"]?.stageIds ?? []),
 	]);
 	const allStageIds = [
 		...definitions.pipelines.full.stageIds,
 		...definitions.pipelines.delta.stageIds,
 		...definitions.pipelines.research.stageIds,
+		...(definitions.pipelines["tob-goal"]?.stageIds ?? []),
 	];
 
 	return { allStageIds, runtimeStageIds, stageById };
@@ -106,17 +117,22 @@ export const createRuntimeSettingsPolicy = (definitions: RuntimeDefinitions) => 
 				agentProfileId: setting.agentProfileId || null,
 			};
 		}
-		return { stages };
+		return {
+			stages,
+			...(parsed.threatDirection
+				? { threatDirection: parsed.threatDirection }
+				: {}),
+		};
 	};
 
 	const buildComplete = (input: {
-		scanType: "delta" | "full" | "research";
+		scanType: "delta" | "full" | "research" | "tob-goal";
 		targetStageSettings?: ScanStageSettings | null;
 		runtimeOverrides?: ScanRuntimeSettings | null;
 	}): ScanRuntimeSettings => {
-		const stageIds = definitions.pipelines[
-			getPipelineIdForScanType(input.scanType)
-		].stageIds;
+		const stageIds =
+			definitions.pipelines[getPipelineIdForScanType(input.scanType)]
+				?.stageIds ?? [];
 		const overrides = normalize(input.runtimeOverrides ?? {});
 		const stages: NonNullable<ScanRuntimeSettings["stages"]> = {};
 
@@ -141,7 +157,12 @@ export const createRuntimeSettingsPolicy = (definitions: RuntimeDefinitions) => 
 			};
 		}
 
-		return normalize({ stages });
+		return normalize({
+			stages,
+			...(overrides.threatDirection
+				? { threatDirection: overrides.threatDirection }
+				: {}),
+		});
 	};
 
 	const buildEffectiveDisabled = (input: EffectiveDisabledStageInput) => {
@@ -205,7 +226,7 @@ export const createRuntimeSettingsFunctions = (
 ) => ({
 	normalize: (value: unknown) => createRuntimeSettingsPolicy(loadDefinitions()).normalize(value),
 	buildComplete: (input: {
-		scanType: "delta" | "full" | "research";
+		scanType: "delta" | "full" | "research" | "tob-goal";
 		targetStageSettings?: ScanStageSettings | null;
 		runtimeOverrides?: ScanRuntimeSettings | null;
 	}) => createRuntimeSettingsPolicy(loadDefinitions()).buildComplete(input),

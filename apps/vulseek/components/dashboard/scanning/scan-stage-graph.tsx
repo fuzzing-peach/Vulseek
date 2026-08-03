@@ -66,12 +66,12 @@ type FullScanStageGraphTarget =
 	| {
 			applicationId: string;
 			composeId?: never;
-			scanType?: "delta" | "full" | "research";
+			scanType?: "delta" | "full" | "research" | "tob-goal";
 	  }
 	| {
 			composeId: string;
 			applicationId?: never;
-			scanType?: "delta" | "full" | "research";
+			scanType?: "delta" | "full" | "research" | "tob-goal";
 	  };
 type StageFlowNodeData = Record<string, unknown> & {
 	label: ReactNode;
@@ -1784,7 +1784,7 @@ export const FullScanStageGraphPreview = ({
 	serviceData?: PreviewServiceData;
 	scanRuntimeSettings?: ScanRuntimeSettingsDraft;
 	onScanRuntimeSettingsChange?: (settings: ScanRuntimeSettingsDraft) => void;
-	scanType?: "delta" | "full" | "research";
+	scanType?: "delta" | "full" | "research" | "tob-goal";
 }) => {
 	const { t } = useTranslation("scan");
 	const target = useMemo<FullScanStageGraphTarget | null>(() => {
@@ -1834,10 +1834,16 @@ export const FullScanStageGraphPreview = ({
 							? scanT(t, "scan.scanType.delta", "Delta Scan")
 							: scanType === "research"
 								? scanT(t, "scan.scanType.research", "Research Scan")
+								: scanType === "tob-goal"
+									? scanT(t, "scan.scanType.goal", "Goal Scan")
 							: scanT(t, "scan.scanType.full", "Full Scan"),
 				},
 			)}
-			heightClassName={scanType === "research" ? "h-[600px]" : "h-[360px]"}
+			heightClassName={
+				scanType === "research" || scanType === "tob-goal"
+					? "h-[600px]"
+					: "h-[360px]"
+			}
 			scanRuntimeSettings={scanRuntimeSettings}
 			agentProfiles={agentProfiles}
 			onStageSettingSave={handleStageSettingSave}

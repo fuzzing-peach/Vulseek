@@ -15,41 +15,29 @@ import {
 	updateTaskStatusRepo,
 } from "../persistence/task.repo";
 import type { Task } from "../types";
-import { computeTaskCost } from "../cost";
 import {
 	normalizeTaskApiTokenUsage,
 	normalizeTasksApiTokenUsage,
 } from "./token-usage";
-import type { TaskAgentProfileSnapshot } from "@vulseek/server/db/schema";
-
-const withEstimatedCost = <T extends Task>(task: T) => ({
-	...task,
-	estimatedCost: computeTaskCost(
-		task.inputTokens,
-		task.outputTokens,
-		task.cachedReadTokens,
-		task.agentProfile as TaskAgentProfileSnapshot | null,
-	),
-});
 
 export const createTask = async (input: Parameters<typeof createTaskRepo>[0]) =>
 	await createTaskRepo(input);
 
 export const findTaskById = async (taskId: string) =>
-	withEstimatedCost(normalizeTaskApiTokenUsage(await findTaskByIdRepo(taskId)));
+	normalizeTaskApiTokenUsage(await findTaskByIdRepo(taskId));
 
 export const findTasksByScanJobId = async (scanJobId: string) =>
-	normalizeTasksApiTokenUsage(await listTasksByScanJobIdRepo(scanJobId)).map(withEstimatedCost);
+	normalizeTasksApiTokenUsage(await listTasksByScanJobIdRepo(scanJobId));
 
 export const findChildTasksByParentTaskId = async (parentTaskId: string) =>
 	normalizeTasksApiTokenUsage(
 		await listChildTasksByParentTaskIdRepo(parentTaskId),
-	).map(withEstimatedCost);
+	);
 
 export const findTasksByScanJobAndStage = async (input: {
 	scanJobId: string;
 	stageName: string;
-}) => normalizeTasksApiTokenUsage(await listTasksByScanJobAndStageRepo(input)).map(withEstimatedCost);
+}) => normalizeTasksApiTokenUsage(await listTasksByScanJobAndStageRepo(input));
 
 export const updateTask = async (taskId: string, patch: Partial<Task>) =>
 	await updateTaskRepo(taskId, patch);

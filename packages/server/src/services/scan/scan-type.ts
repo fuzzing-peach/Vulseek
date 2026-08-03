@@ -1,4 +1,4 @@
-export const SCAN_TYPES = ["delta", "full", "research"] as const;
+export const SCAN_TYPES = ["delta", "full", "research", "tob-goal"] as const;
 
 export type ScanType = (typeof SCAN_TYPES)[number];
 
@@ -15,4 +15,4 @@ export const getResearchMinimumDurationMs = () => {
 };
 
 export const usesFullRepositoryPreparation = (scanType: ScanType) =>
-	scanType === "full" || scanType === "research";
+	scanType === "full" || scanType === "research" || scanType === "tob-goal";

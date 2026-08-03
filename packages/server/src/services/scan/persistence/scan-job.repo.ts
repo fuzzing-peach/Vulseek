@@ -155,6 +155,12 @@ export const createScanJobRepo = async (input: {
 	targetTag?: string | null;
 	scanRuntimeSettings?: ScanRuntimeSettings | null;
 	researchScope?: Record<string, unknown> | null;
+	threatDirection?: {
+		focus: string;
+		attackerModel: string;
+		nonGoals?: string[];
+		notes?: string;
+	} | null;
 	commitWindow?: number | null;
 	defaultDeltaCommitWindow: number;
 }) => {
@@ -172,7 +178,9 @@ export const createScanJobRepo = async (input: {
 					? "Delta Scan Job"
 					: input.scanType === "research"
 						? "Research Scan Job"
-						: "Full Scan Job"),
+						: input.scanType === "tob-goal"
+							? "Goal Scan Job"
+							: "Full Scan Job"),
 			description: input.description || "",
 			triggerSource: input.triggerSource || "manual",
 			commitSha: input.commitSha,
@@ -195,21 +203,40 @@ export const createScanJobRepo = async (input: {
 		});
 	}
 
+	const rootStageId = pipelineDefinitions.pipelines[pipelineId]!.rootStageId;
+	const threatDirection =
+		input.threatDirection ??
+		(input.scanRuntimeSettings &&
+		typeof input.scanRuntimeSettings === "object" &&
+		"threatDirection" in input.scanRuntimeSettings
+			? (input.scanRuntimeSettings as { threatDirection?: unknown })
+					.threatDirection
+			: undefined);
+	const rootInput =
+		input.scanType === "research"
+			? { researchScope: input.researchScope ?? {} }
+			: input.scanType === "tob-goal"
+				? {
+						threatDirection:
+							threatDirection &&
+							typeof threatDirection === "object"
+								? threatDirection
+								: {
+										focus: "Find one high-impact vulnerability matching the attacker model",
+										attackerModel:
+											"Remote attacker with network access only; no local credential or admin preconditions",
+									},
+					}
+				: undefined;
 	await createTaskRepo({
 		scanJobId: created[0].scanJobId,
 		name:
-			input.scanType === "research"
-				? resolveStageTaskName(
-					pipelineDefinitions.pipelines[pipelineId]!.rootStageId,
-					{ researchScope: input.researchScope ?? {} },
-				)
-				: pipelineDefinitions.pipelines[pipelineId]!.rootStageId,
-		stageName: pipelineDefinitions.pipelines[pipelineId]!.rootStageId,
+			input.scanType === "research" || input.scanType === "tob-goal"
+				? resolveStageTaskName(rootStageId, rootInput ?? {})
+				: rootStageId,
+		stageName: rootStageId,
 		status: "pending",
-		input:
-			input.scanType === "research"
-				? { researchScope: input.researchScope ?? {} }
-				: undefined,
+		input: rootInput,
 	});
 
 	return created[0];

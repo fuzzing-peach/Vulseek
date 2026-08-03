@@ -88,9 +88,10 @@ const PIPELINE_TITLES: Record<string, string> = {
 	full: "Full Scan",
 	delta: "Delta Scan",
 	research: "Research Scan",
+	"tob-goal": "Goal Scan",
 };
 
-const PIPELINE_ORDER = ["full", "delta", "research"];
+const PIPELINE_ORDER = ["full", "delta", "research", "tob-goal"];
 
 const StageSettingsFormSchema = z.object({
 	agentProfileId: z.string().min(1),

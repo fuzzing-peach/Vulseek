@@ -52,12 +52,18 @@ interface Props {
 	defaultCommitWindow?: number;
 	showCommitWindow?: boolean;
 	showFullScanPreview?: boolean;
-	scanType?: "delta" | "full" | "research";
+	scanType?: "delta" | "full" | "research" | "tob-goal";
 	onSubmit: (input: {
 		targetRef?: string;
 		targetTag?: string;
 		commitWindow?: number;
 		scanRuntimeSettings?: ScanRuntimeSettingsDraft;
+		threatDirection?: {
+			focus: string;
+			attackerModel: string;
+			nonGoals?: string[];
+			notes?: string;
+		};
 	}) => Promise<void>;
 }
 
@@ -84,6 +90,14 @@ export const CreateScanDialog = ({
 	const [commitWindow, setCommitWindow] = useState(String(defaultCommitWindow));
 	const [scanRuntimeSettings, setScanRuntimeSettings] =
 		useState<ScanRuntimeSettingsDraft>({});
+	const [threatFocus, setThreatFocus] = useState(
+		"Find one high-impact vulnerability reachable under the stated attacker model",
+	);
+	const [threatAttackerModel, setThreatAttackerModel] = useState(
+		"Remote network attacker without local credentials, admin access, or prior code execution",
+	);
+	const [threatNonGoals, setThreatNonGoals] = useState("");
+	const [threatNotes, setThreatNotes] = useState("");
 	const previewDescription =
 		scanType === "delta"
 			? scanT(
@@ -97,6 +111,12 @@ export const CreateScanDialog = ({
 						"scan.dialog.researchPreview",
 						"Research Scan builds a trust-boundary model, maintains independent research tracks, validates findings, and reviews candidate chains.",
 					)
+				: scanType === "tob-goal"
+					? scanT(
+							t,
+							"scan.dialog.goalPreview",
+							"Goal Scan crafts a red-teamed goal, dispatches hunt goals from attack surfaces, judges candidates, and stores novel findings.",
+						)
 				: scanT(
 					t,
 					"scan.dialog.fullPreview",
@@ -109,6 +129,14 @@ export const CreateScanDialog = ({
 			setTargetTag("");
 			setCommitWindow(String(defaultCommitWindow));
 			setScanRuntimeSettings({});
+			setThreatFocus(
+				"Find one high-impact vulnerability reachable under the stated attacker model",
+			);
+			setThreatAttackerModel(
+				"Remote network attacker without local credentials, admin access, or prior code execution",
+			);
+			setThreatNonGoals("");
+			setThreatNotes("");
 		}
 	}, [defaultCommitWindow, defaultRef, open]);
 
@@ -118,12 +146,27 @@ export const CreateScanDialog = ({
 			Number.isNaN(parsedWindow) || parsedWindow < 1
 				? defaultCommitWindow
 				: parsedWindow;
+		const nonGoals = threatNonGoals
+			.split("\n")
+			.map((line) => line.trim())
+			.filter(Boolean);
 
 		await onSubmit({
 			targetRef: targetRef.trim() || undefined,
 			targetTag: targetTag.trim() || undefined,
 			commitWindow: showCommitWindow ? normalizedWindow : undefined,
 			scanRuntimeSettings,
+			threatDirection:
+				scanType === "tob-goal"
+					? {
+							focus: threatFocus.trim(),
+							attackerModel: threatAttackerModel.trim(),
+							...(nonGoals.length > 0 ? { nonGoals } : {}),
+							...(threatNotes.trim()
+								? { notes: threatNotes.trim() }
+								: {}),
+						}
+					: undefined,
 		});
 		setOpen(false);
 	};
@@ -133,7 +176,7 @@ export const CreateScanDialog = ({
 			<DialogTrigger asChild>{trigger}</DialogTrigger>
 			<DialogContent
 				className={
-					scanType === "research"
+					scanType === "research" || scanType === "tob-goal"
 						? "max-h-[92vh] overflow-y-auto sm:max-w-4xl"
 						: "sm:max-w-3xl"
 				}
@@ -178,7 +221,18 @@ export const CreateScanDialog = ({
 						</Label>
 						<Input
 							id={`${title}-target-tag`}
-							placeholder="v1.2.3"
+							placeholder={
+								// Matches prepare-repository preferLatestTag for full/research/tob-goal
+								scanType === "full" ||
+								scanType === "research" ||
+								scanType === "tob-goal"
+									? scanT(
+											t,
+											"scan.dialog.tagLatestPlaceholder",
+											"Leave empty to use latest tag",
+										)
+									: "v1.2.3"
+							}
 							value={targetTag}
 							onChange={(event) => setTargetTag(event.target.value)}
 						/>
@@ -195,12 +249,73 @@ export const CreateScanDialog = ({
 							/>
 						</div>
 					) : null}
+					{scanType === "tob-goal" ? (
+						<div className="grid gap-3 rounded-lg border p-4">
+							<div className="text-sm font-semibold">
+								{scanT(t, "scan.goal.threatDirection", "Threat direction")}
+							</div>
+							<div className="grid gap-2">
+								<Label htmlFor={`${title}-threat-focus`}>
+									{scanT(t, "scan.goal.focus", "Focus / success intent")}
+								</Label>
+								<Input
+									id={`${title}-threat-focus`}
+									value={threatFocus}
+									onChange={(event) => setThreatFocus(event.target.value)}
+								/>
+							</div>
+							<div className="grid gap-2">
+								<Label htmlFor={`${title}-threat-attacker`}>
+									{scanT(t, "scan.goal.attackerModel", "Attacker model")}
+								</Label>
+								<Input
+									id={`${title}-threat-attacker`}
+									value={threatAttackerModel}
+									onChange={(event) =>
+										setThreatAttackerModel(event.target.value)
+									}
+								/>
+							</div>
+							<div className="grid gap-2">
+								<Label htmlFor={`${title}-threat-nongoals`}>
+									{scanT(
+										t,
+										"scan.goal.nonGoals",
+										"Non-goals (one per line, optional)",
+									)}
+								</Label>
+								<textarea
+									id={`${title}-threat-nongoals`}
+									className="min-h-20 rounded-md border bg-background px-3 py-2 text-sm"
+									value={threatNonGoals}
+									onChange={(event) => setThreatNonGoals(event.target.value)}
+								/>
+							</div>
+							<div className="grid gap-2">
+								<Label htmlFor={`${title}-threat-notes`}>
+									{scanT(t, "scan.goal.notes", "Notes (optional)")}
+								</Label>
+								<Input
+									id={`${title}-threat-notes`}
+									value={threatNotes}
+									onChange={(event) => setThreatNotes(event.target.value)}
+								/>
+							</div>
+						</div>
+					) : null}
 				</div>
 				<DialogFooter>
 					<Button variant="secondary" onClick={() => setOpen(false)}>
 						{scanT(t, "scan.dialog.cancel", "Cancel")}
 					</Button>
-					<Button isLoading={isLoading} onClick={handleSubmit}>
+					<Button
+						isLoading={isLoading}
+						onClick={handleSubmit}
+						disabled={
+							scanType === "tob-goal" &&
+							(!threatFocus.trim() || !threatAttackerModel.trim())
+						}
+					>
 						{scanT(t, "scan.dialog.confirm", "Confirm")}
 					</Button>
 				</DialogFooter>

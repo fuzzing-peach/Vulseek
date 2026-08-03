@@ -145,9 +145,11 @@ This is the primary Vulseek contribution — an AI-driven multi-stage vulnerabil
 
 ### Scan Job Lifecycle
 
-Scan jobs progress through states: `pending` → `running` → `completed` / `failed` / `paused` / `canceled`. Jobs support **pause**, **resume**, and **cancel** operations. Two scan modes:
+Scan jobs progress through states: `pending` → `running` → `completed` / `failed` / `paused` / `canceled`. Jobs support **pause**, **resume**, and **cancel** operations. Scan modes:
 - **Full scan** — complete repository analysis from scratch
 - **Delta scan** — incremental re-scan of changed modules since the last scan
+- **Research** — security research pipeline (`research.yaml`)
+- **ToB Goal** — targeted objective-based pipeline (`tob-goal.yaml`)
 
 The `auto-delta-scan` utility (`apps/vulseek/server/utils/auto-delta-scan.ts`) periodically polls for new commits and triggers delta scans.
 
@@ -156,7 +158,7 @@ The `auto-delta-scan` utility (`apps/vulseek/server/utils/auto-delta-scan.ts`) p
 The pipeline topology used to be two parallel branches (a rule/pattern-matching branch and a function-level deep-analysis branch) hardcoded in TypeScript. That was removed (`refactor(scan): remove legacy stages`) in favor of a single, declarative pipeline defined in YAML and executed by a generic graph runner:
 
 - **Definitions**: `packages/server/src/services/scan/pipeline/definitions/`
-  - `pipelines/{full,delta}.yaml` — the stage list, root stage, and edges (with `fanOut`/`map` modes and `$ctx.` / `$input.` / `$item` / `$computed.` templated input mapping) for each pipeline
+  - `pipelines/{full,delta,research,tob-goal}.yaml` — the stage list, root stage, and edges (with `fanOut`/`map` modes and `$ctx.` / `$input.` / `$item` / `$computed.` templated input mapping) for each pipeline
   - `stages/*.yaml` — per-stage config: `key`, `role`, `group`, `concurrency`, `disableable`, and `runtimeConfig` (agent profile, `persistent`/`reuseContainer`, `skills`, `promptFile`, input/output schema refs)
   - `schemas/*.yaml` — shared JSON Schema fragments referenced via `$ref: "#/schemas/Name"`
 - **Loading & validation**: `scan-pipeline-definitions.ts` reads and Zod-validates the YAML into `ScanPipelineStageConfig`/`ScanPipelineEdgeConfig`; `scan-pipeline-schema-contracts.ts` resolves `$ref`/`$pathOf` schema references into JSON Schema or Zod contracts.
@@ -279,6 +281,31 @@ The scan-tools image installs the official ACP SDK and agent adapters. Codex for
 support is added by
 `packages/server/src/services/dockerfiles/codex-acp-fork-1.1.2.patch` while the
 upstream adapter does not expose `session/fork`.
+
+## Code Conventions
+
+### Commit Messages
+
+Uses **Conventional Commits** via commitlint (`@commitlint/config-conventional`). Format: `type(scope): description`. Common types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`.
+
+### Biome Lint Rules (errors that block commits)
+
+- `noUnusedImports: error` — remove all unused imports
+- `noUnusedFunctionParameters: error` — remove or prefix with `_`
+- `noParameterAssign: error` — never reassign function parameters
+- `noInferrableTypes: error` — don't annotate types that TS can infer
+- `noUselessElse: error` — no `else` after `return`/`throw`/`break`
+- `useAsConstAssertion: error` — prefer `as const`
+- `useSelfClosingElements: error` — `<Foo />` not `<Foo></Foo>`
+- `noUnusedTemplateLiteral: error` — use plain strings when no interpolation
+
+Run `pnpm run format-and-lint` to check, `pnpm run format-and-lint:fix` to auto-fix. The `check` script (used by lint-staged on pre-commit) writes fixes in place.
+
+### Path Aliases (in tests)
+
+Vitest resolves these aliases (see `apps/vulseek/__test__/vitest.config.ts`):
+- `@/` → `apps/vulseek/`
+- `@vulseek/server` → `packages/server/src/`
 
 ## Development Setup
 

@@ -1,8 +1,9 @@
 import { TRPCError } from "@trpc/server";
 import {
+	authorizeScanJobAccess,
 	cancelScanJob,
-	canRebuildCheckoutTools,
 	cancelScanTask,
+	canRebuildCheckoutTools,
 	createScanEvaluationResult,
 	createScanJob,
 	findAllScanJobsByApplicationId,
@@ -16,18 +17,15 @@ import {
 	findComposeById,
 	findFullScanStageGraph,
 	findLatestScanEvaluationResult,
-	findRunningCheckoutTask,
-	authorizeScanJobAccess,
-	listExploitChainsPageRepo,
-	listExploitPrimitivesPageRepo,
-	listResearchFindingsPageRepo,
-	listResearchTracksPageRepo,
 	findResearchFindingRepo,
+	findRunningCheckoutTask,
 	findScanJobById,
 	findScanJobResultSummary,
 	findScanJobStageGraph,
 	findScanJobTerminalTasksPage,
 	findTaskById,
+	findTobGoalCandidateRepo,
+	findTobGoalFindingRepo,
 	findVulnerabilityCandidateById,
 	findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId,
 	findVulnerabilityCandidateWithLatestAnalysisResultById,
@@ -38,11 +36,17 @@ import {
 	getScanHomeOverviewWorkload,
 	getScanPipelineDefinitions,
 	getScanPipelineYaml,
-	listCandidateTags,
 	listCandidateDirectory,
+	listCandidateTags,
+	listExploitChainsPageRepo,
+	listExploitPrimitivesPageRepo,
+	listResearchFindingsPageRepo,
+	listResearchTracksPageRepo,
 	listScanEvaluationResults,
 	listScanJobDirectory,
 	listScanTaskDirectory,
+	listTobGoalCandidatesPageRepo,
+	listTobGoalFindingsPageRepo,
 	pauseScanJob,
 	readCandidateFileContent,
 	readScanJobFileContent,
@@ -139,7 +143,7 @@ const apiFindFullScanStageGraph = z
 	.object({
 		applicationId: z.string().min(1).optional(),
 		composeId: z.string().min(1).optional(),
-		scanType: z.enum(["delta", "full", "research"]).optional(),
+		scanType: z.enum(["delta", "full", "research", "tob-goal"]).optional(),
 	})
 	.refine(
 		(value) => Boolean(value.applicationId) !== Boolean(value.composeId),
@@ -552,7 +556,10 @@ export const scanRouter = createTRPCRouter({
 		.input(z.object({ taskId: z.string().min(1) }))
 		.mutation(async ({ input, ctx }) => {
 			const task = await findTaskById(input.taskId);
-			await authorizeScanJobAccess(task.scanJobId, ctx.session.activeOrganizationId);
+			await authorizeScanJobAccess(
+				task.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 			return await cancelScanTask(input.taskId);
 		}),
 
@@ -800,7 +807,10 @@ export const scanRouter = createTRPCRouter({
 	retryFailedTasks: protectedProcedure
 		.input(apiFindOneScanJob)
 		.mutation(async ({ input, ctx }) => {
-			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 			const scanJob = await findScanJobById(input.scanJobId);
 
 			const result = await retryFailedScanJobTasks(input.scanJobId);
@@ -822,7 +832,10 @@ export const scanRouter = createTRPCRouter({
 		.input(z.object({ taskId: z.string().min(1) }))
 		.mutation(async ({ input, ctx }) => {
 			const sourceTask = await findTaskById(input.taskId);
-			await authorizeScanJobAccess(sourceTask.scanJobId, ctx.session.activeOrganizationId);
+			await authorizeScanJobAccess(
+				sourceTask.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 
 			const result = await rerunScanTask(input.taskId);
 			const queueData: ScanQueueJob = {
@@ -841,8 +854,11 @@ export const scanRouter = createTRPCRouter({
 
 	candidates: protectedProcedure
 		.input(apiFindVulnerabilityCandidatesPageByScanJob)
-	.query(async ({ input, ctx }) => {
-			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
+		.query(async ({ input, ctx }) => {
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 
 			return await findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId(
 				{
@@ -857,23 +873,129 @@ export const scanRouter = createTRPCRouter({
 	researchTracks: protectedProcedure
 		.input(apiFindResearchRegistryPageByScanJob)
 		.query(async ({ input, ctx }) => {
-			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 			return await listResearchTracksPageRepo(input);
 		}),
 
 	researchFindings: protectedProcedure
 		.input(apiFindResearchRegistryPageByScanJob)
 		.query(async ({ input, ctx }) => {
-			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 			const scanJob = await findScanJobById(input.scanJobId);
-			if (scanJob.scanType !== "research") return { items: [], total: 0, page: 1, pageSize: input.pageSize, totalPages: 1 };
+			if (scanJob.scanType !== "research")
+				return {
+					items: [],
+					total: 0,
+					page: 1,
+					pageSize: input.pageSize,
+					totalPages: 1,
+				};
 			return await listResearchFindingsPageRepo(input);
 		}),
 
-	researchFinding: protectedProcedure
-		.input(z.object({ scanJobId: z.string().min(1), findingId: z.string().min(1) }))
+	tobGoalCandidates: protectedProcedure
+		.input(
+			z.object({
+				scanJobId: z.string().min(1),
+				page: z.number().int().min(1).default(1),
+				pageSize: z.number().int().min(1).max(100).default(20),
+				status: z.string().optional(),
+				huntGoalId: z.string().optional(),
+				query: z.string().optional(),
+			}),
+		)
 		.query(async ({ input, ctx }) => {
-			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
+			const scanJob = await findScanJobById(input.scanJobId);
+			if (scanJob.scanType !== "tob-goal") {
+				return {
+					items: [],
+					total: 0,
+					page: 1,
+					pageSize: input.pageSize,
+					totalPages: 1,
+				};
+			}
+			return await listTobGoalCandidatesPageRepo(input);
+		}),
+
+	tobGoalFindings: protectedProcedure
+		.input(
+			z.object({
+				scanJobId: z.string().min(1),
+				page: z.number().int().min(1).default(1),
+				pageSize: z.number().int().min(1).max(100).default(20),
+				status: z.string().optional(),
+				huntGoalId: z.string().optional(),
+				query: z.string().optional(),
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
+			const scanJob = await findScanJobById(input.scanJobId);
+			if (scanJob.scanType !== "tob-goal") {
+				return {
+					items: [],
+					total: 0,
+					page: 1,
+					pageSize: input.pageSize,
+					totalPages: 1,
+				};
+			}
+			return await listTobGoalFindingsPageRepo(input);
+		}),
+
+	tobGoalCandidate: protectedProcedure
+		.input(
+			z.object({
+				scanJobId: z.string().min(1),
+				candidateId: z.string().min(1),
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
+			return await findTobGoalCandidateRepo(input);
+		}),
+
+	tobGoalFinding: protectedProcedure
+		.input(
+			z.object({
+				scanJobId: z.string().min(1),
+				findingId: z.string().min(1),
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
+			return await findTobGoalFindingRepo(input);
+		}),
+
+	researchFinding: protectedProcedure
+		.input(
+			z.object({ scanJobId: z.string().min(1), findingId: z.string().min(1) }),
+		)
+		.query(async ({ input, ctx }) => {
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 			const scanJob = await findScanJobById(input.scanJobId);
 			if (scanJob.scanType !== "research") return null;
 			return await findResearchFindingRepo(input);
@@ -882,14 +1004,20 @@ export const scanRouter = createTRPCRouter({
 	exploitPrimitives: protectedProcedure
 		.input(apiFindResearchRegistryPageByScanJob)
 		.query(async ({ input, ctx }) => {
-			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 			return await listExploitPrimitivesPageRepo(input);
 		}),
 
 	exploitChains: protectedProcedure
 		.input(apiFindResearchRegistryPageByScanJob)
 		.query(async ({ input, ctx }) => {
-			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 			return await listExploitChainsPageRepo(input);
 		}),
 
@@ -1198,7 +1326,10 @@ export const scanRouter = createTRPCRouter({
 				? null
 				: await findVulnerabilityCandidateById(input.vulnerabilityCandidateId);
 			const candidateScanJobId = input.scanJobId || candidate?.scanJobId || "";
-			await authorizeScanJobAccess(candidateScanJobId, ctx.session.activeOrganizationId);
+			await authorizeScanJobAccess(
+				candidateScanJobId,
+				ctx.session.activeOrganizationId,
+			);
 
 			const enrichedCandidate =
 				await findVulnerabilityCandidateWithLatestAnalysisResultById({
@@ -1223,7 +1354,10 @@ export const scanRouter = createTRPCRouter({
 	updateCandidateMetadata: protectedProcedure
 		.input(apiUpdateCandidateMetadata)
 		.mutation(async ({ input, ctx }) => {
-			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 
 			await findVulnerabilityCandidateWithLatestAnalysisResultById({
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
@@ -1247,7 +1381,10 @@ export const scanRouter = createTRPCRouter({
 				? null
 				: await findVulnerabilityCandidateById(input.vulnerabilityCandidateId);
 			const candidateScanJobId = input.scanJobId || candidate?.scanJobId || "";
-			await authorizeScanJobAccess(candidateScanJobId, ctx.session.activeOrganizationId);
+			await authorizeScanJobAccess(
+				candidateScanJobId,
+				ctx.session.activeOrganizationId,
+			);
 
 			return await findCandidateTaskLineage({
 				vulnerabilityCandidateId: input.vulnerabilityCandidateId,
@@ -1265,7 +1402,10 @@ export const scanRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ input, ctx }) => {
-			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 
 			const result = await startCandidateAnalysis(input);
 			const queueData: ScanQueueJob = {
@@ -1285,7 +1425,10 @@ export const scanRouter = createTRPCRouter({
 	startCandidateReviewContainer: protectedProcedure
 		.input(apiStartCandidateReviewContainer)
 		.mutation(async ({ input, ctx }) => {
-			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 
 			return await startCandidateReviewContainer(input);
 		}),
@@ -1300,7 +1443,10 @@ export const scanRouter = createTRPCRouter({
 			const candidate = await findVulnerabilityCandidateById(
 				input.vulnerabilityCandidateId,
 			);
-			await authorizeScanJobAccess(candidate.scanJobId, ctx.session.activeOrganizationId);
+			await authorizeScanJobAccess(
+				candidate.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 
 			return await startCandidateVerification(input.vulnerabilityCandidateId);
 		}),
@@ -1314,10 +1460,18 @@ export const scanRouter = createTRPCRouter({
 			}),
 		)
 		.query(async ({ input, ctx }) => {
-			await authorizeScanJobAccess(input.scanJobId, ctx.session.activeOrganizationId);
-			const candidate = await findVulnerabilityCandidateById(input.vulnerabilityCandidateId);
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
+			const candidate = await findVulnerabilityCandidateById(
+				input.vulnerabilityCandidateId,
+			);
 			if (candidate.scanJobId !== input.scanJobId) {
-				throw new TRPCError({ code: "NOT_FOUND", message: "Candidate not found for this scan job" });
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Candidate not found for this scan job",
+				});
 			}
 			return await listCandidateDirectory({
 				scanJobId: input.scanJobId,
@@ -1339,7 +1493,10 @@ export const scanRouter = createTRPCRouter({
 				input.vulnerabilityCandidateId,
 			);
 			const candidateScanJobId = input.scanJobId || candidate?.scanJobId || "";
-			await authorizeScanJobAccess(candidateScanJobId, ctx.session.activeOrganizationId);
+			await authorizeScanJobAccess(
+				candidateScanJobId,
+				ctx.session.activeOrganizationId,
+			);
 			if (!candidate || candidate.scanJobId !== candidateScanJobId) {
 				throw new TRPCError({
 					code: "NOT_FOUND",

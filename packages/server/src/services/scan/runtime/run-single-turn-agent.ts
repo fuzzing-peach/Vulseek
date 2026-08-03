@@ -23,6 +23,7 @@ import {
 	AGENT_RUNTIME_FILE_NAMES,
 	initializeAgentRuntimeFiles,
 } from "./agent-runtime-files";
+import { ensureCodexGoalsFeature } from "./codex-config-compat";
 import { installRuntimeSkillsInContainer } from "./runtime-skills";
 import {
 	buildStructuredOutputEnvelopeJsonSchema,
@@ -129,11 +130,11 @@ const resolveCurrentDockerNetworkArg = async () => {
 const sanitizeProviderName = (value: string) =>
 	value.toLowerCase().replace(/[^a-z0-9_-]/g, "-") || "provider";
 
-const CODEX_AUTO_APPROVE_CONFIG_TOML = [
-	`approval_policy = "never"`,
-	`sandbox_mode = "danger-full-access"`,
-	"",
-].join("\n");
+const CODEX_AUTO_APPROVE_CONFIG_TOML = ensureCodexGoalsFeature(
+	[`approval_policy = "never"`, `sandbox_mode = "danger-full-access"`, ""].join(
+		"\n",
+	),
+);
 const resolveAgentAuthMode = (
 	agentProfile: AgentProfileLike | null | undefined,
 ) => (agentProfile?.authMode === "host_home" ? "host_home" : "api_key");
@@ -150,10 +151,11 @@ const withCodexAutoApproveConfigToml = (configToml: string) => {
 	if (!/^\s*sandbox_mode\s*=/m.test(configToml)) {
 		defaults.push(`sandbox_mode = "danger-full-access"`);
 	}
-	if (defaults.length === 0) {
-		return configToml;
-	}
-	return joinTomlBlocks(`${defaults.join("\n")}\n`, configToml);
+	const withDefaults =
+		defaults.length === 0
+			? configToml
+			: joinTomlBlocks(`${defaults.join("\n")}\n`, configToml);
+	return ensureCodexGoalsFeature(withDefaults);
 };
 
 export const buildCodexConfigToml = (agentProfile: AgentProfileLike) => {
@@ -516,6 +518,32 @@ const resolveProjectProfileHostPath = async (input: {
 	);
 	await fs.mkdir(hostProfileDir, { recursive: true });
 	return hostProfileDir;
+};
+
+/**
+ * Path for Node fs writes inside the vulseek process.
+ * Prefer the in-container /scan-context mount (bind of host scan data).
+ * VULSEEK_SCAN_CONTEXT_HOST_PATH is for Docker -v only and may not be the
+ * same filesystem from inside the app container.
+ */
+const resolveProjectProfileAppWritePath = async (input: {
+	projectName: string;
+	profileName: string;
+}) => {
+	const relative = path.join(
+		"projects",
+		sanitizeContextPathPart(input.projectName),
+		"profiles",
+		sanitizeContextPathPart(input.profileName),
+	);
+	try {
+		await fs.access(CONTAINER_SCAN_CONTEXT_ROOT);
+		const appProfileDir = path.join(CONTAINER_SCAN_CONTEXT_ROOT, relative);
+		await fs.mkdir(appProfileDir, { recursive: true });
+		return appProfileDir;
+	} catch {
+		return resolveProjectProfileHostPath(input);
+	}
 };
 
 const resolveMountedProjectProfilePath = (input: {
@@ -902,6 +930,12 @@ export type StageContainerInput = {
 	nullableOutput?: boolean;
 	groupedPersistent?: boolean;
 	allowAgentExit?: boolean;
+	/**
+	 * When true, write jobs/<scanJobId>/security-policy.md under the project
+	 * profile and append its path instruction to the agent prompt. Defaults to
+	 * false (stage YAML runtimeConfig.includePolicy).
+	 */
+	includePolicy?: boolean;
 };
 
 export type RunSingleTurnAgentInput = StageContainerInput & {
@@ -1775,11 +1809,13 @@ export const runSingleTurnAgentInContainer = async (
 			: null;
 	const injectionPromptText = injectionTarget?.injectionPrompt?.trim() || "";
 	const securityPolicyText = injectionTarget?.securityPolicy?.trim() || "";
+	// Only stages with runtimeConfig.includePolicy: true get the policy path in prompt.
 	const securityPolicyArtifact =
-		injectionTarget && securityPolicyText
+		input.includePolicy && injectionTarget && securityPolicyText
 			? await writeScanJobSecurityPolicyArtifact({
 					securityPolicy: securityPolicyText,
-					profileHostPath: await resolveProjectProfileHostPath({
+					// Write via /scan-context (app mount), not HOST_PATH shadow dir.
+					profileHostPath: await resolveProjectProfileAppWritePath({
 						projectName: injectionTarget.environment.project.name,
 						profileName: injectionTarget.name || injectionTarget.appName,
 					}),
@@ -1797,8 +1833,14 @@ export const runSingleTurnAgentInContainer = async (
 	const resolvedPromptFinal = promptAdditions.length
 		? `${resolvedPrompt.trimEnd()}\n\n${promptAdditions.join("\n\n")}`
 		: resolvedPrompt;
+	// Codex native `/goal` (via codex-acp) rejects objectives longer than 4000
+	// characters and treats the entire first text block after `/goal` as the
+	// objective. Skip the bulky schema suffix — the tob-goal hunt objective
+	// already embeds the /task/output.json contract.
+	const isNativeCodexGoalPrompt = /^\s*\/goal\b/i.test(resolvedPromptFinal);
 	const promptWithOutputSchema =
-		input.outputSchema || input.routeOutputSchemas?.length
+		!isNativeCodexGoalPrompt &&
+		(input.outputSchema || input.routeOutputSchemas?.length)
 			? `${resolvedPromptFinal.trimEnd()}\n${buildStructuredOutputPromptSuffix(
 					input.outputSchema || input.routeOutputSchemas![0]!.schema,
 					structuredOutputSchemaAgentPathInContainer,

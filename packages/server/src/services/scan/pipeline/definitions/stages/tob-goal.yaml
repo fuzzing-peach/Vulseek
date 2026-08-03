@@ -1,0 +1,122 @@
+goal-craft:
+  key: goalCraft
+  name: Goal Craft
+  taskName: "Craft goal specification"
+  role: scan
+  group: tob-goal
+  concurrency: 1
+  maxConcurrency: 1
+  disableable: false
+  description: Draft and self-red-team a precise GoalSpec from the human threat direction.
+  runtimeConfig:
+    persistent: false
+    reuseContainer: true
+    mode: serial
+    cwd: /workspace/repo
+    skills: [goal-craft]
+    promptFile: goal-craft.prompt.md
+    prepareRepository: true
+    includePolicy: true
+  inputSchema:
+    type: object
+  outputSchema:
+    $ref: "#/schemas/GoalCraftOutput"
+
+goal-surface:
+  key: goalSurface
+  name: Goal Surface
+  taskName: "Plan hunt goals ($input.feedback.kind)"
+  role: scan
+  group: tob-goal
+  concurrency: 1
+  maxConcurrency: 1
+  disableable: false
+  description: Goal-as-lens attack-surface planning and continuous hunt-goal dispatch.
+  runtimeConfig:
+    persistent: true
+    reuseContainer: true
+    mode: serial
+    cwd: /workspace/repo
+    skills: [goal-surface]
+    promptFile: goal-surface.prompt.md
+    includePolicy: true
+  inputSchema:
+    type: object
+  outputSchema:
+    $ref: "#/schemas/SurfaceDispatch"
+
+goal-hunt:
+  key: goalHunt
+  name: Goal Hunt
+  taskName: "Hunt: $input.huntGoal.title"
+  role: scan
+  group: tob-goal
+  concurrency: 8
+  maxConcurrency: 8
+  disableable: false
+  description: One hunt goal, one candidate or exhaustion declaration.
+  runtimeConfig:
+    persistent: true
+    reuseContainer: true
+    mode: fanout
+    cwd: /workspace/repo
+    skills: [goal-hunt, codeql, semgrep, tree-sitter]
+    promptFile: goal-hunt.prompt.md
+  inputSchema:
+    type: object
+  outputSchema:
+    $ref: "#/schemas/GoalHuntOutput"
+  effects:
+    - type: tob-goal-registry
+      operation: persist-candidate
+
+goal-judge:
+  key: goalJudge
+  name: Goal Judge
+  taskName: "Judge candidate: $input.candidate.title"
+  role: verification
+  group: tob-goal
+  concurrency: 4
+  maxConcurrency: 4
+  disableable: false
+  description: Single independent judge for safety path and PoC feasibility.
+  runtimeConfig:
+    persistent: false
+    reuseContainer: true
+    mode: fanout
+    cwd: /workspace/repo
+    skills: [goal-judge]
+    promptFile: goal-judge.prompt.md
+    includePolicy: true
+  inputSchema:
+    type: object
+  outputSchema:
+    $ref: "#/schemas/GoalJudgeVerdict"
+  effects:
+    - type: tob-goal-registry
+      operation: apply-judge
+
+goal-dedup:
+  key: goalDedup
+  name: Goal Dedup
+  taskName: "Dedup candidate: $input.candidate.title"
+  role: verification
+  group: tob-goal
+  concurrency: 4
+  maxConcurrency: 4
+  disableable: false
+  description: Novelty check against known issues and prior scan findings.
+  runtimeConfig:
+    persistent: false
+    reuseContainer: true
+    mode: fanout
+    cwd: /workspace/repo
+    skills: [goal-dedup, search-registries]
+    promptFile: goal-dedup.prompt.md
+  inputSchema:
+    type: object
+  outputSchema:
+    $ref: "#/schemas/GoalDedupResult"
+  effects:
+    - type: tob-goal-registry
+      operation: apply-dedup

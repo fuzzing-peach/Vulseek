@@ -19,7 +19,12 @@ export type RunningTaskStage =
 	| "chain-review"
 	| "exploit-validation"
 	| "exploit-review"
-	| "research-report";
+	| "research-report"
+	| "goal-craft"
+	| "goal-surface"
+	| "goal-hunt"
+	| "goal-judge"
+	| "goal-dedup";
 
 export const RESEARCH_RUNNING_TASK_STAGES = [
 	"research-scope",
@@ -52,6 +57,44 @@ export const RESEARCH_RUNNING_TASK_STAGE_DISPLAY_NAMES: Record<
 	"exploit-validation": "Exploit Validation",
 	"exploit-review": "Exploit Review",
 	"research-report": "Research Report",
+};
+
+export const TOB_GOAL_RUNNING_TASK_STAGES = [
+	"goal-craft",
+	"goal-surface",
+	"goal-hunt",
+	"goal-judge",
+	"goal-dedup",
+] as const satisfies readonly RunningTaskStage[];
+
+export const TOB_GOAL_RUNNING_TASK_STAGE_DISPLAY_NAMES: Record<
+	(typeof TOB_GOAL_RUNNING_TASK_STAGES)[number],
+	string
+> = {
+	"goal-craft": "Goal Craft",
+	"goal-surface": "Goal Surface",
+	"goal-hunt": "Goal Hunt",
+	"goal-judge": "Goal Judge",
+	"goal-dedup": "Goal Dedup",
+};
+
+export const isTobGoalRunningTaskStage = (
+	stageName: string,
+): stageName is (typeof TOB_GOAL_RUNNING_TASK_STAGES)[number] =>
+	(TOB_GOAL_RUNNING_TASK_STAGES as readonly string[]).includes(stageName);
+
+export const getTobGoalRunningTaskPresentation = (
+	stageName: string,
+	taskName: string,
+) => {
+	if (!isTobGoalRunningTaskStage(stageName)) {
+		return null;
+	}
+	return {
+		title: taskName,
+		subtitle: TOB_GOAL_RUNNING_TASK_STAGE_DISPLAY_NAMES[stageName],
+		stage: stageName,
+	};
 };
 
 export const isResearchRunningTaskStage = (
@@ -114,6 +157,11 @@ export const mapRunningTaskStage = (
 		case "exploit-validation":
 		case "exploit-review":
 		case "research-report":
+		case "goal-craft":
+		case "goal-surface":
+		case "goal-hunt":
+		case "goal-judge":
+		case "goal-dedup":
 			return stageName;
 		default:
 			return null;

@@ -1,0 +1,174 @@
+tob-goal:
+  name: tob-goal-programmatic
+  root: goal-craft
+  stages:
+    - goal-craft
+    - goal-surface
+    - goal-hunt
+    - goal-judge
+    - goal-dedup
+  edges:
+    - name: goal-craft-to-goal-surface
+      from: goal-craft
+      to: goal-surface
+      mode: map
+      input:
+        goalSpecPath: "$output.goalSpecPath"
+        goalSpec: "$output.goalSpec"
+      artifacts:
+        - from: "$output.goalSpecPath"
+          to: inputs/goal-spec.json
+          inputField: goalSpecPath
+
+    # Single outbound edge from goal-surface — no route key (envelope route: null),
+    # matching full/delta non-branching edges.
+    - name: goal-surface-to-goal-hunt
+      from: goal-surface
+      to: goal-hunt
+      mode: fanOut
+      foreach: "$.huntGoals[*]"
+      input:
+        goalSpecPath: "$input.goalSpecPath"
+        goalSpec: "$input.goalSpec"
+        huntGoal: "$item"
+      artifacts:
+        - from: "$input.goalSpecPath"
+          to: inputs/goal-spec.json
+          inputField: goalSpecPath
+
+    - name: goal-hunt-to-goal-judge
+      from: goal-hunt
+      to: goal-judge
+      mode: map
+      route:
+        key: candidate
+        default: true
+      input:
+        goalSpecPath: "$input.goalSpecPath"
+        goalSpec: "$input.goalSpec"
+        huntGoal: "$input.huntGoal"
+        candidate: "$output.candidate"
+      artifacts:
+        - from: "$input.goalSpecPath"
+          to: inputs/goal-spec.json
+          inputField: goalSpecPath
+
+    - name: goal-hunt-candidate-to-goal-surface
+      from: goal-hunt
+      to: goal-surface
+      mode: map
+      route:
+        key: candidate
+      input:
+        goalSpecPath: "$input.goalSpecPath"
+        goalSpec: "$input.goalSpec"
+        feedback:
+          kind: hunt-candidate
+          huntGoalId: "$input.huntGoal.huntGoalId"
+          candidateId: "$output.candidate.candidateId"
+          summary: "$output.candidate.title"
+          payload: "$output.candidate"
+      artifacts:
+        - from: "$input.goalSpecPath"
+          to: inputs/goal-spec.json
+          inputField: goalSpecPath
+
+    - name: goal-hunt-exhausted-to-goal-surface
+      from: goal-hunt
+      to: goal-surface
+      mode: map
+      route:
+        key: exhausted
+        # non-default; candidate is the default route key
+      input:
+        goalSpecPath: "$input.goalSpecPath"
+        goalSpec: "$input.goalSpec"
+        feedback:
+          kind: hunt-exhausted
+          huntGoalId: "$input.huntGoal.huntGoalId"
+          candidateId: null
+          summary: "$output.exhaustion.reason"
+          payload: "$output.exhaustion"
+      artifacts:
+        - from: "$input.goalSpecPath"
+          to: inputs/goal-spec.json
+          inputField: goalSpecPath
+
+    - name: goal-judge-to-goal-dedup
+      from: goal-judge
+      to: goal-dedup
+      mode: map
+      route:
+        key: confirmed
+      input:
+        goalSpecPath: "$input.goalSpecPath"
+        goalSpec: "$input.goalSpec"
+        huntGoal: "$input.huntGoal"
+        candidate: "$input.candidate"
+        judge: "$output"
+      artifacts:
+        - from: "$input.goalSpecPath"
+          to: inputs/goal-spec.json
+          inputField: goalSpecPath
+
+    - name: goal-judge-reject-to-goal-surface
+      from: goal-judge
+      to: goal-surface
+      mode: map
+      route:
+        key: rejected
+        default: true
+      input:
+        goalSpecPath: "$input.goalSpecPath"
+        goalSpec: "$input.goalSpec"
+        feedback:
+          kind: judge-reject
+          huntGoalId: "$input.huntGoal.huntGoalId"
+          candidateId: "$input.candidate.candidateId"
+          summary: "$output.summary"
+          payload: "$output"
+      artifacts:
+        - from: "$input.goalSpecPath"
+          to: inputs/goal-spec.json
+          inputField: goalSpecPath
+
+    - name: goal-dedup-novel-to-goal-surface
+      from: goal-dedup
+      to: goal-surface
+      mode: map
+      route:
+        key: novel
+      input:
+        goalSpecPath: "$input.goalSpecPath"
+        goalSpec: "$input.goalSpec"
+        feedback:
+          kind: dedup-novel
+          huntGoalId: "$input.huntGoal.huntGoalId"
+          candidateId: "$input.candidate.candidateId"
+          summary: "$output.summary"
+          payload: "$output"
+      artifacts:
+        - from: "$input.goalSpecPath"
+          to: inputs/goal-spec.json
+          inputField: goalSpecPath
+
+    - name: goal-dedup-reject-to-goal-surface
+      from: goal-dedup
+      to: goal-surface
+      mode: map
+      route:
+        key: reject
+        default: true
+      input:
+        goalSpecPath: "$input.goalSpecPath"
+        goalSpec: "$input.goalSpec"
+        feedback:
+          kind: dedup-reject
+          huntGoalId: "$input.huntGoal.huntGoalId"
+          candidateId: "$input.candidate.candidateId"
+          summary: "$output.summary"
+          payload: "$output"
+      artifacts:
+        - from: "$input.goalSpecPath"
+          to: inputs/goal-spec.json
+          inputField: goalSpecPath

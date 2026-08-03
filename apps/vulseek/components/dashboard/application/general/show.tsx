@@ -175,12 +175,86 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 								targetRef,
 								targetTag,
 								scanRuntimeSettings,
-							}).then(() => {
-								toast.success(scanT(t, "scan.actions.researchScanStarted", "Research scan started successfully"));
-								refetch();
-							}).catch(() => toast.error(scanT(t, "scan.actions.researchScanStartError", "Error starting research scan")));
+							})
+								.then(() => {
+									toast.success(
+										scanT(
+											t,
+											"scan.actions.researchScanStarted",
+											"Research scan started successfully",
+										),
+									);
+									refetch();
+									refetchScanJobs();
+									router.push(
+										`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/profiles/application/${applicationId}?tab=deployments`,
+									);
+								})
+								.catch(() =>
+									toast.error(
+										scanT(
+											t,
+											"scan.actions.researchScanStartError",
+											"Error starting research scan",
+										),
+									),
+								);
 						}}
 						trigger={<Button variant="default" isLoading={isCreatingScanJob} className={SCAN_BUTTON_CLASS_NAME}><Telescope className="size-4 mr-1" />{scanT(t, "scan.actions.researchScan", "Research Scan")}</Button>}
+					/>
+					<CreateScanDialog
+						title={scanT(t, "scan.actions.goalScan", "Goal Scan")}
+						description={scanT(
+							t,
+							"scan.actions.goalScanDescription",
+							"Run a Trail-of-Bits-style goal-driven hunt: craft a goal, dispatch surfaces, judge and dedup findings.",
+						)}
+						isLoading={isCreatingScanJob}
+						showCommitWindow={false}
+						showFullScanPreview
+						scanType="tob-goal"
+						serviceData={data ? (data as unknown as Record<string, unknown>) : undefined}
+						onSubmit={async ({
+							targetRef,
+							targetTag,
+							scanRuntimeSettings,
+							threatDirection,
+						}) => {
+							await createScanJob({
+								applicationId,
+								scanType: "tob-goal",
+								triggerSource: "manual",
+								targetRef,
+								targetTag,
+								scanRuntimeSettings,
+								threatDirection,
+							})
+								.then(() => {
+									toast.success(
+										scanT(t, "scan.actions.goalScanStarted", "Goal scan started successfully"),
+									);
+									refetch();
+									refetchScanJobs();
+									router.push(
+										`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/profiles/application/${applicationId}?tab=deployments`,
+									);
+								})
+								.catch(() =>
+									toast.error(
+										scanT(t, "scan.actions.goalScanStartError", "Error starting goal scan"),
+									),
+								);
+						}}
+						trigger={
+							<Button
+								variant="default"
+								isLoading={isCreatingScanJob}
+								className={SCAN_BUTTON_CLASS_NAME}
+							>
+								<Telescope className="size-4 mr-1" />
+								{scanT(t, "scan.actions.goalScan", "Goal Scan")}
+							</Button>
+						}
 					/>
 					<CreateScanDialog
 							title={scanT(t, "scan.actions.deltaScan", "Delta Scan")}

@@ -149,6 +149,28 @@ export const resolveStageTaskName = <TInput>(
 				? `Write research report: ${subject}`
 				: "Write research report";
 		}
+		case "goal-craft":
+			return "Craft goal specification";
+		case "goal-surface": {
+			const feedback = asRecord(record?.feedback);
+			const kind =
+				typeof feedback?.kind === "string" ? feedback.kind : null;
+			return kind
+				? `Plan hunt goals (${kind})`
+				: "Plan and dispatch hunt goals";
+		}
+		case "goal-hunt": {
+			const subject = researchSubjectFromInput(input, ["huntGoal"]);
+			return subject ? `Hunt: ${subject}` : "Hunt assigned goal";
+		}
+		case "goal-judge": {
+			const subject = researchSubjectFromInput(input, ["candidate"]);
+			return subject ? `Judge candidate: ${subject}` : "Judge candidate";
+		}
+		case "goal-dedup": {
+			const subject = researchSubjectFromInput(input, ["candidate"]);
+			return subject ? `Dedup candidate: ${subject}` : "Dedup candidate";
+		}
 		case "delta-scope":
 			return "delta-scope";
 		case "repository-profile":

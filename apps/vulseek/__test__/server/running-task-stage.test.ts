@@ -1,7 +1,9 @@
 import {
 	mapRunningTaskStage,
 	getResearchRunningTaskPresentation,
+	getTobGoalRunningTaskPresentation,
 	RESEARCH_RUNNING_TASK_STAGES,
+	TOB_GOAL_RUNNING_TASK_STAGES,
 	RUNNING_TASK_VIEW_STATUSES,
 } from "@vulseek/server/services/scan/running-task-stage";
 import { describe, expect, it } from "vitest";
@@ -51,6 +53,24 @@ describe("mapRunningTaskStage", () => {
 					stage,
 				},
 			);
+		}
+	});
+
+	it("includes every tob-goal pipeline stage", () => {
+		expect(TOB_GOAL_RUNNING_TASK_STAGES).toEqual([
+			"goal-craft",
+			"goal-surface",
+			"goal-hunt",
+			"goal-judge",
+			"goal-dedup",
+		]);
+		for (const stage of TOB_GOAL_RUNNING_TASK_STAGES) {
+			expect(mapRunningTaskStage(stage)).toBe(stage);
+			expect(getTobGoalRunningTaskPresentation(stage, "Goal task")).toEqual({
+				title: "Goal task",
+				subtitle: expect.any(String),
+				stage,
+			});
 		}
 	});
 

@@ -14,3 +14,22 @@ export const sanitizeCodexAcpConfigToml = (configToml: string) => {
 		})
 		.join("\n");
 };
+
+/**
+ * Ensure Codex native Goals (`/goal`, thread_goals) are enabled.
+ * Required for tob-goal hunt stages that activate objectives via `/goal …`.
+ */
+export const ensureCodexGoalsFeature = (configToml: string) => {
+	const source = (configToml || "").trimEnd();
+	if (/^\s*\[features\]\s*$/m.test(source) || /^\s*\[features\]\s*(?:#.*)?$/m.test(source)) {
+		if (/^\s*goals\s*=/m.test(source)) {
+			return source.replace(/^\s*goals\s*=\s*.*$/m, "goals = true");
+		}
+		return source.replace(
+			/^(\s*\[features\]\s*(?:#.*)?)$/m,
+			"$1\ngoals = true",
+		);
+	}
+	const block = ["[features]", "goals = true"].join("\n");
+	return source ? `${source}\n\n${block}` : block;
+};

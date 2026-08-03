@@ -229,19 +229,16 @@ export const validatePipelineRouteConfiguration = <
 				`Stage ${stage.name} mixes routed and non-routed downstream edges`,
 			);
 		}
-		const routeKeys = new Set<string>();
-		for (const edge of edges) {
-			if (routeKeys.has(edge.route!.key)) {
-				throw new Error(
-					`Duplicate route key ${edge.route!.key} for stage ${stage.name}`,
-				);
-			}
-			routeKeys.add(edge.route!.key);
-		}
-		const defaultCount = edges.filter((edge) => edge.route?.default).length;
-		if (defaultCount !== 1) {
+		// Same route key may fan out to multiple targets (e.g. candidate → judge + surface).
+		// Only require that exactly one default route key exists among downstream edges.
+		const defaultKeys = new Set(
+			edges
+				.filter((edge) => edge.route?.default)
+				.map((edge) => edge.route!.key),
+		);
+		if (defaultKeys.size !== 1) {
 			throw new Error(
-				`Stage ${stage.name} must define exactly one default route`,
+				`Stage ${stage.name} must define exactly one default route key`,
 			);
 		}
 	}
@@ -265,12 +262,20 @@ export const selectDownstreamEdgesForRoute = <
 	}
 
 	const routedEdges = downstreamEdges.filter((edge) => edge.route);
-	const matched = routedEdges.find((edge) => edge.route?.key === routeKey);
-	const fallback = routeKey == null
-		? routedEdges.find((edge) => edge.route?.default)
-		: undefined;
-	const selected = matched || fallback;
-	if (!selected) {
+	const matched = routedEdges.filter((edge) => edge.route?.key === routeKey);
+	const fallbackEdge =
+		routeKey == null
+			? routedEdges.find((edge) => edge.route?.default)
+			: undefined;
+	const selectedEdges =
+		matched.length > 0
+			? matched
+			: fallbackEdge
+				? routedEdges.filter(
+						(edge) => edge.route?.key === fallbackEdge.route?.key,
+					)
+				: [];
+	if (selectedEdges.length === 0) {
 		throw new Error(
 			routeKey == null
 				? `No default route configured for stage ${stageName}`
@@ -279,8 +284,8 @@ export const selectDownstreamEdgesForRoute = <
 	}
 
 	return {
-		edges: [selected],
-		selectedRouteKey: selected.route?.key ?? null,
-		fallback: !matched,
+		edges: selectedEdges,
+		selectedRouteKey: selectedEdges[0]?.route?.key ?? null,
+		fallback: matched.length === 0,
 	};
 };

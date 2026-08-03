@@ -48,6 +48,10 @@ import {
 import { ScanMonitoring } from "@/components/dashboard/scanning/scan-monitoring";
 import { ResearchRegistryPanels } from "@/components/dashboard/scanning/research-registry-panels";
 import {
+	TobGoalCandidatesPanel,
+	TobGoalFindingsPanel,
+} from "@/components/dashboard/scanning/tob-goal-registry-panels";
+import {
 	getResearchRegistryTabs,
 	isResearchRegistryTab,
 } from "@/components/dashboard/scanning/research-registry-tabs";
@@ -136,6 +140,8 @@ type ScanJobTab =
 	| "evaluate"
 	| "tasks"
 	| "candidates"
+	| "goal-candidates"
+	| "goal-findings"
 	| "findings"
 	| "tracks"
 	| "primitives"
@@ -374,6 +380,8 @@ const resolveRequestedTab = (
 		rawTab === "evaluate" ||
 		rawTab === "tasks" ||
 		rawTab === "candidates" ||
+		rawTab === "goal-candidates" ||
+		rawTab === "goal-findings" ||
 		isResearchRegistryTab(rawTab) ||
 		rawTab === "monitoring" ||
 		rawTab === "files"
@@ -1653,7 +1661,20 @@ export const ShowScanJobDetail = ({
 		() => {
 			const tab = resolveRequestedTab(router.query.tab);
 			if (scanJob?.scanType === "research" && tab === "candidates") return "findings";
-			if (scanJob && scanJob.scanType !== "research" && tab === "findings") return "overview";
+			// tob-goal uses dedicated tabs; legacy `findings` query maps to goal-findings.
+			if (scanJob?.scanType === "tob-goal" && tab === "findings") {
+				return "goal-findings";
+			}
+			if (
+				scanJob &&
+				scanJob.scanType !== "research" &&
+				scanJob.scanType !== "tob-goal" &&
+				(tab === "findings" ||
+					tab === "goal-candidates" ||
+					tab === "goal-findings")
+			) {
+				return "overview";
+			}
 			return tab;
 		},
 		[router.query.tab, scanJob],
@@ -2807,10 +2828,27 @@ export const ShowScanJobDetail = ({
 							<TabsTrigger className="shrink-0 px-2 sm:px-3" value="tasks">
 								{scanT(t, "scan.job.tabs.tasks", "阶段任务")}
 							</TabsTrigger>
-			{scanJob?.scanType !== "research" ? (
+			{scanJob?.scanType !== "research" &&
+			scanJob?.scanType !== "tob-goal" ? (
 				<TabsTrigger className="shrink-0 px-2 sm:px-3" value="candidates">
 					{scanT(t, "scan.job.tabs.candidates", "Candidates")}
 				</TabsTrigger>
+			) : null}
+			{scanJob?.scanType === "tob-goal" ? (
+				<>
+					<TabsTrigger
+						className="shrink-0 px-2 sm:px-3"
+						value="goal-candidates"
+					>
+						{scanT(t, "scan.job.tabs.goalCandidates", "Goal Candidates")}
+					</TabsTrigger>
+					<TabsTrigger
+						className="shrink-0 px-2 sm:px-3"
+						value="goal-findings"
+					>
+						{scanT(t, "scan.job.tabs.goalFindings", "Goal Findings")}
+					</TabsTrigger>
+				</>
 			) : null}
 							{researchRegistryTabs.map((tab) => (
 								<TabsTrigger
@@ -3463,7 +3501,19 @@ export const ShowScanJobDetail = ({
 							)}
 						</TabsContent>
 
-						{scanJob?.scanType !== "research" ? (
+						{scanJob?.scanType === "tob-goal" ? (
+							<>
+								<TabsContent value="goal-candidates" className="pt-4">
+									<TobGoalCandidatesPanel scanJobId={scanJobId} />
+								</TabsContent>
+								<TabsContent value="goal-findings" className="pt-4">
+									<TobGoalFindingsPanel scanJobId={scanJobId} />
+								</TabsContent>
+							</>
+						) : null}
+
+						{scanJob?.scanType !== "research" &&
+						scanJob?.scanType !== "tob-goal" ? (
 						<TabsContent value="candidates" className="pt-4">
 							{isLoadingCandidates && !candidates ? (
 								<div className="flex items-center gap-2 text-muted-foreground">

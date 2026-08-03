@@ -28,6 +28,7 @@ export * from "./registry";
 export * from "./research";
 export * from "./rollbacks";
 export * from "./scan";
+export * from "./tob-goal";
 export * from "./schedule";
 export * from "./security";
 export * from "./server";

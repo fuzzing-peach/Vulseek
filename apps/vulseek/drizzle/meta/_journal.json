@@ -1548,6 +1548,13 @@
       "when": 1785161443835,
       "tag": "0220_agent_owned_research_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 221,
+      "version": "7",
+      "when": 1785648000000,
+      "tag": "0221_tob_goal_pipeline",
+      "breakpoints": true
     }
   ]
 }

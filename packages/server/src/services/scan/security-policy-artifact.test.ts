@@ -33,12 +33,21 @@ test("writeScanJobSecurityPolicyArtifact skips empty policies", async () => {
 	assert.equal(writeCalled, false);
 });
 
-test("writeScanJobSecurityPolicyArtifact writes job policy and prompt instruction", async () => {
+test("writeScanJobSecurityPolicyArtifact writes job-dir policy and prompt instruction", async () => {
 	const paths = buildScanJobSecurityPolicyArtifactPaths({
 		profileHostPath: "/tmp/profile",
 		profileContainerPath: "/scan-context/projects/demo/profiles/app",
 		scanJobId: "scan-1",
 	});
+	assert.equal(
+		paths.hostPath,
+		path.join("/tmp/profile", "jobs", "scan-1", "security-policy.md"),
+	);
+	assert.equal(
+		paths.containerPath,
+		"/scan-context/projects/demo/profiles/app/jobs/scan-1/security-policy.md",
+	);
+
 	let observedMkdirPath = "";
 	let observedWritePath = "";
 	let observedContent = "";

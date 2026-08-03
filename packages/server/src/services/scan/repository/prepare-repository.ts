@@ -29,7 +29,12 @@ export const prepareRepositoryForScanInContainer = async (input: {
 	scanRootDir: string;
 }): Promise<PreparedRepositoryState> => {
 	const forceLatestRef = input.scanType === "delta";
-	const preferLatestTag = input.scanType === "full" || input.scanType === "research";
+	// full / research / tob-goal: empty tag → checkout newest tag in the image
+	// (checkout images skip remote fetch; branch names like "master" may not exist)
+	const preferLatestTag =
+		input.scanType === "full" ||
+		input.scanType === "research" ||
+		input.scanType === "tob-goal";
 	const targetRef = input.targetRef?.trim() || "";
 	const targetTag = input.targetTag?.trim() || "";
 	const requestedCommit = input.commitSha?.trim() || "";

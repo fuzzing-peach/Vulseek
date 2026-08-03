@@ -94,6 +94,7 @@ import { normalizeTerminalTaskFilters } from "./scan/terminal-task-filters";
 import { resolveStageTaskName } from "./scan/stage-task-name";
 import {
 	getResearchRunningTaskPresentation,
+	getTobGoalRunningTaskPresentation,
 	type RunningTaskStage,
 } from "./scan/running-task-stage";
 import type {
@@ -145,7 +146,10 @@ import {
 	buildLocalCheckoutDockerfile,
 	buildLocalRepositoryPopulateScript,
 } from "./scan/local-checkout";
-import { sanitizeCodexAcpConfigToml } from "./scan/runtime/codex-config-compat";
+import {
+	ensureCodexGoalsFeature,
+	sanitizeCodexAcpConfigToml,
+} from "./scan/runtime/codex-config-compat";
 import {
 	buildEffectiveDisabledStageSet,
 	getRuntimeStageConcurrency,
@@ -307,6 +311,11 @@ const IN_PROGRESS_TASK_STAGE_ORDER: Record<
 	"exploit-validation": 18,
 	"exploit-review": 19,
 	"research-report": 20,
+	"goal-craft": 21,
+	"goal-surface": 22,
+	"goal-hunt": 23,
+	"goal-judge": 24,
+	"goal-dedup": 25,
 };
 
 const compareInProgressTaskView = (
@@ -805,6 +814,19 @@ const buildInProgressTaskView = (
 			id: `${researchPresentation.stage}-${task.taskId}`,
 			taskId: task.taskId,
 			...researchPresentation,
+			startedAt: task.startedAt,
+			updatedAt: task.updatedAt,
+		};
+	}
+	const tobGoalPresentation = getTobGoalRunningTaskPresentation(
+		task.stageName,
+		task.name,
+	);
+	if (tobGoalPresentation) {
+		return {
+			id: `${tobGoalPresentation.stage}-${task.taskId}`,
+			taskId: task.taskId,
+			...tobGoalPresentation,
 			startedAt: task.startedAt,
 			updatedAt: task.updatedAt,
 		};
@@ -2130,11 +2152,11 @@ const toImageTagFromAppName = (appName: string) =>
 const sanitizeProviderName = (value: string) =>
 	value.toLowerCase().replace(/[^a-z0-9_-]/g, "-") || "provider";
 
-const CODEX_AUTO_APPROVE_CONFIG_TOML = [
-	`approval_policy = "never"`,
-	`sandbox_mode = "danger-full-access"`,
-	"",
-].join("\n");
+const CODEX_AUTO_APPROVE_CONFIG_TOML = ensureCodexGoalsFeature(
+	[`approval_policy = "never"`, `sandbox_mode = "danger-full-access"`, ""].join(
+		"\n",
+	),
+);
 const resolveCodexAuthMode = (
 	agentProfile: AgentProfileLike | null | undefined,
 ) => (agentProfile?.authMode === "host_home" ? "host_home" : "api_key");
@@ -2169,10 +2191,11 @@ const withCodexAutoApproveConfigToml = (configToml: string) => {
 	if (!/^\s*sandbox_mode\s*=/m.test(configToml)) {
 		defaults.push(`sandbox_mode = "danger-full-access"`);
 	}
-	if (defaults.length === 0) {
-		return configToml;
-	}
-	return joinTomlBlocks(`${defaults.join("\n")}\n`, configToml);
+	const withDefaults =
+		defaults.length === 0
+			? configToml
+			: joinTomlBlocks(`${defaults.join("\n")}\n`, configToml);
+	return ensureCodexGoalsFeature(withDefaults);
 };
 
 const stripProfileControlledCodexConfigToml = (configToml: string) => {
@@ -3917,7 +3940,10 @@ const prepareRepositoryForScanInContainer = async (input: {
 	scanRootDir: string;
 }): Promise<PreparedRepositoryState> => {
 	const forceLatestRef = input.scanJob.scanType === "delta";
-	const preferLatestTag = input.scanJob.scanType === "full" || input.scanJob.scanType === "research";
+	const preferLatestTag =
+		input.scanJob.scanType === "full" ||
+		input.scanJob.scanType === "research" ||
+		input.scanJob.scanType === "tob-goal";
 	const targetRef = input.scanJob.targetRef?.trim() || "";
 	const targetTag = input.scanJob.targetTag?.trim() || "";
 	const requestedCommit = input.scanJob.commitSha?.trim() || "";
@@ -4385,14 +4411,14 @@ const buildGenericYamlPipeline = (
 									value: input,
 								})
 							: input;
-					const taskName = targetConfig.taskName
-							? String(
-									await renderPipelineTemplate(targetConfig.taskName, {
-										ctx,
-										stageInput:
-											context.scanJob.scanType === "research"
-												? taskNameInput
-												: input,
+					const renderedTaskName = targetConfig.taskName
+						? String(
+								await renderPipelineTemplate(targetConfig.taskName, {
+									ctx,
+									stageInput:
+										context.scanJob.scanType === "research"
+											? taskNameInput
+											: input,
 									stageOutput: null,
 									readJsonFile: async (containerPath) =>
 										await readTaskJsonArtifact({
@@ -4401,10 +4427,19 @@ const buildGenericYamlPipeline = (
 										}),
 									allowedRoots: [fromTaskDir],
 								}),
-							)
-						: context.scanJob.scanType === "research"
-							? resolveStageTaskName(edgeConfig.to, taskNameInput)
-							: `${targetConfig.name} ${index + 1}`;
+							).trim()
+						: "";
+					// Prefer YAML taskName templates; fall back to descriptive resolvers
+					// for research/tob-goal (not "StageName 1" fan-out indexes).
+					const taskName =
+						renderedTaskName &&
+						!/\(\s*\)$/.test(renderedTaskName) &&
+						!/:\s*$/.test(renderedTaskName)
+							? renderedTaskName
+							: context.scanJob.scanType === "research" ||
+								  context.scanJob.scanType === "tob-goal"
+								? resolveStageTaskName(edgeConfig.to, taskNameInput)
+								: `${targetConfig.name} ${index + 1}`;
 					const taskId = createTaskIdForDispatchKey(
 						dispatchKeyForItem(index),
 					);
@@ -4842,6 +4877,36 @@ const runResearchScan = async (
 	}
 };
 
+const runTobGoalScan = async (
+	scanJobId: string,
+	options?: {
+		enqueueInitialGoalCraftTask?: boolean;
+		awaitCompletion?: boolean;
+	},
+) => {
+	const enqueueInitialGoalCraftTask =
+		options?.enqueueInitialGoalCraftTask ?? true;
+	const awaitCompletion = options?.awaitCompletion ?? true;
+	await assertScanJobNotCancelled(scanJobId);
+	const context = await buildFullScanPipelineContext(scanJobId);
+	const pipeline = buildYamlPipeline(
+		context,
+		getPipelineIdForScanType("tob-goal"),
+	);
+	if (enqueueInitialGoalCraftTask) {
+		await enqueuePipelineRootTask(
+			scanJobId,
+			getPipelineIdForScanType("tob-goal"),
+		);
+	}
+	await assertScanJobNotCancelled(scanJobId);
+	if (awaitCompletion) {
+		await runPipeline(pipeline, context);
+	} else {
+		startPipelineRuntime(pipeline, context);
+	}
+};
+
 const startScanPipelineRuntimeForExistingQueues = async (scanJobId: string) => {
 	const scanJob = await findScanJobByIdRepo(scanJobId);
 	if (scanJob.scanType === "delta") {
@@ -4853,6 +4918,13 @@ const startScanPipelineRuntimeForExistingQueues = async (scanJobId: string) => {
 	}
 	if (scanJob.scanType === "research") {
 		await runResearchScan(scanJobId, { enqueueInitialResearchTask: false, awaitCompletion: false });
+		return;
+	}
+	if (scanJob.scanType === "tob-goal") {
+		await runTobGoalScan(scanJobId, {
+			enqueueInitialGoalCraftTask: false,
+			awaitCompletion: false,
+		});
 		return;
 	}
 	await runFullScan(scanJobId, {
@@ -4921,6 +4993,13 @@ export const runScanJobInContainer = async (
 	if (scanJob.scanType === "research") {
 		await runResearchScan(scanJobId, {
 			enqueueInitialResearchTask: options?.enqueueInitialRepositoryTask ?? true,
+		});
+		return;
+	}
+	if (scanJob.scanType === "tob-goal") {
+		await runTobGoalScan(scanJobId, {
+			enqueueInitialGoalCraftTask:
+				options?.enqueueInitialRepositoryTask ?? true,
 		});
 		return;
 	}

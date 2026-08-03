@@ -8,6 +8,10 @@ export type SecurityPolicyArtifactPaths = {
 	containerPath: string;
 };
 
+/**
+ * Policy is stored under the scan job directory:
+ * .../profiles/<profile>/jobs/<scanJobId>/security-policy.md
+ */
 export const buildScanJobSecurityPolicyArtifactPaths = (input: {
 	profileHostPath: string;
 	profileContainerPath: string;

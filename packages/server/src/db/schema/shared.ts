@@ -102,9 +102,19 @@ export const ScanRuntimeStageSettingSchema = z.object({
 	concurrency: z.number().int().min(1).max(128).nullable().optional(),
 });
 
+export const TobGoalThreatDirectionSchema = z.object({
+	focus: z.string().min(1),
+	attackerModel: z.string().min(1),
+	nonGoals: z.array(z.string()).optional(),
+	notes: z.string().optional(),
+});
+
+export type TobGoalThreatDirection = z.infer<typeof TobGoalThreatDirectionSchema>;
+
 export const ScanRuntimeSettingsSchema = z
 	.object({
 		stages: z.record(ScanRuntimeStageSettingSchema).optional(),
+		threatDirection: TobGoalThreatDirectionSchema.optional(),
 	})
 	.default({});
 

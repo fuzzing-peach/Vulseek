@@ -249,7 +249,7 @@ export const resolveScanProfileConcurrencySettings = async (
 	scanJobId: string,
 ): Promise<ScanProfileConcurrencySettings & {
 	scanRuntimeSettings: ScanRuntimeSettings;
-	scanType: "delta" | "full" | "research";
+	scanType: "delta" | "full" | "research" | "tob-goal";
 }> => {
 	const [scanJob] = await db
 		.select({

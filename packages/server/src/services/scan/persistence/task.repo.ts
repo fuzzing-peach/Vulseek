@@ -22,10 +22,10 @@ import {
 	triageSchema,
 	verificationSchema,
 } from "../artifacts/contracts/domain-object.contract";
-import { computeTaskCost } from "../cost";
+import { computePatchedTaskCost, computeTaskCost } from "../cost";
 import {
-	mapRunningTaskStage,
 	getResearchRunningTaskPresentation,
+	mapRunningTaskStage,
 	RUNNING_TASK_VIEW_STATUSES,
 	type RunningTaskStage,
 } from "../running-task-stage";
@@ -36,8 +36,8 @@ import type {
 	VerificationResult,
 } from "../types";
 import {
-	upsertCandidateResultProjectionTx,
 	type CandidateProjectionResultStage,
+	upsertCandidateResultProjectionTx,
 } from "./candidate-result-projection.repo";
 import { readCandidateIdFromTaskInputArtifact } from "./task-artifact-resolver";
 import { buildTaskStatusTransitionPatch } from "./task-status-transition";
@@ -119,6 +119,13 @@ const tokenUsageKeys = [
 	"cachedWriteTokens",
 ] as const;
 
+const taskCostUsageKeys = [
+	"inputTokens",
+	"outputTokens",
+	"cachedReadTokens",
+	"cachedWriteTokens",
+] as const;
+
 type TaskTokenUsageKey = (typeof tokenUsageKeys)[number];
 type TaskRecord = typeof tasks.$inferSelect;
 
@@ -126,7 +133,11 @@ const hasTokenUsagePatch = (patch: Partial<typeof tasks.$inferSelect>) =>
 	tokenUsageKeys.some((key) => key in patch);
 
 const hasTaskCostPatch = (patch: Partial<typeof tasks.$inferSelect>) =>
-	hasTokenUsagePatch(patch) || "agentProfile" in patch;
+	taskCostUsageKeys.some((key) => key in patch) || "agentProfile" in patch;
+
+const requiresTaskUsageTransaction = (
+	patch: Partial<typeof tasks.$inferSelect>,
+) => hasTokenUsagePatch(patch) || "agentProfile" in patch;
 
 const toTokenCount = (value: number | null | undefined) =>
 	typeof value === "number" && Number.isFinite(value) ? value : 0;
@@ -194,15 +205,25 @@ const applyScanJobEstimatedCostDelta = async (
 const calculateTaskCost = (
 	task: Pick<
 		TaskRecord,
-		"inputTokens" | "outputTokens" | "cachedReadTokens" | "agentProfile"
+		| "inputTokens"
+		| "outputTokens"
+		| "cachedReadTokens"
+		| "cachedWriteTokens"
+		| "agentProfile"
 	>,
 ) =>
-	computeTaskCost(
-		task.inputTokens,
-		task.outputTokens,
-		task.cachedReadTokens,
-		task.agentProfile,
-	);
+	computeTaskCost({
+		inputTokens: task.inputTokens,
+		outputTokens: task.outputTokens,
+		cachedReadTokens: task.cachedReadTokens,
+		cachedWriteTokens: task.cachedWriteTokens,
+		agentProfile: task.agentProfile,
+	});
+
+const calculatePatchedTaskCost = (
+	task: TaskRecord,
+	patch: Partial<TaskRecord>,
+) => computePatchedTaskCost(task, patch);
 
 const buildAnalysisTaskResultView = async (
 	task: typeof tasks.$inferSelect,
@@ -414,6 +435,7 @@ export const createTaskRepo = async (input: {
 						inputTokens: input.inputTokens ?? null,
 						outputTokens: input.outputTokens ?? null,
 						cachedReadTokens: input.cachedReadTokens ?? null,
+						cachedWriteTokens: input.cachedWriteTokens ?? null,
 						agentProfile: input.agentProfile ?? null,
 					}),
 					errorMessage: input.errorMessage ?? null,
@@ -505,12 +527,7 @@ export const listActiveTasksByScanJobIdRepo = async (scanJobId: string) =>
 		.where(
 			and(
 				eq(tasks.scanJobId, scanJobId),
-				inArray(tasks.status, [
-					"launching",
-					"launched",
-					"starting",
-					"running",
-				]),
+				inArray(tasks.status, ["launching", "launched", "starting", "running"]),
 			),
 		)
 		.orderBy(desc(tasks.updatedAt));
@@ -1008,7 +1025,12 @@ export const transitionTaskStatusRepo = async (input: {
 		}
 		const rows = await tx
 			.update(tasks)
-			.set(patch)
+			.set({
+				...patch,
+				...(hasTaskCostPatch(patch)
+					? { estimatedCost: calculatePatchedTaskCost(previous, patch) }
+					: {}),
+			})
 			.where(
 				and(eq(tasks.taskId, input.taskId), inArray(tasks.status, input.from)),
 			)
@@ -1033,7 +1055,12 @@ export const transitionTaskStatusRepo = async (input: {
 				tx,
 				updatedTask,
 			);
-			await upsertCandidateResultProjectionTx(tx, updatedTask, undefined, resultStage);
+			await upsertCandidateResultProjectionTx(
+				tx,
+				updatedTask,
+				undefined,
+				resultStage,
+			);
 		}
 		await input.afterUpdate?.(tx, updatedTask);
 		return updatedTask;
@@ -1050,7 +1077,7 @@ export const updateTaskRepo = async (
 		...patch,
 		updatedAt: new Date().toISOString(),
 	};
-	const updated = hasTaskCostPatch(patch)
+	const updated = requiresTaskUsageTransaction(patch)
 		? await db.transaction(async (tx) => {
 				const previous = await tx
 					.select()
@@ -1065,24 +1092,9 @@ export const updateTaskRepo = async (
 					.update(tasks)
 					.set({
 						...nextPatch,
-						estimatedCost: calculateTaskCost({
-							inputTokens:
-								("inputTokens" in patch
-									? patch.inputTokens
-									: previous.inputTokens) ?? null,
-							outputTokens:
-								("outputTokens" in patch
-									? patch.outputTokens
-									: previous.outputTokens) ?? null,
-							cachedReadTokens:
-								("cachedReadTokens" in patch
-									? patch.cachedReadTokens
-									: previous.cachedReadTokens) ?? null,
-							agentProfile:
-								("agentProfile" in patch
-									? patch.agentProfile
-									: previous.agentProfile) ?? null,
-						}),
+						...(hasTaskCostPatch(patch)
+							? { estimatedCost: calculatePatchedTaskCost(previous, patch) }
+							: {}),
 					})
 					.where(eq(tasks.taskId, taskId))
 					.returning();

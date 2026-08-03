@@ -38,6 +38,7 @@ import {
 	resolveStageRuntimePrompt,
 	resolveStageRuntimePromptTemplate,
 } from "./agent-stage-runtime";
+import { tryBuildTobGoalHuntNativePrompt } from "./tob-goal-native-prompt";
 import {
 	type PipelineContext,
 	resolveStageConcurrencySetting,
@@ -54,14 +55,15 @@ type GenericStageContext = StageContext & { scanJob?: ScanJob };
 export const resolveStageReuseContainer = (
 	scanType: ScanJob["scanType"],
 	configured: boolean,
-) => (scanType === "research" ? false : configured);
+) =>
+	scanType === "research" || scanType === "tob-goal" ? false : configured;
 
 export const resolveStageContainerNameParts = (
 	scanType: ScanJob["scanType"],
 	taskId: string,
 	configured: Array<string | null | undefined> | undefined,
 ) =>
-	scanType === "research"
+	scanType === "research" || scanType === "tob-goal"
 		? [...(configured || []), taskId]
 		: configured;
 
@@ -203,7 +205,7 @@ export const createGenericAgentStageDefinition = <
 			const stageCtx = ctx as GenericStageContext;
 			const scanJob = stageCtx.scanJob;
 			if (!scanJob) throw new Error("Generic stage requires scanJob context");
-			const effectiveStageInput =
+			let effectiveStageInput =
 				scanJob.scanType === "research"
 					? await enrichResearchTrackInput({
 							stageName: stageCtx.stageName,
@@ -216,6 +218,28 @@ export const createGenericAgentStageDefinition = <
 								}),
 						})
 					: stageInput;
+			if (
+				scanJob.scanType === "tob-goal" &&
+				(stageCtx.stageName === "goal-craft" ||
+					stageCtx.stageName === "goal-surface")
+			) {
+				const inputRecord =
+					effectiveStageInput &&
+					typeof effectiveStageInput === "object" &&
+					!Array.isArray(effectiveStageInput)
+						? (effectiveStageInput as Record<string, unknown>)
+						: {};
+				const threatDirection =
+					inputRecord.threatDirection ??
+					(scanJob.scanRuntimeSettings as { threatDirection?: unknown } | null)
+						?.threatDirection;
+				if (threatDirection && !inputRecord.threatDirection) {
+					effectiveStageInput = {
+						...inputRecord,
+						threatDirection,
+					};
+				}
+			}
 			const containerNameParts = resolveStageContainerNameParts(
 				scanJob.scanType,
 				stageCtx.taskId,
@@ -243,6 +267,16 @@ export const createGenericAgentStageDefinition = <
 				effectiveStageInput,
 				input.config,
 			);
+			const renderedPrompt = await resolveStageRuntimePrompt(
+				stageCtx,
+				promptTemplate,
+				promptValues,
+			);
+			// tob-goal hunt must activate Codex native /goal (thread_goals), not a plain prompt.
+			const nativeHuntPrompt =
+				scanJob.scanType === "tob-goal" && stageCtx.stageName === "goal-hunt"
+					? tryBuildTobGoalHuntNativePrompt(effectiveStageInput)
+					: null;
 			const result = await runSingleTurnAgentInContainer({
 				scanJob,
 				agentProfile: runtime.agentProfile,
@@ -261,16 +295,13 @@ export const createGenericAgentStageDefinition = <
 				),
 				groupedPersistent: stageCtx.groupedPersistent,
 				allowAgentExit: input.config.allowAgentExit,
+				includePolicy: Boolean(input.config.runtime?.includePolicy),
 				laneThreadId: stageCtx.laneThreadId,
 				cwd: await resolveStageRuntimeCwd(stageCtx),
 				sessionMode: stageCtx.sessionMode,
 				parentSessionId: stageCtx.parentSessionId,
 				parentTaskId: stageCtx.parentTaskId,
-				prompt: await resolveStageRuntimePrompt(
-					stageCtx,
-					promptTemplate,
-					promptValues,
-				),
+				prompt: nativeHuntPrompt ?? renderedPrompt,
 				outputSchema: input.outputSchema,
 				routeOutputSchemas: stageCtx.routeOutputSchemas,
 				onThreadId: async (threadId) => {
@@ -333,13 +364,25 @@ export const createGenericAgentStageDefinition = <
 				);
 			}
 		},
-		onSuccess: async (ctx, _stageInput, _output, transaction) => {
-				for (const effect of input.config.effects) {
-					if (effect.type === "sync-candidates") {
-						await syncVulnerabilityCandidatesFromProducerTask(
-							ctx.taskId,
-							transaction as CandidateSyncTransaction | undefined,
-						);
+		onSuccess: async (ctx, stageInput, output, transaction) => {
+			for (const effect of input.config.effects) {
+				if (effect.type === "sync-candidates") {
+					await syncVulnerabilityCandidatesFromProducerTask(
+						ctx.taskId,
+						transaction as CandidateSyncTransaction | undefined,
+					);
+				}
+				if (effect.type === "tob-goal-registry") {
+					const { applyTobGoalRegistryEffect } = await import(
+						"../persistence/tob-goal-registry.repo"
+					);
+					await applyTobGoalRegistryEffect({
+						scanJobId: ctx.scanJobId,
+						taskId: ctx.taskId,
+						operation: effect.operation,
+						stageOutput: output,
+						stageInput,
+					});
 				}
 			}
 		},

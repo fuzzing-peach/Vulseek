@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sanitizeCodexAcpConfigToml } from "./codex-config-compat";
+import {
+	ensureCodexGoalsFeature,
+	sanitizeCodexAcpConfigToml,
+} from "./codex-config-compat";
 
 test("removes the unsupported default service tier from copied Codex config", () => {
 	const source = [
@@ -34,4 +37,28 @@ test("preserves supported service tiers and nested keys", () => {
 	].join("\n");
 
 	assert.equal(sanitizeCodexAcpConfigToml(source), source);
+});
+
+test("ensureCodexGoalsFeature appends features.goals when missing", () => {
+	const source = ['model = "gpt-5.4-mini"', 'approval_policy = "never"'].join(
+		"\n",
+	);
+	assert.equal(
+		ensureCodexGoalsFeature(source),
+		[
+			'model = "gpt-5.4-mini"',
+			'approval_policy = "never"',
+			"",
+			"[features]",
+			"goals = true",
+		].join("\n"),
+	);
+});
+
+test("ensureCodexGoalsFeature forces goals = true inside existing features table", () => {
+	const source = ["[features]", "goals = false", "foo = true"].join("\n");
+	assert.equal(
+		ensureCodexGoalsFeature(source),
+		["[features]", "goals = true", "foo = true"].join("\n"),
+	);
 });

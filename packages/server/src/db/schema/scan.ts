@@ -38,7 +38,12 @@ export type TaskAgentProfileSnapshot = {
 	thinkingLevelEnabled?: boolean | null;
 };
 
-export const scanTypeEnum = pgEnum("scanType", ["delta", "full", "research"]);
+export const scanTypeEnum = pgEnum("scanType", [
+	"delta",
+	"full",
+	"research",
+	"tob-goal",
+]);
 export const scanJobStatusEnum = pgEnum("scanJobStatus", [
 	"pending",
 	"running",
@@ -669,7 +674,7 @@ export const apiCreateScanJob = z
 	.object({
 		applicationId: z.string().min(1).optional(),
 		composeId: z.string().min(1).optional(),
-		scanType: z.enum(["delta", "full", "research"]),
+		scanType: z.enum(["delta", "full", "research", "tob-goal"]),
 		title: z.string().min(1).optional(),
 		description: z.string().optional(),
 		triggerSource: z.enum(["manual", "webhook", "schedule"]).default("manual"),
@@ -680,11 +685,28 @@ export const apiCreateScanJob = z
 		commitWindow: z.number().int().min(1).max(50).optional(),
 		scanRuntimeSettings: ScanRuntimeSettingsSchema.optional(),
 		researchScope: z.record(z.unknown()).optional(),
+		threatDirection: z
+			.object({
+				focus: z.string().min(1),
+				attackerModel: z.string().min(1),
+				nonGoals: z.array(z.string()).optional(),
+				notes: z.string().optional(),
+			})
+			.optional(),
 	})
 	.refine((value) => Boolean(value.applicationId) !== Boolean(value.composeId), {
 		message: "Provide exactly one target: applicationId or composeId",
 		path: ["applicationId"],
-	});
+	})
+	.refine(
+		(value) =>
+			value.scanType !== "tob-goal" ||
+			Boolean(value.threatDirection?.focus?.trim()),
+		{
+			message: "Goal scans require threatDirection.focus",
+			path: ["threatDirection"],
+		},
+	);
 
 export const apiFindScanJobsByApplication = z
 	.object({

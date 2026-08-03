@@ -115,7 +115,7 @@ import { loadScanPipelineDefinitions } from "./scan-pipeline-definitions";
 type PipelineScanJobContext = PipelineContext & {
 	scanJob: {
 		scanJobId: string;
-		scanType?: "delta" | "full" | "research";
+		scanType?: "delta" | "full" | "research" | "tob-goal";
 		repositoryTaskId?: string | null;
 		applicationId: string | null;
 		composeId: string | null;
@@ -154,7 +154,9 @@ const resolveStageReuseContainer = async (
 		? await stage.runtimeConfig.getReuseContainer()
 		: null;
 	const configured = runtimeReuseContainer ?? stage.reuseContainer ?? true;
-	return scanType === "research" ? false : configured;
+	return scanType === "research" || scanType === "tob-goal"
+		? false
+		: configured;
 };
 
 const resolveStageNullableOutput = async (
@@ -1251,7 +1253,7 @@ const failSilentStuckTask = async <TPipelineContext extends PipelineContext>(
 
 type ScanJobLike = {
 	scanJobId: string;
-	scanType?: "delta" | "full" | "research";
+	scanType?: "delta" | "full" | "research" | "tob-goal";
 	applicationId: string | null;
 	composeId: string | null;
 };

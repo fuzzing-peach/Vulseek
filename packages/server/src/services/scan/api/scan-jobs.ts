@@ -67,10 +67,16 @@ const resolveCreateScanJobTargetStageSettings = async (
 export const createScanJob = async (input: typeof apiCreateScanJob._type) => {
 	const targetStageSettings =
 		await resolveCreateScanJobTargetStageSettings(input);
+	const runtimeOverrides = {
+		...(input.scanRuntimeSettings ?? {}),
+		...(input.threatDirection
+			? { threatDirection: input.threatDirection }
+			: {}),
+	};
 	const scanRuntimeSettings = buildCompleteScanRuntimeSettings({
 		scanType: input.scanType,
 		targetStageSettings,
-		runtimeOverrides: input.scanRuntimeSettings ?? {},
+		runtimeOverrides,
 	});
 	return await createScanJobRepo({
 		...input,
