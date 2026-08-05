@@ -11,8 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { api } from "@/utils/api";
-import type { DatasetHook, DatasetSource } from "@vulseek/server/db/schema";
-import { DatasetHookEditor } from "@/components/dashboard/datasets/dataset-hook-editor";
+import type { DatasetSource } from "@vulseek/server/db/schema";
 
 const DatasetDetailPage = () => {
 	const router = useRouter();
@@ -23,7 +22,6 @@ const DatasetDetailPage = () => {
 	const removeProfile = api.dataset.profiles.remove.useMutation();
 	const createEvaluation = api.dataset.evaluations.create.useMutation();
 	const updateDataset = api.dataset.update.useMutation();
-	const agentProfiles = api.ai.getAgentProfiles.useQuery();
 	const sshKeys = api.sshKey.all.useQuery();
 	const [profileId, setProfileId] = useState("");
 	const selectedProfile = dataset.data?.profiles.find((profile) => profile.profileId === profileId) ?? dataset.data?.profiles[0];
@@ -41,12 +39,6 @@ const DatasetDetailPage = () => {
 	const [configRef, setConfigRef] = useState("");
 	const [configSshKeyId, setConfigSshKeyId] = useState<string | null>(null);
 	const [configSubmodules, setConfigSubmodules] = useState(false);
-	const [postCheckoutHook, setPostCheckoutHook] = useState<DatasetHook>({ type: "none" });
-	const [postScanHook, setPostScanHook] = useState<DatasetHook>({ type: "none" });
-	const [postEvaluationHook, setPostEvaluationHook] = useState<DatasetHook>({ type: "none" });
-	const [postCheckoutSchema, setPostCheckoutSchema] = useState("{}");
-	const [postScanSchema, setPostScanSchema] = useState("{}");
-	const [postEvaluationSchema, setPostEvaluationSchema] = useState("{}");
 
 	useEffect(() => {
 		if (!profileId && dataset.data?.profiles[0]?.profileId) setProfileId(dataset.data.profiles[0].profileId);
@@ -64,12 +56,6 @@ const DatasetDetailPage = () => {
 		setConfigRef(source.type === "git" ? source.ref ?? "" : "");
 		setConfigSshKeyId(source.type === "git" ? source.sshKeyId ?? null : null);
 		setConfigSubmodules(source.type === "git" ? source.submodules ?? false : false);
-		setPostCheckoutHook(dataset.data.postCheckoutHook as DatasetHook);
-		setPostScanHook(dataset.data.postScanHook as DatasetHook);
-		setPostEvaluationHook(dataset.data.postEvaluationHook as DatasetHook);
-		setPostCheckoutSchema(JSON.stringify(dataset.data.postCheckoutSchema ?? {}, null, 2));
-		setPostScanSchema(JSON.stringify(dataset.data.postScanSchema ?? {}, null, 2));
-		setPostEvaluationSchema(JSON.stringify(dataset.data.postEvaluationSchema ?? {}, null, 2));
 	}, [dataset.data, configurationDatasetId]);
 
 	const newProfile = async () => {
@@ -89,22 +75,10 @@ const DatasetDetailPage = () => {
 	};
 	const saveConfiguration = async (event: React.FormEvent) => {
 		event.preventDefault();
-		try {
-			const parseSchema = (value: string, label: string) => {
-				const parsed: unknown = JSON.parse(value || "{}");
-				if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${label} must be a JSON object`);
-				return parsed as Record<string, unknown>;
-			};
-			await updateDataset.mutateAsync({
+		try {			await updateDataset.mutateAsync({
 				datasetId,
 				description: configDescription,
 				source: configSourceType === "git" ? { type: "git", url: configSource, ref: configRef || null, sshKeyId: configSshKeyId, submodules: configSubmodules } : { type: "local", path: configSource },
-				postCheckoutHook,
-				postScanHook,
-				postEvaluationHook,
-				postCheckoutSchema: parseSchema(postCheckoutSchema, "Post-checkout schema"),
-				postScanSchema: parseSchema(postScanSchema, "Post-scan schema"),
-				postEvaluationSchema: parseSchema(postEvaluationSchema, "Post-evaluation schema"),
 			});
 			await dataset.refetch();
 			toast.success("Dataset configuration saved");
@@ -118,12 +92,10 @@ const DatasetDetailPage = () => {
 			<BreadcrumbSidebar list={[{ name: "Datasets", href: "/dashboard/datasets" }, { name: dataset.data.name }]} />
 			<div className="w-full space-y-5">
 				<div className="flex items-center justify-between gap-3"><div><Button variant="ghost" size="sm" asChild><Link href="/dashboard/datasets"><ArrowLeft className="size-4" />Datasets</Link></Button><h1 className="mt-2 flex items-center gap-2 text-2xl font-semibold"><Database className="size-6 text-muted-foreground" />{dataset.data.name}</h1><p className="text-sm text-muted-foreground">{dataset.data.description || "No description"}</p></div>{dataset.data.canManage && <Button onClick={newProfile} disabled={createProfile.isLoading || checkout.isLoading}><RefreshCw className="size-4" />New Profile & Checkout</Button>}</div>
-				{dataset.data.canManage && <Card><CardHeader><CardTitle>Configuration</CardTitle><CardDescription>Changes apply to future profiles. Existing profiles keep their checkout and hook snapshot.</CardDescription></CardHeader><CardContent><form onSubmit={saveConfiguration} className="grid gap-5">
+				{dataset.data.canManage && <Card><CardHeader><CardTitle>Configuration</CardTitle><CardDescription>Changes apply to future profiles. Existing profiles keep their prepared source snapshot.</CardDescription></CardHeader><CardContent><form onSubmit={saveConfiguration} className="grid gap-5">
 					<label className="grid gap-2 text-sm font-medium">Description<Input value={configDescription} onChange={(event) => setConfigDescription(event.target.value)} /></label>
 					<div className="grid gap-3 sm:grid-cols-2"><label className="grid gap-2 text-sm font-medium">Source type<select className="h-10 rounded-md border bg-background px-3" value={configSourceType} onChange={(event) => setConfigSourceType(event.target.value as "git" | "local")}><option value="git">Git repository</option><option value="local">Local directory</option></select></label><label className="grid gap-2 text-sm font-medium">{configSourceType === "git" ? "Repository URL" : "Absolute local path"}<Input required value={configSource} onChange={(event) => setConfigSource(event.target.value)} /></label></div>
 					{configSourceType === "git" && <div className="grid gap-3 sm:grid-cols-3"><label className="grid gap-2 text-sm font-medium">Git ref<Input value={configRef} onChange={(event) => setConfigRef(event.target.value)} placeholder="main" /></label><label className="grid gap-2 text-sm font-medium">SSH key<select className="h-10 rounded-md border bg-background px-3" value={configSshKeyId ?? ""} onChange={(event) => setConfigSshKeyId(event.target.value || null)}><option value="">Default Git SSH</option>{sshKeys.data?.map((key) => <option key={key.sshKeyId} value={key.sshKeyId}>{key.name}</option>)}</select></label><label className="flex items-center gap-2 self-end pb-2 text-sm font-medium"><input type="checkbox" checked={configSubmodules} onChange={(event) => setConfigSubmodules(event.target.checked)} />Fetch submodules</label></div>}
-					<div className="grid gap-4 lg:grid-cols-3"><DatasetHookEditor label="Post-checkout hook" value={postCheckoutHook} onChange={setPostCheckoutHook} agentProfiles={agentProfiles.data ?? []} /><DatasetHookEditor label="Post-scan hook" value={postScanHook} onChange={setPostScanHook} agentProfiles={agentProfiles.data ?? []} /><DatasetHookEditor label="Post-evaluation hook" value={postEvaluationHook} onChange={setPostEvaluationHook} agentProfiles={agentProfiles.data ?? []} /></div>
-					<div className="grid gap-4 lg:grid-cols-3"><label className="grid gap-2 text-sm font-medium">Post-checkout JSON Schema<Textarea className="min-h-36 font-mono text-xs" value={postCheckoutSchema} onChange={(event) => setPostCheckoutSchema(event.target.value)} /></label><label className="grid gap-2 text-sm font-medium">Post-scan JSON Schema<Textarea className="min-h-36 font-mono text-xs" value={postScanSchema} onChange={(event) => setPostScanSchema(event.target.value)} /></label><label className="grid gap-2 text-sm font-medium">Post-evaluation JSON Schema<Textarea className="min-h-36 font-mono text-xs" value={postEvaluationSchema} onChange={(event) => setPostEvaluationSchema(event.target.value)} /></label></div>
 					<div className="flex justify-end"><Button type="submit" disabled={updateDataset.isLoading}>{updateDataset.isLoading ? <Loader2 className="size-4 animate-spin" /> : null}Save Configuration</Button></div>
 				</form></CardContent></Card>}
 				<div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">

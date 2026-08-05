@@ -15,7 +15,6 @@ import {
 	} from "@vulseek/server/db/schema";
 import {
 	cancelScanJob,
-	cancelDatasetHookRuns,
 	getScanPipelineDefinitions,
 	pauseScanJob,
 	prepareDatasetProfile,
@@ -59,8 +58,6 @@ const profileSummary = (profile: typeof datasetProfiles.$inferSelect) => ({
 	sourceDigest: profile.sourceDigest,
 	checkoutImage: profile.checkoutImage,
 	checkoutImageDigest: profile.checkoutImageDigest,
-	postCheckoutStatus: profile.postCheckoutStatus,
-	postCheckoutLog: profile.postCheckoutLog,
 	errorMessage: profile.errorMessage,
 	createdAt: profile.createdAt,
 	updatedAt: profile.updatedAt,
@@ -116,12 +113,6 @@ export const datasetRouter = createTRPCRouter({
 			name: input.name,
 			description: input.description,
 			source: input.source,
-			postCheckoutHook: input.postCheckoutHook,
-			postCheckoutSchema: input.postCheckoutSchema,
-			postScanHook: input.postScanHook,
-			postEvaluationHook: input.postEvaluationHook,
-			postScanSchema: input.postScanSchema,
-			postEvaluationSchema: input.postEvaluationSchema,
 		}).returning().then((rows) => rows[0]);
 	}),
 
@@ -166,7 +157,7 @@ export const datasetRouter = createTRPCRouter({
 			requireDatasetManager(ctx.user.role);
 			const profile = await db.select({ profile: datasetProfiles, dataset: datasets }).from(datasetProfiles).innerJoin(datasets, eq(datasetProfiles.datasetId, datasets.datasetId)).where(and(eq(datasetProfiles.profileId, input.profileId), eq(datasets.organizationId, ctx.session.activeOrganizationId))).limit(1).then((rows) => rows[0]);
 			if (!profile) throw new TRPCError({ code: "NOT_FOUND", message: "Dataset profile not found" });
-			const activeEvaluation = await db.select({ evaluationId: datasetEvaluations.evaluationId }).from(datasetEvaluations).where(and(eq(datasetEvaluations.profileId, input.profileId), inArray(datasetEvaluations.status, ["pending", "running", "paused", "finalizing"]))).limit(1);
+			const activeEvaluation = await db.select({ evaluationId: datasetEvaluations.evaluationId }).from(datasetEvaluations).where(and(eq(datasetEvaluations.profileId, input.profileId), inArray(datasetEvaluations.status, ["pending", "running", "paused"]))).limit(1);
 			if (activeEvaluation[0]) throw new TRPCError({ code: "BAD_REQUEST", message: "Dataset profile is locked by an active evaluation" });
 			await prepareDatasetProfile(input.profileId);
 			return db.select().from(datasetProfiles).where(eq(datasetProfiles.profileId, input.profileId)).limit(1).then((rows) => rows[0] && profileSummary(rows[0]));
@@ -262,10 +253,10 @@ export const datasetRouter = createTRPCRouter({
 		requireDatasetManager(ctx.user.role);
 		const evaluation = await db.select({ evaluation: datasetEvaluations, dataset: datasets }).from(datasetEvaluations).innerJoin(datasets, eq(datasetEvaluations.datasetId, datasets.datasetId)).where(and(eq(datasetEvaluations.evaluationId, input.evaluationId), eq(datasets.organizationId, ctx.session.activeOrganizationId))).limit(1).then((rows) => rows[0]);
 		if (!evaluation) throw new TRPCError({ code: "NOT_FOUND", message: "Evaluation not found" });
-		if (evaluation.evaluation.status === "running" || evaluation.evaluation.status === "finalizing") {
+		if (evaluation.evaluation.status === "running") {
 			return { evaluationId: input.evaluationId, status: evaluation.evaluation.status };
 		}
-		const activeTrial = await db.select({ scanJobId: datasetEvaluationTrials.scanJobId }).from(datasetEvaluationTrials).where(and(eq(datasetEvaluationTrials.evaluationId, input.evaluationId), inArray(datasetEvaluationTrials.status, ["preparing", "running", "post_processing"]))).orderBy(asc(datasetEvaluationTrials.ordinal)).limit(1).then((rows) => rows[0]);
+		const activeTrial = await db.select({ scanJobId: datasetEvaluationTrials.scanJobId }).from(datasetEvaluationTrials).where(and(eq(datasetEvaluationTrials.evaluationId, input.evaluationId), inArray(datasetEvaluationTrials.status, ["preparing", "running"]))).orderBy(asc(datasetEvaluationTrials.ordinal)).limit(1).then((rows) => rows[0]);
 		if (evaluation.evaluation.status === "paused" && activeTrial?.scanJobId) await resumeScanJob(activeTrial.scanJobId).catch(() => {});
 		await db.update(datasetEvaluations).set({ status: "pending", errorMessage: null, updatedAt: new Date().toISOString() }).where(eq(datasetEvaluations.evaluationId, input.evaluationId));
 		await datasetEvaluationQueue.add("dataset-evaluation", { evaluationId: input.evaluationId }, { jobId: `resume-${input.evaluationId}-${Date.now()}`, removeOnComplete: 100, removeOnFail: 100 });
@@ -276,9 +267,8 @@ export const datasetRouter = createTRPCRouter({
 		requireDatasetManager(ctx.user.role);
 		const evaluation = await db.select({ evaluation: datasetEvaluations, dataset: datasets }).from(datasetEvaluations).innerJoin(datasets, eq(datasetEvaluations.datasetId, datasets.datasetId)).where(and(eq(datasetEvaluations.evaluationId, input.evaluationId), eq(datasets.organizationId, ctx.session.activeOrganizationId))).limit(1).then((rows) => rows[0]);
 		if (!evaluation) throw new TRPCError({ code: "NOT_FOUND", message: "Evaluation not found" });
-		const activeTrial = await db.select({ scanJobId: datasetEvaluationTrials.scanJobId }).from(datasetEvaluationTrials).where(and(eq(datasetEvaluationTrials.evaluationId, input.evaluationId), inArray(datasetEvaluationTrials.status, ["preparing", "running", "post_processing"]))).orderBy(asc(datasetEvaluationTrials.ordinal)).limit(1).then((rows) => rows[0]);
+		const activeTrial = await db.select({ scanJobId: datasetEvaluationTrials.scanJobId }).from(datasetEvaluationTrials).where(and(eq(datasetEvaluationTrials.evaluationId, input.evaluationId), inArray(datasetEvaluationTrials.status, ["preparing", "running"]))).orderBy(asc(datasetEvaluationTrials.ordinal)).limit(1).then((rows) => rows[0]);
 		if (activeTrial?.scanJobId) await pauseScanJob(activeTrial.scanJobId).catch(() => {});
-		await cancelDatasetHookRuns(input.evaluationId);
 		await db.update(datasetEvaluations).set({ status: "paused", updatedAt: new Date().toISOString() }).where(eq(datasetEvaluations.evaluationId, input.evaluationId));
 		return { evaluationId: input.evaluationId, status: "paused" as const };
 	}),
@@ -292,14 +282,13 @@ export const datasetRouter = createTRPCRouter({
 			.from(datasetEvaluationTrials)
 			.where(and(
 				eq(datasetEvaluationTrials.evaluationId, input.evaluationId),
-				inArray(datasetEvaluationTrials.status, ["preparing", "running", "post_processing"]),
+				inArray(datasetEvaluationTrials.status, ["preparing", "running"]),
 			))
 			.orderBy(asc(datasetEvaluationTrials.ordinal))
 			.limit(1)
 			.then((rows) => rows[0]);
 		if (activeTrial?.scanJobId) await cancelScanJob(activeTrial.scanJobId).catch(() => {});
-		await cancelDatasetHookRuns(input.evaluationId);
-		await db.update(datasetEvaluationTrials).set({ status: "canceled", errorMessage: "Evaluation canceled", finishedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }).where(and(eq(datasetEvaluationTrials.evaluationId, input.evaluationId), inArray(datasetEvaluationTrials.status, ["pending", "preparing", "running", "post_processing"])));
+		await db.update(datasetEvaluationTrials).set({ status: "canceled", errorMessage: "Evaluation canceled", finishedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }).where(and(eq(datasetEvaluationTrials.evaluationId, input.evaluationId), inArray(datasetEvaluationTrials.status, ["pending", "preparing", "running"])));
 		await db.update(datasetEvaluations).set({ status: "canceled", finishedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }).where(eq(datasetEvaluations.evaluationId, input.evaluationId));
 		return { evaluationId: input.evaluationId, status: "canceled" as const };
 	}),

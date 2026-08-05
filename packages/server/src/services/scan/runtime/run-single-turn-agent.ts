@@ -1056,7 +1056,7 @@ export type StageContainerInput = {
 	nullableOutput?: boolean;
 	groupedPersistent?: boolean;
 	allowAgentExit?: boolean;
-	/** Optional host-backed workspace used by dataset hook agents. */
+	/** Optional host-backed workspace used by Dataset evaluation scan tasks. */
 	datasetAgentRuntime?: {
 		imageTag: string;
 		projectName: string;
@@ -1064,7 +1064,6 @@ export type StageContainerInput = {
 		profileHostDir: string;
 		workspaceHostPath: string;
 		workspaceReadOnly?: boolean;
-		inputHostPath?: string;
 	};
 	/**
 	 * When true, write jobs/<scanJobId>/security-policy.md under the project
@@ -1171,9 +1170,6 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 	const datasetSampleMountArg = datasetSampleHostPath
 		? `-v '${escapeSingleQuotes(datasetSampleHostPath)}:/workspace/repo:${datasetSampleMountReadOnly ? "ro" : "rw"}'`
 		: "";
-	const datasetHookInputMountArg = input.datasetAgentRuntime?.inputHostPath
-		? `-v '${escapeSingleQuotes(input.datasetAgentRuntime.inputHostPath)}:/workspace/vulseek-input/input.json:ro' -e VULSEEK_DATASET_INPUT=/workspace/vulseek-input/input.json`
-		: "";
 
 	const stdoutPath = path.join(input.stageDirPath, runtimeFileNames.stdout);
 	const containerBootstrapPath = path.join(
@@ -1203,7 +1199,6 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		containerNetworkArg,
 		containerEnvArgs,
 		datasetSampleMountArg,
-		datasetHookInputMountArg,
 		memoryArgs,
 		stdoutPath,
 		containerBootstrapPath,
@@ -1280,7 +1275,7 @@ export const startContainer = async (input: StageContainerInput) => {
 				containerName: input.containerName,
 				taskId: input.taskId,
 				logPath,
-				command: `docker run -d --init --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.memoryArgs} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.datasetSampleMountArg} ${runtime.datasetHookInputMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
+				command: `docker run -d --init --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.memoryArgs} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.datasetSampleMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
 			}),
 	);
 

@@ -15,20 +15,6 @@ import { organization } from "./account";
 
 const timestamp = () => new Date().toISOString();
 
-export type DatasetHook =
-	| { type: "none" }
-	| {
-			type: "script";
-			command: string;
-			timeoutSeconds?: number;
-	  }
-	| {
-			type: "prompt";
-			prompt: string;
-			agentProfileId: string;
-			timeoutSeconds?: number;
-	  };
-
 export type DatasetSource =
 	| {
 			type: "git";
@@ -64,21 +50,6 @@ export const datasetSourceSchema = z.discriminatedUnion("type", [
 	}),
 ]);
 
-export const datasetHookSchema = z.discriminatedUnion("type", [
-	z.object({ type: z.literal("none") }),
-	z.object({
-		type: z.literal("script"),
-		command: z.string().trim().min(1),
-		timeoutSeconds: z.number().int().min(1).max(86_400).optional(),
-	}),
-	z.object({
-		type: z.literal("prompt"),
-		prompt: z.string().trim().min(1),
-		agentProfileId: z.string().min(1),
-		timeoutSeconds: z.number().int().min(1).max(86_400).optional(),
-	}),
-]);
-
 export const datasets = pgTable(
 	"datasets",
 	{
@@ -89,30 +60,6 @@ export const datasets = pgTable(
 		name: text("name").notNull(),
 		description: text("description").notNull().default(""),
 		source: jsonb("source").$type<DatasetSource>().notNull(),
-		postCheckoutHook: jsonb("postCheckoutHook")
-			.$type<DatasetHook>()
-			.notNull()
-			.default({ type: "none" }),
-		postCheckoutSchema: jsonb("postCheckoutSchema")
-			.$type<Record<string, unknown>>()
-			.notNull()
-			.default({}),
-		postScanHook: jsonb("postScanHook")
-			.$type<DatasetHook>()
-			.notNull()
-			.default({ type: "none" }),
-		postEvaluationHook: jsonb("postEvaluationHook")
-			.$type<DatasetHook>()
-			.notNull()
-			.default({ type: "none" }),
-		postScanSchema: jsonb("postScanSchema")
-			.$type<Record<string, unknown>>()
-			.notNull()
-			.default({}),
-		postEvaluationSchema: jsonb("postEvaluationSchema")
-			.$type<Record<string, unknown>>()
-			.notNull()
-			.default({}),
 		createdAt: text("createdAt").notNull().$defaultFn(timestamp),
 		updatedAt: text("updatedAt").notNull().$defaultFn(timestamp),
 	},
@@ -145,12 +92,6 @@ export const datasetProfiles = pgTable(
 			.$type<Record<string, unknown>>()
 			.notNull()
 			.default({}),
-		postCheckoutStatus: text("postCheckoutStatus")
-			.$type<"pending" | "running" | "completed" | "failed" | "skipped">()
-			.notNull()
-			.default("pending"),
-		postCheckoutLog: text("postCheckoutLog"),
-		postCheckoutResult: jsonb("postCheckoutResult").$type<unknown | null>(),
 		errorMessage: text("errorMessage"),
 		createdAt: text("createdAt").notNull().$defaultFn(timestamp),
 		updatedAt: text("updatedAt").notNull().$defaultFn(timestamp),
@@ -219,17 +160,11 @@ export const datasetEvaluations = pgTable(
 			.$type<Record<string, unknown>>()
 			.notNull()
 			.default({}),
-		postEvaluationStatus: text("postEvaluationStatus")
-			.$type<"pending" | "running" | "completed" | "failed" | "skipped">()
-			.notNull()
-			.default("pending"),
-		postEvaluationResult: jsonb("postEvaluationResult").$type<unknown | null>(),
 		status: text("status")
 			.$type<
 				| "pending"
 				| "running"
 				| "paused"
-				| "finalizing"
 				| "completed"
 				| "completed_with_errors"
 				| "failed"
@@ -267,21 +202,14 @@ export const datasetEvaluationTrials = pgTable(
 				| "pending"
 				| "preparing"
 				| "running"
-				| "post_processing"
 				| "completed"
 				| "scan_failed"
 				| "timed_out"
-				| "postprocess_failed"
 				| "canceled"
 			>()
 			.notNull()
 			.default("pending"),
 		scanJobId: text("scanJobId"),
-		postScanStatus: text("postScanStatus")
-			.$type<"pending" | "running" | "completed" | "failed" | "skipped">()
-			.notNull()
-			.default("pending"),
-		postScanResult: jsonb("postScanResult").$type<unknown | null>(),
 		durationMs: integer("durationMs"),
 		inputTokens: bigint("inputTokens", { mode: "number" }).notNull().default(0),
 		outputTokens: bigint("outputTokens", { mode: "number" }).notNull().default(0),
@@ -306,7 +234,7 @@ export const datasetEvaluationTrials = pgTable(
 		).on(table.evaluationId, table.sampleId, table.repetition),
 		activeEvaluationUnique: uniqueIndex("dataset_evaluation_active_trial_unique")
 			.on(table.evaluationId)
-			.where(sql`${table.status} in ('preparing', 'running', 'post_processing')`),
+			.where(sql`${table.status} in ('preparing', 'running')`),
 		statusIdx: index("dataset_evaluation_trials_status_idx").on(table.status),
 	}),
 );
@@ -320,24 +248,12 @@ export const apiCreateDataset = z.object({
 	name: z.string().trim().min(1).max(160),
 	description: z.string().max(4000).optional().default(""),
 	source: datasetSourceSchema,
-	postCheckoutHook: datasetHookSchema.optional().default({ type: "none" }),
-	postCheckoutSchema: z.record(z.unknown()).optional().default({}),
-	postScanHook: datasetHookSchema.optional().default({ type: "none" }),
-	postEvaluationHook: datasetHookSchema.optional().default({ type: "none" }),
-	postScanSchema: z.record(z.unknown()).optional().default({}),
-	postEvaluationSchema: z.record(z.unknown()).optional().default({}),
 });
 
 export const apiUpdateDataset = apiDatasetId.extend({
 	name: z.string().trim().min(1).max(160).optional(),
 	description: z.string().max(4000).optional(),
 	source: datasetSourceSchema.optional(),
-	postCheckoutHook: datasetHookSchema.optional(),
-	postCheckoutSchema: z.record(z.unknown()).optional(),
-	postScanHook: datasetHookSchema.optional(),
-	postEvaluationHook: datasetHookSchema.optional(),
-	postScanSchema: z.record(z.unknown()).optional(),
-	postEvaluationSchema: z.record(z.unknown()).optional(),
 });
 
 export const apiCreateDatasetProfile = apiDatasetId.extend({
