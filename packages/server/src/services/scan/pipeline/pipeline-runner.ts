@@ -68,7 +68,10 @@ import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";
 import { buildKnownQueueJobIdsForTask } from "../queue-job-ids";
 import { AGENT_RUNTIME_FILE_NAMES } from "../runtime/agent-runtime-files";
 import { parseDriverStdout } from "../runtime/driver-stdout-protocol";
-import { removeContainer } from "../runtime/run-single-turn-agent";
+import {
+	ensureJobAgentHome,
+	removeContainer,
+} from "../runtime/run-single-turn-agent";
 import {
 	buildEffectiveDisabledStageSet,
 	createRuntimeSettingsPolicy,
@@ -251,7 +254,6 @@ const shouldStopForPausedScanJob = async <
 	return true;
 };
 
-const ACP_DRIVER_TASK_DIR_NAME = "acp-driver-tasks";
 
 const normalizeJsonOutput = (rawOutput: string) => {
 	const trimmed = rawOutput.trim();
@@ -303,10 +305,8 @@ const copyPersistentLaneArtifactsToTaskDir = async (ctx: StageContext) => {
 	}
 	const skipEntries = new Set([
 		"inputs",
-		ACP_DRIVER_TASK_DIR_NAME,
-		"acp-driver.pid",
-		"acp-driver-launch.sh",
 		"output.json",
+		AGENT_RUNTIME_FILE_NAMES.stdin,
 		AGENT_RUNTIME_FILE_NAMES.stdout,
 	]);
 	const entries = await fs
@@ -518,64 +518,6 @@ const readTaskTokenUsage = async (ctx: StageContext) => {
 	};
 };
 
-const readPersistentQueueFailureForTask = async (
-	task: Awaited<ReturnType<typeof findTaskByIdRepo>>,
-	taskDir: string,
-) => {
-	const lane = await findStageLaneRuntimeByActiveTaskIdRepo(task.taskId).catch(
-		() => null,
-	);
-	if (!lane) {
-		return null;
-	}
-	const stageRoot = path.dirname(path.dirname(taskDir));
-	const taskQueueDir = path.join(
-		stageRoot,
-		"lanes",
-		`lane-${lane.laneIndex}`,
-		ACP_DRIVER_TASK_DIR_NAME,
-	);
-	const entries = await fs.readdir(taskQueueDir).catch(() => []);
-	for (const entry of entries.filter((value) =>
-		value.endsWith(".failed.reason.json"),
-	)) {
-		const reasonPath = path.join(taskQueueDir, entry);
-		const content = await readFileIfExists(reasonPath);
-		if (!content.trim()) {
-			continue;
-		}
-		try {
-			const parsed = JSON.parse(content) as Record<string, unknown>;
-			if (parsed.taskId !== task.taskId) {
-				continue;
-			}
-			return {
-				laneIndex: lane.laneIndex,
-				taskQueueDir,
-				reasonPath,
-				queueEntry:
-					typeof parsed.queueEntry === "string" ? parsed.queueEntry : null,
-				runningPath:
-					typeof parsed.runningPath === "string" ? parsed.runningPath : null,
-				failedPath:
-					typeof parsed.failedPath === "string" ? parsed.failedPath : null,
-				rawBytes: typeof parsed.rawBytes === "number" ? parsed.rawBytes : null,
-				error: typeof parsed.error === "string" ? parsed.error : null,
-				failedAt: typeof parsed.failedAt === "string" ? parsed.failedAt : null,
-			};
-		} catch (error) {
-			logPipelineEvent("stage.queue_failure_marker_invalid", {
-				scanJobId: task.scanJobId,
-				stageName: task.stageName,
-				taskId: task.taskId,
-				reasonPath,
-				errorMessage: getErrorMessage(error),
-			});
-		}
-	}
-	return null;
-};
-
 const extractDriverExitCode = (stdoutContent: string) =>
 	parseDriverStdout(stdoutContent).exitCode;
 
@@ -593,6 +535,16 @@ const extractThreadIdFromStdout = (stdoutContent: string) => {
 		.find((event) => event.type === "thread");
 	return typeof threadEvent?.threadId === "string"
 		? threadEvent.threadId
+		: null;
+};
+
+const extractDriverPidFromStdout = (stdoutContent: string) => {
+	const startEvent = [...parseDriverStdout(stdoutContent).events]
+		.reverse()
+		.find((event) => event.type === "start");
+	const pid = startEvent?.pid;
+	return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0
+		? pid
 		: null;
 };
 
@@ -1049,6 +1001,7 @@ const createStageContextForTask = async <
 		containerIndex: laneRuntime?.laneIndex ?? task.containerIndex ?? null,
 		laneIndex: laneRuntime?.laneIndex ?? null,
 		laneThreadId: laneRuntime?.threadId ?? null,
+		laneDriverPid: laneRuntime?.driverPid ?? null,
 		sessionMode: task.runtimeMode === "fork_session" ? "fork" : "new",
 		parentSessionId: task.forkedFromThreadId ?? null,
 		parentTaskId: task.forkedFromTaskId ?? null,
@@ -1100,16 +1053,6 @@ const inspectHalfStartedRunningTask = async <
 		threadId: task.threadId || null,
 		containerName: task.containerName || null,
 	};
-	const queueFailure = await readPersistentQueueFailureForTask(task, taskDir);
-	if (queueFailure) {
-		return {
-			reason: "queue_task_read_failed",
-			diagnostics: {
-				...diagnostics,
-				queueFailure,
-			},
-		} as const;
-	}
 	const previousSnapshot = runtime.runningStdoutSnapshots.get(task.taskId);
 	const diagnosticKey = outputSummary.exists
 		? sha1(
@@ -1437,6 +1380,7 @@ const createTaskStageContext = async <
 			null,
 		laneIndex: taskRuntime?.laneRuntime?.laneIndex ?? null,
 		laneThreadId: taskRuntime?.laneRuntime?.threadId ?? null,
+		laneDriverPid: taskRuntime?.laneRuntime?.driverPid ?? null,
 		sessionMode: taskRuntime?.laneRuntime?.threadId
 			? "new"
 			: taskRuntime?.runtimeMode === "fork_session"
@@ -2961,6 +2905,19 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 		}
 		stepStartedAt = Date.now();
 		const threadId = extractThreadIdFromStdout(stdoutContent);
+		const driverPid = extractDriverPidFromStdout(stdoutContent);
+		if (driverPid !== null) {
+			const lane = await findStageLaneRuntimeByActiveTaskIdRepo(task.taskId);
+			if (lane) {
+				await bindStageLaneRuntimeRepo({
+					scanJobId: lane.scanJobId,
+					stageName: lane.stageName,
+					laneIndex: lane.laneIndex,
+					containerName: task.containerName,
+					driverPid,
+				});
+			}
+		}
 		if (threadId) {
 			const lane = await findStageLaneRuntimeByActiveTaskIdRepo(task.taskId);
 			if (lane) {
@@ -3773,6 +3730,11 @@ const startJobRuntime = <TPipelineContext extends PipelineContext>(
 ) => {
 	return (async () => {
 		try {
+			await ensureJobAgentHome({
+				projectName: runtime.ctx.projectName,
+				serviceName: runtime.ctx.serviceName,
+				scanJobId: runtime.ctx.scanJobId,
+			});
 			await runJobLoop(runtime);
 			if (runtime.failure) {
 				throw runtime.failure;

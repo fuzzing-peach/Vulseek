@@ -151,6 +151,12 @@ const MENU: Menu = {
 		},
 		{
 			isSingle: true,
+			title: "Datasets",
+			url: "/dashboard/datasets",
+			icon: Database,
+		},
+		{
+			isSingle: true,
 			title: "Monitoring",
 			url: "/dashboard/monitoring",
 			icon: BarChartHorizontalBigIcon,
@@ -832,6 +838,7 @@ export default function Page({ children }: Props) {
 	const { data: vulseekVersion } = api.settings.getVulseekVersion.useQuery();
 
 	const includesProjects = pathname?.includes("/dashboard/project");
+	const includesDatasets = pathname?.includes("/dashboard/datasets");
 	const { data: isCloud } = api.settings.isCloud.useQuery();
 
 	const {
@@ -1101,7 +1108,7 @@ export default function Page({ children }: Props) {
 				<SidebarRail />
 			</Sidebar>
 			<SidebarInset>
-				{!includesProjects && (
+				{!includesProjects && !includesDatasets && (
 					<header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12">
 						<div className="flex items-center justify-between w-full px-4">
 							<div className="flex items-center gap-2">

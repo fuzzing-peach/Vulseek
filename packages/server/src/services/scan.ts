@@ -92,6 +92,7 @@ import {
 import { readTaskJsonArtifactForTask } from "./scan/persistence/task-artifact-resolver";
 import { normalizeTerminalTaskFilters } from "./scan/terminal-task-filters";
 import { resolveStageTaskName } from "./scan/stage-task-name";
+import { resolveDatasetTrialRuntime } from "./dataset";
 import {
 	getResearchRunningTaskPresentation,
 	getTobGoalRunningTaskPresentation,
@@ -1433,6 +1434,10 @@ const resolveCheckoutToolsDefinition = async () => {
 	};
 };
 
+/** Resolve the current tools image without exposing checkout implementation details. */
+export const resolveCurrentCheckoutToolsImage = async () =>
+	(await resolveCheckoutToolsDefinition()).imageTag;
+
 type CheckoutStatus = "running" | "completed" | "failed";
 
 type CheckoutTask = {
@@ -2394,6 +2399,54 @@ const writeContainerFile = async (
 };
 
 const resolveScanExecutionContext = async (scanJob: ScanJob) => {
+	if (scanJob.datasetEvaluationTrialId) {
+		const datasetRuntime = await resolveDatasetTrialRuntime(scanJob.scanJobId);
+		if (!datasetRuntime) {
+			throw new Error(`Dataset trial not found for scan job ${scanJob.scanJobId}`);
+		}
+		const projectName = `dataset-${datasetRuntime.dataset.datasetId}`;
+		const serviceName = `${datasetRuntime.profile.profileId}-${datasetRuntime.sample.sampleKey}`;
+		const imageTag = datasetRuntime.checkoutImage;
+		await execAsync(`docker image inspect ${escapeSingleQuotes(imageTag)}`).catch(() => {
+			throw new Error(`Dataset checkout image not found: ${imageTag}`);
+		});
+		const configuredHostRoot = resolveConfiguredScanContextHostPath();
+		if (!configuredHostRoot) {
+			throw new Error(
+				"Scan context host path is not configured. Restart vulseek-dev from dev.sh so /scan-context is mounted.",
+			);
+		}
+		const target = {
+			appName: serviceName,
+			name: datasetRuntime.sample.title || datasetRuntime.sample.sampleKey,
+			environment: {
+				project: { name: projectName, scanContextVolumeName: "" },
+			},
+			scanStageSettings: {},
+			memoryLimit: null,
+			memoryReservation: null,
+		};
+		const repositoryProfileAgentProfileId = getRuntimeStageSetting(
+			scanJob.scanRuntimeSettings,
+			SCAN_STAGE_IDS.repositoryProfile,
+		).agentProfileId || null;
+		const scanAgentProfile = repositoryProfileAgentProfileId
+			? await getAgentProfileById(repositoryProfileAgentProfileId).catch(() => null)
+			: null;
+		return {
+			isApplicationJob: false,
+			target,
+			appName: serviceName,
+			imageTag,
+			contextVolumeName: "",
+			projectName,
+			serviceName,
+			projectProfileContextRoot: buildProjectProfileContextRoot(),
+			projectProfileCacheRoot: buildProjectProfileCacheRoot(),
+			scanAgentProfile,
+			datasetSampleHostPath: datasetRuntime.sampleHostPath,
+		};
+	}
 	const isApplicationJob = Boolean(scanJob.applicationId);
 	const target = isApplicationJob
 		? await findApplicationById(scanJob.applicationId as string)
@@ -2440,6 +2493,7 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 		projectProfileContextRoot,
 		projectProfileCacheRoot,
 		scanAgentProfile,
+		datasetSampleHostPath: null,
 	};
 };
 
@@ -2715,6 +2769,14 @@ const resolveCandidateTaskRuntimeDir = async (
 };
 
 const resolveScanJobTargetIdentity = async (scanJob: ScanJob) => {
+	if (scanJob.datasetEvaluationTrialId) {
+		const datasetRuntime = await resolveDatasetTrialRuntime(scanJob.scanJobId);
+		if (!datasetRuntime) throw new Error("Invalid dataset evaluation trial target");
+		return {
+			projectName: `dataset-${datasetRuntime.dataset.datasetId}`,
+			profileName: `${datasetRuntime.profile.profileId}-${datasetRuntime.sample.sampleKey}`,
+		};
+	}
 	if (scanJob.applicationId) {
 		const application = await findApplicationById(scanJob.applicationId);
 		return {
@@ -3729,6 +3791,9 @@ export const findFullScanStageGraph = async (
 	const definitions = loadScanPipelineDefinitions();
 	const scanType: ScanType = target.scanType ?? "full";
 	const pipeline = definitions.pipelines[getPipelineIdForScanType(scanType)];
+	if (!pipeline) {
+		throw new Error(`Unknown scan pipeline for type ${scanType}`);
+	}
 	const stages = pipeline.stageIds.map((stageId) => {
 		const stage = definitions.stageMetadataById[stageId];
 		if (!stage) {
@@ -5362,6 +5427,9 @@ export const cancelScanJob = async (scanJobId: string) => {
 	const tasksToCancel = [...tasksToCancelById.values()];
 	const pipelineDefinitions = resolveScanJobPipelineDefinitions(scanJob);
 	const pipeline = pipelineDefinitions.pipelines[getPipelineIdForScanType(scanJob.scanType as ScanType)];
+	if (!pipeline) {
+		throw new Error(`Unknown scan pipeline for type ${scanJob.scanType}`);
+	}
 	const rootStageName = pipeline.rootStageId;
 	const rootQueue = getScanStageQueue(scanJobId, rootStageName);
 

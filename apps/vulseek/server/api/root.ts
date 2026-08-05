@@ -8,6 +8,7 @@ import { certificateRouter } from "./routers/certificate";
 import { clusterRouter } from "./routers/cluster";
 import { composeRouter } from "./routers/compose";
 import { deploymentRouter } from "./routers/deployment";
+import { datasetRouter } from "./routers/dataset";
 import { destinationRouter } from "./routers/destination";
 import { dockerRouter } from "./routers/docker";
 import { domainRouter } from "./routers/domain";
@@ -62,6 +63,7 @@ export const appRouter = createTRPCRouter({
 	destination: destinationRouter,
 	backup: backupRouter,
 	deployment: deploymentRouter,
+	dataset: datasetRouter,
 	previewDeployment: previewDeploymentRouter,
 	mounts: mountRouter,
 	certificates: certificateRouter,

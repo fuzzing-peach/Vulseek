@@ -2,6 +2,7 @@ import {
 	AlertTriangle,
 	ArrowUpDown,
 	BookIcon,
+	ChevronDown,
 	ExternalLinkIcon,
 	FolderInput,
 	Loader2,
@@ -54,6 +55,7 @@ import {
 import { api } from "@/utils/api";
 import { HandleProject } from "./handle-project";
 import { ProjectEnvironment } from "./project-environment";
+import { CreateDatasetDialog } from "../datasets/create-dataset-dialog";
 
 export const ShowProjects = () => {
 	const utils = api.useUtils();
@@ -148,10 +150,23 @@ export const ShowProjects = () => {
 								</CardDescription>
 							</CardHeader>
 
-							{(auth?.role === "owner" || auth?.canCreateProjects) && (
-								<div className="">
-									<HandleProject />
-								</div>
+							{(auth?.role === "owner" || auth?.canCreateProjects || auth?.role === "admin") && (
+								<DropdownMenu>
+									<DropdownMenuTrigger asChild>
+										<Button>
+											Create
+											<ChevronDown className="size-4" />
+										</Button>
+									</DropdownMenuTrigger>
+									<DropdownMenuContent align="end" className="w-52">
+										{(auth?.role === "owner" || auth?.canCreateProjects) && (
+											<HandleProject trigger="menu" />
+										)}
+										{(auth?.role === "owner" || auth?.role === "admin") && (
+												<CreateDatasetDialog trigger="menu" />
+										)}
+									</DropdownMenuContent>
+								</DropdownMenu>
 							)}
 						</div>
 

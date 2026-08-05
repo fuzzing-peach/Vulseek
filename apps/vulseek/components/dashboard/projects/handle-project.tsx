@@ -56,7 +56,7 @@ type AddProject = z.infer<typeof AddProjectSchema>;
 
 interface Props {
 	projectId?: string;
-	trigger?: "dropdown" | "button";
+	trigger?: "dropdown" | "button" | "menu";
 }
 
 export const HandleProject = ({ projectId, trigger = "dropdown" }: Props) => {
@@ -141,6 +141,14 @@ export const HandleProject = ({ projectId, trigger = "dropdown" }: Props) => {
 						<SquarePen className="h-4 w-4" />
 						Edit Project
 					</Button>
+				) : trigger === "menu" ? (
+					<DropdownMenuItem
+						className="w-full cursor-pointer space-x-3"
+						onSelect={(e) => e.preventDefault()}
+					>
+						<PlusIcon className="size-4" />
+						<span>Create Project</span>
+					</DropdownMenuItem>
 				) : (
 					<Button>
 						<PlusIcon className="h-4 w-4" />

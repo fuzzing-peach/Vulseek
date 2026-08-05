@@ -12,6 +12,7 @@ import {
 	pgTable,
 	real,
 	text,
+	uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { randomUUID } from "node:crypto";
 import { nanoid } from "nanoid";
@@ -112,6 +113,9 @@ export const scanJobs = pgTable("scan_jobs", {
 	composeId: text("composeId").references(() => compose.composeId, {
 		onDelete: "cascade",
 	}),
+	// Dataset evaluations use a trial as their scan target. The foreign key is
+	// installed by the dataset migration to avoid a circular schema declaration.
+	datasetEvaluationTrialId: text("datasetEvaluationTrialId"),
 	createdAt: text("createdAt")
 		.notNull()
 		.$defaultFn(() => new Date().toISOString()),
@@ -119,7 +123,11 @@ export const scanJobs = pgTable("scan_jobs", {
 	finishedAt: text("finishedAt"),
 	errorMessage: text("errorMessage"),
 	scanningThreadId: text("scanningThreadId"),
-});
+}, (table) => ({
+	datasetEvaluationTrialUnique: uniqueIndex("scan_jobs_dataset_trial_unique")
+		.on(table.datasetEvaluationTrialId)
+		.where(sql`${table.datasetEvaluationTrialId} is not null`),
+}));
 
 export const tasks = pgTable(
 	"tasks",
@@ -248,6 +256,7 @@ export const scanStageLaneRuntimes = pgTable(
 		laneIndex: integer("laneIndex").notNull(),
 		containerName: text("containerName"),
 		threadId: text("threadId"),
+		driverPid: integer("driverPid"),
 		activeTaskId: text("activeTaskId").references(() => tasks.taskId, {
 			onDelete: "set null",
 		}),
@@ -674,6 +683,7 @@ export const apiCreateScanJob = z
 	.object({
 		applicationId: z.string().min(1).optional(),
 		composeId: z.string().min(1).optional(),
+		datasetEvaluationTrialId: z.string().min(1).optional(),
 		scanType: z.enum(["delta", "full", "research", "tob-goal"]),
 		title: z.string().min(1).optional(),
 		description: z.string().optional(),
@@ -685,6 +695,8 @@ export const apiCreateScanJob = z
 		commitWindow: z.number().int().min(1).max(50).optional(),
 		scanRuntimeSettings: ScanRuntimeSettingsSchema.optional(),
 		researchScope: z.record(z.unknown()).optional(),
+		datasetSampleInput: z.record(z.unknown()).optional(),
+		scanPipelineDefinitionSnapshot: z.record(z.unknown()).optional(),
 		threatDirection: z
 			.object({
 				focus: z.string().min(1),
@@ -694,8 +706,17 @@ export const apiCreateScanJob = z
 			})
 			.optional(),
 	})
-	.refine((value) => Boolean(value.applicationId) !== Boolean(value.composeId), {
-		message: "Provide exactly one target: applicationId or composeId",
+	.refine(
+		(value) =>
+			[Boolean(value.applicationId), Boolean(value.composeId), Boolean(value.datasetEvaluationTrialId)].filter(Boolean).length === 1,
+		{
+			message:
+				"Provide exactly one target: applicationId, composeId, or datasetEvaluationTrialId",
+			path: ["applicationId"],
+		},
+	)
+	.refine((value) => !value.datasetEvaluationTrialId || value.scanType !== "delta", {
+		message: "Dataset evaluations do not support delta scans",
 		path: ["applicationId"],
 	})
 	.refine(

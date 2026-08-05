@@ -61,6 +61,9 @@ const resolveCreateScanJobTargetStageSettings = async (
 			.limit(1);
 		return row?.scanStageSettings ?? {};
 	}
+	if (input.datasetEvaluationTrialId) {
+		return {};
+	}
 	return {};
 };
 

@@ -26,7 +26,11 @@ export type {
 	Verification,
 } from "./artifacts/contracts/domain-object.contract";
 
-export type ScanJob = typeof scanJobs.$inferSelect & {
+export type ScanJob = Omit<
+	typeof scanJobs.$inferSelect,
+	"datasetEvaluationTrialId"
+> & {
+	datasetEvaluationTrialId?: string | null;
 	inputTokens: number;
 	outputTokens: number;
 	thoughtTokens: number;

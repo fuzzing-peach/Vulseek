@@ -31,6 +31,7 @@ const selectScanJobWithRepositoryTaskStatus = {
 	commitWindow: scanJobs.commitWindow,
 	applicationId: scanJobs.applicationId,
 	composeId: scanJobs.composeId,
+	datasetEvaluationTrialId: scanJobs.datasetEvaluationTrialId,
 	createdAt: scanJobs.createdAt,
 	startedAt: scanJobs.startedAt,
 	finishedAt: scanJobs.finishedAt,
@@ -145,6 +146,7 @@ export const listUnfinishedScanJobsRepo = async () =>
 export const createScanJobRepo = async (input: {
 	applicationId?: string | null;
 	composeId?: string | null;
+	datasetEvaluationTrialId?: string | null;
 	scanType: ScanType;
 	title?: string | null;
 	description?: string | null;
@@ -155,6 +157,8 @@ export const createScanJobRepo = async (input: {
 	targetTag?: string | null;
 	scanRuntimeSettings?: ScanRuntimeSettings | null;
 	researchScope?: Record<string, unknown> | null;
+	datasetSampleInput?: Record<string, unknown> | null;
+	scanPipelineDefinitionSnapshot?: Record<string, unknown> | null;
 	threatDirection?: {
 		focus: string;
 		attackerModel: string;
@@ -171,6 +175,7 @@ export const createScanJobRepo = async (input: {
 		.values({
 			applicationId: input.applicationId,
 			composeId: input.composeId,
+			datasetEvaluationTrialId: input.datasetEvaluationTrialId,
 			scanType: input.scanType as typeof scanJobs.$inferInsert.scanType,
 			title:
 				input.title ||
@@ -190,7 +195,8 @@ export const createScanJobRepo = async (input: {
 			scanRuntimeSettings: normalizeScanRuntimeSettings(
 				input.scanRuntimeSettings ?? {},
 			),
-			scanPipelineDefinitionSnapshot: pipelineDefinitions,
+			scanPipelineDefinitionSnapshot:
+				input.scanPipelineDefinitionSnapshot ?? pipelineDefinitions,
 			commitWindow: input.commitWindow || input.defaultDeltaCommitWindow,
 			status: "pending",
 		})
@@ -212,9 +218,12 @@ export const createScanJobRepo = async (input: {
 			? (input.scanRuntimeSettings as { threatDirection?: unknown })
 					.threatDirection
 			: undefined);
+	const datasetRootInput = input.datasetEvaluationTrialId
+		? { datasetSampleInput: input.datasetSampleInput ?? {} }
+		: {};
 	const rootInput =
 		input.scanType === "research"
-			? { researchScope: input.researchScope ?? {} }
+			? { researchScope: input.researchScope ?? {}, ...datasetRootInput }
 			: input.scanType === "tob-goal"
 				? {
 						threatDirection:
@@ -225,9 +234,12 @@ export const createScanJobRepo = async (input: {
 										focus: "Find one high-impact vulnerability matching the attacker model",
 										attackerModel:
 											"Remote attacker with network access only; no local credential or admin preconditions",
-									},
+						},
+						...datasetRootInput,
 					}
-				: undefined;
+				: input.datasetEvaluationTrialId
+					? datasetRootInput
+					: undefined;
 	await createTaskRepo({
 		scanJobId: created[0].scanJobId,
 		name:

@@ -91,6 +91,12 @@ void app.prepare().then(async () => {
 				"./queues/scan-evaluations-queue"
 			);
 			void scanEvaluationsWorker.run();
+			console.log("Starting Dataset Evaluations Worker");
+			const { datasetEvaluationsWorker, recoverPendingDatasetEvaluations } = await import(
+				"./queues/dataset-evaluations-queue"
+			);
+			await recoverPendingDatasetEvaluations();
+			void datasetEvaluationsWorker.run();
 			console.log("Starting Auto Delta Scan Polling");
 			await initAutoDeltaScanPolling();
 		}

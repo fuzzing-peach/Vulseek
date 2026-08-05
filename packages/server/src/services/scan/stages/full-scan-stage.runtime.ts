@@ -385,6 +385,7 @@ export type StageContext = PipelineContext & {
 	containerIndex: number | null;
 	laneIndex: number | null;
 	laneThreadId: string | null;
+	laneDriverPid: number | null;
 	routeOutputSchemas?: Array<{
 		routeKey: string;
 		description?: string;
@@ -438,6 +439,7 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 	containerIndex?: number | null;
 	laneIndex?: number | null;
 	laneThreadId?: string | null;
+	laneDriverPid?: number | null;
 	sessionMode?: "new" | "fork";
 	parentSessionId?: string | null;
 	parentTaskId?: string | null;
@@ -454,6 +456,7 @@ export const createStageContext = <TBase extends PipelineContext>(input: {
 	containerIndex: input.containerIndex ?? null,
 	laneIndex: input.laneIndex ?? null,
 	laneThreadId: input.laneThreadId ?? null,
+	laneDriverPid: input.laneDriverPid ?? null,
 	routeOutputSchemas: input.routeOutputSchemas,
 	sessionMode: input.sessionMode || "new",
 	parentSessionId: input.parentSessionId ?? null,

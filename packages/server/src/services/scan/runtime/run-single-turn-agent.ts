@@ -7,17 +7,12 @@ import { execAsync } from "../../../utils/process/execAsync";
 import { getAgentProfileById } from "../../ai";
 import { findApplicationById } from "../../application";
 import { findComposeById } from "../../compose";
-import { findStageLaneRuntimeByTaskIdRepo } from "../persistence/stage-lane-runtime.repo";
+import { resolveDatasetTrialRuntime } from "../../dataset";
 import { findTaskByIdRepo, updateTaskRepo } from "../persistence/task.repo";
 import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { getRuntimeStageSetting } from "../runtime-settings";
 import { writeScanJobSecurityPolicyArtifact } from "../security-policy-artifact";
 import { SCAN_STAGE_IDS } from "../stage-metadata";
-import { resolveStageTaskName } from "../stage-task-name";
-import {
-	resolveStageLaneRootSegment,
-	resolveTaskRootSegment,
-} from "../stages/full-scan-stage.runtime";
 import type { AgentProfileLike, ScanJob } from "../types";
 import {
 	AGENT_RUNTIME_FILE_NAMES,
@@ -56,8 +51,8 @@ const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
 const TASK_ALIAS_ROOT_IN_CONTAINER = "/task";
 const STRUCTURED_OUTPUT_SCHEMA_FILE_NAME = "output.schema.json";
 const STRUCTURED_OUTPUT_RESULT_FILE_NAME = "output.json";
-const CODEX_HOME_IN_CONTAINER = "/root/.codex";
 const CLAUDE_HOME_IN_CONTAINER = "/root/.claude";
+const JOB_AGENT_HOME_DIR_NAME = "agent-home";
 const PERSISTENT_DRIVER_HEALTH_MAX_IDLE_MS = Number.parseInt(
 	process.env.VULSEEK_PERSISTENT_DRIVER_HEALTH_MAX_IDLE_MS || "120000",
 	10,
@@ -355,20 +350,6 @@ const writeContainerFile = async (
 	);
 };
 
-const writeContainerFileAtomically = async (
-	containerName: string,
-	filePath: string,
-	content: string,
-) => {
-	const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random()
-		.toString(16)
-		.slice(2)}`;
-	await writeContainerFile(containerName, tempPath, content);
-	await execAsync(
-		`docker exec ${containerName} bash -lc "mv -f '${tempPath}' '${filePath}'"`,
-	);
-};
-
 const appendContainerFile = async (
 	containerName: string,
 	filePath: string,
@@ -380,6 +361,31 @@ const appendContainerFile = async (
 			filePath,
 		)}' && echo '${encoded}' | base64 -d >> '${filePath}'"`,
 	);
+};
+
+const pendingDriverInputWrites = new Map<string, Promise<void>>();
+
+const writeDriverTaskToInputFile = async (input: {
+	inputPath: string;
+	taskInput: Record<string, unknown>;
+}) => {
+	const previousWrite = pendingDriverInputWrites.get(input.inputPath) || Promise.resolve();
+	const currentWrite = previousWrite.catch(() => {}).then(async () => {
+		await fs.mkdir(path.dirname(input.inputPath), { recursive: true });
+		await fs.appendFile(
+			input.inputPath,
+			`${JSON.stringify(input.taskInput)}\n`,
+			"utf-8",
+		);
+	});
+	pendingDriverInputWrites.set(input.inputPath, currentWrite);
+	try {
+		await currentWrite;
+	} finally {
+		if (pendingDriverInputWrites.get(input.inputPath) === currentWrite) {
+			pendingDriverInputWrites.delete(input.inputPath);
+		}
+	}
 };
 
 const sleep = async (ms: number) =>
@@ -520,6 +526,58 @@ const resolveProjectProfileHostPath = async (input: {
 	return hostProfileDir;
 };
 
+const resolveJobRootFromRuntimeDir = (
+	runtimeDir: string,
+	scanJobId: string,
+) => {
+	const resolved = path.resolve(runtimeDir);
+	const parts = resolved.split(path.sep);
+	const scanJobIndex = parts.lastIndexOf(scanJobId);
+	if (scanJobIndex <= 0 || parts[scanJobIndex - 1] !== "jobs") {
+		throw new Error(
+			`Unable to resolve scan job runtime root from '${runtimeDir}' for job '${scanJobId}'`,
+		);
+	}
+	const root = parts.slice(0, scanJobIndex + 1).join(path.sep);
+	return root || path.sep;
+};
+
+export const buildJobAgentHomePathOnHost = (
+	runtimeDir: string,
+	scanJobId: string,
+) =>
+	path.join(
+		resolveJobRootFromRuntimeDir(runtimeDir, scanJobId),
+		JOB_AGENT_HOME_DIR_NAME,
+	);
+
+export const ensureJobAgentHome = async (input: {
+	projectName: string;
+	serviceName: string;
+	scanJobId: string;
+}) => {
+	const profileDir = await resolveProjectProfileHostPath({
+		projectName: input.projectName,
+		profileName: input.serviceName,
+	});
+	const jobHomePath = path.join(
+		profileDir,
+		"jobs",
+		input.scanJobId,
+		JOB_AGENT_HOME_DIR_NAME,
+	);
+	await fs.mkdir(jobHomePath, { recursive: true });
+	return jobHomePath;
+};
+
+export const buildJobAgentHomePathInContainer = (scanJobId: string) =>
+	path.posix.join(
+		CONTAINER_SCAN_CONTEXT_ROOT,
+		"jobs",
+		scanJobId,
+		JOB_AGENT_HOME_DIR_NAME,
+	);
+
 /**
  * Path for Node fs writes inside the vulseek process.
  * Prefer the in-container /scan-context mount (bind of host scan data).
@@ -574,7 +632,73 @@ const getTargetMemoryArgs = (target: unknown) => {
 	};
 };
 
-const resolveScanExecutionContext = async (scanJob: ScanJob) => {
+const resolveScanExecutionContext = async (
+	scanJob: ScanJob,
+	datasetAgentRuntime?: StageContainerInput["datasetAgentRuntime"],
+) => {
+	if (datasetAgentRuntime) {
+		return {
+			isApplicationJob: false,
+			target: {
+				appName: datasetAgentRuntime.serviceName,
+				name: datasetAgentRuntime.serviceName,
+				environment: { project: { name: datasetAgentRuntime.projectName, scanContextVolumeName: "" } },
+				scanStageSettings: {},
+				memoryLimit: null,
+				memoryReservation: null,
+			},
+			appName: datasetAgentRuntime.serviceName,
+			imageTag: datasetAgentRuntime.imageTag,
+			contextVolumeName: "",
+			projectName: datasetAgentRuntime.projectName,
+			serviceName: datasetAgentRuntime.serviceName,
+			projectProfileContextRoot: buildProjectProfileContextRoot(),
+			projectProfileCacheRoot: buildProjectProfileCacheRoot(),
+			scanAgentProfile: null,
+			datasetSampleHostPath: datasetAgentRuntime.workspaceHostPath,
+			datasetSampleMountReadOnly: datasetAgentRuntime.workspaceReadOnly !== false,
+		};
+	}
+	if (scanJob.datasetEvaluationTrialId) {
+		const datasetRuntime = await resolveDatasetTrialRuntime(scanJob.scanJobId);
+		if (!datasetRuntime) {
+			throw new Error(`Dataset trial not found for scan job ${scanJob.scanJobId}`);
+		}
+		const projectName = `dataset-${datasetRuntime.dataset.datasetId}`;
+		const serviceName = `${datasetRuntime.profile.profileId}-${datasetRuntime.sample.sampleKey}`;
+		const imageTag = datasetRuntime.checkoutImage;
+		await execAsync(`docker image inspect ${escapeSingleQuotes(imageTag)}`).catch(() => {
+			throw new Error(`Dataset checkout image not found: ${imageTag}`);
+		});
+		const repositoryProfileAgentProfileId = getRuntimeStageSetting(
+			scanJob.scanRuntimeSettings,
+			SCAN_STAGE_IDS.repositoryProfile,
+		).agentProfileId || null;
+		const scanAgentProfile = repositoryProfileAgentProfileId
+			? await getAgentProfileById(repositoryProfileAgentProfileId).catch(() => null)
+			: null;
+		return {
+			isApplicationJob: false,
+			target: {
+				appName: serviceName,
+				name: datasetRuntime.sample.title || datasetRuntime.sample.sampleKey,
+				environment: { project: { name: projectName, scanContextVolumeName: "" } },
+				scanStageSettings: {},
+				memoryLimit: null,
+				memoryReservation: null,
+			},
+			appName: serviceName,
+			imageTag,
+			contextVolumeName: "",
+			projectName,
+			serviceName,
+			projectProfileContextRoot: buildProjectProfileContextRoot(),
+			projectProfileCacheRoot: buildProjectProfileCacheRoot(),
+			scanAgentProfile,
+			datasetSampleHostPath: datasetRuntime.sampleHostPath,
+			datasetSampleMountReadOnly: true,
+		};
+	}
 	const isApplicationJob = Boolean(scanJob.applicationId);
 	const target = isApplicationJob
 		? await findApplicationById(scanJob.applicationId as string)
@@ -623,6 +747,8 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 		projectProfileContextRoot,
 		projectProfileCacheRoot,
 		scanAgentProfile,
+		datasetSampleHostPath: null,
+		datasetSampleMountReadOnly: true,
 	};
 };
 
@@ -930,6 +1056,16 @@ export type StageContainerInput = {
 	nullableOutput?: boolean;
 	groupedPersistent?: boolean;
 	allowAgentExit?: boolean;
+	/** Optional host-backed workspace used by dataset hook agents. */
+	datasetAgentRuntime?: {
+		imageTag: string;
+		projectName: string;
+		serviceName: string;
+		profileHostDir: string;
+		workspaceHostPath: string;
+		workspaceReadOnly?: boolean;
+		inputHostPath?: string;
+	};
 	/**
 	 * When true, write jobs/<scanJobId>/security-policy.md under the project
 	 * profile and append its path instruction to the agent prompt. Defaults to
@@ -946,6 +1082,7 @@ export type RunSingleTurnAgentInput = StageContainerInput & {
 	taskStageRootInContainer?: string;
 	taskRealRootInContainer?: string;
 	laneThreadId?: string | null;
+	laneDriverPid?: number | null;
 	outputSchema?: StructuredOutputSchemaSource;
 	routeOutputSchemas?: RouteOutputSchema[];
 	onThreadId?: (threadId: string) => Promise<void>;
@@ -983,19 +1120,35 @@ export const requireResearchDatabaseContext = (
 };
 
 const resolveStageContainerRuntime = async (input: StageContainerInput) => {
-	const { imageTag, projectName, serviceName, target } =
-		await resolveScanExecutionContext(input.scanJob);
+	const {
+		imageTag,
+		projectName,
+		serviceName,
+		target,
+		datasetSampleHostPath,
+		datasetSampleMountReadOnly,
+	} = await resolveScanExecutionContext(input.scanJob, input.datasetAgentRuntime);
 	requireResearchDatabaseContext(input.scanJob.scanType, process.env);
 	const globalContainerEnvPairs = getGlobalContainerEnvironmentPairs();
 	const agentsDir = await resolveAgentsDirectory();
-	const hostProfileDir = await resolveProjectProfileHostPath({
+	const hostProfileDir = input.datasetAgentRuntime?.profileHostDir || (await resolveProjectProfileHostPath({
 		projectName,
 		profileName: serviceName,
-	});
+	}));
 	const mountedProfileDir = resolveMountedProjectProfilePath({
 		projectName,
 		profileName: serviceName,
 	});
+	const jobAgentHomeHostPath = path.join(
+		hostProfileDir,
+		"jobs",
+		input.scanJob.scanJobId,
+		JOB_AGENT_HOME_DIR_NAME,
+	);
+	const jobAgentHomeContainerPath = buildJobAgentHomePathInContainer(
+		input.scanJob.scanJobId,
+	);
+	await fs.mkdir(jobAgentHomeHostPath, { recursive: true });
 	await fs.mkdir(input.stageDirPath, { recursive: true });
 	const containerEnvPairs = [
 		...globalContainerEnvPairs,
@@ -1015,6 +1168,12 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 			return `-e '${escaped}'`;
 		})
 		.join(" ");
+	const datasetSampleMountArg = datasetSampleHostPath
+		? `-v '${escapeSingleQuotes(datasetSampleHostPath)}:/workspace/repo:${datasetSampleMountReadOnly ? "ro" : "rw"}'`
+		: "";
+	const datasetHookInputMountArg = input.datasetAgentRuntime?.inputHostPath
+		? `-v '${escapeSingleQuotes(input.datasetAgentRuntime.inputHostPath)}:/workspace/vulseek-input/input.json:ro' -e VULSEEK_DATASET_INPUT=/workspace/vulseek-input/input.json`
+		: "";
 
 	const stdoutPath = path.join(input.stageDirPath, runtimeFileNames.stdout);
 	const containerBootstrapPath = path.join(
@@ -1035,14 +1194,16 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		taskRuntimeMount: {
 			mountSource: hostProfileDir,
 			mountDescription: `host_path:${hostProfileDir}`,
-			dockerMountArg: `-v '${escapeSingleQuotes(hostProfileDir)}':${mountedProfileDir}`,
+			dockerMountArg: `-v '${escapeSingleQuotes(hostProfileDir)}':${mountedProfileDir} -v '${escapeSingleQuotes(jobAgentHomeHostPath)}':${jobAgentHomeContainerPath}`,
 		},
 		agentHome: {
-			codexContainerDir: CODEX_HOME_IN_CONTAINER,
-			claudeContainerDir: CLAUDE_HOME_IN_CONTAINER,
+			codexContainerDir: jobAgentHomeContainerPath,
+			claudeContainerDir: jobAgentHomeContainerPath,
 		},
 		containerNetworkArg,
 		containerEnvArgs,
+		datasetSampleMountArg,
+		datasetHookInputMountArg,
 		memoryArgs,
 		stdoutPath,
 		containerBootstrapPath,
@@ -1119,7 +1280,7 @@ export const startContainer = async (input: StageContainerInput) => {
 				containerName: input.containerName,
 				taskId: input.taskId,
 				logPath,
-				command: `docker run -d --init --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.memoryArgs} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
+				command: `docker run -d --init --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.memoryArgs} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.datasetSampleMountArg} ${runtime.datasetHookInputMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
 			}),
 	);
 
@@ -1180,6 +1341,8 @@ const updateTaskAliasSymlinkInContainer = async (input: {
 	};
 
 const DRAIN_PREVIOUS_DRIVER_TIMEOUT_MS = 60_000;
+const ACP_DRIVER_FILE_NAME = "/opt/vulseek-acp/vulseek-acp-driver.mjs";
+const CONTAINER_BOOTSTRAP_LOG_FILE_NAME = "container-bootstrap.log";
 
 const drainPreviousTaskAliasInContainer = async (input: {
 	containerName: string;
@@ -1193,20 +1356,17 @@ const drainPreviousTaskAliasInContainer = async (input: {
 		"if [ ! -L /task ]; then exit 0; fi",
 		"old_root=$(readlink -f /task)",
 		'if [ "$old_root" = "$next_root" ]; then exit 0; fi',
-		"pid_path=\"$old_root/acp-driver.pid\"",
-		"stdout_path=\"$old_root/stdout\"",
+		"input_path=\"$old_root/stdin\"",
 		"pid=''",
-		'if [ -f "$pid_path" ]; then pid=$(cat "$pid_path" 2>/dev/null || true); fi',
+		`pid=$(pgrep -f -- "${ACP_DRIVER_FILE_NAME} $input_path" | head -n 1 || true)`,
 		'if [ -z "$pid" ]; then exit 0; fi',
 		`deadline=$(($(date +%s) + ${timeoutSeconds}))`,
 		"while :; do",
-			"  has_exit=false",
-			"  if [ -f \"$stdout_path\" ] && grep -Eq '\"type\"[[:space:]]*:[[:space:]]*\"exit\"' \"$stdout_path\"; then has_exit=true; fi",
 			"  process_alive=false",
 			"  if kill -0 \"$pid\" 2>/dev/null; then process_alive=true; fi",
-			"  if [ \"$has_exit\" = true ] && [ \"$process_alive\" = false ]; then exit 0; fi",
+			"  if [ \"$process_alive\" = false ]; then exit 0; fi",
 			"  if [ \"$(date +%s)\" -ge \"$deadline\" ]; then",
-			"    echo \"previous driver did not drain: pid=$pid old_root=$old_root has_exit=$has_exit process_alive=$process_alive\" >&2",
+			"    echo \"previous driver did not drain: pid=$pid old_root=$old_root process_alive=$process_alive\" >&2",
 			"    exit 42",
 			"  fi",
 			"  sleep 0.2",
@@ -1220,44 +1380,6 @@ const drainPreviousTaskAliasInContainer = async (input: {
 			execAsync(
 				`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(script)}'`,
 			),
-	);
-};
-
-const ACP_DRIVER_FILE_NAME = "/opt/vulseek-acp/vulseek-acp-driver.mjs";
-const ACP_DRIVER_INPUT_FILE_NAME = "acp-driver-input.json";
-const ACP_DRIVER_LAUNCH_FILE_NAME = "acp-driver-launch.sh";
-const ACP_DRIVER_PID_FILE_NAME = "acp-driver.pid";
-const CONTAINER_BOOTSTRAP_LOG_FILE_NAME = "container-bootstrap.log";
-const ACP_DRIVER_TASK_DIR_NAME = "acp-driver-tasks";
-const ACP_AGENT_HOME_DIR_NAME = "agent-home";
-const ACP_DRIVER_VERSION = "2026-07-15-sdk-1";
-
-export const buildAcpDriverLaunchScript = (input: {
-	driverScriptPath: string;
-	driverInputPath: string;
-	driverStdoutPath: string;
-	driverPidPath: string;
-}) => `#!/usr/bin/env bash
-set -euo pipefail
-
-mkdir -p '${escapeSingleQuotes(path.posix.dirname(input.driverScriptPath))}'
-: > '${escapeSingleQuotes(input.driverStdoutPath)}'
-
-nohup bash -c '
-  node "$1" "$2" >/dev/null 2>&1
-  status=$?
-  printf "%s\\n" "{\\"type\\":\\"exit\\",\\"code\\":\${status}}" >> "$3"
-' _ '${escapeSingleQuotes(input.driverScriptPath)}' '${escapeSingleQuotes(input.driverInputPath)}' '${escapeSingleQuotes(input.driverStdoutPath)}' >/dev/null 2>&1 &
-driver_pid=$!
-echo "$driver_pid" > '${escapeSingleQuotes(input.driverPidPath)}'
-`;
-
-const launchDriver = async (input: {
-	containerName: string;
-	driverLaunchPath: string;
-}) => {
-	await execAsync(
-		`docker exec ${input.containerName} bash '${input.driverLaunchPath}'`,
 	);
 };
 
@@ -1292,8 +1414,10 @@ const parseDriverHealthOutput = (output: string): DriverHealth => {
 
 const inspectDriverHealth = async (input: {
 	containerName: string;
-	driverPidPath: string;
+	driverScriptPath: string;
+	driverInputPath: string;
 	driverStdoutPath: string;
+	driverPid?: number | null;
 }): Promise<DriverHealth> => {
 	const maxIdleMs = Number.isFinite(PERSISTENT_DRIVER_HEALTH_MAX_IDLE_MS)
 		? Math.max(30000, PERSISTENT_DRIVER_HEALTH_MAX_IDLE_MS)
@@ -1301,14 +1425,17 @@ const inspectDriverHealth = async (input: {
 	const maxIdleSeconds = Math.ceil(maxIdleMs / 1000);
 	const probe = [
 		"set -u",
-		`pid_path='${escapeSingleQuotes(input.driverPidPath)}'`,
+		`driver_script='${escapeSingleQuotes(input.driverScriptPath)}'`,
+		`input_path='${escapeSingleQuotes(input.driverInputPath)}'`,
 		`stdout_path='${escapeSingleQuotes(input.driverStdoutPath)}'`,
 		`max_idle_seconds=${maxIdleSeconds}`,
-		"pid=''",
-		'if [ -f "$pid_path" ]; then pid=$(cat "$pid_path" 2>/dev/null || true); fi',
-		"if [ -z \"$pid\" ]; then echo 'alive=false'; echo 'reason=missing_pid'; exit 0; fi",
+		`expected_pid='${input.driverPid ?? ""}'`,
+		'pid="$expected_pid"',
+		'if [ -z "$pid" ]; then pid=$(pgrep -f -- "$driver_script $input_path" | head -n 1 || true); fi',
+		'if [ -z "$pid" ]; then echo \'alive=false\'; echo \'reason=process_not_running\'; exit 0; fi',
+		'if [ -n "$pid" ]; then command_line=$(ps -p "$pid" -o args= 2>/dev/null || true); case "$command_line" in *"$driver_script $input_path"*) ;; *) echo \'alive=false\'; echo \'reason=process_not_running\'; echo "pid=$pid"; exit 0;; esac; fi',
 		"state=$(ps -p \"$pid\" -o stat= 2>/dev/null | tr -d '[:space:]' || true)",
-		"if [ -z \"$state\" ]; then echo 'alive=false'; echo 'reason=process_not_running'; echo \"pid=$pid\"; exit 0; fi",
+		'if [ -z "$state" ]; then echo \'alive=false\'; echo \'reason=process_not_running\'; echo "pid=$pid"; exit 0; fi',
 		'case "$state" in *Z*) echo \'alive=false\'; echo \'reason=process_zombie\'; echo "pid=$pid"; echo "state=$state"; exit 0;; esac',
 		'if ! kill -0 "$pid" 2>/dev/null; then echo \'alive=false\'; echo \'reason=kill_check_failed\'; echo "pid=$pid"; echo "state=$state"; exit 0; fi',
 		'if [ ! -f "$stdout_path" ]; then echo \'alive=false\'; echo \'reason=missing_stdout\'; echo "pid=$pid"; echo "state=$state"; exit 0; fi',
@@ -1343,307 +1470,20 @@ const inspectDriverHealth = async (input: {
 
 const stopPersistentDriver = async (input: {
 	containerName: string;
-	driverPidPath: string;
-}) => {
-	const script = [
-		"set -u",
-		`pid_path='${escapeSingleQuotes(input.driverPidPath)}'`,
-		"pid=''",
-		'if [ -f "$pid_path" ]; then pid=$(cat "$pid_path" 2>/dev/null || true); fi',
-		'if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then kill "$pid" 2>/dev/null || true; sleep 1; fi',
-		'if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi',
-		'rm -f "$pid_path"',
-	].join("; ");
-	await execAsync(
-		`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(script)}'`,
-	).catch(() => {});
-};
-
-const quarantinePersistentDriverTaskQueue = async (input: {
-	containerName: string;
-	taskQueueDir: string;
-}) => {
-	const script = [
-		"set -u",
-		`queue_dir='${escapeSingleQuotes(input.taskQueueDir)}'`,
-		'if [ -d "$queue_dir" ]; then mv "$queue_dir" "$queue_dir.stale-$(date +%s)-$$" 2>/dev/null || true; fi',
-		'mkdir -p "$queue_dir"',
-	].join("; ");
-	await execAsync(
-		`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(script)}'`,
-	).catch(() => {});
-};
-
-const persistentDriverScriptMatchesCurrentVersion = async (input: {
-	containerName: string;
 	driverScriptPath: string;
+	driverInputPath: string;
 }) => {
-	const { stdout } = await execAsync(
-		`docker exec ${input.containerName} bash -lc "grep -F '${escapeSingleQuotes(
-			ACP_DRIVER_VERSION,
-		)}' '${escapeSingleQuotes(input.driverScriptPath)}' >/dev/null 2>&1 && echo yes || echo no"`,
-	);
-	return stdout.trim() === "yes";
-};
-
-const buildTaskAgentHomePathInContainer = (taskRootInContainer: string) =>
-	path.posix.join(taskRootInContainer, ACP_AGENT_HOME_DIR_NAME);
-
-const buildTaskRootInContainer = (input: {
-	scanJobId: string;
-	stageName: string;
-	name: string;
-	taskId: string;
-}) =>
-	path.posix.join(
-		CONTAINER_SCAN_CONTEXT_ROOT,
-		"jobs",
-		input.scanJobId,
-		resolveTaskRootSegment(input.stageName, input.name, input.taskId)
-			.split(path.sep)
-			.join("/"),
-	);
-
-const buildLaneRootInContainer = (input: {
-	scanJobId: string;
-	stageName: string;
-	laneIndex: number;
-}) =>
-	path.posix.join(
-		CONTAINER_SCAN_CONTEXT_ROOT,
-		"jobs",
-		input.scanJobId,
-		resolveStageLaneRootSegment(input.stageName, input.laneIndex)
-			.split(path.sep)
-			.join("/"),
-	);
-
-const resolveJobRootFromRuntimeDir = (
-	runtimeDir: string,
-	scanJobId: string,
-) => {
-	const resolved = path.resolve(runtimeDir);
-	const parts = resolved.split(path.sep);
-	const scanJobIndex = parts.lastIndexOf(scanJobId);
-	if (scanJobIndex <= 0 || parts[scanJobIndex - 1] !== "jobs") {
-		throw new Error(
-			`Unable to resolve scan job runtime root from '${runtimeDir}' for job '${scanJobId}'`,
-		);
-	}
-	const root = parts.slice(0, scanJobIndex + 1).join(path.sep);
-	return root || path.sep;
-};
-
-const buildTaskRootOnHost = (input: {
-	jobRootOnHost: string;
-	stageName: string;
-	name: string;
-	taskId: string;
-}) =>
-	path.join(
-		input.jobRootOnHost,
-		resolveTaskRootSegment(input.stageName, input.name, input.taskId),
-	);
-
-const buildLaneRootOnHost = (input: {
-	jobRootOnHost: string;
-	stageName: string;
-	laneIndex: number;
-}) =>
-	path.join(
-		input.jobRootOnHost,
-		resolveStageLaneRootSegment(input.stageName, input.laneIndex),
-	);
-
-const resolvePersistentLaneIndexFromContainerName = (
-	containerName: string | null | undefined,
-) => {
-	const match = (containerName || "").match(/(?:^|-)lane-(\d+)$/);
-	if (!match?.[1]) {
-		return null;
-	}
-	const laneIndex = Number.parseInt(match[1], 10);
-	return Number.isFinite(laneIndex) ? laneIndex : null;
-};
-
-const resolveParentTaskRootInContainer = async (
-	input: RunSingleTurnAgentInput,
-) => {
-	if (input.sessionMode !== "fork") {
-		return null;
-	}
-	if (!input.parentTaskId) {
-		return null;
-	}
-	const parentTask = await findTaskByIdRepo(input.parentTaskId).catch(
-		() => null,
-	);
-	if (!parentTask) {
-		throw new Error(
-			`Fork session requested but parent task '${input.parentTaskId}' was not found`,
-		);
-	}
-	return buildTaskRootInContainer({
-		scanJobId: input.scanJob.scanJobId,
-		stageName: parentTask.stageName,
-		name:
-			parentTask.name ||
-			resolveStageTaskName(parentTask.stageName, parentTask.input),
-		taskId: parentTask.taskId,
-	});
-};
-
-const resolveParentRuntimeRootOnHost = async (
-	input: RunSingleTurnAgentInput,
-) => {
-	if (input.sessionMode !== "fork" || !input.parentTaskId) {
-		return null;
-	}
-	const parentTask = await findTaskByIdRepo(input.parentTaskId).catch(
-		() => null,
-	);
-	if (!parentTask) {
-		throw new Error(
-			`Fork session requested but parent task '${input.parentTaskId}' was not found`,
-		);
-	}
-	const jobRootOnHost = resolveJobRootFromRuntimeDir(
-		input.taskStageDirPath || input.stageDirPath,
-		input.scanJob.scanJobId,
-	);
-	const parentContainerLaneIndex = resolvePersistentLaneIndexFromContainerName(
-		parentTask.containerName,
-	);
-	if (parentContainerLaneIndex !== null) {
-		return buildLaneRootOnHost({
-			jobRootOnHost,
-			stageName: parentTask.stageName,
-			laneIndex: parentContainerLaneIndex,
-		});
-	}
-	const parentLaneRuntime = await findStageLaneRuntimeByTaskIdRepo({
-		scanJobId: input.scanJob.scanJobId,
-		stageName: parentTask.stageName,
-		taskId: parentTask.taskId,
-	}).catch(() => null);
-	if (parentLaneRuntime) {
-		return buildLaneRootOnHost({
-			jobRootOnHost,
-			stageName: parentTask.stageName,
-			laneIndex: parentLaneRuntime.laneIndex,
-		});
-	}
-	return buildTaskRootOnHost({
-		jobRootOnHost,
-		stageName: parentTask.stageName,
-		name:
-			parentTask.name ||
-			resolveStageTaskName(parentTask.stageName, parentTask.input),
-		taskId: parentTask.taskId,
-	});
-};
-
-const pathExists = async (filePath: string) =>
-	Boolean(await fs.stat(filePath).catch(() => null));
-
-const copyDirectoryReplacing = async (source: string, target: string) => {
-	if (!(await pathExists(source))) {
-		return false;
-	}
-	await fs.rm(target, { recursive: true, force: true });
-	await fs.mkdir(path.dirname(target), { recursive: true });
-	await fs.cp(source, target, { recursive: true });
-	return true;
-};
-
-const prepareForkAgentHomeOnHost = async (input: {
-	runInput: RunSingleTurnAgentInput;
-	taskStageDirPath: string;
-}) => {
-	if (input.runInput.sessionMode !== "fork" || !input.runInput.parentTaskId) {
-		return;
-	}
-
-	const parentRuntimeRootOnHost = await resolveParentRuntimeRootOnHost(
-		input.runInput,
-	);
-	if (!parentRuntimeRootOnHost) {
-		throw new Error(
-			`Fork session requested but parent task runtime root could not be resolved for task '${input.runInput.parentTaskId}'`,
-		);
-	}
-
-	const parentAgentHomeOnHost = path.join(
-		parentRuntimeRootOnHost,
-		ACP_AGENT_HOME_DIR_NAME,
-	);
-	const childAgentHomeRootOnHost = input.runInput.persistent
-		? input.runInput.stageDirPath
-		: input.taskStageDirPath;
-	const childAgentHomeOnHost = path.join(
-		childAgentHomeRootOnHost,
-		ACP_AGENT_HOME_DIR_NAME,
-	);
-	const childAgentHomeExists = await pathExists(childAgentHomeOnHost);
-	const copiedAgentHome =
-		input.runInput.persistent && childAgentHomeExists
-			? true
-			: await copyDirectoryReplacing(
-					parentAgentHomeOnHost,
-					childAgentHomeOnHost,
-				);
-
-	if (!copiedAgentHome) {
-		throw new Error(
-			`Fork session requested but parent agent-home was not found at ${parentAgentHomeOnHost}`,
-		);
-	}
-};
-
-const resolveParentAgentHomePathInContainer = async (
-	input: RunSingleTurnAgentInput,
-) => {
-	if (input.sessionMode !== "fork" || !input.parentTaskId) {
-		return null;
-	}
-	const parentTask = await findTaskByIdRepo(input.parentTaskId).catch(
-		() => null,
-	);
-	if (!parentTask) {
-		throw new Error(
-			`Fork session requested but parent task '${input.parentTaskId}' was not found`,
-		);
-	}
-	const parentContainerLaneIndex = resolvePersistentLaneIndexFromContainerName(
-		parentTask.containerName,
-	);
-	if (parentContainerLaneIndex !== null) {
-		return buildTaskAgentHomePathInContainer(
-			buildLaneRootInContainer({
-				scanJobId: input.scanJob.scanJobId,
-				stageName: parentTask.stageName,
-				laneIndex: parentContainerLaneIndex,
-			}),
-		);
-	}
-	const parentLaneRuntime = await findStageLaneRuntimeByTaskIdRepo({
-		scanJobId: input.scanJob.scanJobId,
-		stageName: parentTask.stageName,
-		taskId: parentTask.taskId,
-	}).catch(() => null);
-	if (parentLaneRuntime) {
-		return buildTaskAgentHomePathInContainer(
-			buildLaneRootInContainer({
-				scanJobId: input.scanJob.scanJobId,
-				stageName: parentTask.stageName,
-				laneIndex: parentLaneRuntime.laneIndex,
-			}),
-		);
-	}
-	const parentTaskRoot = await resolveParentTaskRootInContainer(input);
-	return parentTaskRoot
-		? buildTaskAgentHomePathInContainer(parentTaskRoot)
-		: null;
+	const script = [
+		"set -u",
+		`driver_script='${escapeSingleQuotes(input.driverScriptPath)}'`,
+		`input_path='${escapeSingleQuotes(input.driverInputPath)}'`,
+		'pkill -TERM -f "$driver_script $input_path" 2>/dev/null || true',
+		'sleep 1',
+		'pkill -KILL -f "$driver_script $input_path" 2>/dev/null || true',
+	].join("; ");
+	await execAsync(
+		`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(script)}'`,
+	).catch(() => {});
 };
 
 const prepareTaskAgentHomeInContainer = async (input: {
@@ -1651,57 +1491,26 @@ const prepareTaskAgentHomeInContainer = async (input: {
 	agentProvider: string;
 	agentProfile: AgentProfileLike | null;
 	agentsDir: string | null;
-	agentHomeRootInContainer: string;
-	sessionMode?: "new" | "fork";
-	parentAgentHomePathInContainer: string | null;
-	reuseExistingAgentHome?: boolean;
+	agentHomePathInContainer: string;
 	logPath?: string | null;
 }) => {
-	const agentHomePathInContainer = buildTaskAgentHomePathInContainer(
-		input.agentHomeRootInContainer,
-	);
-	const isFork = input.sessionMode === "fork";
 	const setupScript = [
 		"set -euo pipefail",
-		`agent_home='${escapeSingleQuotes(agentHomePathInContainer)}'`,
-		`parent_agent_home='${escapeSingleQuotes(input.parentAgentHomePathInContainer || "")}'`,
-		`reuse_existing='${input.reuseExistingAgentHome ? "1" : "0"}'`,
-		'mkdir -p "$(dirname "$agent_home")"',
-		'if [ "$reuse_existing" = "1" ] && [ -d "$agent_home" ]; then',
-		"  :",
-		"else",
-		isFork
-			? [
-					'  if [ -d "$agent_home" ]; then',
-					"    :",
-					'  elif [ -n "$parent_agent_home" ] && [ -d "$parent_agent_home" ]; then',
-					'    rm -rf "$agent_home"',
-					'    cp -a "$parent_agent_home" "$agent_home"',
-					"  else",
-					'    echo "fork session requested but neither current nor parent agent-home is available: $agent_home / $parent_agent_home" >&2',
-					"    exit 1",
-					"  fi",
-				].join("\n")
-			: '  rm -rf "$agent_home" && mkdir -p "$agent_home"',
-		"fi",
+		`agent_home='${escapeSingleQuotes(input.agentHomePathInContainer)}'`,
 		'mkdir -p "$agent_home/skills"',
 	].join("\n");
 
 	await withHostBootstrapLog(
 		input.logPath,
 		"agent_home_setup",
-		`provider=${input.agentProvider} session_mode=${input.sessionMode || ""} reuse_existing=${String(
-			Boolean(input.reuseExistingAgentHome),
-		)} target=${JSON.stringify(agentHomePathInContainer)} parent=${JSON.stringify(
-			input.parentAgentHomePathInContainer || "",
-		)}`,
+		`provider=${input.agentProvider} target=${JSON.stringify(input.agentHomePathInContainer)}`,
 		() =>
 			execAsync(
 				`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(setupScript)}'`,
 			),
 	);
 
-	if (input.agentProvider === "claude_code" && !isFork) {
+	if (input.agentProvider === "claude_code") {
 		await withHostBootstrapLog(
 			input.logPath,
 			"agent_home_copy_claude_assets",
@@ -1709,11 +1518,11 @@ const prepareTaskAgentHomeInContainer = async (input: {
 			() =>
 				copyClaudeAssetsToContainerHome(
 					input.containerName,
-					agentHomePathInContainer,
+					input.agentHomePathInContainer,
 					input.agentProfile,
 				),
 		);
-	} else if (!isFork) {
+	} else {
 		await withHostBootstrapLog(
 			input.logPath,
 			"agent_home_copy_codex_assets",
@@ -1721,7 +1530,7 @@ const prepareTaskAgentHomeInContainer = async (input: {
 			() =>
 				copyCodexAssetsToContainerHome(
 					input.containerName,
-					agentHomePathInContainer,
+					input.agentHomePathInContainer,
 					input.agentsDir,
 					input.agentProfile,
 				),
@@ -1729,10 +1538,10 @@ const prepareTaskAgentHomeInContainer = async (input: {
 	}
 
 	return {
-		agentHomePathInContainer,
-		agentHomeLinkPathInContainer: agentHomePathInContainer,
-		parentAgentHomePathInContainer: input.parentAgentHomePathInContainer,
-		agentHomeCopiedFromParent: isFork,
+		agentHomePathInContainer: input.agentHomePathInContainer,
+		agentHomeLinkPathInContainer: input.agentHomePathInContainer,
+		parentAgentHomePathInContainer: null,
+		agentHomeCopiedFromParent: false,
 	};
 };
 
@@ -1872,58 +1681,42 @@ export const runSingleTurnAgentInContainer = async (
 		taskRootInContainer: realTaskRootInContainer,
 		logPath: taskStderrPath,
 	});
-	await withHostBootstrapLog(
-		taskStderrPath,
-		"prepare_fork_agent_home",
-		`session_mode=${input.sessionMode || ""} parent_task_id=${input.parentTaskId || ""}`,
-		() =>
-			prepareForkAgentHomeOnHost({
-				runInput: input,
-				taskStageDirPath,
-			}),
-	);
 	const agentProvider = input.agentProfile?.provider || "codex";
 	const driverScriptPath = ACP_DRIVER_FILE_NAME;
+	const driverInputHostPath = path.join(
+		input.stageDirPath,
+		runtimeFileNames.stdin,
+	);
 	const driverInputPath = path.posix.join(
 		input.stageRootInContainer,
-		ACP_DRIVER_INPUT_FILE_NAME,
+		runtimeFileNames.stdin,
 	);
 	const driverStdoutPath = path.posix.join(
 		taskStageRootInContainer,
 		runtimeFileNames.stdout,
 	);
-	const driverLaunchPath = path.posix.join(
-		input.stageRootInContainer,
-		ACP_DRIVER_LAUNCH_FILE_NAME,
-	);
-	const driverPidPath = path.posix.join(
-		input.stageRootInContainer,
-		ACP_DRIVER_PID_FILE_NAME,
-	);
-	const taskQueueDir = path.posix.join(
-		input.stageRootInContainer,
-		ACP_DRIVER_TASK_DIR_NAME,
-	);
 
 	const persistentDriverHealth = input.persistent
 		? await withHostBootstrapLog(
 				taskStderrPath,
-				"inspect_persistent_driver_health",
-				"",
-				() =>
-					inspectDriverHealth({
-						containerName: input.containerName,
-						driverPidPath,
-						driverStdoutPath,
-					}),
+					"inspect_persistent_driver_health",
+					"",
+					() =>
+						inspectDriverHealth({
+							containerName: input.containerName,
+							driverScriptPath,
+							driverInputPath: driverInputPath,
+							driverStdoutPath,
+							driverPid: input.laneDriverPid,
+						}),
 			)
 		: null;
 	if (persistentDriverHealth) {
 		await appendHostBootstrapLog(
 			taskStderrPath,
-			`persistent_driver_health alive=${String(
-				persistentDriverHealth.alive,
-			)} reason=${JSON.stringify(persistentDriverHealth.reason || "")} pid=${JSON.stringify(
+				`persistent_driver_health alive=${String(
+					persistentDriverHealth.alive,
+				)} reason=${JSON.stringify(persistentDriverHealth.reason || "")} pid=${JSON.stringify(
 				persistentDriverHealth.pid || "",
 			)} state=${JSON.stringify(persistentDriverHealth.state || "")} lifecycle_age_ms=${
 				persistentDriverHealth.lifecycleAgeMs ?? ""
@@ -1933,48 +1726,15 @@ export const runSingleTurnAgentInContainer = async (
 	let persistentDriverAlive = Boolean(
 		input.persistent && persistentDriverHealth?.alive,
 	);
-	if (persistentDriverAlive) {
-		const driverScriptCurrent = await withHostBootstrapLog(
-			taskStderrPath,
-			"inspect_persistent_driver_script_version",
-			`expected=${ACP_DRIVER_VERSION}`,
-			() =>
-				persistentDriverScriptMatchesCurrentVersion({
-					containerName: input.containerName,
-					driverScriptPath,
-				}),
-		).catch(() => false);
-		if (!driverScriptCurrent) {
-			await appendHostBootstrapLog(
-				taskStderrPath,
-				`persistent_driver_script_stale expected=${ACP_DRIVER_VERSION}; restarting driver`,
-			);
-			await stopPersistentDriver({
-				containerName: input.containerName,
-				driverPidPath,
-			});
-			await quarantinePersistentDriverTaskQueue({
-				containerName: input.containerName,
-				taskQueueDir,
-			});
-			persistentDriverAlive = false;
-		}
-	}
-	const agentHomeRootInContainer = input.persistent
-		? input.stageRootInContainer
-		: taskStageRootInContainer;
-	const parentAgentHomePathInContainer =
-		await resolveParentAgentHomePathInContainer(input);
+	const agentHomePathInContainer = buildJobAgentHomePathInContainer(
+		input.scanJob.scanJobId,
+	);
 	const agentsDir = await resolveAgentsDirectory();
 	const taskAgentHome = persistentDriverAlive
 		? {
-				agentHomePathInContainer: buildTaskAgentHomePathInContainer(
-					agentHomeRootInContainer,
-				),
-				agentHomeLinkPathInContainer: buildTaskAgentHomePathInContainer(
-					agentHomeRootInContainer,
-				),
-				parentAgentHomePathInContainer,
+				agentHomePathInContainer,
+				agentHomeLinkPathInContainer: agentHomePathInContainer,
+				parentAgentHomePathInContainer: null,
 				agentHomeCopiedFromParent: false,
 			}
 		: await prepareTaskAgentHomeInContainer({
@@ -1982,10 +1742,7 @@ export const runSingleTurnAgentInContainer = async (
 				agentProvider,
 				agentProfile: input.agentProfile,
 				agentsDir,
-				agentHomeRootInContainer,
-				sessionMode: input.sessionMode,
-				parentAgentHomePathInContainer,
-				reuseExistingAgentHome: Boolean(input.persistent),
+				agentHomePathInContainer,
 				logPath: taskStderrPath,
 			});
 
@@ -2033,6 +1790,7 @@ export const runSingleTurnAgentInContainer = async (
 			? input.agentProfile.thinkingLevel
 			: null,
 		sessionMode: input.laneThreadId ? "persistent" : input.sessionMode || "new",
+		persistent: Boolean(input.persistent),
 		parentSessionId: input.parentSessionId || null,
 		stdoutPath: path.posix.join(
 			taskStageRootInContainer,
@@ -2046,38 +1804,10 @@ export const runSingleTurnAgentInContainer = async (
 	});
 	if (persistentDriverAlive) {
 		const driverTaskInput = buildDriverTaskInput();
-		const requestPath = path.posix.join(
-			taskQueueDir,
-			`${Date.now()}-${input.scanJob.scanJobId}-${Math.random().toString(16).slice(2)}.json`,
-		);
-		await appendHostBootstrapLog(
-			taskStderrPath,
-			`persistent_driver_enqueue request_path=${JSON.stringify(requestPath)} lane_thread_id=${input.laneThreadId || ""}`,
-		);
-		await appendContainerFile(
-			input.containerName,
-			driverStdoutPath,
-			`${JSON.stringify({
-				type: "log",
-				level: "debug",
-				source: "host",
-				message: `persistent_driver_enqueue task_id=${input.taskId || ""} request_path=${requestPath} lane_thread_id=${input.laneThreadId || ""}`,
-			})}\n`,
-		).catch(() => {});
-		await withHostBootstrapLog(
-			taskStderrPath,
-			"persistent_driver_write_queue_entry",
-			"",
-			() =>
-				writeContainerFileAtomically(
-					input.containerName,
-					requestPath,
-					JSON.stringify(driverTaskInput, null, 2),
-				),
-		);
-		return {
-			threadId: input.laneThreadId || null,
-		};
+		await appendHostBootstrapLog(taskStderrPath, `persistent_driver_enqueue stdin task_id=${input.taskId || ""} lane_thread_id=${input.laneThreadId || ""}`);
+		await appendContainerFile(input.containerName, driverStdoutPath, `${JSON.stringify({ type: "log", level: "debug", source: "host", message: `persistent_driver_enqueue stdin task_id=${input.taskId || ""} lane_thread_id=${input.laneThreadId || ""}` })}\n`).catch(() => {});
+		await withHostBootstrapLog(taskStderrPath, "persistent_driver_append_stdin", "", () => writeDriverTaskToInputFile({ inputPath: driverInputHostPath, taskInput: driverTaskInput }));
+		return { threadId: input.laneThreadId || null };
 	}
 	const driverTaskInput = buildDriverTaskInput();
 	if (input.persistent && input.laneThreadId && persistentDriverHealth) {
@@ -2093,59 +1823,21 @@ export const runSingleTurnAgentInContainer = async (
 		).catch(() => {});
 		await stopPersistentDriver({
 			containerName: input.containerName,
-			driverPidPath,
-		});
-		await quarantinePersistentDriverTaskQueue({
-			containerName: input.containerName,
-			taskQueueDir,
+			driverScriptPath,
+			driverInputPath,
 		});
 	}
 
-	await withHostBootstrapLog(taskStderrPath, "write_driver_input", "", () =>
-		writeContainerFile(
-			input.containerName,
-			driverInputPath,
-			JSON.stringify(
-				{
-					...driverTaskInput,
-					persistent: input.persistent || false,
-					taskQueueDir,
-				},
-				null,
-				2,
-			),
-		),
-	);
-	await withHostBootstrapLog(
-		taskStderrPath,
-		"write_driver_launch_script",
-		"",
-		() =>
-			writeContainerFile(
-				input.containerName,
-				driverLaunchPath,
-				buildAcpDriverLaunchScript({
-					driverScriptPath,
-					driverInputPath,
-					driverStdoutPath,
-					driverPidPath,
-				}),
-			),
-	);
-	await withHostBootstrapLog(
-		taskStderrPath,
-		"chmod_driver_launch_script",
-		"",
-		() =>
-			execAsync(
-				`docker exec ${input.containerName} bash -lc "chmod +x '${driverLaunchPath}'"`,
-			),
+	await withHostBootstrapLog(taskStderrPath, "write_driver_stdin", "", () =>
+		writeDriverTaskToInputFile({
+			inputPath: driverInputHostPath,
+			taskInput: driverTaskInput,
+		}),
 	);
 	await withHostBootstrapLog(taskStderrPath, "launch_driver", "", () =>
-		launchDriver({
-			containerName: input.containerName,
-			driverLaunchPath,
-		}),
+		execAsync(
+			`docker exec -d ${input.containerName} node '${escapeSingleQuotes(driverScriptPath)}' '${escapeSingleQuotes(driverInputPath)}'`,
+		),
 	);
 	await appendHostBootstrapLog(
 		taskStderrPath,

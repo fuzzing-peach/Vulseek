@@ -11,17 +11,18 @@ type FindNativeAgentTranscriptInput = {
 
 export const buildNativeAgentTranscriptRoots = ({
 	runtimeDir,
-	laneIndex,
+	scanJobId,
 }: {
 	runtimeDir: string;
-	laneIndex: number | null;
+	scanJobId: string;
 }) => {
-	const roots = [runtimeDir];
-	if (laneIndex !== null) {
-		const stageRoot = path.dirname(path.dirname(runtimeDir));
-		roots.push(path.join(stageRoot, "lanes", `lane-${laneIndex}`));
+	const resolved = path.resolve(runtimeDir);
+	const parts = resolved.split(path.sep);
+	const scanJobIndex = parts.lastIndexOf(scanJobId);
+	if (scanJobIndex <= 0 || parts[scanJobIndex - 1] !== "jobs") {
+		return [];
 	}
-	return roots;
+	return [parts.slice(0, scanJobIndex + 1).join(path.sep)];
 };
 
 const isSafeThreadId = (threadId: string) =>

@@ -192,28 +192,6 @@ const withTimeout = async (promise, timeoutMs, onTimeout) => {
 	}
 };
 
-const readNextQueuedTask = async (queueDir) => {
-	if (!queueDir) return null;
-	await fs.mkdir(queueDir, { recursive: true });
-	const entry = (await fs.readdir(queueDir))
-		.filter((name) => /^[^.]+\.json$/.test(name))
-		.sort()[0];
-	if (!entry) return null;
-	const source = path.join(queueDir, entry);
-	const running = `${source}.running`;
-	try {
-		await fs.rename(source, running);
-	} catch {
-		return null;
-	}
-	try {
-		return { input: JSON.parse(await fs.readFile(running, "utf-8")), running };
-	} catch (error) {
-		await fs.rename(running, `${source}.failed`).catch(() => {});
-		throw error;
-	}
-};
-
 const updateTaskAlias = async (input) => {
 	const alias = input.taskAliasRootInContainer;
 	const target = input.taskStageRootInContainer;
@@ -299,10 +277,76 @@ const assertCapability = (capabilities, name) => {
 		throw new Error(`ACP adapter does not support session/${name}`);
 };
 
+let lastInputForError = null;
+
 const run = async () => {
-	const inputPath = process.argv[2];
-	if (!inputPath) throw new Error("ACP driver input path is required");
-	const initialInput = JSON.parse(await fs.readFile(inputPath, "utf-8"));
+	const inputPath = process.argv[2] || process.env.VULSEEK_ACP_DRIVER_INPUT_PATH;
+	if (!inputPath) {
+		throw new Error("ACP driver input JSONL path is required");
+	}
+
+	let inputOffset = 0;
+	let inputRemainder = "";
+	let pendingLines = [];
+	let stopRequested = false;
+	const readAvailableInput = async () => {
+		const fileStat = await fs.stat(inputPath).catch(() => null);
+		if (!fileStat || !fileStat.isFile()) return;
+		if (fileStat.size < inputOffset) {
+			inputOffset = 0;
+			inputRemainder = "";
+			pendingLines = [];
+		}
+		const length = fileStat.size - inputOffset;
+		if (length <= 0) return;
+		const handle = await fs.open(inputPath, "r");
+		try {
+			const buffer = Buffer.alloc(length);
+			const result = await handle.read(buffer, 0, length, inputOffset);
+			inputOffset += result.bytesRead;
+			const text = `${inputRemainder}${buffer.toString("utf-8", 0, result.bytesRead)}`;
+			const lines = text.split("\n");
+			inputRemainder = lines.pop() || "";
+			pendingLines.push(...lines.map((line) => line.replace(/\r$/, "")));
+		} finally {
+			await handle.close();
+		}
+	};
+	const readNextTaskInput = async () => {
+		while (!stopRequested) {
+			await readAvailableInput();
+			while (pendingLines.length) {
+				const line = pendingLines.shift();
+				if (!line || !line.trim()) continue;
+				try {
+					const value = JSON.parse(line);
+					if (!value || typeof value !== "object" || Array.isArray(value)) {
+						throw new Error("task input must be a JSON object");
+					}
+					lastInputForError = value;
+					return value;
+				} catch (error) {
+					if (lastInputForError?.stdoutPath) {
+						await appendProtocolEvent(lastInputForError.stdoutPath, {
+							type: "log",
+							level: "error",
+							source: "driver",
+							message: "invalid task input JSONL",
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
+					throw new Error(
+						"Invalid task input JSONL: " +
+							(error instanceof Error ? error.message : String(error)),
+					);
+				}
+			}
+			await sleep(50);
+		}
+		return null;
+	};
+	const initialInput = await readNextTaskInput();
+	if (!initialInput) return false;
 	let activeInput = initialInput;
 	await appendProtocolEvent(initialInput.stdoutPath, {
 		type: "start",
@@ -368,6 +412,7 @@ const run = async () => {
 		}
 	};
 	const stop = async (signal) => {
+		stopRequested = true;
 		await cancel().catch(() => {});
 		await appendProtocolEvent(activeInput.stdoutPath, {
 			type: "log",
@@ -456,9 +501,17 @@ const run = async () => {
 
 		const runTask = async (taskInput) => {
 			activeInput = taskInput;
+			lastInputForError = taskInput;
 			snapshots.setInput(taskInput);
 			normalizer.reset();
 			await updateTaskAlias(taskInput);
+			await writeTaskEvent(taskInput, {
+				type: "log",
+				level: "debug",
+				source: "driver",
+				message: "task_input",
+				input: taskInput,
+			});
 			await writeTaskEvent(taskInput, {
 				type: "task_start",
 				taskId: taskInput.taskId || null,
@@ -577,36 +630,16 @@ const run = async () => {
 
 		await runTask(initialInput);
 		while (initialInput.persistent) {
-			const queued = await readNextQueuedTask(initialInput.taskQueueDir);
-			if (!queued) {
-				await sleep(500);
-				continue;
-			}
-			try {
-				await runTask({
-					...queued.input,
-				});
-				await fs.rename(queued.running, `${queued.running}.done`);
-			} catch (error) {
-				await fs.writeFile(
-					`${queued.running}.failed.reason.json`,
-					JSON.stringify(
-						{
-							taskId: queued.input.taskId,
-							error: error.message,
-							failedAt: new Date().toISOString(),
-						},
-						null,
-						2,
-					),
-				);
-				await fs
-					.rename(queued.running, `${queued.running}.failed`)
-					.catch(() => {});
-			}
+			const nextInput = await readNextTaskInput();
+			if (!nextInput) break;
+			await runTask(nextInput);
 		}
 		await ctx.request(acp.methods.agent.session.close, {
 			sessionId: sessionIdRef.current,
+		});
+		await appendProtocolEvent(activeInput.stdoutPath, {
+			type: "exit",
+			code: 0,
 		});
 		return true;
 	});
@@ -618,16 +651,17 @@ const run = async () => {
 };
 
 run().catch(async (error) => {
-	const inputPath = process.argv[2];
 	try {
-		const input = inputPath
-			? JSON.parse(await fs.readFile(inputPath, "utf-8"))
-			: {};
+		const input = lastInputForError || {};
 		await appendProtocolEvent(input.stdoutPath, {
 			type: "log",
 			level: "error",
 			source: "driver",
 			message: error instanceof Error ? error.stack || error.message : String(error),
+		});
+		await appendProtocolEvent(input.stdoutPath, {
+			type: "exit",
+			code: 1,
 		});
 	} catch {}
 	fsSync.writeSync(

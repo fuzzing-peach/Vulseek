@@ -12,26 +12,23 @@ const makeRoot = async () =>
 	mkdtemp(path.join(os.tmpdir(), "vulseek-agent-stream-"));
 
 describe("findNativeAgentTranscript", () => {
-	it("keeps ordinary task lookup inside the task runtime", () => {
+	it("resolves every task to the Job-level agent home", () => {
 		assert.deepEqual(
 			buildNativeAgentTranscriptRoots({
 				runtimeDir: "/scan/jobs/job-1/stages/scan-target/tasks/task-1",
-				laneIndex: null,
+				scanJobId: "job-1",
 			}),
-			["/scan/jobs/job-1/stages/scan-target/tasks/task-1"],
+			["/scan/jobs/job-1"],
 		);
 	});
 
-	it("adds the persistent lane agent home to transcript lookup roots", () => {
+	it("does not resolve a task outside its Job runtime", () => {
 		assert.deepEqual(
 			buildNativeAgentTranscriptRoots({
-				runtimeDir: "/scan/jobs/job-1/stages/scan-target/tasks/task-1",
-				laneIndex: 3,
+				runtimeDir: "/scan/jobs/other-job/stages/scan-target/tasks/task-1",
+				scanJobId: "job-1",
 			}),
-			[
-				"/scan/jobs/job-1/stages/scan-target/tasks/task-1",
-				"/scan/jobs/job-1/stages/scan-target/lanes/lane-3",
-			],
+			[],
 		);
 	});
 

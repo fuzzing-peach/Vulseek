@@ -53,13 +53,13 @@ import {
 type GenericStageContext = StageContext & { scanJob?: ScanJob };
 
 export const resolveStageReuseContainer = (
-	scanType: ScanJob["scanType"],
+	scanType: ScanJob["scanType"] | "full_scan" | "delta_scan",
 	configured: boolean,
 ) =>
 	scanType === "research" || scanType === "tob-goal" ? false : configured;
 
 export const resolveStageContainerNameParts = (
-	scanType: ScanJob["scanType"],
+	scanType: ScanJob["scanType"] | "full_scan" | "delta_scan",
 	taskId: string,
 	configured: Array<string | null | undefined> | undefined,
 ) =>
@@ -297,6 +297,7 @@ export const createGenericAgentStageDefinition = <
 				allowAgentExit: input.config.allowAgentExit,
 				includePolicy: Boolean(input.config.runtime?.includePolicy),
 				laneThreadId: stageCtx.laneThreadId,
+				laneDriverPid: stageCtx.laneDriverPid,
 				cwd: await resolveStageRuntimeCwd(stageCtx),
 				sessionMode: stageCtx.sessionMode,
 				parentSessionId: stageCtx.parentSessionId,

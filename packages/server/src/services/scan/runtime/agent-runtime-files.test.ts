@@ -8,7 +8,7 @@ import {
 	initializeAgentRuntimeFiles,
 } from "./agent-runtime-files";
 
-test("initializes only the unified driver stdout artifact", async () => {
+test("initializes the shared driver stdin and stdout artifacts", async () => {
 	const runtimeDir = await mkdtemp(path.join(tmpdir(), "agent-runtime-files-"));
 	await initializeAgentRuntimeFiles(runtimeDir);
 	assert.deepEqual(

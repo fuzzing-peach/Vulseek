@@ -483,7 +483,10 @@ export const scanRouter = createTRPCRouter({
 		.input(apiFindOneScanJob)
 		.query(async ({ input, ctx }) => {
 			const scanJob = await findScanJobById(input.scanJobId);
-			let organizationId: string | undefined;
+			let organizationId: string | undefined = scanJob.datasetEvaluationTrialId
+				? (ctx.session.activeOrganizationId ?? undefined)
+				: undefined;
+			if (scanJob.datasetEvaluationTrialId) await authorizeScanJobAccess(scanJob.scanJobId, ctx.session.activeOrganizationId);
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
 				organizationId = application.environment.project.organizationId;
@@ -526,7 +529,10 @@ export const scanRouter = createTRPCRouter({
 			}
 
 			const scanJob = await findScanJobById(task.scanJobId);
-			let organizationId: string | undefined;
+			let organizationId: string | undefined = scanJob.datasetEvaluationTrialId
+				? (ctx.session.activeOrganizationId ?? undefined)
+				: undefined;
+			if (scanJob.datasetEvaluationTrialId) await authorizeScanJobAccess(scanJob.scanJobId, ctx.session.activeOrganizationId);
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
 				organizationId = application.environment.project.organizationId;
@@ -1126,11 +1132,13 @@ export const scanRouter = createTRPCRouter({
 			return await listScanEvaluationResults(input.scanJobId);
 		}),
 
-	resultSummary: protectedProcedure
+		resultSummary: protectedProcedure
 		.input(apiFindOneScanJob)
 		.query(async ({ input, ctx }) => {
 			const scanJob = await findScanJobById(input.scanJobId);
-			let organizationId: string | undefined;
+			let organizationId: string | undefined = scanJob.datasetEvaluationTrialId
+				? await authorizeScanJobAccess(scanJob.scanJobId, ctx.session.activeOrganizationId)
+				: undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
 				organizationId = application.environment.project.organizationId;
@@ -1166,7 +1174,9 @@ export const scanRouter = createTRPCRouter({
 		)
 		.query(async ({ input, ctx }) => {
 			const scanJob = await findScanJobById(input.scanJobId);
-			let organizationId: string | undefined;
+			let organizationId: string | undefined = scanJob.datasetEvaluationTrialId
+				? await authorizeScanJobAccess(scanJob.scanJobId, ctx.session.activeOrganizationId)
+				: undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
 				organizationId = application.environment.project.organizationId;
@@ -1201,7 +1211,9 @@ export const scanRouter = createTRPCRouter({
 		)
 		.query(async ({ input, ctx }) => {
 			const scanJob = await findScanJobById(input.scanJobId);
-			let organizationId: string | undefined;
+			let organizationId: string | undefined = scanJob.datasetEvaluationTrialId
+				? await authorizeScanJobAccess(scanJob.scanJobId, ctx.session.activeOrganizationId)
+				: undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
 				organizationId = application.environment.project.organizationId;
@@ -1244,7 +1256,9 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 			const scanJob = await findScanJobById(task.scanJobId);
-			let organizationId: string | undefined;
+			let organizationId: string | undefined = scanJob.datasetEvaluationTrialId
+				? await authorizeScanJobAccess(scanJob.scanJobId, ctx.session.activeOrganizationId)
+				: undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
 				organizationId = application.environment.project.organizationId;
@@ -1287,7 +1301,9 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 			const scanJob = await findScanJobById(task.scanJobId);
-			let organizationId: string | undefined;
+			let organizationId: string | undefined = scanJob.datasetEvaluationTrialId
+				? await authorizeScanJobAccess(scanJob.scanJobId, ctx.session.activeOrganizationId)
+				: undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
 				organizationId = application.environment.project.organizationId;

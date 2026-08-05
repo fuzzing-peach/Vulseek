@@ -8,7 +8,7 @@ const RESEARCH_REGISTRY_TABS = [
 ] as const;
 
 export const getResearchRegistryTabs = (
-	scanType: "delta" | "full" | "research" | null | undefined,
+	scanType: "delta" | "full" | "research" | "tob-goal" | null | undefined,
 ) => (scanType === "research" ? RESEARCH_REGISTRY_TABS : []);
 
 export const isResearchRegistryTab = (

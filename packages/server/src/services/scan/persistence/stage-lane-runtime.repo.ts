@@ -186,6 +186,7 @@ export const bindStageLaneRuntimeRepo = async (input: {
 	laneIndex: number;
 	containerName?: string | null;
 	threadId?: string | null;
+	driverPid?: number | null;
 }) =>
 	await db
 		.update(scanStageLaneRuntimes)
@@ -194,6 +195,7 @@ export const bindStageLaneRuntimeRepo = async (input: {
 				? { containerName: input.containerName }
 				: {}),
 			...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+			...(input.driverPid !== undefined ? { driverPid: input.driverPid } : {}),
 			updatedAt: new Date().toISOString(),
 		})
 		.where(
@@ -218,6 +220,7 @@ export const resetClaimedStageLaneRuntimeForFreshStartRepo = async (input: {
 		.set({
 			containerName: null,
 			threadId: null,
+			driverPid: null,
 			forkedFromTaskId: input.forkedFromTaskId ?? null,
 			forkedFromThreadId: input.forkedFromThreadId ?? null,
 			updatedAt: new Date().toISOString(),
@@ -252,6 +255,7 @@ export const resetStageLaneRuntimeForExitRepo = async (input: {
 		.set({
 			containerName: null,
 			threadId: null,
+			driverPid: null,
 			activeTaskId: null,
 			forkedFromTaskId: null,
 			forkedFromThreadId: null,
@@ -272,6 +276,7 @@ export const resetStageLaneRuntimeSessionForExitRepo = async (input: {
 		.update(scanStageLaneRuntimes)
 		.set({
 			threadId: null,
+			driverPid: null,
 			activeTaskId: null,
 			forkedFromTaskId: null,
 			forkedFromThreadId: null,
@@ -296,6 +301,7 @@ export const resetStageLaneRuntimeByLaneForExitRepo = async (input: {
 		.set({
 			containerName: null,
 			threadId: null,
+			driverPid: null,
 			activeTaskId: null,
 			forkedFromTaskId: null,
 			forkedFromThreadId: null,
@@ -323,6 +329,7 @@ export const resetStageLaneRuntimesByScanJobIdRepo = async (
 		.set({
 			containerName: null,
 			threadId: null,
+			driverPid: null,
 			activeTaskId: null,
 			forkedFromTaskId: null,
 			forkedFromThreadId: null,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,7 +8,17 @@ import { test } from "node:test";
 
 const run = (command, args, options) =>
 	new Promise((resolve, reject) => {
-		const child = spawn(command, args, options);
+		const inputPath = args[1];
+		if (inputPath && existsSync(inputPath)) {
+			const input = readFileSync(inputPath, "utf-8");
+			if (!input.endsWith("\n")) {
+				appendFileSync(inputPath, "\n", "utf-8");
+			}
+		}
+		const child = spawn(command, args, {
+			...options,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
 		let stdout = "";
 		let stderr = "";
 		child.stdout.on("data", (chunk) => {
@@ -73,7 +83,7 @@ rl.on("line", (line) => {
 			taskId: "task-1",
 			provider: "codex",
 			cwd: dir,
-			prompt: "Inspect the repository",
+			prompt: "Inspect the repository\nwith \"quotes\" and unicode 测试 \ and \nslashes",
 			adapterCommand: process.execPath,
 			adapterArgs: [adapterPath],
 			stdoutPath,
@@ -102,13 +112,17 @@ rl.on("line", (line) => {
 					"vendor/claude-replay/src/agent-events.mjs",
 				),
 			},
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: ["pipe", "pipe", "pipe"],
 		},
 	);
 
 	assert.equal(result.code, 0, result.stderr);
 	const events = await readEvents(stdoutPath);
 	assert.equal(events.some((event) => event.type === "start"), true);
+	assert.equal(
+		typeof events.find((event) => event.type === "start")?.pid,
+		"number",
+	);
 	assert.equal(
 		events.some(
 			(event) =>
@@ -117,6 +131,10 @@ rl.on("line", (line) => {
 		true,
 	);
 	assert.equal(events.some((event) => event.type === "activity"), true);
+	assert.deepEqual(
+		events.find((event) => event.type === "log" && event.message === "task_input")?.input.prompt,
+		"Inspect the repository\nwith \"quotes\" and unicode 测试 \ and \nslashes",
+	);
 	assert.deepEqual(
 		events.findLast((event) => event.type === "usage")?.usage,
 		{ used: 42, contextSize: 1000 },
@@ -130,8 +148,112 @@ rl.on("line", (line) => {
 			stopReason: "end_turn",
 		},
 	);
-	assert.equal(events.findLast((event) => event.type === "exit")?.code, undefined);
+	assert.equal(events.findLast((event) => event.type === "exit")?.code, 0);
 	assert.equal(JSON.parse(await readFile(outputPath, "utf-8")).output, null);
+});
+
+test("ACP driver waits for an empty file and joins a later partial JSONL line", async () => {
+	const dir = await mkdtemp(path.join(tmpdir(), "vulseek-acp-file-reader-"));
+	const adapterPath = path.join(dir, "fake-adapter.mjs");
+	const inputPath = path.join(dir, "stdin");
+	const outputPath = path.join(dir, "output.json");
+	const stdoutPath = path.join(dir, "stdout");
+	const promptLogPath = path.join(dir, "prompt.txt");
+	await writeFile(
+		adapterPath,
+		`
+import fs from "node:fs";
+import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin });
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {}, close: {} } } } });
+  if (message.method === "session/new") send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "thread-file-reader" } });
+  if (message.method === "session/prompt") {
+    fs.writeFileSync(process.argv[2], message.params.prompt[0].text);
+    send({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+  }
+  if (message.method === "session/close") { send({ jsonrpc: "2.0", id: message.id, result: {} }); process.exit(0); }
+});
+`,
+		"utf-8",
+	);
+	await writeFile(inputPath, "", "utf-8");
+	const taskInput = {
+		taskId: "task-file-reader",
+		provider: "codex",
+		cwd: dir,
+		prompt: "line one\nline two with 测试",
+		adapterCommand: process.execPath,
+		adapterArgs: [adapterPath, promptLogPath],
+		stdoutPath,
+		structuredOutputResultPathInContainer: outputPath,
+		nullableOutput: true,
+	};
+	const child = spawn(
+		process.execPath,
+		[
+			path.resolve(
+				process.cwd(),
+				"packages/server/src/services/dockerfiles/vulseek-acp-driver.mjs",
+			),
+			inputPath,
+		],
+		{
+			cwd: process.cwd(),
+			env: {
+				...process.env,
+				VULSEEK_AGENT_EVENTS_PATH: path.resolve(
+					process.cwd(),
+					"vendor/claude-replay/src/agent-events.mjs",
+				),
+			},
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
+	try {
+		await new Promise((resolve) => setTimeout(resolve, 120));
+		assert.equal(existsSync(stdoutPath), false);
+		const serialized = JSON.stringify(taskInput);
+		const splitAt = Math.max(1, serialized.length - 1);
+		appendFileSync(inputPath, serialized.slice(0, splitAt), "utf-8");
+		await new Promise((resolve) => setTimeout(resolve, 120));
+		assert.equal(existsSync(stdoutPath), false);
+		appendFileSync(inputPath, `${serialized.slice(splitAt)}\n`, "utf-8");
+		await waitFor(async () => {
+			try {
+				return (await readEvents(stdoutPath)).some(
+					(event) => event.type === "task_done" && event.taskId === taskInput.taskId,
+				);
+			} catch {
+				return false;
+			}
+		});
+		assert.equal(await readFile(promptLogPath, "utf-8"), taskInput.prompt);
+	} finally {
+		child.kill("SIGTERM");
+		await new Promise((resolve) => child.once("close", resolve));
+	}
+});
+
+test("ACP driver reports invalid JSONL input", async () => {
+	const dir = await mkdtemp(path.join(tmpdir(), "vulseek-acp-invalid-input-"));
+	const inputPath = path.join(dir, "stdin");
+	await writeFile(inputPath, "not valid json\n", "utf-8");
+	const result = await run(
+		process.execPath,
+		[
+			path.resolve(
+				process.cwd(),
+				"packages/server/src/services/dockerfiles/vulseek-acp-driver.mjs",
+			),
+			inputPath,
+		],
+		{ cwd: process.cwd() },
+	);
+	assert.equal(result.code, 1);
+	assert.match(result.stderr, /Invalid task input JSONL/);
 });
 
 test("ACP driver does not invent output for a non-nullable end_turn", async () => {
@@ -573,11 +695,9 @@ test("ACP driver reuses one session for persistent queued tasks", async () => {
 	const dir = await mkdtemp(path.join(tmpdir(), "vulseek-acp-persistent-"));
 	const adapterPath = path.join(dir, "fake-adapter.mjs");
 	const requestLogPath = path.join(dir, "requests.jsonl");
-	const queueDir = path.join(dir, "queue");
 	const firstDir = path.join(dir, "first");
 	const secondDir = path.join(dir, "second");
 	const inputPath = path.join(dir, "input.json");
-	await mkdir(queueDir, { recursive: true });
 	await writeFile(
 		adapterPath,
 		`
@@ -614,9 +734,8 @@ rl.on("line", (line) => {
 	const initialInput = {
 		...taskInput("task-1", firstDir, "first prompt"),
 		persistent: true,
-		taskQueueDir: queueDir,
 	};
-	await writeFile(inputPath, JSON.stringify(initialInput), "utf-8");
+	await writeFile(inputPath, `${JSON.stringify(initialInput)}\n`, "utf-8");
 
 	const child = spawn(
 		process.execPath,
@@ -655,18 +774,9 @@ rl.on("line", (line) => {
 				return false;
 			}
 		});
-		await writeFile(
-			path.join(queueDir, "0001-task.json.running.failed.reason.json"),
-			JSON.stringify({
-				taskId: "failed-task",
-				error: "previous failure",
-				failedAt: new Date().toISOString(),
-			}),
-			"utf-8",
-		);
-		await writeFile(
-			path.join(queueDir, "0002-task.json"),
-			JSON.stringify(taskInput("task-2", secondDir, "second prompt")),
+		appendFileSync(
+			inputPath,
+			`${JSON.stringify(taskInput("task-2", secondDir, "second prompt"))}\n`,
 			"utf-8",
 		);
 		await waitFor(async () => {
