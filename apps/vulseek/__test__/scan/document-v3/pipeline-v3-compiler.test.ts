@@ -1,0 +1,153 @@
+import { describe, expect, it } from "vitest";
+import {
+	compilePipelineDocumentV3,
+	derivePipelineCapabilities,
+	type CompiledPipelineDefinition,
+	type PipelineDocumentV3,
+} from "@vulseek/server/services/scan/pipeline/document-v3";
+import { resolveCompiledDefinition } from "@vulseek/server/services/scan/api/pipeline-runs";
+
+const baseDocument = (): PipelineDocumentV3 => ({
+	version: 3,
+	name: "test",
+	supportedTargets: ["project", "evaluation"],
+	root: "start",
+	limits: { maxTasks: 10_000, maxDurationSeconds: 86_400 },
+	schemas: {},
+	stages: {
+		start: {
+			name: "Start",
+			role: "scan",
+			group: "g",
+			mode: "serial",
+			concurrency: 1,
+			disableable: true,
+			inputArtifacts: [],
+			outputArtifacts: [],
+			effects: [],
+			containerNameParts: [],
+			allowAgentExit: false,
+			promptValues: {},
+			runtime: {
+				kind: "agent",
+				prompt: "Do it.",
+				prepareRepository: "target",
+				includePolicy: false,
+				plugins: [],
+			},
+		},
+		finish: {
+			name: "Finish",
+			role: "verification",
+			group: "g",
+			mode: "serial",
+			concurrency: 1,
+			disableable: true,
+			inputArtifacts: [],
+			outputArtifacts: [],
+			effects: [],
+			containerNameParts: [],
+			allowAgentExit: false,
+			promptValues: {},
+			runtime: {
+				kind: "agent",
+				prompt: "Verify.",
+				prepareRepository: "none",
+				includePolicy: false,
+				plugins: [],
+			},
+		},
+	},
+	edges: [
+		{
+			id: "start-to-finish",
+			name: "start-to-finish",
+			from: "start",
+			to: "finish",
+			fork: false,
+			mode: "map",
+			artifacts: [],
+		},
+	],
+	groups: [],
+});
+
+describe("compilePipelineDocumentV3", () => {
+	it("flattens stages into an ordered array with ids", () => {
+		const compiled = compilePipelineDocumentV3(baseDocument(), {
+			pipelineId: "my-pipeline",
+		});
+		expect(compiled.pipelineId).toBe("my-pipeline");
+		expect(compiled.root).toBe("start");
+		expect(compiled.stages.map((stage) => stage.id)).toEqual([
+			"start",
+			"finish",
+		]);
+		expect(compiled.edges[0]?.id).toBe("start-to-finish");
+	});
+
+	it("carries the root stage prepareRepository mode", () => {
+		const compiled = compilePipelineDocumentV3(baseDocument());
+		expect(compiled.prepareRepository).toBe("target");
+	});
+
+	it("keeps limits in the snapshot", () => {
+		const compiled = compilePipelineDocumentV3(baseDocument());
+		expect(compiled.limits).toEqual({
+			maxTasks: 10_000,
+			maxDurationSeconds: 86_400,
+		});
+	});
+});
+
+describe("derivePipelineCapabilities", () => {
+	it("detects candidate producers", () => {
+		const document = baseDocument();
+		document.stages.start!.effects = [{ type: "sync-candidates" }];
+		expect(derivePipelineCapabilities(document)).toEqual({
+			candidates: true,
+			research: false,
+			tobGoal: false,
+		});
+	});
+
+	it("detects research and tob-goal behavior from effects and plugins", () => {
+		const research = baseDocument();
+		research.stages.start!.effects = [
+			{ type: "research-registry", operation: "persist-scope" },
+		];
+		expect(derivePipelineCapabilities(research)).toMatchObject({
+			research: true,
+		});
+
+		const goal = baseDocument();
+		goal.stages.start!.runtime.plugins = ["tob-goal-native"];
+		goal.stages.start!.effects = [
+			{ type: "tob-goal-registry", operation: "persist-candidate" },
+		];
+		expect(derivePipelineCapabilities(goal)).toMatchObject({
+			tobGoal: true,
+			candidates: false,
+		});
+	});
+});
+
+describe("resolveCompiledDefinition", () => {
+	it("passes a compiled snapshot through unchanged", () => {
+		const compiled: CompiledPipelineDefinition =
+			compilePipelineDocumentV3(baseDocument());
+		expect(resolveCompiledDefinition(compiled, "")).toBe(compiled);
+	});
+
+	it("compiles a stored canonical document on the fly (Phase 2 seed rows)", () => {
+		const document = baseDocument();
+		const resolved = resolveCompiledDefinition(
+			document as unknown,
+			"",
+		);
+		expect(resolved.stages.map((stage) => stage.id)).toEqual([
+			"start",
+			"finish",
+		]);
+	});
+});

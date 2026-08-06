@@ -394,6 +394,7 @@ export const createTaskRepo = async (input: {
 			return existing;
 		}
 	}
+	await consumeScanJobTaskBudget(input.scanJobId);
 	const hasExplicitTaskId = Boolean(input.taskId);
 	let created: Array<typeof tasks.$inferSelect> = [];
 	let lastError: unknown = null;
@@ -1515,3 +1516,85 @@ export const countTasksByScanJobStageAndStatusRepo = async (
 		.from(tasks)
 		.where(eq(tasks.scanJobId, scanJobId))
 		.groupBy(tasks.stageName, tasks.status);
+
+
+/**
+ * V3 loop-safety: atomically claim one task slot against the job's persisted
+ * `maxTasks` / `deadlineAt` budget. The counter lives on scan_jobs so worker
+ * restarts and retries cannot reset it. Jobs without `maxTasks` (legacy
+ * scanType runs) are unlimited and pass through untouched.
+ *
+ * Throws `ScanJobBudgetExceededError` when the budget is exhausted; the
+ * caller stops dispatching and the worker marks the job failed with a
+ * `terminationReason`.
+ */
+export class ScanJobBudgetExceededError extends Error {
+	constructor(
+		public readonly scanJobId: string,
+		public readonly reason: "task_limit" | "duration_limit",
+	) {
+		super(
+			reason === "task_limit"
+				? `Scan job ${scanJobId} exceeded its task limit`
+				: `Scan job ${scanJobId} exceeded its duration limit`,
+		);
+		this.name = "ScanJobBudgetExceededError";
+	}
+}
+
+export const consumeScanJobTaskBudget = async (scanJobId: string) => {
+	const now = new Date().toISOString();
+	const claimed = await db
+		.update(scanJobs)
+		.set({ taskCount: sql`${scanJobs.taskCount} + 1` })
+		.where(
+			and(
+				eq(scanJobs.scanJobId, scanJobId),
+				or(
+					sql`${scanJobs.maxTasks} is null`,
+					sql`${scanJobs.taskCount} < ${scanJobs.maxTasks}`,
+				),
+				or(
+					sql`${scanJobs.deadlineAt} is null`,
+					sql`${scanJobs.deadlineAt} > ${now}`,
+				),
+			),
+		)
+		.returning({ taskCount: scanJobs.taskCount });
+
+	if (claimed.length > 0) {
+		return claimed[0]!.taskCount;
+	}
+
+	// Budget exhausted — determine why and record the termination reason so
+	// the run detail page can explain the failure.
+	const scanJob = await db
+		.select({
+			maxTasks: scanJobs.maxTasks,
+			taskCount: scanJobs.taskCount,
+			deadlineAt: scanJobs.deadlineAt,
+		})
+		.from(scanJobs)
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.limit(1)
+		.then((rows) => rows[0]);
+	const reason: "task_limit" | "duration_limit" =
+		scanJob &&
+		scanJob.maxTasks != null &&
+		scanJob.taskCount >= scanJob.maxTasks
+			? "task_limit"
+			: "duration_limit";
+	await db
+		.update(scanJobs)
+		.set({ terminationReason: reason })
+		.where(
+			and(
+				eq(scanJobs.scanJobId, scanJobId),
+				or(
+					sql`${scanJobs.terminationReason} is null`,
+					sql`${scanJobs.terminationReason} != ${reason}`,
+				),
+			),
+		);
+	throw new ScanJobBudgetExceededError(scanJobId, reason);
+};

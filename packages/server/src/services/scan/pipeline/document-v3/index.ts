@@ -38,6 +38,14 @@ export {
 	validatePipelineDocumentV3,
 } from "./pipeline-document-v3-validate";
 export {
+	compilePipelineDocumentV3,
+	derivePipelineCapabilities,
+	type CompiledEdgeV3,
+	type CompiledPipelineCapabilities,
+	type CompiledPipelineDefinition,
+	type CompiledStageV3,
+} from "./pipeline-v3-compiler";
+export {
 	convertV2DefinitionsToV3,
 	PIPELINE_KINDS,
 	type PipelineKind,

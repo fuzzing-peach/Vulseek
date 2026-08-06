@@ -7,6 +7,7 @@ import {
 } from "@vulseek/server/db/schema";
 import { nanoid } from "nanoid";
 import {
+	compilePipelineDocumentV3,
 	computePipelineContentHash,
 	normalizePipelineDocumentV3,
 	parsePipelineDocumentV3,
@@ -440,9 +441,9 @@ export const publishPipelineForOrganization = async (
 					versionNumber,
 					yaml: rawYaml,
 					contentHash,
-					// Phase 3 replaces this with the full compiled definition;
-					// the canonical document is the stable seed for it.
-					compiledDefinition: canonical as unknown,
+					compiledDefinition: compilePipelineDocumentV3(
+						canonical,
+					) as unknown,
 					source: "user",
 					publishedBy: userId,
 				})

@@ -238,6 +238,13 @@ export const createScanJobRepo = async (input: {
 	} | null;
 	commitWindow?: number | null;
 	defaultDeltaCommitWindow: number;
+	// V3 snapshot linkage (frozen at run creation).
+	pipelineId?: string | null;
+	pipelineVersionId?: string | null;
+	pipelineYamlSnapshot?: string | null;
+	pipelineCompiledSnapshot?: Record<string, unknown> | null;
+	maxTasks?: number | null;
+	deadlineAt?: string | null;
 }) => {
 	const pipelineDefinitions = loadScanPipelineDefinitions();
 	const pipelineId = getPipelineIdForScanType(input.scanType);
@@ -269,6 +276,12 @@ export const createScanJobRepo = async (input: {
 			scanPipelineDefinitionSnapshot:
 				input.scanPipelineDefinitionSnapshot ?? pipelineDefinitions,
 			commitWindow: input.commitWindow || input.defaultDeltaCommitWindow,
+			pipelineId: input.pipelineId ?? null,
+			pipelineVersionId: input.pipelineVersionId ?? null,
+			pipelineYamlSnapshot: input.pipelineYamlSnapshot ?? null,
+			pipelineCompiledSnapshot: input.pipelineCompiledSnapshot ?? null,
+			maxTasks: input.maxTasks ?? null,
+			deadlineAt: input.deadlineAt ?? null,
 			status: "pending",
 		})
 		.returning();

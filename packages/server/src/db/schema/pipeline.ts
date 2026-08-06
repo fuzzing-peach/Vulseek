@@ -50,3 +50,34 @@ export const apiValidatePipelineYaml = z.object({
 export const apiPublishedPipelineOptions = z.object({
 	targetType: z.enum(["project", "evaluation"]),
 });
+
+export const apiCreatePipelineRun = z.object({
+	target: z.discriminatedUnion("type", [
+		z.object({ type: z.literal("application"), applicationId: z.string().min(1) }),
+		z.object({ type: z.literal("compose"), composeId: z.string().min(1) }),
+		z.object({ type: z.literal("datasetTrial"), trialId: z.string().min(1) }),
+	]),
+	pipelineId: z.string().min(1),
+	pipelineVersionId: z.string().min(1).optional(),
+	repository: z
+		.object({
+			targetRef: z.string().optional(),
+			targetTag: z.string().optional(),
+			commitSha: z.string().optional(),
+			baseSha: z.string().optional(),
+			commitWindow: z.number().int().min(1).max(100).optional(),
+		})
+		.optional(),
+	title: z.string().max(200).optional(),
+	description: z.string().max(1000).optional(),
+	stageOverrides: z
+		.record(
+			z.string(),
+			z.object({
+				enabled: z.boolean().optional(),
+				concurrency: z.number().int().min(1).optional(),
+				agentProfileId: z.string().min(1).nullable().optional(),
+			}),
+		)
+		.optional(),
+});

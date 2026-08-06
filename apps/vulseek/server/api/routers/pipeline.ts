@@ -3,6 +3,7 @@ import {
 	apiArchivePipeline,
 	apiCopyVersionToDraft,
 	apiCreatePipeline,
+	apiCreatePipelineRun,
 	apiDeletePipelineDraft,
 	apiDuplicatePipeline,
 	apiPipelineId,
@@ -33,6 +34,7 @@ import {
 	unarchivePipelineForOrganization,
 	validatePipelineYaml,
 } from "@vulseek/server/services/pipeline";
+import { createPipelineRun } from "@vulseek/server/services/scan/api/pipeline-runs";
 
 /**
  * Organization-level pipeline router.
@@ -128,6 +130,32 @@ export const pipelineRouter = createTRPCRouter({
 			"tob-goal-registry",
 		],
 	})),
+
+	/**
+	 * Start a run of a published pipeline version. Members may run; only
+	 * published content is reachable (drafts can never run). The queue payload
+	 * carries only the scanJobId — the worker reads the frozen snapshot.
+	 */
+	run: protectedProcedure
+		.input(apiCreatePipelineRun)
+		.mutation(async ({ ctx, input }) => {
+			const scanJob = await createPipelineRun({
+				organizationId: ctx.session.activeOrganizationId,
+				userId: ctx.user.id,
+				...input,
+			});
+			const { scansQueue } = await import("@/server/queues/queueSetup");
+			await scansQueue.add(
+				"scans",
+				{ scanJobId: scanJob.scanJobId },
+				{
+					jobId: `scan:${scanJob.scanJobId}`,
+					removeOnComplete: true,
+					removeOnFail: true,
+				},
+			);
+			return scanJob;
+		}),
 
 	create: protectedProcedure
 		.input(apiCreatePipeline)

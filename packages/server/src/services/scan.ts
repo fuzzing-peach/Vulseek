@@ -113,8 +113,14 @@ import {
 	readScanPipelineDefinitionsYaml,
 	type ScanPipelineConfig,
 	type ScanPipelineDefinitions,
+	type ScanPipelineEdgeConfig,
+	type ScanPipelineGroupConfig,
 	type ScanPipelineStageConfig,
 } from "./scan/pipeline/scan-pipeline-definitions";
+import type {
+	CompiledPipelineDefinition,
+	CompiledStageV3,
+} from "./scan/pipeline/document-v3";
 import {
 	renderPipelineTemplate,
 	transformPipelineEdgeInput,
@@ -4252,16 +4258,22 @@ type FullScanPipelineEdge = PipelineEdge<
 	any
 >;
 
-const buildDefinitionsSchemaContract = (
-	definitions: ScanPipelineDefinitions,
+const buildSchemaContract = (
+	schemas: Record<string, Record<string, unknown>>,
 	schema: Record<string, unknown> | null | undefined,
 ): StructuredOutputSchemaSource | undefined =>
 	schema
 		? createJsonSchemaContract({
-				schemas: definitions.schemas,
+				schemas,
 				schema,
 			})
 		: undefined;
+
+const buildDefinitionsSchemaContract = (
+	definitions: ScanPipelineDefinitions,
+	schema: Record<string, unknown> | null | undefined,
+): StructuredOutputSchemaSource | undefined =>
+	buildSchemaContract(definitions.schemas, schema);
 
 const getDefinitionsStageOutputSchema = (
 	definitions: ScanPipelineDefinitions,
@@ -4272,11 +4284,11 @@ const getDefinitionsStageOutputSchema = (
 		definitions.stages.find((stage) => stage.id === stageId)?.outputSchema,
 	);
 
-const buildPipelineGroupsFromDefinitions = (
-	pipeline: ScanPipelineConfig,
+const buildPipelineGroupsFromConfigs = (
+	groups: ScanPipelineGroupConfig[],
 	stageRegistry: Map<string, FullScanPipelineStage>,
 ) =>
-	pipeline.groups.map((group) => {
+	groups.map((group) => {
 		const leader = stageRegistry.get(group.leader);
 		if (!leader) {
 			throw new Error(`missing group leader implementation: ${group.leader}`);
@@ -4381,44 +4393,50 @@ const resolveResearchTaskNameInput = async (input: {
 	};
 };
 
-const buildGenericYamlPipeline = (
-	context: FullScanPipelineContext,
-	pipelineId: string,
-): PipelineDefinition<
+const buildPipelineFromStageConfigs = (input: {
+	context: FullScanPipelineContext;
+	pipelineName: string;
+	stageIds: string[];
+	edges: ScanPipelineEdgeConfig[];
+	groups: ScanPipelineGroupConfig[];
+	stageConfigs: Map<string, ScanPipelineStageConfig>;
+	schemas: Record<string, Record<string, unknown>>;
+	/** Research/goal pipelines fall back to descriptive task-name resolvers. */
+	useTaskNameResolvers: boolean;
+	runtimeConfigBuilder?: (stageId: string) => ReturnType<
+		typeof createStageRuntimeConfig
+	>;
+}): PipelineDefinition<
 	FullScanPipelineContext,
 	FullScanPipelineStage[],
 	FullScanPipelineEdge[]
 > => {
-	const definitions = resolveScanJobPipelineDefinitions(context.scanJob);
-	const pipelineConfig = definitions.pipelines[pipelineId];
-	if (!pipelineConfig) {
-		throw new Error(`Unknown YAML pipeline: ${pipelineId}`);
-	}
+	const { context } = input;
 	const stageRegistry = new Map<string, FullScanPipelineStage>();
-	for (const stageId of pipelineConfig.stageIds) {
-		const stage = definitions.stages.find((item) => item.id === stageId);
+	for (const stageId of input.stageIds) {
+		const stage = input.stageConfigs.get(stageId);
 		if (!stage) throw new Error(`Unknown YAML stage: ${stageId}`);
 		const genericStage =
 			createGenericAgentStageDefinition<FullScanPipelineContext>({
 				config: toGenericStageConfig(stage),
-				outputSchema: getDefinitionsStageOutputSchema(definitions, stageId),
+				outputSchema: buildSchemaContract(
+					input.schemas,
+					stage.outputSchema,
+				),
 				queue: createGenericStageQueueBinding(context, stageId),
 			});
 		stageRegistry.set(stageId, {
 			...genericStage,
-			runtimeConfig: createStageRuntimeConfig(
-				context.scanJob.scanJobId,
-				stageId,
-			),
+			runtimeConfig: input.runtimeConfigBuilder?.(stageId),
 		});
 	}
 
-	const stages = pipelineConfig.stageIds.map((stageId) => {
+	const stages = input.stageIds.map((stageId) => {
 		const stage = stageRegistry.get(stageId);
 		if (!stage) throw new Error(`Missing generic stage: ${stageId}`);
 		return stage;
 	});
-	const edges = pipelineConfig.edges.map((edgeConfig) => {
+	const edges = input.edges.map((edgeConfig) => {
 		const from = stageRegistry.get(edgeConfig.from);
 		const to = stageRegistry.get(edgeConfig.to);
 		if (!from || !to) throw new Error(`Invalid YAML edge: ${edgeConfig.name}`);
@@ -4429,8 +4447,8 @@ const buildGenericYamlPipeline = (
 			fork: edgeConfig.fork,
 			mode: edgeConfig.mode || "map",
 			route: edgeConfig.route || undefined,
-			outputSchema: buildDefinitionsSchemaContract(
-				definitions,
+			outputSchema: buildSchemaContract(
+				input.schemas,
 				edgeConfig.outputSchema,
 			),
 			transformOutput: async ({
@@ -4486,9 +4504,7 @@ const buildGenericYamlPipeline = (
 					context,
 					fromTask,
 				);
-				const targetConfig = definitions.stages.find(
-					(stage) => stage.id === edgeConfig.to,
-				);
+				const targetConfig = input.stageConfigs.get(edgeConfig.to);
 				if (!targetConfig)
 					throw new Error(`Missing target stage: ${edgeConfig.to}`);
 				const taskIds: string[] = [];
@@ -4496,22 +4512,20 @@ const buildGenericYamlPipeline = (
 					const input = {
 						...(nextInput as Record<string, unknown>),
 					};
-					const taskNameInput =
-						context.scanJob.scanType === "research"
-							? await resolveResearchTaskNameInput({
-									scanJobId: context.scanJob.scanJobId,
-									stageName: edgeConfig.to,
-									value: input,
-								})
-							: input;
+					const taskNameInput = input.useTaskNameResolvers
+						? await resolveResearchTaskNameInput({
+								scanJobId: context.scanJob.scanJobId,
+								stageName: edgeConfig.to,
+								value: input,
+							})
+						: input;
 					const renderedTaskName = targetConfig.taskName
 						? String(
 								await renderPipelineTemplate(targetConfig.taskName, {
 									ctx,
-									stageInput:
-										context.scanJob.scanType === "research"
-											? taskNameInput
-											: input,
+									stageInput: input.useTaskNameResolvers
+										? taskNameInput
+										: input,
 									stageOutput: null,
 									readJsonFile: async (containerPath) =>
 										await readTaskJsonArtifact({
@@ -4529,8 +4543,7 @@ const buildGenericYamlPipeline = (
 						!/\(\s*\)$/.test(renderedTaskName) &&
 						!/:\s*$/.test(renderedTaskName)
 							? renderedTaskName
-							: context.scanJob.scanType === "research" ||
-									context.scanJob.scanType === "tob-goal"
+							: input.useTaskNameResolvers
 								? resolveStageTaskName(edgeConfig.to, taskNameInput)
 								: `${targetConfig.name} ${index + 1}`;
 					const taskId = createTaskIdForDispatchKey(dispatchKeyForItem(index));
@@ -4611,12 +4624,176 @@ const buildGenericYamlPipeline = (
 		FullScanPipelineStage[],
 		FullScanPipelineEdge[]
 	>({
-		name: pipelineConfig.name,
+		name: input.pipelineName,
 		stages,
 		edges: edges as FullScanPipelineEdge[],
-		groups: buildPipelineGroupsFromDefinitions(pipelineConfig, stageRegistry),
+		groups: buildPipelineGroupsFromConfigs(input.groups, stageRegistry),
 	});
 };
+
+const buildGenericYamlPipeline = (
+	context: FullScanPipelineContext,
+	pipelineId: string,
+): PipelineDefinition<
+	FullScanPipelineContext,
+	FullScanPipelineStage[],
+	FullScanPipelineEdge[]
+> => {
+	const definitions = resolveScanJobPipelineDefinitions(context.scanJob);
+	const pipelineConfig = definitions.pipelines[pipelineId];
+	if (!pipelineConfig) {
+		throw new Error(`Unknown YAML pipeline: ${pipelineId}`);
+	}
+	const stageConfigs = new Map(
+		definitions.stages.map((stage) => [stage.id, stage] as const),
+	);
+	return buildPipelineFromStageConfigs({
+		context,
+		pipelineName: pipelineConfig.name,
+		stageIds: pipelineConfig.stageIds,
+		edges: pipelineConfig.edges,
+		groups: pipelineConfig.groups,
+		stageConfigs,
+		schemas: definitions.schemas,
+		useTaskNameResolvers:
+			context.scanJob.scanType === "research" ||
+			context.scanJob.scanType === "tob-goal",
+		runtimeConfigBuilder: (stageId) =>
+			createStageRuntimeConfig(context.scanJob.scanJobId, stageId),
+	});
+};
+
+/**
+ * V3 runtime path: build the runner pipeline from a frozen compiled snapshot
+ * instead of the V2 definitions / scanType branch. Runtime config getters
+ * read straight from the snapshot so the job never touches filesystem
+ * definitions or `scanType`.
+ */
+const toStageConfigFromCompiled = (
+	stage: CompiledStageV3,
+): ScanPipelineStageConfig => ({
+	id: stage.id,
+	key: stage.id,
+	name: stage.name,
+	role: stage.role,
+	group: stage.group,
+	concurrency: stage.concurrency,
+	maxConcurrency: stage.maxConcurrency ?? null,
+	disableable: stage.disableable,
+	description: stage.description ?? null,
+	inputSchema: stage.inputSchema ?? null,
+	outputSchema: stage.outputSchema ?? null,
+	runtimeConfig: {
+		agentProfile: stage.runtime.agentProfileId ?? null,
+		persistent: stage.runtime.persistent ?? null,
+		reuseContainer: stage.runtime.reuseContainer ?? null,
+		mode: stage.mode,
+		nullableOutput: stage.runtime.nullableOutput ?? null,
+		cwd: stage.runtime.cwd ?? null,
+		skills: stage.runtime.skills ?? null,
+		prompt: stage.runtime.prompt,
+		promptFile: null,
+		prepareRepository: stage.runtime.prepareRepository !== "none",
+		includePolicy: stage.runtime.includePolicy ?? false,
+		// Legacy runtime-level fields are unused in V3 (stage-level
+		// inputArtifacts/outputSchema are authoritative).
+		inputArtifacts: null,
+		outputSchema: null,
+	},
+	inputArtifacts: stage.inputArtifacts ?? [],
+	outputArtifacts: stage.outputArtifacts ?? [],
+	effects: stage.effects ?? [],
+	report: stage.report ?? null,
+	taskName: stage.taskName ?? null,
+	promptValues: stage.promptValues ?? {},
+	containerNameParts: stage.containerNameParts ?? [],
+	allowAgentExit: stage.allowAgentExit ?? false,
+});
+
+const toEdgeConfigFromCompiled = (
+	edge: CompiledPipelineDefinition["edges"][number],
+): ScanPipelineEdgeConfig => ({
+	id: edge.id,
+	name: edge.name,
+	from: edge.from,
+	to: edge.to,
+	fork: edge.fork,
+	mode: edge.mode ?? null,
+	foreach: edge.foreach ?? null,
+	input: edge.input ?? null,
+	outputSchema: edge.outputSchema ?? null,
+	outputSchemaDescription: edge.outputSchemaDescription ?? null,
+	artifacts: (edge.artifacts ?? []).map((artifact) => ({
+		from: artifact.from,
+		to: artifact.to,
+		inputField: artifact.inputField,
+		required: artifact.required,
+	})),
+	route: edge.route ?? null,
+});
+
+const createCompiledStageRuntimeConfig = (
+	compiled: CompiledPipelineDefinition,
+	stageId: string,
+) => {
+	const stage = compiled.stages.find((item) => item.id === stageId);
+	if (!stage) {
+		throw new Error(`Compiled stage not found: ${stageId}`);
+	}
+	const runtime = stage.runtime;
+	return {
+		getConcurrency: async () => stage.concurrency,
+		getAgentProfile: async () => runtime.agentProfileId ?? null,
+		getPersistent: async () => runtime.persistent ?? null,
+		getReuseContainer: async () => runtime.reuseContainer ?? null,
+		getMode: async () => stage.mode,
+		getNullableOutput: async () => runtime.nullableOutput ?? null,
+		getCwd: async () => runtime.cwd ?? null,
+		getSkills: async () => runtime.skills ?? [],
+		getPrompt: async () => runtime.prompt,
+		getInputArtifacts: async () => null,
+		getOutputSchema: async () => stage.outputSchema ?? null,
+	};
+};
+
+export const buildPipelineFromCompiled = (
+	context: FullScanPipelineContext,
+	compiled: CompiledPipelineDefinition,
+): PipelineDefinition<
+	FullScanPipelineContext,
+	FullScanPipelineStage[],
+	FullScanPipelineEdge[]
+> => {
+	const stageConfigs = new Map(
+		compiled.stages.map((stage) => [
+			stage.id,
+			toStageConfigFromCompiled(stage),
+		] as const),
+	);
+	const edges = compiled.edges.map(toEdgeConfigFromCompiled);
+	const groups = (compiled.groups ?? []).map((group) => ({
+		id: group.id,
+		name: group.name,
+		leader: group.leader,
+		members: group.members,
+	}));
+	return buildPipelineFromStageConfigs({
+		context,
+		pipelineName: compiled.name,
+		stageIds: compiled.stages.map((stage) => stage.id),
+		edges,
+		groups,
+		stageConfigs,
+		schemas: compiled.schemas,
+		useTaskNameResolvers:
+			compiled.capabilities.research || compiled.capabilities.tobGoal,
+		runtimeConfigBuilder: (stageId) =>
+			createCompiledStageRuntimeConfig(compiled, stageId) as ReturnType<
+				typeof createStageRuntimeConfig
+			>,
+	});
+};
+
 
 export const buildYamlPipeline = buildGenericYamlPipeline;
 
@@ -5073,6 +5250,70 @@ export const resumeScanJob = async (scanJobId: string) => {
 	};
 };
 
+const loadCompiledPipelineSnapshot = (scanJob: ScanJob) => {
+	const snapshot = scanJob.pipelineCompiledSnapshot;
+	if (!snapshot || typeof snapshot !== "object") {
+		throw new Error(
+			`Scan job ${scanJob.scanJobId} has no compiled pipeline snapshot`,
+		);
+	}
+	return snapshot as unknown as CompiledPipelineDefinition;
+};
+
+/**
+ * V3 run entry: builds the pipeline from the job's frozen compiled snapshot
+ * and dispatches it through the same generic runtime as the legacy paths.
+ */
+const runPipelineFromSnapshot = async (
+	scanJobId: string,
+	options?: { enqueueInitialRootTask?: boolean },
+) => {
+	const enqueueInitialRootTask = options?.enqueueInitialRootTask ?? true;
+	const awaitCompletion = options
+		? "awaitCompletion" in options && options.awaitCompletion === false
+			? false
+			: true
+		: true;
+	await assertScanJobNotCancelled(scanJobId);
+	console.log(
+		"[scan-v3]",
+		JSON.stringify({ event: "runPipelineFromSnapshot.start", scanJobId }),
+	);
+	const context = await buildFullScanPipelineContext(scanJobId);
+	const compiled = loadCompiledPipelineSnapshot(context.scanJob);
+	const pipeline = buildPipelineFromCompiled(context, compiled);
+
+	try {
+		await assertScanJobNotCancelled(scanJobId);
+		await updateTaskRepo(context.scanJob.repositoryTaskId || scanJobId, {
+			name: context.projectName,
+		}).catch(() => {});
+		if (enqueueInitialRootTask) {
+			await enqueuePipelineRootTaskForStage(scanJobId, compiled.root);
+			console.log(
+				"[scan-v3]",
+				JSON.stringify({ event: "root.enqueued", scanJobId }),
+			);
+		}
+		await assertScanJobNotCancelled(scanJobId);
+		if (awaitCompletion) {
+			await runPipeline(pipeline, context);
+		} else {
+			startPipelineRuntime(pipeline, context);
+		}
+	} catch (error) {
+		console.log(
+			"[scan-v3]",
+			JSON.stringify({
+				event: "runPipelineFromSnapshot.failed",
+				scanJobId,
+				errorMessage: error instanceof Error ? error.message : String(error),
+			}),
+		);
+		throw error;
+	}
+};
+
 export const runScanJobInContainer = async (
 	scanJobId: string,
 	options?: {
@@ -5081,6 +5322,14 @@ export const runScanJobInContainer = async (
 ) => {
 	await assertScanJobNotCancelled(scanJobId);
 	const scanJob = await findScanJobByIdRepo(scanJobId);
+	// V3 snapshot-driven run: the frozen compiled definition drives every
+	// stage/edge decision; scanType is never read on this path.
+	if (scanJob.pipelineVersionId && scanJob.pipelineCompiledSnapshot) {
+		await runPipelineFromSnapshot(scanJobId, {
+			enqueueInitialRootTask: options?.enqueueInitialRepositoryTask ?? true,
+		});
+		return;
+	}
 	if (scanJob.scanType === "full") {
 		await runFullScan(scanJobId, {
 			enqueueInitialRepositoryTask:
@@ -5170,6 +5419,18 @@ const enqueueStageTask = async (
 		removeOnComplete: true,
 		removeOnFail: true,
 	});
+};
+
+const enqueuePipelineRootTaskForStage = async (
+	scanJobId: string,
+	rootStageName: string,
+) => {
+	const scanJob = await findScanJobByIdRepo(scanJobId);
+	await enqueueStageTask(
+		scanJobId,
+		rootStageName,
+		scanJob.repositoryTaskId || scanJobId,
+	);
 };
 
 const enqueuePipelineRootTask = async (
