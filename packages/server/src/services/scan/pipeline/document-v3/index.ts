@@ -27,6 +27,7 @@ export {
 } from "./pipeline-document-v3";
 export {
 	assertStableRoundTrip,
+	normalizePipelineDocumentV3,
 	parsePipelineDocumentV3,
 	serializePipelineDocumentV3,
 } from "./pipeline-document-v3-io";

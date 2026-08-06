@@ -17,6 +17,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { nanoid } from "nanoid";
 import { z } from "zod";
+import { organization } from "./account";
 import { applications } from "./application";
 import { compose } from "./compose";
 import {
@@ -72,6 +73,95 @@ export const taskStatusEnum = pgEnum("taskStatus", [
 	"exited",
 	"canceled",
 ]);
+
+export const scanPipelineVersionSourceEnum = pgEnum(
+	"scanPipelineVersionSource",
+	["user", "system", "migration"],
+);
+
+/**
+ * Organization-level pipeline. A pipeline owns a single shared draft plus an
+ * immutable append-only version history (`scanPipelineVersions`). Only
+ * published versions can run; system pipelines (`systemKey != null`) cannot
+ * be deleted or archived.
+ */
+export const scanPipelines = pgTable(
+	"scan_pipelines",
+	{
+		pipelineId: text("pipelineId")
+			.notNull()
+			.primaryKey()
+			.$defaultFn(() => nanoid()),
+		organizationId: text("organizationId")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		slug: text("slug").notNull(),
+		name: text("name").notNull(),
+		description: text("description"),
+		// Single organization-shared draft. `draftYaml` stores the raw text
+		// verbatim (comments and layout included); `draftRevision` is the
+		// optimistic-lock counter bumped on every save.
+		draftYaml: text("draftYaml"),
+		draftRevision: integer("draftRevision").notNull().default(0),
+		draftBaseVersionId: text("draftBaseVersionId"),
+		currentPublishedVersionId: text("currentPublishedVersionId"),
+		systemKey: text("systemKey"),
+		archivedAt: text("archivedAt"),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		createdBy: text("createdBy"),
+		updatedBy: text("updatedBy"),
+	},
+	(table) => ({
+		organizationSlugUnique: uniqueIndex("scan_pipelines_org_slug_unique").on(
+			table.organizationId,
+			table.slug,
+		),
+		systemKeyUnique: uniqueIndex("scan_pipelines_system_key_unique")
+			.on(table.organizationId, table.systemKey)
+			.where(sql`${table.systemKey} is not null`),
+	}),
+);
+
+/**
+ * Immutable published version of a pipeline. Rows are only ever inserted —
+ * never updated or deleted — so running jobs and evaluations stay
+ * reproducible no matter what happens to the pipeline afterwards.
+ */
+export const scanPipelineVersions = pgTable(
+	"scan_pipeline_versions",
+	{
+		pipelineVersionId: text("pipelineVersionId")
+			.notNull()
+			.primaryKey()
+			.$defaultFn(() => nanoid()),
+		pipelineId: text("pipelineId")
+			.notNull()
+			.references(() => scanPipelines.pipelineId, { onDelete: "cascade" }),
+		versionNumber: integer("versionNumber").notNull(),
+		// Raw YAML exactly as published (the audit-able source of truth).
+		yaml: text("yaml").notNull(),
+		contentHash: text("contentHash").notNull(),
+		compiledDefinition: jsonb("compiledDefinition"),
+		source: scanPipelineVersionSourceEnum("source").notNull().default("user"),
+		publishedBy: text("publishedBy"),
+		publishedAt: text("publishedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		pipelineVersionUnique: uniqueIndex(
+			"scan_pipeline_versions_pipeline_number_unique",
+		).on(table.pipelineId, table.versionNumber),
+		contentHashUnique: uniqueIndex("scan_pipeline_versions_content_hash_unique")
+			.on(table.pipelineId, table.contentHash)
+			.where(sql`${table.contentHash} is not null`),
+	}),
+);
 
 export const scanJobs = pgTable(
 	"scan_jobs",
@@ -130,6 +220,25 @@ export const scanJobs = pgTable(
 		// Dataset evaluations use a trial as their scan target. The foreign key is
 		// installed by the dataset migration to avoid a circular schema declaration.
 		datasetEvaluationTrialId: text("datasetEvaluationTrialId"),
+		// Frozen pipeline linkage for V3 runs: the exact version and its
+		// snapshots make the job reproducible after version switches/archival.
+		pipelineId: text("pipelineId").references(
+			() => scanPipelines.pipelineId,
+			{ onDelete: "set null" },
+		),
+		pipelineVersionId: text("pipelineVersionId").references(
+			() => scanPipelineVersions.pipelineVersionId,
+			{ onDelete: "set null" },
+		),
+		pipelineYamlSnapshot: text("pipelineYamlSnapshot"),
+		pipelineCompiledSnapshot: jsonb("pipelineCompiledSnapshot").$type<unknown>(),
+		// Loop-safety limits; persisted so worker restarts cannot reset them.
+		maxTasks: integer("maxTasks"),
+		deadlineAt: text("deadlineAt"),
+		taskCount: integer("taskCount").notNull().default(0),
+		terminationReason: text("terminationReason").$type<
+			"task_limit" | "duration_limit" | null
+		>(),
 		createdAt: text("createdAt")
 			.notNull()
 			.$defaultFn(() => new Date().toISOString()),
@@ -638,11 +747,40 @@ export const scanJobsRelations = relations(scanJobs, ({ one, many }) => ({
 		fields: [scanJobs.composeId],
 		references: [compose.composeId],
 	}),
+	pipeline: one(scanPipelines, {
+		fields: [scanJobs.pipelineId],
+		references: [scanPipelines.pipelineId],
+	}),
+	pipelineVersion: one(scanPipelineVersions, {
+		fields: [scanJobs.pipelineVersionId],
+		references: [scanPipelineVersions.pipelineVersionId],
+	}),
 	tasks: many(tasks),
 	candidateMetadata: many(candidateMetadata),
 	vulnerabilityCandidates: many(vulnerabilityCandidates),
 	evaluateResults: many(scanEvaluateResults),
 }));
+
+export const scanPipelinesRelations = relations(
+	scanPipelines,
+	({ one, many }) => ({
+		versions: many(scanPipelineVersions),
+		currentPublishedVersion: one(scanPipelineVersions, {
+			fields: [scanPipelines.currentPublishedVersionId],
+			references: [scanPipelineVersions.pipelineVersionId],
+		}),
+	}),
+);
+
+export const scanPipelineVersionsRelations = relations(
+	scanPipelineVersions,
+	({ one }) => ({
+		pipeline: one(scanPipelines, {
+			fields: [scanPipelineVersions.pipelineId],
+			references: [scanPipelines.pipelineId],
+		}),
+	}),
+);
 
 export const tasksRelations = relations(tasks, ({ one, many }) => ({
 	scanJob: one(scanJobs, {

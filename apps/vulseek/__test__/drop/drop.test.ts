@@ -26,6 +26,7 @@ if (typeof window === "undefined") {
 
 const baseApp: ApplicationNested = {
 	railpackVersion: "0.2.2",
+	defaultPipelineId: null,
 	applicationId: "",
 	previewLabels: [],
 	herokuVersion: "",

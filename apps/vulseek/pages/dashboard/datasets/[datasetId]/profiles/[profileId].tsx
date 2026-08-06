@@ -564,7 +564,7 @@ export const ProfileEvaluationsTable = ({
 				items: {
 					evaluationId: string;
 					name: string;
-					pipelineId: string;
+					pipelineId: string | null;
 					status: string;
 					sampleIds: string[];
 					repetitions: number;

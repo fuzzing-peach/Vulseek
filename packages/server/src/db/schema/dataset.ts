@@ -12,6 +12,7 @@ import {
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { organization } from "./account";
+import { scanPipelines, scanPipelineVersions } from "./scan";
 
 const timestamp = () => new Date().toISOString();
 
@@ -153,7 +154,19 @@ export const datasetEvaluations = pgTable(
 			.notNull()
 			.references(() => datasetProfiles.profileId, { onDelete: "restrict" }),
 		name: text("name").notNull(),
-		pipelineId: text("pipelineId").notNull(),
+		// Legacy pipeline selector ("full" | "research" | "tob-goal") used by
+		// pre-V3 evaluations; new evaluations use pipelineId + the frozen
+		// version snapshot below.
+		legacyPipelineKey: text("legacyPipelineKey"),
+		pipelineId: text("pipelineId").references(() => scanPipelines.pipelineId, {
+			onDelete: "set null",
+		}),
+		pipelineVersionId: text("pipelineVersionId").references(
+			() => scanPipelineVersions.pipelineVersionId,
+			{ onDelete: "set null" },
+		),
+		pipelineYamlSnapshot: text("pipelineYamlSnapshot"),
+		pipelineCompiledSnapshot: jsonb("pipelineCompiledSnapshot").$type<unknown>(),
 		sampleIds: jsonb("sampleIds").$type<string[]>().notNull().default([]),
 		repetitions: integer("repetitions").notNull().default(1),
 		timeBudgetSeconds: integer("timeBudgetSeconds"),
@@ -351,7 +364,12 @@ export const apiListDatasetTrials = apiDatasetEvaluationId.extend({
 export const apiCreateDatasetEvaluation = apiDatasetId.extend({
 	profileId: z.string().min(1),
 	name: z.string().trim().min(1).max(160),
-	pipelineId: z.enum(["full", "research", "tob-goal"]),
+	// Legacy pre-V3 selector. `pipelineId` keeps its historical meaning here
+	// (full/research/tob-goal) so existing clients keep working; new
+	// evaluations pass `pipelineId` as an org pipeline id — resolved in the
+	// V3 run path (Phase 3+).
+	legacyPipelineKey: z.enum(["full", "research", "tob-goal"]).optional(),
+	pipelineId: z.enum(["full", "research", "tob-goal"]).optional(),
 	sampleIds: z.array(z.string().min(1)).min(1),
 	repetitions: z.number().int().min(1).max(100),
 	timeBudgetSeconds: z.number().int().min(1).max(86_400).nullable().optional(),

@@ -26,10 +26,8 @@ describe("migration journal", () => {
 			.filter((tag) => !journalTags.has(tag))
 			.sort();
 
-		expect(journal.entries).toHaveLength(226);
-		expect(journal.entries.at(-1)?.tag).toBe(
-			"0225_dataset_profile_sample_selection",
-		);
+		expect(journal.entries).toHaveLength(227);
+		expect(journal.entries.at(-1)?.tag).toBe("0226_scan_pipelines");
 		expect(unregisteredTags).toEqual(["0057_damp_prism"]);
 		expect(journal.entries.map((entry) => entry.idx)).toEqual(
 			journal.entries.map((_, index) => index),

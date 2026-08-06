@@ -187,7 +187,7 @@ const processTrial = async (input: {
 		} else {
 			const scanJob = await createScanJob({
 				datasetEvaluationTrialId: input.trial.trialId,
-				scanType: input.evaluation.evaluation.pipelineId as
+				scanType: input.evaluation.evaluation.legacyPipelineKey as
 					| "full"
 					| "research"
 					| "tob-goal",
@@ -219,7 +219,7 @@ const processTrial = async (input: {
 			"dataset-trial-scan",
 			{
 				scanJobId: scanJobId as string,
-				mode: input.evaluation.evaluation.pipelineId,
+				mode: input.evaluation.evaluation.legacyPipelineKey,
 			},
 			{
 				jobId: `dataset-trial-${scanJobId}`,

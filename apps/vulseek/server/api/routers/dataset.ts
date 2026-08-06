@@ -850,7 +850,8 @@ export const datasetRouter = createTRPCRouter({
 						message: "One or more samples are not in the selected profile",
 					});
 				const definitions = getScanPipelineDefinitions();
-				if (!definitions.pipelines[input.pipelineId])
+				const legacyKey = input.legacyPipelineKey ?? input.pipelineId;
+				if (legacyKey && !definitions.pipelines[legacyKey])
 					throw new TRPCError({
 						code: "BAD_REQUEST",
 						message: "Unknown scan pipeline",
@@ -864,7 +865,7 @@ export const datasetRouter = createTRPCRouter({
 							datasetId: dataset.datasetId,
 							profileId: profile.profileId,
 							name: input.name,
-							pipelineId: input.pipelineId,
+							legacyPipelineKey: input.legacyPipelineKey ?? input.pipelineId ?? null,
 							sampleIds: input.sampleIds,
 							repetitions: input.repetitions,
 							timeBudgetSeconds: input.timeBudgetSeconds ?? null,

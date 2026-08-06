@@ -5,6 +5,7 @@ import { expect, test } from "vitest";
 const baseApp: ApplicationNested = {
 	railpackVersion: "0.2.2",
 	rollbackActive: false,
+	defaultPipelineId: null,
 	applicationId: "",
 	previewLabels: [],
 	herokuVersion: "",
