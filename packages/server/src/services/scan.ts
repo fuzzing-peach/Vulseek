@@ -5289,7 +5289,7 @@ const runPipelineFromSnapshot = async (
 			name: context.projectName,
 		}).catch(() => {});
 		if (enqueueInitialRootTask) {
-			await enqueuePipelineRootTaskForStage(scanJobId, compiled.root);
+			await createV3RootTask(context.scanJob, compiled);
 			console.log(
 				"[scan-v3]",
 				JSON.stringify({ event: "root.enqueued", scanJobId }),
@@ -5421,16 +5421,50 @@ const enqueueStageTask = async (
 	});
 };
 
-const enqueuePipelineRootTaskForStage = async (
-	scanJobId: string,
-	rootStageName: string,
+/**
+ * V3 root task: one task row with the standardized root context
+ * `{ run, target, repository, limits }`, then enqueued onto the root stage
+ * queue. The compiled root stage's promptValues read `$ctx.scanJob.*` which
+ * the expression resolver supplies from the frozen scan job row.
+ */
+const createV3RootTask = async (
+	scanJob: ScanJob,
+	compiled: CompiledPipelineDefinition,
 ) => {
-	const scanJob = await findScanJobByIdRepo(scanJobId);
-	await enqueueStageTask(
-		scanJobId,
-		rootStageName,
-		scanJob.repositoryTaskId || scanJobId,
-	);
+	const rootStage = compiled.stages.find((stage) => stage.id === compiled.root);
+	const taskId = scanJob.repositoryTaskId || scanJob.scanJobId;
+	const input = {
+		run: {
+			scanJobId: scanJob.scanJobId,
+			title: scanJob.title,
+			triggerSource: scanJob.triggerSource,
+		},
+		target: {
+			applicationId: scanJob.applicationId ?? null,
+			composeId: scanJob.composeId ?? null,
+			datasetEvaluationTrialId: scanJob.datasetEvaluationTrialId ?? null,
+		},
+		repository: {
+			targetRef: scanJob.targetRef ?? null,
+			targetTag: scanJob.targetTag ?? null,
+			commitSha: scanJob.commitSha ?? null,
+			baseSha: scanJob.baseSha ?? null,
+			commitWindow: scanJob.commitWindow ?? null,
+		},
+		limits: {
+			maxTasks: scanJob.maxTasks ?? null,
+			deadlineAt: scanJob.deadlineAt ?? null,
+		},
+	};
+	await createTaskRepo({
+		taskId,
+		scanJobId: scanJob.scanJobId,
+		name: rootStage?.name ?? compiled.root,
+		stageName: compiled.root,
+		status: "pending",
+		input,
+	});
+	await enqueueStageTask(scanJob.scanJobId, compiled.root, taskId);
 };
 
 const enqueuePipelineRootTask = async (

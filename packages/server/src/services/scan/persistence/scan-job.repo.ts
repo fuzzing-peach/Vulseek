@@ -293,6 +293,11 @@ export const createScanJobRepo = async (input: {
 		});
 	}
 
+	// V3 snapshot runs create their own root task from the compiled
+	// definition (runPipelineFromSnapshot) — skip the legacy V2 root task.
+	if (input.pipelineId) {
+		return created[0]!;
+	}
 	const rootStageId = pipelineDefinitions.pipelines[pipelineId]!.rootStageId;
 	const threatDirection =
 		input.threatDirection ??

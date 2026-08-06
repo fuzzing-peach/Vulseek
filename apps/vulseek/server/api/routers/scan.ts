@@ -402,6 +402,16 @@ export const scanRouter = createTRPCRouter({
 	create: protectedProcedure
 		.input(apiCreateScanJob)
 		.mutation(async ({ input, ctx }) => {
+			// Grayscale gate: when V3 pipelines are enforced, legacy scanType
+			// writes are rejected — use pipeline.run instead. Old jobs keep
+			// working; only new writes are blocked.
+			if (process.env.VULSEEK_V3_ONLY === "true") {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message:
+						"Legacy scanType runs are disabled — use the Run Pipeline dialog with a published pipeline",
+				});
+			}
 			if (input.applicationId) {
 				const application = await findApplicationById(input.applicationId);
 				if (
