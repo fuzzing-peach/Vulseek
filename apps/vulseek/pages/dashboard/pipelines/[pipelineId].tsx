@@ -430,6 +430,45 @@ const EditorPage = ({
 									onSelect={(entity) =>
 										dispatch({ type: "select", entity: entity as never })
 									}
+									onAddStage={() => {
+										const base = "stage";
+										let id = base;
+										let index = 1;
+										while (editorDocument.stages[id]) {
+											id = `${base}-${index}`;
+											index += 1;
+										}
+										dispatch({
+											type: "canvasModified",
+											document: {
+												...editorDocument,
+												stages: {
+													...editorDocument.stages,
+													[id]: {
+														name: "New Stage",
+														role: "scan",
+														group: "custom",
+														mode: "serial",
+														concurrency: 1,
+														disableable: true,
+														inputArtifacts: [],
+														outputArtifacts: [],
+														effects: [],
+														containerNameParts: [],
+														allowAgentExit: false,
+														promptValues: {},
+														runtime: {
+															kind: "agent",
+															prompt: "Analyze this target.",
+															prepareRepository: "none",
+															includePolicy: false,
+															plugins: [],
+														},
+													},
+												},
+											},
+										});
+									}}
 								/>
 							) : (
 								<div className="flex h-full items-center justify-center p-8 text-center text-sm text-muted-foreground">
