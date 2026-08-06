@@ -6,12 +6,9 @@ import {
 
 describe("research registry job tabs", () => {
 	it("shows three registry tabs for research jobs", () => {
-		expect(getResearchRegistryTabs("research").map((tab) => tab.value)).toEqual([
-			"findings",
-			"tracks",
-			"primitives",
-			"chains",
-		]);
+		expect(getResearchRegistryTabs("research").map((tab) => tab.value)).toEqual(
+			["findings", "tracks", "primitives", "chains"],
+		);
 	});
 
 	it("does not show registry tabs for full or delta jobs", () => {

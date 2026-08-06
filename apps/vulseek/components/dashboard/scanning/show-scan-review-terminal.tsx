@@ -1,7 +1,7 @@
-import Head from "next/head";
 import dynamic from "next/dynamic";
-import { useTranslation } from "next-i18next";
+import Head from "next/head";
 import { useRouter } from "next/router";
+import { useTranslation } from "next-i18next";
 import { scanT } from "./scan-i18n";
 
 const DockerTerminal = dynamic(

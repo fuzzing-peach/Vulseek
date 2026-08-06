@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { relations, sql } from "drizzle-orm";
 import {
 	type AnyPgColumn,
@@ -7,14 +8,13 @@ import {
 	index,
 	integer,
 	jsonb,
-	primaryKey,
 	pgEnum,
 	pgTable,
+	primaryKey,
 	real,
 	text,
 	uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { randomUUID } from "node:crypto";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { applications } from "./application";
@@ -73,61 +73,77 @@ export const taskStatusEnum = pgEnum("taskStatus", [
 	"canceled",
 ]);
 
-export const scanJobs = pgTable("scan_jobs", {
-	scanJobId: text("scanJobId")
-		.notNull()
-		.primaryKey()
-		.$defaultFn(() => nanoid()),
-	title: text("title").notNull().default("Scan Job"),
-	description: text("description"),
-	note: text("note"),
-	scanType: scanTypeEnum("scanType").notNull(),
-	status: scanJobStatusEnum("status").notNull().default("pending"),
-	triggerSource: text("triggerSource").notNull().default("manual"),
-	commitSha: text("commitSha"),
-	baseSha: text("baseSha"),
-	targetRef: text("targetRef"),
-	targetTag: text("targetTag"),
-	scanRuntimeSettings: jsonb("scanRuntimeSettings")
-		.$type<ScanRuntimeSettings>()
-		.notNull()
-		.default({}),
-	scanPipelineDefinitionSnapshot: jsonb("scanPipelineDefinitionSnapshot")
-		.$type<Record<string, unknown>>()
-		.notNull()
-		.default({}),
-	commitWindow: integer("commitWindow").notNull().default(3),
-	inputTokens: bigint("input_tokens", { mode: "number" }).notNull().default(0),
-	outputTokens: bigint("output_tokens", { mode: "number" }).notNull().default(0),
-	thoughtTokens: bigint("thought_tokens", { mode: "number" }).notNull().default(0),
-	totalTokens: bigint("total_tokens", { mode: "number" }).notNull().default(0),
-	cachedReadTokens: bigint("cached_read_tokens", { mode: "number" }).notNull().default(0),
-	cachedWriteTokens: bigint("cached_write_tokens", { mode: "number" }).notNull().default(0),
-	estimatedCost: real("estimated_cost").notNull().default(0),
-	applicationId: text("applicationId").references(
-		() => applications.applicationId,
-		{
+export const scanJobs = pgTable(
+	"scan_jobs",
+	{
+		scanJobId: text("scanJobId")
+			.notNull()
+			.primaryKey()
+			.$defaultFn(() => nanoid()),
+		title: text("title").notNull().default("Scan Job"),
+		description: text("description"),
+		note: text("note"),
+		scanType: scanTypeEnum("scanType").notNull(),
+		status: scanJobStatusEnum("status").notNull().default("pending"),
+		triggerSource: text("triggerSource").notNull().default("manual"),
+		commitSha: text("commitSha"),
+		baseSha: text("baseSha"),
+		targetRef: text("targetRef"),
+		targetTag: text("targetTag"),
+		scanRuntimeSettings: jsonb("scanRuntimeSettings")
+			.$type<ScanRuntimeSettings>()
+			.notNull()
+			.default({}),
+		scanPipelineDefinitionSnapshot: jsonb("scanPipelineDefinitionSnapshot")
+			.$type<Record<string, unknown>>()
+			.notNull()
+			.default({}),
+		commitWindow: integer("commitWindow").notNull().default(3),
+		inputTokens: bigint("input_tokens", { mode: "number" })
+			.notNull()
+			.default(0),
+		outputTokens: bigint("output_tokens", { mode: "number" })
+			.notNull()
+			.default(0),
+		thoughtTokens: bigint("thought_tokens", { mode: "number" })
+			.notNull()
+			.default(0),
+		totalTokens: bigint("total_tokens", { mode: "number" })
+			.notNull()
+			.default(0),
+		cachedReadTokens: bigint("cached_read_tokens", { mode: "number" })
+			.notNull()
+			.default(0),
+		cachedWriteTokens: bigint("cached_write_tokens", { mode: "number" })
+			.notNull()
+			.default(0),
+		estimatedCost: real("estimated_cost").notNull().default(0),
+		applicationId: text("applicationId").references(
+			() => applications.applicationId,
+			{
+				onDelete: "cascade",
+			},
+		),
+		composeId: text("composeId").references(() => compose.composeId, {
 			onDelete: "cascade",
-		},
-	),
-	composeId: text("composeId").references(() => compose.composeId, {
-		onDelete: "cascade",
+		}),
+		// Dataset evaluations use a trial as their scan target. The foreign key is
+		// installed by the dataset migration to avoid a circular schema declaration.
+		datasetEvaluationTrialId: text("datasetEvaluationTrialId"),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		startedAt: text("startedAt"),
+		finishedAt: text("finishedAt"),
+		errorMessage: text("errorMessage"),
+		scanningThreadId: text("scanningThreadId"),
+	},
+	(table) => ({
+		datasetEvaluationTrialUnique: uniqueIndex("scan_jobs_dataset_trial_unique")
+			.on(table.datasetEvaluationTrialId)
+			.where(sql`${table.datasetEvaluationTrialId} is not null`),
 	}),
-	// Dataset evaluations use a trial as their scan target. The foreign key is
-	// installed by the dataset migration to avoid a circular schema declaration.
-	datasetEvaluationTrialId: text("datasetEvaluationTrialId"),
-	createdAt: text("createdAt")
-		.notNull()
-		.$defaultFn(() => new Date().toISOString()),
-	startedAt: text("startedAt"),
-	finishedAt: text("finishedAt"),
-	errorMessage: text("errorMessage"),
-	scanningThreadId: text("scanningThreadId"),
-}, (table) => ({
-	datasetEvaluationTrialUnique: uniqueIndex("scan_jobs_dataset_trial_unique")
-		.on(table.datasetEvaluationTrialId)
-		.where(sql`${table.datasetEvaluationTrialId} is not null`),
-}));
+);
 
 export const tasks = pgTable(
 	"tasks",
@@ -150,17 +166,19 @@ export const tasks = pgTable(
 		),
 		name: text("name").notNull(),
 		stageName: text("stageName").notNull(),
-	status: taskStatusEnum("status").notNull().default("pending"),
-	downstreamDispatchStatus: text("downstreamDispatchStatus")
-		.$type<"pending" | "dispatching" | "completed">()
-		.notNull()
-		.default("pending"),
-	downstreamRouteKey: text("downstreamRouteKey"),
-	downstreamDispatchedAt: text("downstreamDispatchedAt"),
-	dispatchKey: text("dispatchKey"),
+		status: taskStatusEnum("status").notNull().default("pending"),
+		downstreamDispatchStatus: text("downstreamDispatchStatus")
+			.$type<"pending" | "dispatching" | "completed">()
+			.notNull()
+			.default("pending"),
+		downstreamRouteKey: text("downstreamRouteKey"),
+		downstreamDispatchedAt: text("downstreamDispatchedAt"),
+		dispatchKey: text("dispatchKey"),
 		priority: integer("priority"),
 		attempt: integer("attempt").notNull().default(0),
-		agentProfile: jsonb("agentProfile").$type<TaskAgentProfileSnapshot | null>(),
+		agentProfile: jsonb(
+			"agentProfile",
+		).$type<TaskAgentProfileSnapshot | null>(),
 		containerName: text("containerName"),
 		containerIndex: integer("containerIndex"),
 		threadId: text("threadId"),
@@ -174,20 +192,18 @@ export const tasks = pgTable(
 			},
 		),
 		forkedFromThreadId: text("forkedFromThreadId"),
-			stageGroupInstanceId: text("stageGroupInstanceId"),
-			input: jsonb("input").$type<unknown | null>(),
-			output: jsonb("output").$type<unknown | null>(),
-			inputTokens: bigint("input_tokens", { mode: "number" }),
-			outputTokens: bigint("output_tokens", { mode: "number" }),
-			thoughtTokens: bigint("thought_tokens", { mode: "number" }),
-			totalTokens: bigint("total_tokens", { mode: "number" }),
-			cachedReadTokens: bigint("cached_read_tokens", { mode: "number" }),
+		stageGroupInstanceId: text("stageGroupInstanceId"),
+		input: jsonb("input").$type<unknown | null>(),
+		output: jsonb("output").$type<unknown | null>(),
+		inputTokens: bigint("input_tokens", { mode: "number" }),
+		outputTokens: bigint("output_tokens", { mode: "number" }),
+		thoughtTokens: bigint("thought_tokens", { mode: "number" }),
+		totalTokens: bigint("total_tokens", { mode: "number" }),
+		cachedReadTokens: bigint("cached_read_tokens", { mode: "number" }),
 		cachedWriteTokens: bigint("cached_write_tokens", { mode: "number" }),
 		estimatedCost: real("estimated_cost"),
-			errorMessage: text("errorMessage"),
-		exitReason: text("exitReason").$type<
-			"agent_exit" | "leader_exit" | null
-		>(),
+		errorMessage: text("errorMessage"),
+		exitReason: text("exitReason").$type<"agent_exit" | "leader_exit" | null>(),
 		exitNote: text("exitNote"),
 		startedAt: text("startedAt"),
 		completedAt: text("completedAt"),
@@ -374,8 +390,7 @@ export const scanStageGroupLaneMemberships = pgTable(
 export const candidateMetadata = pgTable(
 	"candidate_metadata",
 	{
-		vulnerabilityCandidateId: text("vulnerabilityCandidateId")
-			.notNull(),
+		vulnerabilityCandidateId: text("vulnerabilityCandidateId").notNull(),
 		scanJobId: text("scanJobId")
 			.notNull()
 			.references(() => scanJobs.scanJobId, {
@@ -428,10 +443,15 @@ export const vulnerabilityCandidates = pgTable(
 		evidence: jsonb("evidence").$type<unknown[]>().notNull().default([]),
 		attackerControl: text("attackerControl"),
 		affectedSink: text("affectedSink"),
-		preconditions: jsonb("preconditions").$type<string[]>().notNull().default([]),
+		preconditions: jsonb("preconditions")
+			.$type<string[]>()
+			.notNull()
+			.default([]),
 		quickDisproofAttempt: text("quickDisproofAttempt"),
 		needsFuzzing: boolean("needsFuzzing").notNull().default(false),
-		needsManualAnalysis: boolean("needsManualAnalysis").notNull().default(false),
+		needsManualAnalysis: boolean("needsManualAnalysis")
+			.notNull()
+			.default(false),
 		createdAt: text("createdAt")
 			.notNull()
 			.$defaultFn(() => new Date().toISOString()),
@@ -498,7 +518,7 @@ export const candidateResultProjections = pgTable(
 				vulnerabilityCandidates.scanJobId,
 				vulnerabilityCandidates.vulnerabilityCandidateId,
 			],
-				name: "candidate_result_projection_candidate_fk",
+			name: "candidate_result_projection_candidate_fk",
 		}),
 		scanJobIdx: index("candidate_result_projection_scan_job_idx").on(
 			table.scanJobId,
@@ -588,9 +608,7 @@ export const scanEvaluateResults = pgTable(
 			.$defaultFn(() => new Date().toISOString()),
 	},
 	(table) => ({
-		scanJobIdx: index("scan_evaluate_results_scan_job_idx").on(
-			table.scanJobId,
-		),
+		scanJobIdx: index("scan_evaluate_results_scan_job_idx").on(table.scanJobId),
 		applicationIdx: index("scan_evaluate_results_application_idx").on(
 			table.applicationId,
 		),
@@ -695,7 +713,6 @@ export const apiCreateScanJob = z
 		commitWindow: z.number().int().min(1).max(50).optional(),
 		scanRuntimeSettings: ScanRuntimeSettingsSchema.optional(),
 		researchScope: z.record(z.unknown()).optional(),
-		datasetSampleInput: z.record(z.unknown()).optional(),
 		scanPipelineDefinitionSnapshot: z.record(z.unknown()).optional(),
 		threatDirection: z
 			.object({
@@ -708,17 +725,24 @@ export const apiCreateScanJob = z
 	})
 	.refine(
 		(value) =>
-			[Boolean(value.applicationId), Boolean(value.composeId), Boolean(value.datasetEvaluationTrialId)].filter(Boolean).length === 1,
+			[
+				Boolean(value.applicationId),
+				Boolean(value.composeId),
+				Boolean(value.datasetEvaluationTrialId),
+			].filter(Boolean).length === 1,
 		{
 			message:
 				"Provide exactly one target: applicationId, composeId, or datasetEvaluationTrialId",
 			path: ["applicationId"],
 		},
 	)
-	.refine((value) => !value.datasetEvaluationTrialId || value.scanType !== "delta", {
-		message: "Dataset evaluations do not support delta scans",
-		path: ["applicationId"],
-	})
+	.refine(
+		(value) => !value.datasetEvaluationTrialId || value.scanType !== "delta",
+		{
+			message: "Dataset evaluations do not support delta scans",
+			path: ["applicationId"],
+		},
+	)
 	.refine(
 		(value) =>
 			value.scanType !== "tob-goal" ||
@@ -740,6 +764,32 @@ export const apiFindScanJobsByCompose = z
 		composeId: z.string().min(1),
 	})
 	.required();
+
+const scanJobListPageFields = {
+	search: z.string().trim().max(200).optional(),
+	status: z
+		.enum([
+			"pending",
+			"running",
+			"paused",
+			"finalizing",
+			"finished",
+			"partially_finished",
+			"failed",
+			"canceled",
+		])
+		.optional(),
+	page: z.number().int().min(1).default(1),
+	pageSize: z.number().int().min(1).max(100).default(20),
+} as const;
+
+export const apiListScanJobsByApplication = apiFindScanJobsByApplication.extend(
+	scanJobListPageFields,
+);
+
+export const apiListScanJobsByCompose = apiFindScanJobsByCompose.extend(
+	scanJobListPageFields,
+);
 
 export const apiFindOneScanJob = z
 	.object({
@@ -765,10 +815,13 @@ export const apiCheckoutScanEnvironment = z
 		applicationId: z.string().min(1).optional(),
 		composeId: z.string().min(1).optional(),
 	})
-	.refine((value) => Boolean(value.applicationId) !== Boolean(value.composeId), {
-		message: "Provide exactly one target: applicationId or composeId",
-		path: ["applicationId"],
-	});
+	.refine(
+		(value) => Boolean(value.applicationId) !== Boolean(value.composeId),
+		{
+			message: "Provide exactly one target: applicationId or composeId",
+			path: ["applicationId"],
+		},
+	);
 
 export const apiFindCheckoutStatus = z
 	.object({
@@ -781,7 +834,10 @@ export const apiFindRunningCheckout = z
 		applicationId: z.string().min(1).optional(),
 		composeId: z.string().min(1).optional(),
 	})
-	.refine((value) => Boolean(value.applicationId) !== Boolean(value.composeId), {
-		message: "Provide exactly one target: applicationId or composeId",
-		path: ["applicationId"],
-	});
+	.refine(
+		(value) => Boolean(value.applicationId) !== Boolean(value.composeId),
+		{
+			message: "Provide exactly one target: applicationId or composeId",
+			path: ["applicationId"],
+		},
+	);

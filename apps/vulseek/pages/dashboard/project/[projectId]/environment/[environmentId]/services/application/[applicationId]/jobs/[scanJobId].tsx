@@ -1,5 +1,8 @@
 import { validateRequest } from "@vulseek/server/lib/auth";
-import type { GetServerSidePropsContext, InferGetServerSidePropsType } from "next";
+import type {
+	GetServerSidePropsContext,
+	InferGetServerSidePropsType,
+} from "next";
 import type { ReactElement } from "react";
 import { ShowScanJobDetail } from "@/components/dashboard/scanning/show-scan-job-detail";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";

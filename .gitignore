@@ -57,3 +57,22 @@ yarn-error.log*
 
 # Generated Codex app-server schemas
 agents/schemas/codex-app-server/
+
+# Local credentials
+/dokploy-cred
+
+# Local scratch / reference material
+/--annotate
+/no
+/nohup.out
+/local_credentials.txt
+/.grok/
+/DockerSandboxes-linux-amd64/
+/DockerSandboxes-linux-amd64.tar.gz
+/apps/dokploy/
+/apps/vulseek-qa/
+/apps/vulseek/core
+*.orig
+/third_party/*
+!/third_party/deepsec
+/vendor/claude-replay/

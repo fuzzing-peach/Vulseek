@@ -1,1 +1,4 @@
-export { default, getServerSideProps } from "../../profiles/mariadb/[mariadbId]";
+export {
+	default,
+	getServerSideProps,
+} from "../../profiles/mariadb/[mariadbId]";

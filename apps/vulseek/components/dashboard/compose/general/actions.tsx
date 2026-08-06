@@ -33,7 +33,7 @@ export const ComposeActions = ({ composeId }: Props) => {
 		},
 		{ enabled: !!composeId },
 	);
-	const { refetch: refetchScanJobs } = api.scan.allByCompose.useQuery(
+	const { refetch: refetchScanJobs } = api.scan.listByCompose.useQuery(
 		{
 			composeId,
 		},
@@ -71,7 +71,7 @@ export const ComposeActions = ({ composeId }: Props) => {
 						}) => {
 							const scanJobsResult = await refetchScanJobs();
 							const hasPendingFullScan = Boolean(
-								scanJobsResult.data?.some(
+								scanJobsResult.data?.items.some(
 									(scanJob) =>
 										scanJob.scanType === "full" &&
 										(scanJob.status === "pending" ||
@@ -151,12 +151,18 @@ export const ComposeActions = ({ composeId }: Props) => {
 					/>
 					<CreateScanDialog
 						title={scanT(t, "scan.actions.researchScan", "Research Scan")}
-						description={scanT(t, "scan.actions.researchScanDescription", "Run an independent, registry-backed security research pipeline.")}
+						description={scanT(
+							t,
+							"scan.actions.researchScanDescription",
+							"Run an independent, registry-backed security research pipeline.",
+						)}
 						isLoading={isCreatingScanJob}
 						showCommitWindow={false}
 						showFullScanPreview
 						scanType="research"
-						serviceData={data ? (data as unknown as Record<string, unknown>) : undefined}
+						serviceData={
+							data ? (data as unknown as Record<string, unknown>) : undefined
+						}
 						onSubmit={async ({ targetRef, targetTag, scanRuntimeSettings }) => {
 							await createScanJob({
 								composeId,
@@ -190,7 +196,16 @@ export const ComposeActions = ({ composeId }: Props) => {
 									),
 								);
 						}}
-						trigger={<Button variant="default" isLoading={isCreatingScanJob} className={SCAN_BUTTON_CLASS_NAME}><Telescope className="size-4 mr-1" />{scanT(t, "scan.actions.researchScan", "Research Scan")}</Button>}
+						trigger={
+							<Button
+								variant="default"
+								isLoading={isCreatingScanJob}
+								className={SCAN_BUTTON_CLASS_NAME}
+							>
+								<Telescope className="size-4 mr-1" />
+								{scanT(t, "scan.actions.researchScan", "Research Scan")}
+							</Button>
+						}
 					/>
 					<CreateScanDialog
 						title={scanT(t, "scan.actions.goalScan", "Goal Scan")}
@@ -203,7 +218,9 @@ export const ComposeActions = ({ composeId }: Props) => {
 						showCommitWindow={false}
 						showFullScanPreview
 						scanType="tob-goal"
-						serviceData={data ? (data as unknown as Record<string, unknown>) : undefined}
+						serviceData={
+							data ? (data as unknown as Record<string, unknown>) : undefined
+						}
 						onSubmit={async ({
 							targetRef,
 							targetTag,
@@ -221,7 +238,11 @@ export const ComposeActions = ({ composeId }: Props) => {
 							})
 								.then(() => {
 									toast.success(
-										scanT(t, "scan.actions.goalScanStarted", "Goal scan started successfully"),
+										scanT(
+											t,
+											"scan.actions.goalScanStarted",
+											"Goal scan started successfully",
+										),
 									);
 									refetch();
 									refetchScanJobs();
@@ -231,7 +252,11 @@ export const ComposeActions = ({ composeId }: Props) => {
 								})
 								.catch(() =>
 									toast.error(
-										scanT(t, "scan.actions.goalScanStartError", "Error starting goal scan"),
+										scanT(
+											t,
+											"scan.actions.goalScanStartError",
+											"Error starting goal scan",
+										),
 									),
 								);
 						}}
@@ -268,7 +293,7 @@ export const ComposeActions = ({ composeId }: Props) => {
 						}) => {
 							const scanJobsResult = await refetchScanJobs();
 							const hasPendingDeltaScan = Boolean(
-								scanJobsResult.data?.some(
+								scanJobsResult.data?.items.some(
 									(scanJob) =>
 										scanJob.scanType === "delta" &&
 										(scanJob.status === "pending" ||

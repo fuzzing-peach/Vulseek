@@ -1,4 +1,8 @@
-export type ResearchRegistryTab = "findings" | "tracks" | "primitives" | "chains";
+export type ResearchRegistryTab =
+	| "findings"
+	| "tracks"
+	| "primitives"
+	| "chains";
 
 const RESEARCH_REGISTRY_TABS = [
 	{ value: "findings", label: "Findings" },

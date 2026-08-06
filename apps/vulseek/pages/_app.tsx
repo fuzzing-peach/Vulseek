@@ -35,8 +35,7 @@ const MyApp = ({
 			<style jsx global>
 				{`
 					:root {
-						--font-inter:
-							"Helvetica Neue", Helvetica, Arial, "Noto Sans", sans-serif;
+						--font-inter: "Inter", sans-serif;
 					}
 				`}
 			</style>

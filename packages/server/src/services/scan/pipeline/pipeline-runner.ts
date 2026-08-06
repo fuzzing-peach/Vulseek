@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { execAsync } from "../../../utils/process/execAsync";
+import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";
 import {
 	CANDIDATE_PRODUCER_STAGE_NAMES,
 	syncVulnerabilityCandidatesFromProducerTask,
@@ -18,11 +19,6 @@ import {
 	resetStaleDownstreamDispatchesRepo,
 	settleScanJobRepo,
 } from "../persistence/job-settlement.repo";
-import {
-	deletePipelineRuntime,
-	getPipelineRuntimeRegistry,
-	setPipelineRuntime,
-} from "./pipeline-runtime-registry";
 import {
 	findScanJobByIdRepo,
 	findScanJobRuntimeControlRepo,
@@ -55,8 +51,8 @@ import {
 	countOpenTasksByScanJobIdRepo,
 	countTasksByScanJobStageAndStatusRepo,
 	findTaskByIdRepo,
-	listActiveTasksByScanJobIdRepo,
 	listActiveTasksByScanJobAndStageRepo,
+	listActiveTasksByScanJobIdRepo,
 	listPendingTaskQueueMetadataByScanJobIdRepo,
 	listTasksByScanJobIdRepo,
 	type PendingTaskQueueMetadata,
@@ -64,7 +60,6 @@ import {
 	updateTaskRepo,
 } from "../persistence/task.repo";
 import { readCandidateIdFromTaskInputArtifact } from "../persistence/task-artifact-resolver";
-import { readTaskJsonArtifact } from "../artifacts/task-artifact-paths";
 import { buildKnownQueueJobIdsForTask } from "../queue-job-ids";
 import { AGENT_RUNTIME_FILE_NAMES } from "../runtime/agent-runtime-files";
 import { parseDriverStdout } from "../runtime/driver-stdout-protocol";
@@ -76,16 +71,15 @@ import {
 	buildEffectiveDisabledStageSet,
 	createRuntimeSettingsPolicy,
 } from "../runtime-settings";
-import { buildResearchDispatchRetryPlan } from "./research-dispatch-recovery";
-import { resolveLaunchDisposition } from "./launch-disposition";
 import { resolveStageTaskName } from "../stage-task-name";
 import {
 	createStageContext,
 	type PipelineContext,
-	type StageContext,
 	resolveTaskRuntimeDirForTask,
+	type StageContext,
 } from "../stages/full-scan-stage.runtime";
 import { parseAgentUsageSnapshot } from "../usage-snapshot";
+import { resolveLaunchDisposition } from "./launch-disposition";
 import {
 	type FirstStageInputOf,
 	getDownstreamEdges,
@@ -97,6 +91,19 @@ import {
 	selectDownstreamEdgesForRoute,
 	validatePipelineRouteConfiguration,
 } from "./pipeline-definition";
+import {
+	deletePipelineRuntime,
+	getPipelineRuntimeRegistry,
+	setPipelineRuntime,
+} from "./pipeline-runtime-registry";
+import { buildResearchDispatchRetryPlan } from "./research-dispatch-recovery";
+import {
+	getPollableStageNames,
+	groupActiveTasksByStage,
+	type PendingQueueTarget,
+	type RuntimeLoopSnapshot,
+} from "./runtime-loop-snapshot";
+import { loadScanPipelineDefinitions } from "./scan-pipeline-definitions";
 import { validateStructuredOutputSchemaSource } from "./scan-pipeline-schema-contracts";
 import type {
 	StageDefinition,
@@ -107,13 +114,6 @@ import {
 	buildPipelineTaskUpdatePatch,
 	type PipelineTaskUpdate,
 } from "./task-update-patch";
-import {
-	getPollableStageNames,
-	groupActiveTasksByStage,
-	type PendingQueueTarget,
-	type RuntimeLoopSnapshot,
-} from "./runtime-loop-snapshot";
-import { loadScanPipelineDefinitions } from "./scan-pipeline-definitions";
 
 type PipelineScanJobContext = PipelineContext & {
 	scanJob: {
@@ -253,7 +253,6 @@ const shouldStopForPausedScanJob = async <
 	});
 	return true;
 };
-
 
 const normalizeJsonOutput = (rawOutput: string) => {
 	const trimmed = rawOutput.trim();
@@ -449,19 +448,14 @@ const inspectContainerForFailure = async (
 
 const buildTaskFailureDiagnostics = async (ctx: StageContext) => {
 	const { taskDir, stdoutPath, outputPath } = await getTaskRuntimePaths(ctx);
-	const [
-		task,
-		stdoutContent,
-		outputContent,
-		stdoutStat,
-		outputStat,
-	] = await Promise.all([
-		findTaskByIdRepo(ctx.taskId).catch(() => null),
-		readFileIfExists(stdoutPath),
-		readFileIfExists(outputPath),
-		statFileIfExists(stdoutPath),
-		statFileIfExists(outputPath),
-	]);
+	const [task, stdoutContent, outputContent, stdoutStat, outputStat] =
+		await Promise.all([
+			findTaskByIdRepo(ctx.taskId).catch(() => null),
+			readFileIfExists(stdoutPath),
+			readFileIfExists(outputPath),
+			statFileIfExists(stdoutPath),
+			statFileIfExists(outputPath),
+		]);
 	const containerDiagnostics = await inspectContainerForFailure(
 		task?.containerName,
 	);
@@ -1023,12 +1017,9 @@ const inspectHalfStartedRunningTask = async <
 	}
 
 	const stageCtx = await createStageContextForTask(runtime, task);
-	const { taskDir, stdoutPath, outputPath } = await getTaskRuntimePaths(stageCtx);
-	const [
-		stdoutContent,
-		outputContent,
-		outputStat,
-	] = await Promise.all([
+	const { taskDir, stdoutPath, outputPath } =
+		await getTaskRuntimePaths(stageCtx);
+	const [stdoutContent, outputContent, outputStat] = await Promise.all([
 		readFileIfExists(stdoutPath),
 		readFileIfExists(outputPath),
 		statFileIfExists(outputPath),
@@ -1066,10 +1057,7 @@ const inspectHalfStartedRunningTask = async <
 			)
 		: previousSnapshot?.lastDiagnosticKey;
 	const runtimeOutputHash = sha1(
-		[
-			`stdout:${stdoutContent}`,
-			`output:${outputContent}`,
-		].join("\n"),
+		[`stdout:${stdoutContent}`, `output:${outputContent}`].join("\n"),
 	);
 	if (!previousSnapshot || previousSnapshot.hash !== runtimeOutputHash) {
 		const lastRunningOutputWithoutEndTurnLoggedAt =
@@ -1373,7 +1361,8 @@ const createTaskStageContext = async <
 		reuseContainer: stageReuseContainer,
 		nullableOutput: stageNullableOutput,
 		groupedPersistent: taskRuntime?.groupedPersistent ?? false,
-		allowAgentExit: taskRuntime?.allowAgentExit ?? stage.allowAgentExit ?? false,
+		allowAgentExit:
+			taskRuntime?.allowAgentExit ?? stage.allowAgentExit ?? false,
 		containerIndex:
 			taskRuntime?.containerIndex ??
 			taskRuntime?.laneRuntime?.laneIndex ??
@@ -1424,9 +1413,7 @@ const resolveStageRawOutput = async (ctx: StageContext) => {
 	]);
 	const protocol = parseDriverStdout(stdoutContent);
 	const taskSummary = summarizeTaskProtocol(stdoutContent);
-	const progressSignature = sha1(
-		[stdoutContent, outputContent].join("\n"),
-	);
+	const progressSignature = sha1([stdoutContent, outputContent].join("\n"));
 	const hasAgentOutput =
 		protocol.events.some((event) => event.type === "thread") ||
 		taskSummary.promptFinished;
@@ -1604,7 +1591,7 @@ const persistTerminalSuccess = async <
 							: "Agent requested lane exit",
 						errorMessage: null,
 					}
-					: {}),
+				: {}),
 		},
 		terminalRouteKey: routeKey,
 		afterUpdate: async (tx) => {
@@ -1630,7 +1617,10 @@ const persistTerminalSuccess = async <
 	try {
 		stepStartedAt = Date.now();
 		await copyPersistentLaneArtifactsToTaskDir(stageCtx);
-		logPersistTiming("copy_persistent_lane_artifacts_to_task_dir", stepStartedAt);
+		logPersistTiming(
+			"copy_persistent_lane_artifacts_to_task_dir",
+			stepStartedAt,
+		);
 		stepStartedAt = Date.now();
 		if (stageCtx.laneIndex !== null) {
 			if (options?.exitLane) {
@@ -1995,15 +1985,16 @@ const buildRuntimeLoopSnapshot = async <
 		countTasksByScanJobStageAndStatusRepo(runtime.ctx.scanJobId),
 	]);
 	const activeTasksByStage = groupActiveTasksByStage(activeTasks);
-	const disabledStages = runtime.runtimeSettingsPolicy.buildEffectiveDisabledStageSet({
-		settings: control?.scanRuntimeSettings ?? {},
-		stageNames: [...runtime.stageStates.keys()],
-		edges: runtime.pipeline.edges.map((edge) => ({
-			source: edge.from.id,
-			target: edge.to.id,
-		})),
-		rootStageName: runtime.pipeline.stages[0]?.id,
-	});
+	const disabledStages =
+		runtime.runtimeSettingsPolicy.buildEffectiveDisabledStageSet({
+			settings: control?.scanRuntimeSettings ?? {},
+			stageNames: [...runtime.stageStates.keys()],
+			edges: runtime.pipeline.edges.map((edge) => ({
+				source: edge.from.id,
+				target: edge.to.id,
+			})),
+			rootStageName: runtime.pipeline.stages[0]?.id,
+		});
 	const stagePolicies = new Map(
 		[...runtime.stageStates.values()].map((stageState) => {
 			const setting = runtime.runtimeSettingsPolicy.getStageSetting(
@@ -2036,11 +2027,13 @@ const buildRuntimeLoopSnapshot = async <
 				tasks.length,
 			]),
 		),
-		pendingTargets: pendingTasks.map((task): PendingQueueTarget => ({
-			taskId: task.taskId,
-			stageName: task.stageName,
-			groupInstanceId: task.stageGroupInstanceId,
-		})),
+		pendingTargets: pendingTasks.map(
+			(task): PendingQueueTarget => ({
+				taskId: task.taskId,
+				stageName: task.stageName,
+				groupInstanceId: task.stageGroupInstanceId,
+			}),
+		),
 		pendingTaskMetadata: pendingTasks,
 		stagePolicies,
 		statusCounts: statusCounts.map((row) => ({
@@ -2079,9 +2072,8 @@ class WakeSignal {
 	}
 }
 
-const pipelineSupervisorJobs = getPipelineRuntimeRegistry<
-	JobRuntime<PipelineContext>
->();
+const pipelineSupervisorJobs =
+	getPipelineRuntimeRegistry<JobRuntime<PipelineContext>>();
 
 export const stopPipelineRuntimesForScanJob = (scanJobId: string) => {
 	let stoppedRuntimes = 0;
@@ -2906,8 +2898,11 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 		stepStartedAt = Date.now();
 		const threadId = extractThreadIdFromStdout(stdoutContent);
 		const driverPid = extractDriverPidFromStdout(stdoutContent);
+		const lane =
+			driverPid !== null || threadId
+				? await findStageLaneRuntimeByActiveTaskIdRepo(task.taskId)
+				: null;
 		if (driverPid !== null) {
-			const lane = await findStageLaneRuntimeByActiveTaskIdRepo(task.taskId);
 			if (lane) {
 				await bindStageLaneRuntimeRepo({
 					scanJobId: lane.scanJobId,
@@ -2919,7 +2914,6 @@ const inspectActiveStageTask = async <TPipelineContext extends PipelineContext>(
 			}
 		}
 		if (threadId) {
-			const lane = await findStageLaneRuntimeByActiveTaskIdRepo(task.taskId);
 			if (lane) {
 				await bindStageLaneRuntimeRepo({
 					scanJobId: lane.scanJobId,
@@ -3326,7 +3320,9 @@ const reenqueueMissingPendingTasks = async <
 	const tasks =
 		pendingTasks !== undefined
 			? pendingTasks
-			: await listPendingTaskQueueMetadataByScanJobIdRepo(runtime.ctx.scanJobId);
+			: await listPendingTaskQueueMetadataByScanJobIdRepo(
+					runtime.ctx.scanJobId,
+				);
 	let reenqueueCount = 0;
 	for (const task of tasks) {
 		const stageState = runtime.stageStates.get(task.stageName);
@@ -3455,7 +3451,9 @@ const inspectTasks = async <TPipelineContext extends PipelineContext>(
 
 const retryPendingDownstreamDispatches = async <
 	TPipelineContext extends PipelineContext,
->(runtime: JobRuntime<TPipelineContext>) => {
+>(
+	runtime: JobRuntime<TPipelineContext>,
+) => {
 	const pendingTasks = await listPendingCompletedDownstreamDispatchesRepo(
 		runtime.ctx.scanJobId,
 	);
@@ -3483,7 +3481,6 @@ const retryPendingDownstreamDispatches = async <
 		});
 	}
 	for (const task of retryPlan.ready) {
-
 		try {
 			if (isCandidateProducerStage(task.stageName)) {
 				await syncVulnerabilityCandidatesFromProducerTask(task.taskId);
@@ -3620,10 +3617,10 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 		const groupBackfill =
 			(runtime.pipeline.groups?.length ?? 0) > 0
 				? await backfillActiveGroupQueues(
-					runtime,
-					snapshot.pendingTaskMetadata,
-					snapshot,
-				  )
+						runtime,
+						snapshot.pendingTaskMetadata,
+						snapshot,
+					)
 				: { count: 0, byStage: new Map<string, number>() };
 		const groupBackfillElapsedMs = Date.now() - groupBackfillStartedAt;
 		progressed = groupBackfill.count > 0 || progressed;
@@ -3663,8 +3660,7 @@ const runJobLoop = async <TPipelineContext extends PipelineContext>(
 			stageBackfillLaunchedCount += launchedCount;
 			progressed = launchedCount > 0 || progressed;
 		}
-		const totalLaunchedCount =
-			groupBackfill.count + stageBackfillLaunchedCount;
+		const totalLaunchedCount = groupBackfill.count + stageBackfillLaunchedCount;
 		const settlementStatus = await trySettleScanJob(runtime.ctx.scanJobId);
 		if (settlementStatus === "terminal") {
 			logPipelineEvent("loop.timing", {
@@ -3803,10 +3799,7 @@ const ensureJobRuntime = <TPipelineContext extends PipelineContext>(
 		defaultConcurrencyByStage: new Map(
 			pipeline.stages.map((stage) => [
 				stage.id,
-				Math.max(
-					1,
-					runtimeSettingsPolicy.getStageConcurrency(stage.id),
-				),
+				Math.max(1, runtimeSettingsPolicy.getStageConcurrency(stage.id)),
 			]),
 		),
 		runningStdoutSnapshots: new Map(),
@@ -3843,17 +3836,15 @@ const resolveResearchDeadlineFromStageInput = async <
 	stageInput: unknown,
 ) => {
 	const scanJob = (runtime.ctx as unknown as PipelineScanJobContext).scanJob;
-	if (
-		!scanJob?.scanType ||
-		scanJob.scanType !== "research"
-	) {
+	if (!scanJob?.scanType || scanJob.scanType !== "research") {
 		return null;
 	}
 	const input =
 		stageInput && typeof stageInput === "object"
 			? (stageInput as Record<string, unknown>)
 			: {};
-	const scopePath = typeof input.scopePath === "string" ? input.scopePath : null;
+	const scopePath =
+		typeof input.scopePath === "string" ? input.scopePath : null;
 	if (!scopePath) return null;
 	const task = await findTaskByIdRepo(fromTaskId).catch(() => null);
 	if (!task) return null;
@@ -3873,8 +3864,7 @@ const resolveResearchDeadlineFromStageInput = async <
 		scope && typeof scope === "object" && !Array.isArray(scope)
 			? Date.parse(
 					String(
-						(scope as Record<string, unknown>).minimumResearchDeadlineAt ||
-							"",
+						(scope as Record<string, unknown>).minimumResearchDeadlineAt || "",
 					),
 				)
 			: Number.NaN;
@@ -3906,7 +3896,12 @@ const dispatchPipelineDownstreamInternal = async <
 			fromTaskId,
 			stageInput,
 		);
-		if (deadline && Date.now() < deadline && routeKey === "confirmed" && stageName === "exploit-review") {
+		if (
+			deadline &&
+			Date.now() < deadline &&
+			routeKey === "confirmed" &&
+			stageName === "exploit-review"
+		) {
 			effectiveRouteKey = "runtime-retry";
 			logPipelineEvent("research.deadline_route_extended", {
 				scanJobId: (runtime.ctx as unknown as PipelineScanJobContext).scanJob

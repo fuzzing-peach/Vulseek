@@ -201,12 +201,15 @@ export const AdvancedEnvironmentSelector = ({
 		<>
 			<DropdownMenu>
 				<DropdownMenuTrigger asChild>
-					<Button variant="ghost" className="h-auto p-2 font-normal">
-						<div className="flex items-center gap-1">
-							<span className="text-muted-foreground">/</span>
-							<span>{currentEnv?.name || "Select Environment"}</span>
-							<ChevronDownIcon className="h-4 w-4 text-muted-foreground" />
-						</div>
+					<Button
+						variant="ghost"
+						className="h-7 max-w-[12rem] shrink-0 gap-1 px-2 font-normal"
+					>
+						<span className="text-muted-foreground">/</span>
+						<span className="min-w-0 truncate">
+							{currentEnv?.name || "Select Environment"}
+						</span>
+						<ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
 					</Button>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent className="w-[300px]" align="start">

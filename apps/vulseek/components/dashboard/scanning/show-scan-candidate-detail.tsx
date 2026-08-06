@@ -22,18 +22,18 @@ import {
 	buildCandidateListStateHref,
 	parseCandidateListQueryState,
 } from "@/components/dashboard/scanning/candidate-list-query-state";
+import {
+	DashboardPage,
+	DashboardPageBody,
+	DashboardPageHeader,
+	DashboardPageTabContent,
+	DashboardPageTabs,
+} from "@/components/dashboard/ui-system";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
-import { DashboardPanelShell } from "@/components/shared/dashboard-panel-shell";
 import { DateTooltip } from "@/components/shared/date-tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
-} from "@/components/ui/card";
 import {
 	Dialog,
 	DialogContent,
@@ -41,30 +41,34 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { parseTabParam } from "@/lib/ui-system/tab-query";
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
 import {
-	LazyFileTree,
-	ROOT_DIRECTORY_KEY,
 	type DirectoryCacheEntry,
 	type DirectoryListItem,
+	LazyFileTree,
+	ROOT_DIRECTORY_KEY,
 } from "./lazy-file-tree";
 import {
 	formatAnalysisResultLabel,
 	formatScanStageLabel,
 	formatScanStatusLabel,
 	formatTruthResultLabel,
+	isTerminalScanJobStatus,
 	type ScanTranslation,
 	scanT,
-	isTerminalScanJobStatus,
 } from "./scan-i18n";
 
 interface Props {
 	serviceType: "application" | "compose";
 	routeSegment: "profiles" | "services";
 }
+
+type CandidateDetailTab = "overview" | "task-lineage" | "files";
+const CANDIDATE_TAB_VALUES = ["overview", "task-lineage", "files"] as const;
 
 const ACTIVE_CANDIDATE_TASK_STATUSES = new Set([
 	"pending",
@@ -454,14 +458,25 @@ export const ShowScanCandidateDetail = ({
 	);
 	const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
 	const [previewFilePath, setPreviewFilePath] = useState<string | null>(null);
-	const [activeTab, setActiveTab] = useState<
-		"overview" | "task-lineage" | "files"
-	>("overview");
+	const [activeTab, setActiveTab] = useState<CandidateDetailTab>("overview");
+	const requestedTab = parseTabParam(
+		router.query,
+		CANDIDATE_TAB_VALUES,
+		"overview",
+	) as CandidateDetailTab;
+
+	useEffect(() => {
+		if (requestedTab !== activeTab) setActiveTab(requestedTab);
+	}, [activeTab, requestedTab]);
 	const [noteDraft, setNoteDraft] = useState("");
 	const [selectedTags, setSelectedTags] = useState<string[]>([]);
 	const [tagInput, setTagInput] = useState("");
-	const [expandedDirectories, setExpandedDirectories] = useState<Record<string, boolean>>({});
-	const [directoryCache, setDirectoryCache] = useState<Record<string, DirectoryCacheEntry>>({});
+	const [expandedDirectories, setExpandedDirectories] = useState<
+		Record<string, boolean>
+	>({});
+	const [directoryCache, setDirectoryCache] = useState<
+		Record<string, DirectoryCacheEntry>
+	>({});
 	const metadataSyncKeyRef = useRef("");
 
 	const jobCandidatesHref = buildCandidateListStateHref(
@@ -493,7 +508,12 @@ export const ShowScanCandidateDetail = ({
 				scanJobId: scanJobId || undefined,
 				producerTaskId: producerTaskId || undefined,
 			},
-			{ enabled: !!candidateId && !!scanJobId, refetchInterval: isTerminalScanJobStatus(jobOverview?.status) ? false : 2000 },
+			{
+				enabled: !!candidateId && !!scanJobId,
+				refetchInterval: isTerminalScanJobStatus(jobOverview?.status)
+					? false
+					: 2000,
+			},
 		);
 	const { data: candidateLineage } = api.scan.candidateTaskLineage.useQuery(
 		{
@@ -501,18 +521,23 @@ export const ShowScanCandidateDetail = ({
 			scanJobId: scanJobId || undefined,
 			producerTaskId: producerTaskId || undefined,
 		},
-		{ enabled: !!candidateId && !!scanJobId, refetchInterval: isTerminalScanJobStatus(jobOverview?.status) ? false : 2000 },
+		{
+			enabled: !!candidateId && !!scanJobId,
+			refetchInterval: isTerminalScanJobStatus(jobOverview?.status)
+				? false
+				: 2000,
+		},
 	);
 	const rootDirectoryQuery = api.scan.listCandidateDirectory.useQuery(
-			{
-				vulnerabilityCandidateId: candidateId,
-				scanJobId,
-			},
-			{
-				enabled: activeTab === "files" && !!candidateId && !!scanJobId,
-				refetchInterval: false,
-			},
-		);
+		{
+			vulnerabilityCandidateId: candidateId,
+			scanJobId,
+		},
+		{
+			enabled: activeTab === "files" && !!candidateId && !!scanJobId,
+			refetchInterval: false,
+		},
+	);
 	const { data: selectedFile, isLoading: isLoadingSelectedFile } =
 		api.scan.readCandidateFile.useQuery(
 			{
@@ -563,27 +588,64 @@ export const ShowScanCandidateDetail = ({
 
 	useEffect(() => {
 		if (rootDirectoryQuery.isLoading) {
-			setDirectoryCache((current) => ({ ...current, [ROOT_DIRECTORY_KEY]: { items: current[ROOT_DIRECTORY_KEY]?.items || [], status: "loading" } }));
+			setDirectoryCache((current) => ({
+				...current,
+				[ROOT_DIRECTORY_KEY]: {
+					items: current[ROOT_DIRECTORY_KEY]?.items || [],
+					status: "loading",
+				},
+			}));
 			return;
 		}
 		if (rootDirectoryQuery.isError) {
-			setDirectoryCache((current) => ({ ...current, [ROOT_DIRECTORY_KEY]: { items: [], status: "error" } }));
+			setDirectoryCache((current) => ({
+				...current,
+				[ROOT_DIRECTORY_KEY]: { items: [], status: "error" },
+			}));
 			return;
 		}
 		const items = (rootDirectoryQuery.data || []) as DirectoryListItem[];
-		setDirectoryCache((current) => ({ ...current, [ROOT_DIRECTORY_KEY]: { items, status: "loaded" } }));
-	}, [rootDirectoryQuery.data, rootDirectoryQuery.isError, rootDirectoryQuery.isLoading]);
+		setDirectoryCache((current) => ({
+			...current,
+			[ROOT_DIRECTORY_KEY]: { items, status: "loaded" },
+		}));
+	}, [
+		rootDirectoryQuery.data,
+		rootDirectoryQuery.isError,
+		rootDirectoryQuery.isLoading,
+	]);
 
 	const handleToggleDirectory = async (directoryPath: string) => {
 		const expanded = !expandedDirectories[directoryPath];
-		setExpandedDirectories((current) => ({ ...current, [directoryPath]: expanded }));
-		if (!expanded || directoryCache[directoryPath]?.status === "loaded" || directoryCache[directoryPath]?.status === "loading") return;
-		setDirectoryCache((current) => ({ ...current, [directoryPath]: { items: [], status: "loading" } }));
+		setExpandedDirectories((current) => ({
+			...current,
+			[directoryPath]: expanded,
+		}));
+		if (
+			!expanded ||
+			directoryCache[directoryPath]?.status === "loaded" ||
+			directoryCache[directoryPath]?.status === "loading"
+		)
+			return;
+		setDirectoryCache((current) => ({
+			...current,
+			[directoryPath]: { items: [], status: "loading" },
+		}));
 		try {
-			const items = await utils.scan.listCandidateDirectory.fetch({ vulnerabilityCandidateId: candidateId, scanJobId, directoryPath });
-			setDirectoryCache((current) => ({ ...current, [directoryPath]: { items, status: "loaded" } }));
+			const items = await utils.scan.listCandidateDirectory.fetch({
+				vulnerabilityCandidateId: candidateId,
+				scanJobId,
+				directoryPath,
+			});
+			setDirectoryCache((current) => ({
+				...current,
+				[directoryPath]: { items, status: "loaded" },
+			}));
 		} catch {
-			setDirectoryCache((current) => ({ ...current, [directoryPath]: { items: [], status: "error" } }));
+			setDirectoryCache((current) => ({
+				...current,
+				[directoryPath]: { items: [], status: "error" },
+			}));
 		}
 	};
 
@@ -846,22 +908,20 @@ export const ShowScanCandidateDetail = ({
 				</DialogContent>
 			</Dialog>
 
-			<DashboardPanelShell>
-				<CardHeader>
-					<div className="flex items-start justify-between gap-4">
-						<div className="min-w-0">
-							<CardTitle className="text-xl">
-								{candidate?.title || `Candidate ${candidateId.slice(0, 6)}`}
-							</CardTitle>
-							<CardDescription className="mt-2 flex items-center gap-2 break-all">
-								<span>{candidateId}</span>
-								<CopyValueButton
-									value={candidateId}
-									label={scanT(t, "scan.field.candidateId", "Candidate ID")}
-									className="size-7 shrink-0"
-								/>
-							</CardDescription>
+			<DashboardPage>
+				<DashboardPageHeader
+					title={candidate?.title || `Candidate ${candidateId.slice(0, 6)}`}
+					description={
+						<div className="flex min-w-0 items-center gap-2 break-all">
+							<span>{candidateId}</span>
+							<CopyValueButton
+								value={candidateId}
+								label={scanT(t, "scan.field.candidateId", "Candidate ID")}
+								className="size-7 shrink-0"
+							/>
 						</div>
+					}
+					actions={
 						<div className="flex shrink-0 flex-wrap justify-end gap-2">
 							<Button
 								type="button"
@@ -896,10 +956,10 @@ export const ShowScanCandidateDetail = ({
 												utils.scan.candidate.invalidate({
 													vulnerabilityCandidateId: candidateId,
 												}),
-								utils.scan.listCandidateDirectory.invalidate({
-									vulnerabilityCandidateId: candidateId,
-									scanJobId,
-								}),
+												utils.scan.listCandidateDirectory.invalidate({
+													vulnerabilityCandidateId: candidateId,
+													scanJobId,
+												}),
 											]);
 											await router.push(
 												`/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}?tab=verify`,
@@ -912,647 +972,660 @@ export const ShowScanCandidateDetail = ({
 								</Button>
 							) : null}
 						</div>
-					</div>
-				</CardHeader>
-				<CardContent>
-					<Tabs
-						value={activeTab}
-						onValueChange={(value) =>
-							setActiveTab(value as "overview" | "task-lineage" | "files")
-						}
-						className="w-full"
-					>
-						<TabsList className="flex gap-4 justify-start">
-							<TabsTrigger value="overview">
-								{scanT(t, "scan.job.tabs.overview", "Overview")}
-							</TabsTrigger>
-							<TabsTrigger value="task-lineage">
-								{scanT(t, "scan.candidate.taskLineage", "阶段任务 Lineage")}
-							</TabsTrigger>
-							<TabsTrigger value="files">
-								{scanT(t, "scan.files.title", "Files")}
-							</TabsTrigger>
-						</TabsList>
-
-						<TabsContent value="overview" className="pt-4">
-							{isLoadingCandidate ? (
-								<div className="flex items-center gap-2 text-muted-foreground">
-									<Loader2 className="size-4 animate-spin" />
-									{scanT(t, "scan.candidate.loading", "Loading candidate...")}
-								</div>
-							) : !candidate ? (
-								<div className="flex items-center gap-2 text-muted-foreground">
-									<AlertCircle className="size-4" />
-									{scanT(t, "scan.candidate.notFound", "Candidate not found")}
-								</div>
-							) : (
-								<div className="grid gap-6">
-									<section className="rounded-lg border p-4">
-										<div className="mb-4 text-lg font-semibold">
-											{scanT(t, "scan.section.general", "General")}
-										</div>
-										<div className="grid gap-3 md:grid-cols-2">
-											<div className="rounded-lg border p-3">
-												<div className="text-sm text-muted-foreground">
-													{scanT(t, "scan.field.sanityCheck", "Sanity Check")}
-												</div>
-												<div className="mt-1 font-medium">
-													{candidate.latestVerificationResult
-														? formatTruthResultLabel(
-																t,
-																candidate.latestVerificationResult.result,
-															)
-														: "-"}
-												</div>
-											</div>
-											<div className="rounded-lg border p-3">
-												<div className="text-sm text-muted-foreground">
-													{scanT(t, "scan.field.location", "Location")}
-												</div>
-												<div className="mt-1 break-all font-medium">
-													{candidate.filePath || "-"}
-													{candidate.line ? `:${candidate.line}` : ""}
-												</div>
-											</div>
-											<div className="rounded-lg border p-3">
-												<div className="text-sm text-muted-foreground">
-													{scanT(t, "scan.field.score", "Score")}
-												</div>
-												<div className="mt-1 font-medium">
-													{typeof candidate.score === "number"
-														? candidate.score.toFixed(1)
-														: "-"}
-												</div>
-											</div>
-											<div className="rounded-lg border p-3">
-												<div className="text-sm text-muted-foreground">
-													{scanT(t, "scan.field.confidence", "Confidence")}
-												</div>
-												<div className="mt-1 font-medium">
-													{typeof candidate.confidence === "number"
-														? candidate.confidence
-														: "-"}
-												</div>
-											</div>
-											<div className="rounded-lg border p-3">
-												<div className="text-sm text-muted-foreground">
-													{scanT(t, "scan.field.created", "Created")}
-												</div>
-												<div className="mt-1 font-medium">
-													<DateTooltip date={candidate.createdAt} />
-												</div>
-											</div>
-											<div className="rounded-lg border p-3">
-												<div className="text-sm text-muted-foreground">
-													{scanT(t, "scan.field.updated", "Updated")}
-												</div>
-												<div className="mt-1 font-medium">
-													<DateTooltip date={candidate.updatedAt} />
-												</div>
-											</div>
-										</div>
-
-										<div className="mt-4 rounded-lg border p-3">
-											<div className="text-sm text-muted-foreground">
-												{scanT(t, "scan.field.description", "Description")}
-											</div>
-											<div className="mt-1 whitespace-pre-wrap break-words text-sm">
-												{candidate.description || "-"}
-											</div>
-										</div>
-									</section>
-
-									<section className="rounded-lg border p-4">
-										<div className="mb-4 flex items-center justify-between gap-3">
-											<div className="flex items-center gap-2 text-lg font-semibold">
-												<Tag className="size-4" />
-												{scanT(t, "scan.candidate.userNotes", "User Notes")}
-											</div>
-											<Button
-												type="button"
-												size="sm"
-												isLoading={updateCandidateMetadataMutation.isLoading}
-												disabled={
-													updateCandidateMetadataMutation.isLoading ||
-													!candidateMetadataDirty
-												}
-												onClick={saveCandidateMetadata}
-											>
-												{scanT(t, "scan.dialog.save", "Save")}
-											</Button>
-										</div>
-										<div className="grid gap-4">
-											<div className="grid gap-2">
-												<div className="text-sm text-muted-foreground">
-													{scanT(t, "scan.candidate.note", "Note")}
-												</div>
-												<Textarea
-													value={noteDraft}
-													onChange={(event) => setNoteDraft(event.target.value)}
-													placeholder={scanT(
-														t,
-														"scan.candidate.notePlaceholder",
-														"Add reviewer notes for this candidate.",
-													)}
-													className="min-h-28"
-												/>
-											</div>
-											<div className="grid gap-2">
-												<div className="text-sm text-muted-foreground">
-													{scanT(t, "scan.candidate.tags", "Tags")}
-												</div>
-												<div className="flex flex-wrap gap-2">
-													{selectedTags.length > 0 ? (
-														selectedTags.map((tag) => (
-															<Badge
-																key={tag}
-																variant="secondary"
-																className="gap-1 pr-1"
-															>
-																<span>{tag}</span>
-																<button
-																	type="button"
-																	className="rounded-sm p-0.5 hover:bg-background/70"
-																	onClick={() => removeCandidateTag(tag)}
-																	aria-label={scanT(
-																		t,
-																		"scan.candidate.removeTagAria",
-																		"Remove tag {{tag}}",
-																		{ tag },
-																	)}
-																>
-																	<X className="size-3" />
-																</button>
-															</Badge>
-														))
-													) : (
-														<div className="text-sm text-muted-foreground">
-															{scanT(
-																t,
-																"scan.candidate.noTags",
-																"No tags set.",
-															)}
-														</div>
-													)}
-												</div>
-												<div className="flex gap-2">
-													<Input
-														value={tagInput}
-														onChange={(event) =>
-															setTagInput(event.target.value)
-														}
-														maxLength={64}
-														onKeyDown={(event) => {
-															if (event.key === "Enter") {
-																event.preventDefault();
-																addCandidateTag(normalizedTagInput);
-															}
-														}}
-														placeholder={scanT(
-															t,
-															"scan.candidate.tagPlaceholder",
-															"Type a new tag",
-														)}
-													/>
-													<Button
-														type="button"
-														variant="secondary"
-														disabled={!normalizedTagInput}
-														onClick={() => addCandidateTag(normalizedTagInput)}
-													>
-														<Plus className="mr-2 size-4" />
-														{scanT(t, "scan.common.add", "Add")}
-													</Button>
-												</div>
-												{candidateTagSuggestions.length > 0 ? (
-													<div className="flex flex-wrap gap-2">
-														{candidateTagSuggestions.map((tag) => (
-															<button
-																key={tag}
-																type="button"
-																className="rounded-md border px-2 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
-																onClick={() => addCandidateTag(tag)}
-															>
-																{tag}
-															</button>
-														))}
-													</div>
-												) : null}
-											</div>
-										</div>
-									</section>
-
-									{candidateExecutionState.activeTask ? (
+					}
+				/>
+				<DashboardPageTabs
+					fallback="overview"
+					tabs={[
+						{
+							value: "overview",
+							label: scanT(t, "scan.job.tabs.overview", "Overview"),
+						},
+						{
+							value: "task-lineage",
+							label: scanT(t, "scan.candidate.taskLineage", "阶段任务 Lineage"),
+						},
+						{ value: "files", label: scanT(t, "scan.files.title", "Files") },
+					]}
+				/>
+				<DashboardPageBody>
+					<DashboardPageTabContent>
+						<Tabs
+							value={activeTab}
+							onValueChange={(value) =>
+								setActiveTab(value as "overview" | "task-lineage" | "files")
+							}
+							className="w-full"
+						>
+							<TabsContent value="overview" className="mt-0 pt-0">
+								{isLoadingCandidate ? (
+									<div className="flex items-center gap-2 text-muted-foreground">
+										<Loader2 className="size-4 animate-spin" />
+										{scanT(t, "scan.candidate.loading", "Loading candidate...")}
+									</div>
+								) : !candidate ? (
+									<div className="flex items-center gap-2 text-muted-foreground">
+										<AlertCircle className="size-4" />
+										{scanT(t, "scan.candidate.notFound", "Candidate not found")}
+									</div>
+								) : (
+									<div className="grid gap-6">
 										<section className="rounded-lg border p-4">
 											<div className="mb-4 text-lg font-semibold">
-												{scanT(t, "scan.candidate.liveOutput", "Live Output")}
+												{scanT(t, "scan.section.general", "General")}
+											</div>
+											<div className="grid gap-3 md:grid-cols-2">
+												<div className="rounded-lg border p-3">
+													<div className="text-sm text-muted-foreground">
+														{scanT(t, "scan.field.sanityCheck", "Sanity Check")}
+													</div>
+													<div className="mt-1 font-medium">
+														{candidate.latestVerificationResult
+															? formatTruthResultLabel(
+																	t,
+																	candidate.latestVerificationResult.result,
+																)
+															: "-"}
+													</div>
+												</div>
+												<div className="rounded-lg border p-3">
+													<div className="text-sm text-muted-foreground">
+														{scanT(t, "scan.field.location", "Location")}
+													</div>
+													<div className="mt-1 break-all font-medium">
+														{candidate.filePath || "-"}
+														{candidate.line ? `:${candidate.line}` : ""}
+													</div>
+												</div>
+												<div className="rounded-lg border p-3">
+													<div className="text-sm text-muted-foreground">
+														{scanT(t, "scan.field.score", "Score")}
+													</div>
+													<div className="mt-1 font-medium">
+														{typeof candidate.score === "number"
+															? candidate.score.toFixed(1)
+															: "-"}
+													</div>
+												</div>
+												<div className="rounded-lg border p-3">
+													<div className="text-sm text-muted-foreground">
+														{scanT(t, "scan.field.confidence", "Confidence")}
+													</div>
+													<div className="mt-1 font-medium">
+														{typeof candidate.confidence === "number"
+															? candidate.confidence
+															: "-"}
+													</div>
+												</div>
+												<div className="rounded-lg border p-3">
+													<div className="text-sm text-muted-foreground">
+														{scanT(t, "scan.field.created", "Created")}
+													</div>
+													<div className="mt-1 font-medium">
+														<DateTooltip date={candidate.createdAt} />
+													</div>
+												</div>
+												<div className="rounded-lg border p-3">
+													<div className="text-sm text-muted-foreground">
+														{scanT(t, "scan.field.updated", "Updated")}
+													</div>
+													<div className="mt-1 font-medium">
+														<DateTooltip date={candidate.updatedAt} />
+													</div>
+												</div>
+											</div>
+
+											<div className="mt-4 rounded-lg border p-3">
+												<div className="text-sm text-muted-foreground">
+													{scanT(t, "scan.field.description", "Description")}
+												</div>
+												<div className="mt-1 whitespace-pre-wrap break-words text-sm">
+													{candidate.description || "-"}
+												</div>
+											</div>
+										</section>
+
+										<section className="rounded-lg border p-4">
+											<div className="mb-4 flex items-center justify-between gap-3">
+												<div className="flex items-center gap-2 text-lg font-semibold">
+													<Tag className="size-4" />
+													{scanT(t, "scan.candidate.userNotes", "User Notes")}
+												</div>
+												<Button
+													type="button"
+													size="sm"
+													isLoading={updateCandidateMetadataMutation.isLoading}
+													disabled={
+														updateCandidateMetadataMutation.isLoading ||
+														!candidateMetadataDirty
+													}
+													onClick={saveCandidateMetadata}
+												>
+													{scanT(t, "scan.dialog.save", "Save")}
+												</Button>
+											</div>
+											<div className="grid gap-4">
+												<div className="grid gap-2">
+													<div className="text-sm text-muted-foreground">
+														{scanT(t, "scan.candidate.note", "Note")}
+													</div>
+													<Textarea
+														value={noteDraft}
+														onChange={(event) =>
+															setNoteDraft(event.target.value)
+														}
+														placeholder={scanT(
+															t,
+															"scan.candidate.notePlaceholder",
+															"Add reviewer notes for this candidate.",
+														)}
+														className="min-h-28"
+													/>
+												</div>
+												<div className="grid gap-2">
+													<div className="text-sm text-muted-foreground">
+														{scanT(t, "scan.candidate.tags", "Tags")}
+													</div>
+													<div className="flex flex-wrap gap-2">
+														{selectedTags.length > 0 ? (
+															selectedTags.map((tag) => (
+																<Badge
+																	key={tag}
+																	variant="secondary"
+																	className="gap-1 pr-1"
+																>
+																	<span>{tag}</span>
+																	<button
+																		type="button"
+																		className="rounded-sm p-0.5 hover:bg-background/70"
+																		onClick={() => removeCandidateTag(tag)}
+																		aria-label={scanT(
+																			t,
+																			"scan.candidate.removeTagAria",
+																			"Remove tag {{tag}}",
+																			{ tag },
+																		)}
+																	>
+																		<X className="size-3" />
+																	</button>
+																</Badge>
+															))
+														) : (
+															<div className="text-sm text-muted-foreground">
+																{scanT(
+																	t,
+																	"scan.candidate.noTags",
+																	"No tags set.",
+																)}
+															</div>
+														)}
+													</div>
+													<div className="flex gap-2">
+														<Input
+															value={tagInput}
+															onChange={(event) =>
+																setTagInput(event.target.value)
+															}
+															maxLength={64}
+															onKeyDown={(event) => {
+																if (event.key === "Enter") {
+																	event.preventDefault();
+																	addCandidateTag(normalizedTagInput);
+																}
+															}}
+															placeholder={scanT(
+																t,
+																"scan.candidate.tagPlaceholder",
+																"Type a new tag",
+															)}
+														/>
+														<Button
+															type="button"
+															variant="secondary"
+															disabled={!normalizedTagInput}
+															onClick={() =>
+																addCandidateTag(normalizedTagInput)
+															}
+														>
+															<Plus className="mr-2 size-4" />
+															{scanT(t, "scan.common.add", "Add")}
+														</Button>
+													</div>
+													{candidateTagSuggestions.length > 0 ? (
+														<div className="flex flex-wrap gap-2">
+															{candidateTagSuggestions.map((tag) => (
+																<button
+																	key={tag}
+																	type="button"
+																	className="rounded-md border px-2 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
+																	onClick={() => addCandidateTag(tag)}
+																>
+																	{tag}
+																</button>
+															))}
+														</div>
+													) : null}
+												</div>
+											</div>
+										</section>
+
+										{candidateExecutionState.activeTask ? (
+											<section className="rounded-lg border p-4">
+												<div className="mb-4 text-lg font-semibold">
+													{scanT(t, "scan.candidate.liveOutput", "Live Output")}
+												</div>
+												<div className="mb-3 flex items-center justify-between gap-3">
+													<div className="text-sm text-muted-foreground">
+														{scanT(
+															t,
+															"scan.candidate.liveAgentOutput",
+															"Live Agent Output",
+														)}
+													</div>
+													<Badge variant="outline" className="capitalize">
+														{formatScanStageLabel(t, candidateStreamStage)}
+													</Badge>
+												</div>
+												{candidateAgentStreamTransport ? (
+													<AgentStream
+														transport={candidateAgentStreamTransport}
+													/>
+												) : null}
+											</section>
+										) : null}
+
+										<section className="rounded-lg border p-4">
+											<div className="mb-4 text-lg font-semibold">
+												{scanT(t, "scan.section.analysis", "Analysis")}
 											</div>
 											<div className="mb-3 flex items-center justify-between gap-3">
 												<div className="text-sm text-muted-foreground">
 													{scanT(
 														t,
-														"scan.candidate.liveAgentOutput",
-														"Live Agent Output",
+														"scan.candidate.latestAnalysis",
+														"Latest Analysis Result",
 													)}
 												</div>
-												<Badge variant="outline" className="capitalize">
-													{formatScanStageLabel(t, candidateStreamStage)}
-												</Badge>
+												{candidate.latestAnalysisResult?.result ? (
+													<Badge
+														variant="outline"
+														className={`capitalize ${getAnalysisResultBadgeClassName(candidate.latestAnalysisResult.result)}`}
+													>
+														{formatAnalysisResultLabel(
+															t,
+															candidate.latestAnalysisResult.result,
+														)}
+													</Badge>
+												) : null}
 											</div>
-											{candidateAgentStreamTransport ? (
-												<AgentStream
-													transport={candidateAgentStreamTransport}
-												/>
-											) : null}
-										</section>
-									) : null}
-
-									<section className="rounded-lg border p-4">
-										<div className="mb-4 text-lg font-semibold">
-											{scanT(t, "scan.section.analysis", "Analysis")}
-										</div>
-										<div className="mb-3 flex items-center justify-between gap-3">
-											<div className="text-sm text-muted-foreground">
-												{scanT(
-													t,
-													"scan.candidate.latestAnalysis",
-													"Latest Analysis Result",
-												)}
-											</div>
-											{candidate.latestAnalysisResult?.result ? (
-												<Badge
-													variant="outline"
-													className={`capitalize ${getAnalysisResultBadgeClassName(candidate.latestAnalysisResult.result)}`}
-												>
-													{formatAnalysisResultLabel(
+											<div className="grid gap-3 md:grid-cols-2">
+												<div className="rounded-md border p-3">
+													<div className="text-xs text-muted-foreground">
+														{scanT(t, "scan.field.summary", "Summary")}
+													</div>
+													<div className="mt-1 whitespace-pre-wrap break-words text-sm">
+														{candidate.latestAnalysisResult?.summary || "-"}
+													</div>
+												</div>
+												{renderPathCard(
+													scanT(t, "scan.field.reportPath", "Report Path"),
+													candidate.latestAnalysisResult?.reportPath,
+													scanT(
 														t,
-														candidate.latestAnalysisResult.result,
-													)}
-												</Badge>
-											) : null}
-										</div>
-										<div className="grid gap-3 md:grid-cols-2">
-											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">
-													{scanT(t, "scan.field.summary", "Summary")}
+														"scan.field.analysisReportPath",
+														"Analysis Report Path",
+													),
+												)}
+												<div className="rounded-md border p-3">
+													<div className="text-xs text-muted-foreground">
+														{scanT(t, "scan.field.score", "Score")}
+													</div>
+													<div className="mt-1 text-sm">
+														{typeof candidate.latestAnalysisResult?.score ===
+														"number"
+															? candidate.latestAnalysisResult.score.toFixed(1)
+															: "-"}
+													</div>
 												</div>
-												<div className="mt-1 whitespace-pre-wrap break-words text-sm">
-													{candidate.latestAnalysisResult?.summary || "-"}
+												<div className="rounded-md border p-3">
+													<div className="text-xs text-muted-foreground">
+														{scanT(t, "scan.field.confidence", "Confidence")}
+													</div>
+													<div className="mt-1 text-sm">
+														{typeof candidate.latestAnalysisResult
+															?.confidence === "number"
+															? candidate.latestAnalysisResult.confidence
+															: "-"}
+													</div>
+												</div>
+												<div className="rounded-md border p-3">
+													<div className="text-xs text-muted-foreground">
+														{scanT(
+															t,
+															"scan.field.runtimeSeconds",
+															"Runtime Seconds",
+														)}
+													</div>
+													<div className="mt-1 text-sm">
+														{candidate.latestAnalysisResult?.runtimeSeconds ??
+															"-"}
+													</div>
+												</div>
+												<div className="rounded-md border p-3">
+													<div className="text-xs text-muted-foreground">
+														{scanT(t, "scan.field.threadId", "Thread ID")}
+													</div>
+													<div className="mt-1 flex items-center gap-2 break-all text-sm">
+														<span>
+															{candidate.latestAnalysisResult?.threadId || "-"}
+														</span>
+														{candidate.latestAnalysisResult?.threadId ? (
+															<CopyValueButton
+																value={candidate.latestAnalysisResult.threadId}
+																label={scanT(
+																	t,
+																	"scan.field.analysisThreadId",
+																	"Analysis Thread ID",
+																)}
+																className="size-6 shrink-0"
+															/>
+														) : null}
+													</div>
 												</div>
 											</div>
-											{renderPathCard(
-												scanT(t, "scan.field.reportPath", "Report Path"),
-												candidate.latestAnalysisResult?.reportPath,
-												scanT(
-													t,
-													"scan.field.analysisReportPath",
-													"Analysis Report Path",
-												),
-											)}
-											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">
-													{scanT(t, "scan.field.score", "Score")}
-												</div>
-												<div className="mt-1 text-sm">
-													{typeof candidate.latestAnalysisResult?.score ===
-													"number"
-														? candidate.latestAnalysisResult.score.toFixed(1)
-														: "-"}
-												</div>
+										</section>
+
+										<section className="rounded-lg border p-4">
+											<div className="mb-4 text-lg font-semibold">
+												{scanT(t, "scan.section.verify", "Verify")}
 											</div>
-											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">
-													{scanT(t, "scan.field.confidence", "Confidence")}
-												</div>
-												<div className="mt-1 text-sm">
-													{typeof candidate.latestAnalysisResult?.confidence ===
-													"number"
-														? candidate.latestAnalysisResult.confidence
-														: "-"}
-												</div>
-											</div>
-											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">
+											<div className="mb-3 flex items-center justify-between gap-3">
+												<div className="text-sm text-muted-foreground">
 													{scanT(
 														t,
-														"scan.field.runtimeSeconds",
-														"Runtime Seconds",
+														"scan.candidate.latestVerification",
+														"Latest Verification Result",
 													)}
 												</div>
-												<div className="mt-1 text-sm">
-													{candidate.latestAnalysisResult?.runtimeSeconds ??
-														"-"}
-												</div>
+												{verificationTruthBadge ? (
+													<Badge
+														variant="outline"
+														className={verificationTruthBadge.className}
+													>
+														{verificationTruthBadge.label}
+													</Badge>
+												) : null}
 											</div>
-											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">
-													{scanT(t, "scan.field.threadId", "Thread ID")}
+											<div className="grid gap-3 md:grid-cols-2">
+												<div className="rounded-md border p-3">
+													<div className="text-xs text-muted-foreground">
+														{scanT(t, "scan.field.result", "Result")}
+													</div>
+													<div className="mt-1 text-sm">
+														{candidate.latestVerificationResult?.result
+															? formatTruthResultLabel(
+																	t,
+																	candidate.latestVerificationResult.result,
+																)
+															: "-"}
+													</div>
 												</div>
-												<div className="mt-1 flex items-center gap-2 break-all text-sm">
-													<span>
-														{candidate.latestAnalysisResult?.threadId || "-"}
-													</span>
-													{candidate.latestAnalysisResult?.threadId ? (
+												<div className="rounded-md border p-3">
+													<div className="text-xs text-muted-foreground">
+														{scanT(t, "scan.field.score", "Score")}
+													</div>
+													<div className="mt-1 text-sm">
+														{typeof candidate.latestVerificationResult
+															?.score === "number"
+															? candidate.latestVerificationResult.score.toFixed(
+																	1,
+																)
+															: "-"}
+													</div>
+												</div>
+												<div className="rounded-md border p-3">
+													<div className="text-xs text-muted-foreground">
+														{scanT(t, "scan.field.confidence", "Confidence")}
+													</div>
+													<div className="mt-1 text-sm">
+														{typeof candidate.latestVerificationResult
+															?.confidence === "number"
+															? candidate.latestVerificationResult.confidence
+															: "-"}
+													</div>
+												</div>
+												{renderPathCard(
+													scanT(t, "scan.field.reportPath", "Report Path"),
+													candidate.latestVerificationResult?.reportPath,
+													scanT(
+														t,
+														"scan.field.verificationReportPath",
+														"Verification Report Path",
+													),
+												)}
+											</div>
+										</section>
+
+										<section className="rounded-lg border p-4">
+											<div className="mb-4 text-lg font-semibold">
+												{scanT(t, "scan.section.triage", "Triage")}
+											</div>
+											<div className="mb-3 text-sm text-muted-foreground">
+												{scanT(
+													t,
+													"scan.candidate.latestTriage",
+													"Latest Triage",
+												)}
+											</div>
+											<div className="grid gap-3 md:grid-cols-2">
+												<div className="rounded-md border p-3">
+													<div className="text-xs text-muted-foreground">
+														{scanT(
+															t,
+															"scan.field.classification",
+															"Classification",
+														)}
+													</div>
+													<div className="mt-1 text-sm">
+														{candidate.latestTriageResult
+															?.securityClassification || "-"}
+													</div>
+												</div>
+												<div className="rounded-md border p-3">
+													<div className="text-xs text-muted-foreground">
+														{scanT(
+															t,
+															"scan.field.securityIssue",
+															"Security Issue",
+														)}
+													</div>
+													<div className="mt-1 text-sm">
+														{typeof candidate.latestTriageResult
+															?.isSecurityIssue === "boolean"
+															? candidate.latestTriageResult.isSecurityIssue
+																? scanT(t, "scan.common.yes", "Yes")
+																: scanT(t, "scan.common.no", "No")
+															: "-"}
+													</div>
+												</div>
+												<div className="rounded-md border p-3">
+													<div className="text-xs text-muted-foreground">
+														{scanT(
+															t,
+															"scan.field.disqualifier",
+															"Disqualifier",
+														)}
+													</div>
+													<div className="mt-1 text-sm">
+														{candidate.latestTriageResult?.disqualifier || "-"}
+													</div>
+												</div>
+												<div className="rounded-md border p-3">
+													<div className="text-xs text-muted-foreground">
+														{scanT(t, "scan.field.impact", "Impact")}
+													</div>
+													<div className="mt-1 text-sm">
+														{candidate.latestTriageResult?.impactType || "-"}
+													</div>
+												</div>
+												<div className="rounded-md border p-3 md:col-span-2">
+													<div className="text-xs text-muted-foreground">
+														{scanT(
+															t,
+															"scan.field.disqualifierReason",
+															"Disqualifier Reason",
+														)}
+													</div>
+													<div className="mt-1 whitespace-pre-wrap break-words text-sm">
+														{candidate.latestTriageResult?.disqualifierReason ||
+															"-"}
+													</div>
+												</div>
+												<div className="rounded-md border p-3">
+													<div className="text-xs text-muted-foreground">
+														CVSS
+													</div>
+													<div className="mt-1 text-sm">
+														{candidate.latestTriageResult?.cvssSeverity || "-"}
+														{typeof candidate.latestTriageResult?.cvssScore ===
+														"number"
+															? ` ${candidate.latestTriageResult.cvssScore.toFixed(1)}`
+															: ""}
+													</div>
+												</div>
+												<div className="rounded-md border p-3">
+													<div className="text-xs text-muted-foreground">
+														EPSS 30d
+													</div>
+													<div className="mt-1 text-sm">
+														{typeof candidate.latestTriageResult
+															?.epssProbability30d === "number"
+															? `${(candidate.latestTriageResult.epssProbability30d * 100).toFixed(2)}%`
+															: "-"}
+													</div>
+												</div>
+												{renderPathCard(
+													scanT(t, "scan.field.reportPath", "Report Path"),
+													candidate.latestTriageResult?.reportPath,
+													scanT(
+														t,
+														"scan.field.triageReportPath",
+														"Triage Report Path",
+													),
+												)}
+											</div>
+										</section>
+									</div>
+								)}
+							</TabsContent>
+
+							<TabsContent value="task-lineage" className="mt-0 pt-0">
+								<CandidateTaskLineagePanel
+									candidateId={candidateId}
+									projectId={projectId}
+									environmentId={environmentId}
+									serviceType={serviceType}
+									routeSegment={routeSegment}
+									serviceId={serviceId}
+									scanJobId={scanJobId}
+									producerTaskId={producerTaskId || undefined}
+									enabled={activeTab === "task-lineage"}
+								/>
+							</TabsContent>
+
+							<TabsContent value="files" className="mt-0 pt-0">
+								<div className="rounded-lg border">
+									<div className="border-b px-4 py-3">
+										<div className="font-medium">
+											{scanT(t, "scan.files.title", "Files")}
+										</div>
+										<div className="text-sm text-muted-foreground">
+											{scanT(
+												t,
+												"scan.files.candidateDescription",
+												"Browse candidate context files.",
+											)}
+										</div>
+									</div>
+									<div className="grid min-h-[65vh] grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]">
+										<div className="border-b lg:border-b-0 lg:border-r">
+											<LazyFileTree
+												rootItems={
+													directoryCache[ROOT_DIRECTORY_KEY]?.items || []
+												}
+												rootStatus={
+													directoryCache[ROOT_DIRECTORY_KEY]?.status ||
+													(rootDirectoryQuery.isLoading ? "loading" : "idle")
+												}
+												expandedDirectories={expandedDirectories}
+												selectedFilePath={selectedFilePath}
+												directoryCache={directoryCache}
+												onToggleDirectory={handleToggleDirectory}
+												onSelectFile={setSelectedFilePath}
+											/>
+										</div>
+										<div className="min-w-0">
+											<div className="border-b px-4 py-3">
+												<div className="flex items-center justify-between gap-3">
+													<div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+														<FileIcon className="size-4 shrink-0" />
+														<span className="truncate">
+															{selectedFile?.relativePath ||
+																selectedFilePath ||
+																scanT(
+																	t,
+																	"scan.files.noFileSelected",
+																	"No file selected",
+																)}
+														</span>
+													</div>
+													{selectedFile?.content ? (
 														<CopyValueButton
-															value={candidate.latestAnalysisResult.threadId}
+															value={selectedFile.content}
 															label={scanT(
 																t,
-																"scan.field.analysisThreadId",
-																"Analysis Thread ID",
+																"scan.files.content",
+																"File Content",
 															)}
-															className="size-6 shrink-0"
+															className="size-7 shrink-0"
 														/>
 													) : null}
 												</div>
 											</div>
-										</div>
-									</section>
-
-									<section className="rounded-lg border p-4">
-										<div className="mb-4 text-lg font-semibold">
-											{scanT(t, "scan.section.verify", "Verify")}
-										</div>
-										<div className="mb-3 flex items-center justify-between gap-3">
-											<div className="text-sm text-muted-foreground">
-												{scanT(
-													t,
-													"scan.candidate.latestVerification",
-													"Latest Verification Result",
+											<div className="max-h-[calc(65vh-49px)] overflow-auto px-4 py-3">
+												{!selectedFilePath ? (
+													<div className="flex min-h-[280px] flex-col items-center justify-center gap-2 text-muted-foreground">
+														<FileIcon className="size-6" />
+														{scanT(
+															t,
+															"scan.files.noFileSelected",
+															"No file selected",
+														)}
+													</div>
+												) : isLoadingSelectedFile ? (
+													<div className="flex min-h-[280px] items-center justify-center gap-2 text-muted-foreground">
+														<Loader2 className="size-4 animate-spin" />
+														{scanT(
+															t,
+															"scan.files.loadingFile",
+															"Loading file...",
+														)}
+													</div>
+												) : (
+													<pre className="whitespace-pre-wrap break-words font-mono text-sm">
+														{selectedFile?.content ||
+															scanT(t, "scan.files.emptyFile", "(empty)")}
+													</pre>
 												)}
 											</div>
-											{verificationTruthBadge ? (
-												<Badge
-													variant="outline"
-													className={verificationTruthBadge.className}
-												>
-													{verificationTruthBadge.label}
-												</Badge>
-											) : null}
-										</div>
-										<div className="grid gap-3 md:grid-cols-2">
-											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">
-													{scanT(t, "scan.field.result", "Result")}
-												</div>
-												<div className="mt-1 text-sm">
-													{candidate.latestVerificationResult?.result
-														? formatTruthResultLabel(
-																t,
-																candidate.latestVerificationResult.result,
-															)
-														: "-"}
-												</div>
-											</div>
-											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">
-													{scanT(t, "scan.field.score", "Score")}
-												</div>
-												<div className="mt-1 text-sm">
-													{typeof candidate.latestVerificationResult?.score ===
-													"number"
-														? candidate.latestVerificationResult.score.toFixed(
-																1,
-															)
-														: "-"}
-												</div>
-											</div>
-											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">
-													{scanT(t, "scan.field.confidence", "Confidence")}
-												</div>
-												<div className="mt-1 text-sm">
-													{typeof candidate.latestVerificationResult
-														?.confidence === "number"
-														? candidate.latestVerificationResult.confidence
-														: "-"}
-												</div>
-											</div>
-											{renderPathCard(
-												scanT(t, "scan.field.reportPath", "Report Path"),
-												candidate.latestVerificationResult?.reportPath,
-												scanT(
-													t,
-													"scan.field.verificationReportPath",
-													"Verification Report Path",
-												),
-											)}
-										</div>
-									</section>
-
-									<section className="rounded-lg border p-4">
-										<div className="mb-4 text-lg font-semibold">
-											{scanT(t, "scan.section.triage", "Triage")}
-										</div>
-										<div className="mb-3 text-sm text-muted-foreground">
-											{scanT(t, "scan.candidate.latestTriage", "Latest Triage")}
-										</div>
-										<div className="grid gap-3 md:grid-cols-2">
-											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">
-													{scanT(
-														t,
-														"scan.field.classification",
-														"Classification",
-													)}
-												</div>
-												<div className="mt-1 text-sm">
-													{candidate.latestTriageResult
-														?.securityClassification || "-"}
-												</div>
-											</div>
-											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">
-													{scanT(
-														t,
-														"scan.field.securityIssue",
-														"Security Issue",
-													)}
-												</div>
-												<div className="mt-1 text-sm">
-													{typeof candidate.latestTriageResult
-														?.isSecurityIssue === "boolean"
-														? candidate.latestTriageResult.isSecurityIssue
-															? scanT(t, "scan.common.yes", "Yes")
-															: scanT(t, "scan.common.no", "No")
-														: "-"}
-												</div>
-											</div>
-											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">
-													{scanT(t, "scan.field.disqualifier", "Disqualifier")}
-												</div>
-												<div className="mt-1 text-sm">
-													{candidate.latestTriageResult?.disqualifier || "-"}
-												</div>
-											</div>
-											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">
-													{scanT(t, "scan.field.impact", "Impact")}
-												</div>
-												<div className="mt-1 text-sm">
-													{candidate.latestTriageResult?.impactType || "-"}
-												</div>
-											</div>
-											<div className="rounded-md border p-3 md:col-span-2">
-												<div className="text-xs text-muted-foreground">
-													{scanT(
-														t,
-														"scan.field.disqualifierReason",
-														"Disqualifier Reason",
-													)}
-												</div>
-												<div className="mt-1 whitespace-pre-wrap break-words text-sm">
-													{candidate.latestTriageResult?.disqualifierReason ||
-														"-"}
-												</div>
-											</div>
-											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">
-													CVSS
-												</div>
-												<div className="mt-1 text-sm">
-													{candidate.latestTriageResult?.cvssSeverity || "-"}
-													{typeof candidate.latestTriageResult?.cvssScore ===
-													"number"
-														? ` ${candidate.latestTriageResult.cvssScore.toFixed(1)}`
-														: ""}
-												</div>
-											</div>
-											<div className="rounded-md border p-3">
-												<div className="text-xs text-muted-foreground">
-													EPSS 30d
-												</div>
-												<div className="mt-1 text-sm">
-													{typeof candidate.latestTriageResult
-														?.epssProbability30d === "number"
-														? `${(candidate.latestTriageResult.epssProbability30d * 100).toFixed(2)}%`
-														: "-"}
-												</div>
-											</div>
-											{renderPathCard(
-												scanT(t, "scan.field.reportPath", "Report Path"),
-												candidate.latestTriageResult?.reportPath,
-												scanT(
-													t,
-													"scan.field.triageReportPath",
-													"Triage Report Path",
-												),
-											)}
-										</div>
-									</section>
-								</div>
-							)}
-						</TabsContent>
-
-						<TabsContent value="task-lineage" className="pt-4">
-							<CandidateTaskLineagePanel
-								candidateId={candidateId}
-								projectId={projectId}
-								environmentId={environmentId}
-								serviceType={serviceType}
-								routeSegment={routeSegment}
-								serviceId={serviceId}
-								scanJobId={scanJobId}
-								producerTaskId={producerTaskId || undefined}
-								enabled={activeTab === "task-lineage"}
-							/>
-						</TabsContent>
-
-						<TabsContent value="files" className="pt-4">
-							<div className="rounded-lg border">
-								<div className="border-b px-4 py-3">
-									<div className="font-medium">
-										{scanT(t, "scan.files.title", "Files")}
-									</div>
-									<div className="text-sm text-muted-foreground">
-										{scanT(
-											t,
-											"scan.files.candidateDescription",
-											"Browse candidate context files.",
-										)}
-									</div>
-								</div>
-								<div className="grid min-h-[65vh] grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]">
-									<div className="border-b lg:border-b-0 lg:border-r">
-										<LazyFileTree
-											rootItems={directoryCache[ROOT_DIRECTORY_KEY]?.items || []}
-											rootStatus={directoryCache[ROOT_DIRECTORY_KEY]?.status || (rootDirectoryQuery.isLoading ? "loading" : "idle")}
-											expandedDirectories={expandedDirectories}
-											selectedFilePath={selectedFilePath}
-											directoryCache={directoryCache}
-											onToggleDirectory={handleToggleDirectory}
-											onSelectFile={setSelectedFilePath}
-										/>
-									</div>
-									<div className="min-w-0">
-										<div className="border-b px-4 py-3">
-											<div className="flex items-center justify-between gap-3">
-												<div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
-													<FileIcon className="size-4 shrink-0" />
-													<span className="truncate">
-														{selectedFile?.relativePath ||
-															selectedFilePath ||
-															scanT(
-																t,
-																"scan.files.noFileSelected",
-																"No file selected",
-															)}
-													</span>
-												</div>
-												{selectedFile?.content ? (
-													<CopyValueButton
-														value={selectedFile.content}
-														label={scanT(
-															t,
-															"scan.files.content",
-															"File Content",
-														)}
-														className="size-7 shrink-0"
-													/>
-												) : null}
-											</div>
-										</div>
-										<div className="max-h-[calc(65vh-49px)] overflow-auto px-4 py-3">
-											{!selectedFilePath ? (
-												<div className="flex min-h-[280px] flex-col items-center justify-center gap-2 text-muted-foreground">
-													<FileIcon className="size-6" />
-													{scanT(
-														t,
-														"scan.files.noFileSelected",
-														"No file selected",
-													)}
-												</div>
-											) : isLoadingSelectedFile ? (
-												<div className="flex min-h-[280px] items-center justify-center gap-2 text-muted-foreground">
-													<Loader2 className="size-4 animate-spin" />
-													{scanT(
-														t,
-														"scan.files.loadingFile",
-														"Loading file...",
-													)}
-												</div>
-											) : (
-												<pre className="whitespace-pre-wrap break-words font-mono text-sm">
-													{selectedFile?.content ||
-														scanT(t, "scan.files.emptyFile", "(empty)")}
-												</pre>
-											)}
 										</div>
 									</div>
 								</div>
-							</div>
-						</TabsContent>
-					</Tabs>
-					<div className="pt-6">
-						<Link
-							className="text-sm text-muted-foreground underline"
-							href={`/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}`}
-						>
-							Back to Job
-						</Link>
-					</div>
-				</CardContent>
-			</DashboardPanelShell>
+							</TabsContent>
+						</Tabs>
+					</DashboardPageTabContent>
+				</DashboardPageBody>
+			</DashboardPage>
 		</div>
 	);
 };

@@ -1,38 +1,23 @@
-import {
-	ChevronLeft,
-	ChevronRight,
-	ChevronsUpDown,
-	Database,
-	Loader2,
-	Search,
-} from "lucide-react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { useRouter } from "next/router";
 import { useTranslation } from "next-i18next";
-import { useState } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { useCallback, useMemo } from "react";
+import {
+	CollectionView,
+	EntityDetailSheet,
+	StatusBadge,
+	useCollectionQuery,
+} from "@/components/dashboard/ui-system";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "@/components/ui/popover";
-import {
-	Sheet,
-	SheetContent,
-	SheetDescription,
-	SheetHeader,
-	SheetTitle,
-} from "@/components/ui/sheet";
-import {
-	Table,
-	TableBody,
-	TableCell,
-	TableHead,
-	TableHeader,
-	TableRow,
-} from "@/components/ui/table";
+	detailQueryParam,
+	parseDetailId,
+	withoutDetailParam,
+} from "@/lib/ui-system/detail-query";
+import type {
+	ListQueryConfig,
+	ListQueryState,
+} from "@/lib/ui-system/list-query";
 import { api, type RouterOutputs } from "@/utils/api";
 import { scanT } from "./scan-i18n";
 
@@ -48,329 +33,31 @@ type GoalPage<T> = {
 	totalPages: number;
 	filterOptions?: { statuses: string[]; huntGoalIds: string[] };
 };
-type GoalListState = {
-	query: string;
-	statuses: string[];
-	huntGoalIds: string[];
-	page: number;
-	pageSize: number;
-};
-type GoalColumn<T> = {
-	label: string;
-	className?: string;
-	render: (item: T) => React.ReactNode;
-};
-
-const PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
 
 const formatDate = (value: string) => new Date(value).toLocaleString();
-const toDomId = (value: string) =>
-	value.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+
 const formatStatus = (value: string) =>
 	value
 		.replace(/[_-]/g, " ")
 		.replace(/\b\w/g, (letter) => letter.toUpperCase());
 
-const useGoalListState = () => {
-	const [state, setState] = useState<GoalListState>({
-		query: "",
-		statuses: [],
-		huntGoalIds: [],
-		page: 1,
-		pageSize: 20,
-	});
+const goalConfig = (prefix: string): ListQueryConfig => ({
+	prefix,
+	sortOptions: [],
+	filterKeys: ["status", "huntGoal"],
+	allowedFilterValues: { status: [], huntGoal: [] },
+	defaultSortKey: "",
+	defaultPageSize: 20,
+});
 
-	const update = (patch: Partial<GoalListState>, resetPage = false) => {
-		setState((current) => ({
-			...current,
-			...patch,
-			...(resetPage ? { page: 1 } : {}),
-		}));
-	};
-
-	return {
-		...state,
-		setQuery: (value: string) => update({ query: value }, true),
-		setStatuses: (value: string[]) => update({ statuses: value }, true),
-		setHuntGoalIds: (value: string[]) => update({ huntGoalIds: value }, true),
-		setPage: (value: number) => update({ page: value }),
-		setPageSize: (value: number) => update({ pageSize: value }, true),
-	};
-};
-
-const GoalFilterPopover = ({
-	label,
-	idPrefix,
-	options,
-	selected,
-	onChange,
-}: {
-	idPrefix: string;
-	label: string;
-	options: string[];
-	selected: string[];
-	onChange: (value: string[]) => void;
-}) => {
-	if (options.length === 0) return null;
-	return (
-		<Popover>
-			<PopoverTrigger asChild>
-				<Button variant="outline" className="justify-between">
-					<span>
-						{label}
-						{selected.length > 0 ? ` (${selected.length})` : ""}
-					</span>
-					<ChevronsUpDown className="size-4 text-muted-foreground" />
-				</Button>
-			</PopoverTrigger>
-			<PopoverContent align="end" className="w-72 p-3">
-				<div className="mb-3 flex items-center justify-between">
-					<div className="text-sm font-medium">{label}</div>
-					<Button
-						type="button"
-						variant="ghost"
-						size="sm"
-						className="h-auto px-2 py-1 text-xs"
-						onClick={() => onChange([])}
-					>
-						Clear
-					</Button>
-				</div>
-				<div className="max-h-64 space-y-2 overflow-y-auto">
-					{options.map((option) => (
-						<label
-							key={option}
-							htmlFor={`goal-filter-${idPrefix}-${toDomId(label)}-${toDomId(option)}`}
-							className="flex cursor-pointer items-center gap-2 text-sm"
-						>
-							<Checkbox
-								id={`goal-filter-${idPrefix}-${toDomId(label)}-${toDomId(option)}`}
-								checked={selected.includes(option)}
-								onCheckedChange={() =>
-									onChange(
-										selected.includes(option)
-											? selected.filter((item) => item !== option)
-											: [...selected, option],
-									)
-								}
-							/>
-							<span className="break-words">{formatStatus(option)}</span>
-						</label>
-					))}
-				</div>
-			</PopoverContent>
-		</Popover>
-	);
-};
-
-const GoalListToolbar = ({
-	title,
-	state,
-	filterOptions,
-}: {
-	title: string;
-	state: ReturnType<typeof useGoalListState>;
-	filterOptions: GoalPage<GoalRecord>["filterOptions"];
-}) => (
-	<div className="flex flex-col gap-3 rounded-lg border bg-card p-3 lg:flex-row lg:items-center">
-		<div className="relative min-w-0 flex-1">
-			<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-			<Input
-				value={state.query}
-				onChange={(event) => state.setQuery(event.target.value)}
-				placeholder={`Search ${title.toLowerCase()}`}
-				className="pl-9"
-			/>
-		</div>
-		<div className="flex flex-wrap gap-2">
-			<GoalFilterPopover
-				label="Status"
-				idPrefix={toDomId(title)}
-				options={filterOptions?.statuses ?? []}
-				selected={state.statuses}
-				onChange={state.setStatuses}
-			/>
-			<GoalFilterPopover
-				label="Hunt goal"
-				idPrefix={toDomId(title)}
-				options={filterOptions?.huntGoalIds ?? []}
-				selected={state.huntGoalIds}
-				onChange={state.setHuntGoalIds}
-			/>
-		</div>
-	</div>
-);
-
-const GoalPagination = <T,>({
-	data,
-	state,
-	idPrefix,
-}: {
-	data: GoalPage<T> | undefined;
-	state: ReturnType<typeof useGoalListState>;
-	idPrefix: string;
-}) => {
-	const total = data?.total ?? 0;
-	const page = data?.page ?? state.page;
-	const pageSize = data?.pageSize ?? state.pageSize;
-	const totalPages = data?.totalPages ?? 1;
-	const start = total > 0 ? (page - 1) * pageSize + 1 : 0;
-	const end = Math.min(total, page * pageSize);
-	return (
-		<div className="flex flex-col gap-3 border-t px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-			<div className="text-muted-foreground">
-				Showing {start}-{end} of {total}
-			</div>
-			<div className="flex flex-wrap items-center gap-2">
-				<label
-					className="text-muted-foreground"
-					htmlFor={`goal-page-size-${idPrefix}`}
-				>
-					Page size
-				</label>
-				<select
-					id={`goal-page-size-${idPrefix}`}
-					value={state.pageSize}
-					onChange={(event) => state.setPageSize(Number(event.target.value))}
-					className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-				>
-					{PAGE_SIZE_OPTIONS.map((size) => (
-						<option key={size} value={size}>
-							{size}
-						</option>
-					))}
-				</select>
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					disabled={page <= 1}
-					onClick={() => state.setPage(Math.max(1, page - 1))}
-				>
-					<ChevronLeft className="size-4" /> Previous
-				</Button>
-				<span className="min-w-20 text-center text-muted-foreground">
-					Page {page} / {totalPages}
-				</span>
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					disabled={page >= totalPages}
-					onClick={() => state.setPage(Math.min(totalPages, page + 1))}
-				>
-					Next <ChevronRight className="size-4" />
-				</Button>
-			</div>
-		</div>
-	);
-};
-
-const GoalList = <T,>({
-	title,
-	description,
-	data,
-	isLoading,
-	isFetching,
-	state,
-	columns,
-	itemKey,
-	detailRenderer,
-}: {
-	title: string;
-	description: string;
-	data: GoalPage<T> | undefined;
-	isLoading: boolean;
-	isFetching: boolean;
-	state: ReturnType<typeof useGoalListState>;
-	columns: GoalColumn<T>[];
-	itemKey: (item: T) => string;
-	detailRenderer: (item: T | null, onClose: () => void) => React.ReactNode;
-}) => {
-	const [selectedItem, setSelectedItem] = useState<T | null>(null);
-
-	return (
-		<div className="space-y-3">
-			<GoalListToolbar
-				title={title}
-				state={state}
-				filterOptions={data?.filterOptions}
-			/>
-			<p className="text-sm text-muted-foreground">{description}</p>
-			<div
-				className={`overflow-hidden rounded-lg border bg-card ${isFetching ? "opacity-60" : ""}`}
-			>
-				{isLoading && !data ? (
-					<div className="flex min-h-56 items-center justify-center gap-2 text-sm text-muted-foreground">
-						<Loader2 className="size-4 animate-spin" /> Loading{" "}
-						{title.toLowerCase()}...
-					</div>
-				) : data?.items.length ? (
-					<div className="overflow-x-auto">
-						<Table className="min-w-[900px]">
-							<TableHeader>
-								<TableRow>
-									{columns.map((column, index) => (
-										<TableHead
-											key={`${column.label}-${index}`}
-											className={column.className}
-										>
-											{column.label}
-										</TableHead>
-									))}
-								</TableRow>
-							</TableHeader>
-							<TableBody>
-								{data.items.map((item) => (
-									<TableRow key={itemKey(item)}>
-										{columns.map((column, index) => (
-											<TableCell
-												key={`${column.label}-${index}`}
-												className={[
-													"align-top [overflow-wrap:anywhere]",
-													column.className,
-												]
-													.filter(Boolean)
-													.join(" ")}
-											>
-												{index === 0 ? (
-													<button
-														type="button"
-														onClick={() => setSelectedItem(item)}
-														className="block w-full text-left hover:text-primary"
-													>
-														{column.render(item)}
-													</button>
-												) : (
-													column.render(item)
-												)}
-											</TableCell>
-										))}
-									</TableRow>
-								))}
-							</TableBody>
-						</Table>
-					</div>
-				) : (
-					<div className="flex min-h-56 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
-						<Database className="size-5" />
-						{state.query || state.statuses.length || state.huntGoalIds.length
-							? `No matching ${title.toLowerCase()}.`
-							: `No ${title.toLowerCase()} yet.`}
-					</div>
-				)}
-				<GoalPagination data={data} state={state} idPrefix={toDomId(title)} />
-			</div>
-			{detailRenderer(selectedItem, () => setSelectedItem(null))}
-		</div>
-	);
-};
-
-const GoalStatus = ({ status }: { status: string }) => (
-	<Badge variant="outline" className="whitespace-nowrap">
-		{formatStatus(status)}
-	</Badge>
-);
+/** ListQueryState -> tob-goal registry API request shape. */
+const toGoalRequest = (state: ListQueryState) => ({
+	query: state.query || undefined,
+	status: (state.filters.status ?? []).join(",") || undefined,
+	huntGoalId: (state.filters.huntGoal ?? []).join(",") || undefined,
+	page: state.page,
+	pageSize: state.pageSize,
+});
 
 const GoalLocation = ({
 	location,
@@ -408,10 +95,12 @@ const GoalField = ({ label, value }: { label: string; value: unknown }) => (
 const GoalDetails = ({
 	kind,
 	item,
+	open,
 	onClose,
 }: {
 	kind: "candidate" | "finding";
 	item: GoalRecord | null;
+	open: boolean;
 	onClose: () => void;
 }) => {
 	const candidateId = item && "candidateId" in item ? item.candidateId : "";
@@ -431,124 +120,266 @@ const GoalDetails = ({
 	const content = record?.content;
 
 	return (
-		<Sheet
-			open={item !== null}
-			onOpenChange={(open) => (open ? undefined : onClose())}
+		<EntityDetailSheet
+			open={open}
+			onOpenChange={(next) => (next ? undefined : onClose())}
+			title={record?.title ?? (kind === "candidate" ? "Candidate" : "Finding")}
+			description={
+				record
+					? "candidateId" in record
+						? record.candidateId
+						: record.findingId
+					: kind === "candidate"
+						? "Goal Candidate"
+						: "Goal Finding"
+			}
+			size="wide"
 		>
-			<SheetContent className="w-full overflow-y-auto sm:max-w-2xl">
-				<SheetHeader>
-					<SheetTitle>
-						{record?.title ?? (kind === "candidate" ? "Candidate" : "Finding")}
-					</SheetTitle>
-					<SheetDescription>
-						{record
-							? "candidateId" in record
-								? record.candidateId
-								: record.findingId
-							: kind === "candidate"
-								? "Goal Candidate"
-								: "Goal Finding"}
-					</SheetDescription>
-				</SheetHeader>
-				{record && content ? (
-					<div className="mt-6 space-y-5">
-						<div className="grid gap-4 sm:grid-cols-2">
-							<div>
-								<div className="text-xs font-semibold uppercase text-muted-foreground">
-									Status
-								</div>
-								<GoalStatus status={record.status} />
+			{record && content ? (
+				<div className="space-y-5">
+					<div className="grid gap-4 sm:grid-cols-2">
+						<div>
+							<div className="text-xs font-semibold uppercase text-muted-foreground">
+								Status
 							</div>
-							<div>
-								<div className="text-xs font-semibold uppercase text-muted-foreground">
-									Hunt goal
-								</div>
-								<div className="break-words text-sm">{record.huntGoalId}</div>
-							</div>
-							{"sourceCandidateId" in record ? (
-								<div>
-									<div className="text-xs font-semibold uppercase text-muted-foreground">
-										Source candidate
-									</div>
-									<div className="break-words font-mono text-xs">
-										{record.sourceCandidateId}
-									</div>
-								</div>
-							) : null}
-							<div>
-								<div className="text-xs font-semibold uppercase text-muted-foreground">
-									Updated
-								</div>
-								<div className="text-sm">{formatDate(record.updatedAt)}</div>
-							</div>
-							<div className="sm:col-span-2">
-								<div className="text-xs font-semibold uppercase text-muted-foreground">
-									Location
-								</div>
-								<GoalLocation location={content.location} />
-							</div>
+							<StatusBadge
+								value={record.status}
+								label={formatStatus(record.status)}
+							/>
 						</div>
-						<GoalField label="Summary" value={record.summary} />
-						<GoalField label="Description" value={content.description} />
-						<GoalField
-							label="Vulnerability class"
-							value={content.vulnerabilityClass}
-						/>
-						<GoalField label="Claim" value={content.claim} />
-						<GoalField label="Root cause" value={content.rootCauseKey} />
-						<GoalField label="Confidence" value={content.confidence} />
-						<GoalField
-							label="Attacker control"
-							value={content.attackerControl}
-						/>
-						<GoalField label="Preconditions" value={content.preconditions} />
-						<GoalField label="Evidence" value={content.evidence} />
-						<GoalField
-							label="Quick disproof attempt"
-							value={content.quickDisproofAttempt}
-						/>
-						{"novelty" in content ? (
-							<GoalField label="Novelty" value={content.novelty} />
+						<div>
+							<div className="text-xs font-semibold uppercase text-muted-foreground">
+								Hunt goal
+							</div>
+							<div className="break-words text-sm">{record.huntGoalId}</div>
+						</div>
+						{"sourceCandidateId" in record ? (
+							<div>
+								<div className="text-xs font-semibold uppercase text-muted-foreground">
+									Source candidate
+								</div>
+								<div className="break-words font-mono text-xs">
+									{record.sourceCandidateId}
+								</div>
+							</div>
 						) : null}
-						{"references" in content ? (
-							<GoalField label="References" value={content.references} />
-						) : null}
+						<div>
+							<div className="text-xs font-semibold uppercase text-muted-foreground">
+								Updated
+							</div>
+							<div className="text-sm">{formatDate(record.updatedAt)}</div>
+						</div>
+						<div className="sm:col-span-2">
+							<div className="text-xs font-semibold uppercase text-muted-foreground">
+								Location
+							</div>
+							<GoalLocation location={content.location} />
+						</div>
 					</div>
-				) : null}
-			</SheetContent>
-		</Sheet>
+					<GoalField label="Summary" value={record.summary} />
+					<GoalField label="Description" value={content.description} />
+					<GoalField
+						label="Vulnerability class"
+						value={content.vulnerabilityClass}
+					/>
+					<GoalField label="Claim" value={content.claim} />
+					<GoalField label="Root cause" value={content.rootCauseKey} />
+					<GoalField label="Confidence" value={content.confidence} />
+					<GoalField label="Attacker control" value={content.attackerControl} />
+					<GoalField label="Preconditions" value={content.preconditions} />
+					<GoalField label="Evidence" value={content.evidence} />
+					<GoalField
+						label="Quick disproof attempt"
+						value={content.quickDisproofAttempt}
+					/>
+					{"novelty" in content ? (
+						<GoalField label="Novelty" value={content.novelty} />
+					) : null}
+					{"references" in content ? (
+						<GoalField label="References" value={content.references} />
+					) : null}
+				</div>
+			) : null}
+		</EntityDetailSheet>
 	);
 };
+
+type GoalColumn<T> = {
+	label: string;
+	className?: string;
+	render: (item: T) => React.ReactNode;
+};
+
+/** Convert goal column descriptors to TanStack columns; first column opens detail. */
+const toColumns = <T extends GoalRecord>(
+	columns: GoalColumn<T>[],
+	onOpen: (item: T) => void,
+): ColumnDef<T, unknown>[] =>
+	columns.map((column, index) => ({
+		id: column.label,
+		header: column.label,
+		cell: ({ row }) => {
+			const content = column.render(row.original);
+			return index === 0 ? (
+				<button
+					type="button"
+					onClick={() => onOpen(row.original)}
+					className="block w-full text-left hover:text-primary"
+				>
+					{content}
+				</button>
+			) : (
+				content
+			);
+		},
+		meta: { className: column.className },
+	}));
+
+const GoalList = <T extends GoalRecord>({
+	title,
+	description,
+	kind,
+	data,
+	isLoading,
+	isFetching,
+	state,
+	setState,
+	searchInput,
+	setSearchInput,
+	columns,
+	itemKey,
+}: {
+	title: string;
+	description: string;
+	kind: "candidate" | "finding";
+	data: GoalPage<T> | undefined;
+	isLoading: boolean;
+	isFetching: boolean;
+	state: ListQueryState;
+	setState: (updater: (previous: ListQueryState) => ListQueryState) => void;
+	searchInput: string;
+	setSearchInput: (value: string) => void;
+	columns: GoalColumn<T>[];
+	itemKey: (item: T) => string;
+}) => {
+	const router = useRouter();
+	const detailId = parseDetailId(router.query);
+	const selectedItem =
+		data?.items.find((item) => itemKey(item) === detailId) ?? null;
+	const detailOpen = detailId !== null;
+
+	const openDetail = useCallback(
+		(item: T) => {
+			void router.replace(
+				{ query: { ...router.query, ...detailQueryParam(itemKey(item)) } },
+				undefined,
+				{ shallow: true },
+			);
+		},
+		[router, itemKey],
+	);
+
+	const closeDetail = useCallback(() => {
+		void router.replace(
+			{ query: withoutDetailParam(router.query) },
+			undefined,
+			{ shallow: true },
+		);
+	}, [router]);
+
+	const filters = useMemo(
+		() =>
+			[
+				...(data?.filterOptions?.statuses.length
+					? [
+							{
+								key: "status",
+								label: "Status",
+								options: data.filterOptions.statuses.map((value) => ({
+									value,
+									label: formatStatus(value),
+								})),
+							},
+						]
+					: []),
+				...(data?.filterOptions?.huntGoalIds.length
+					? [
+							{
+								key: "huntGoal",
+								label: "Hunt goal",
+								options: data.filterOptions.huntGoalIds.map((value) => ({
+									value,
+									label: value,
+								})),
+							},
+						]
+					: []),
+			] as const,
+		[data?.filterOptions],
+	);
+
+	return (
+		<div className="flex flex-col gap-4">
+			<p className="text-sm text-muted-foreground">{description}</p>
+			<CollectionView
+				state={state}
+				onStateChange={setState}
+				data={{ items: data?.items ?? [], total: data?.total ?? 0 }}
+				isLoading={isLoading && !data}
+				isRefreshing={isFetching}
+				columns={toColumns(columns, openDetail)}
+				getRowId={itemKey}
+				searchValue={searchInput}
+				onSearchValueChange={setSearchInput}
+				searchPlaceholder={`Search ${title.toLowerCase()}`}
+				filters={filters}
+				emptyTitle={`No matching ${title.toLowerCase()}.`}
+				emptyDescription="Try adjusting the search or filters."
+				onRowClick={openDetail}
+			/>
+			<GoalDetails
+				kind={kind}
+				item={selectedItem}
+				open={detailOpen}
+				onClose={closeDetail}
+			/>
+		</div>
+	);
+};
+
+const GOAL_CANDIDATES_CONFIG = goalConfig("goalCandidates");
+const GOAL_FINDINGS_CONFIG = goalConfig("goalFindings");
 
 export const TobGoalCandidatesPanel = ({
 	scanJobId,
 }: {
 	scanJobId: string;
 }) => {
-	const state = useGoalListState();
+	const router = useRouter();
+	const config = GOAL_CANDIDATES_CONFIG;
+	const { state, setState, searchInput, setSearchInput, deferredQuery } =
+		useCollectionQuery(router, config);
+	const request = useMemo(
+		() => toGoalRequest({ ...state, query: deferredQuery }),
+		[state, deferredQuery],
+	);
 	const { data, isLoading, isFetching } = api.scan.tobGoalCandidates.useQuery(
-		{
-			scanJobId,
-			page: state.page,
-			pageSize: state.pageSize,
-			query: state.query || undefined,
-			status: state.statuses.join(",") || undefined,
-			huntGoalId: state.huntGoalIds.join(",") || undefined,
-		},
+		{ scanJobId, ...request },
 		{ refetchInterval: 5000, keepPreviousData: true },
 	);
 	return (
 		<GoalList
 			title="Goal Candidates"
 			description="Candidate attack paths produced by the goal-directed hunt."
+			kind="candidate"
 			data={data}
 			isLoading={isLoading}
 			isFetching={isFetching}
 			state={state}
+			setState={setState}
+			searchInput={searchInput}
+			setSearchInput={setSearchInput}
 			itemKey={(item) => item.candidateId}
-			detailRenderer={(item, onClose) => (
-				<GoalDetails kind="candidate" item={item} onClose={onClose} />
-			)}
 			columns={[
 				{
 					label: "Candidate",
@@ -564,7 +395,12 @@ export const TobGoalCandidatesPanel = ({
 				},
 				{
 					label: "Status",
-					render: (item: GoalCandidate) => <GoalStatus status={item.status} />,
+					render: (item: GoalCandidate) => (
+						<StatusBadge
+							value={item.status}
+							label={formatStatus(item.status)}
+						/>
+					),
 				},
 				{
 					label: "Hunt goal",
@@ -642,32 +478,33 @@ const TobGoalThreatDirection = ({ scanJobId }: { scanJobId: string }) => {
 };
 
 export const TobGoalFindingsPanel = ({ scanJobId }: { scanJobId: string }) => {
-	const state = useGoalListState();
+	const router = useRouter();
+	const config = GOAL_FINDINGS_CONFIG;
+	const { state, setState, searchInput, setSearchInput, deferredQuery } =
+		useCollectionQuery(router, config);
+	const request = useMemo(
+		() => toGoalRequest({ ...state, query: deferredQuery }),
+		[state, deferredQuery],
+	);
 	const { data, isLoading, isFetching } = api.scan.tobGoalFindings.useQuery(
-		{
-			scanJobId,
-			page: state.page,
-			pageSize: state.pageSize,
-			query: state.query || undefined,
-			status: state.statuses.join(",") || undefined,
-			huntGoalId: state.huntGoalIds.join(",") || undefined,
-		},
+		{ scanJobId, ...request },
 		{ refetchInterval: 5000, keepPreviousData: true },
 	);
 	return (
-		<div className="space-y-4">
+		<div className="flex flex-col gap-4">
 			<TobGoalThreatDirection scanJobId={scanJobId} />
 			<GoalList
 				title="Goal Findings"
 				description="Novel security findings promoted from goal-directed candidates."
+				kind="finding"
 				data={data}
 				isLoading={isLoading}
 				isFetching={isFetching}
 				state={state}
+				setState={setState}
+				searchInput={searchInput}
+				setSearchInput={setSearchInput}
 				itemKey={(item) => item.findingId}
-				detailRenderer={(item, onClose) => (
-					<GoalDetails kind="finding" item={item} onClose={onClose} />
-				)}
 				columns={[
 					{
 						label: "Finding",
@@ -697,7 +534,12 @@ export const TobGoalFindingsPanel = ({ scanJobId }: { scanJobId: string }) => {
 					},
 					{
 						label: "Status",
-						render: (item: GoalFinding) => <GoalStatus status={item.status} />,
+						render: (item: GoalFinding) => (
+							<StatusBadge
+								value={item.status}
+								label={formatStatus(item.status)}
+							/>
+						),
 					},
 					{
 						label: "Updated",

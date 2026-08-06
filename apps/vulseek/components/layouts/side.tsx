@@ -905,7 +905,10 @@ export default function Page({ children }: Props) {
 												<SidebarMenuButton
 													asChild
 													tooltip={item.title}
-													className={cn(isActive && "bg-border")}
+															className={cn(
+																isActive &&
+																	"bg-border font-medium text-sidebar-accent-foreground",
+															)}
 												>
 													<Link
 														href={item.url}
@@ -940,7 +943,10 @@ export default function Page({ children }: Props) {
 																<SidebarMenuSubItem key={subItem.title}>
 																	<SidebarMenuSubButton
 																		asChild
-																		className={cn(isActive && "bg-border")}
+																								className={cn(
+																									isActive &&
+																										"bg-border font-medium text-sidebar-accent-foreground",
+																								)}
 																	>
 																		<Link
 																			href={subItem.url}
@@ -994,7 +1000,10 @@ export default function Page({ children }: Props) {
 												<SidebarMenuButton
 													asChild
 													tooltip={item.title}
-													className={cn(isActive && "bg-border")}
+															className={cn(
+																isActive &&
+																	"bg-border font-medium text-sidebar-accent-foreground",
+															)}
 												>
 													<Link
 														href={item.url}
@@ -1029,7 +1038,10 @@ export default function Page({ children }: Props) {
 																<SidebarMenuSubItem key={subItem.title}>
 																	<SidebarMenuSubButton
 																		asChild
-																		className={cn(isActive && "bg-border")}
+																								className={cn(
+																									isActive &&
+																										"bg-border font-medium text-sidebar-accent-foreground",
+																								)}
 																	>
 																		<Link
 																			href={subItem.url}

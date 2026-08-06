@@ -6,11 +6,15 @@ import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { getLocale, serverSideTranslations } from "@/utils/i18n";
 
 const Page = () => {
-	return <ShowScanCandidateDetail serviceType="application" routeSegment="profiles" />;
+	return (
+		<ShowScanCandidateDetail
+			serviceType="application"
+			routeSegment="profiles"
+		/>
+	);
 };
 
 export default Page;
-
 
 Page.getLayout = function getLayout(page: ReactElement) {
 	return <DashboardLayout>{page}</DashboardLayout>;

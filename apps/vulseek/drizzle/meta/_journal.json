@@ -1569,6 +1569,20 @@
       "when": 1785820800000,
       "tag": "0223_scan_stage_lane_driver_pid",
       "breakpoints": true
+    },
+    {
+      "idx": 224,
+      "version": "7",
+      "when": 1785907200000,
+      "tag": "0224_dataset_sample_manifest_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 225,
+      "version": "7",
+      "when": 1785993600000,
+      "tag": "0225_dataset_profile_sample_selection",
+      "breakpoints": true
     }
   ]
 }

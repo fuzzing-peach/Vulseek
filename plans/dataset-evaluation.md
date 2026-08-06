@@ -11,8 +11,8 @@
 新增五类表：
 
 - `datasets`：组织、名称和 Git/local source。
-- `dataset_profiles`：不可变 checkout/profile、host root、source digest、轻量 checkout image digest 和配置 snapshot。
-- `dataset_samples`：profile 下的 sampleKey、顺序、repositoryPath、scannerInput、evaluatorMetadata。
+- `dataset_profiles`：local host root、轻量 checkout image digest 和配置 snapshot；source digest 保留为空。
+- `dataset_samples`：profile 下的 id、顺序、repositoryPath 和 metadata。
 - `dataset_evaluations`：引用 profile，保存 pipeline、预算、repetitions、stage settings snapshot 和汇总状态。
 - `dataset_evaluation_trials`：sample x repetition、scan 状态、用时、token、cost、结果和错误。
 
@@ -22,7 +22,7 @@
 /workspace/dataset/.vulseek/samples.json
 ```
 
-实际文件保存在 Dataset Profile 的 host root 中；该目录由 Vulseek 管理，Evaluation 运行时只挂载当前 sample 子目录。
+实际文件位于 Dataset 配置的 local path；Evaluation 运行时只挂载当前 sample 子目录。
 
 Manifest V1 包含：
 
@@ -31,24 +31,23 @@ Manifest V1 包含：
   "version": 1,
   "samples": [
     {
-      "sampleKey": "unique-key",
+      "id": "unique-key",
       "title": "Sample title",
       "repositoryPath": "samples/example/repo",
-      "scannerInput": {},
-      "evaluatorMetadata": {}
+      "metadata": {}
     }
   ]
 }
 ```
 
-`repositoryPath` 必须是存在的相对目录且不能逃逸 Dataset 根目录。`scannerInput` 可供 scan 使用；`evaluatorMetadata` 不得暴露给 scan agent。
+`repositoryPath` 必须是存在的相对目录且不能逃逸 Dataset 根目录。`metadata` 仅供评估器使用，不暴露给 scan agent。
 
 ## Checkout And Execution
 
-- Git source 支持 URL、ref、SSH key 和 submodules；local source 使用 host absolute path。
-- Checkout 将 Git/local 数据拉取到 Dataset Profile 的 host root；构建不包含数据的轻量 checkout image，并验证源目录中的 manifest。
-- 成功后从 host root 验证 manifest，事务化写入 profile samples，并记录源 digest、host root 和 checkout image digest。
-- Profile checkout 支持组织内 SSH key；私钥只在 clone/submodule 期间写入权限为 `0600` 的临时文件，完成后立即删除。Profile prune 只允许删除未被 Evaluation 引用的 profile，并同时清理 host root 和轻量 image。
+- Dataset source 仅支持 host 上的绝对 local path；不支持 Git URL、ref、SSH key 或 submodule。
+- Checkout 直接使用 local path 作为 Dataset Profile 的 host root，不复制数据，不计算 source digest；仅验证目录中的 manifest，并构建不包含数据的轻量 checkout image。
+- 成功后从 host root 验证 manifest，事务化写入 profile samples，并记录 host root 和 checkout image digest。
+- Profile prune 只允许删除未被 Evaluation 引用的 profile，只清理 Vulseek 构建的轻量 image，不删除用户的 local source 目录。
 - Agent credentials 使用临时挂载，不得提交到 preparation image。
 - 每个 trial 只把当前 sample 的 host 目录 bind mount 到容器，不挂载 Dataset Profile 根目录、其他 samples、manifest 或 evaluator metadata。
 - 每个 scan task 基于轻量 checkout image 启动，将当前 sample host 目录只读挂载到 `/workspace/repo`；不允许 task 修改源数据，persistent lane 只复用会话和容器，不共享其他 sample。

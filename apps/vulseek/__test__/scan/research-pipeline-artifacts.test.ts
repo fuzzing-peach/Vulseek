@@ -2,7 +2,6 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { renderPipelineTemplate } from "../../../../packages/server/src/services/scan/pipeline/scan-pipeline-edge-transform";
 import {
 	copyTaskJsonArtifact,
 	readTaskJsonArtifact,
@@ -11,6 +10,7 @@ import {
 	writeTaskTextArtifact,
 } from "../../../../packages/server/src/services/scan/artifacts/task-artifact-paths";
 import { loadDiscoveryFindingArtifacts } from "../../../../packages/server/src/services/scan/persistence/research-artifact-reader";
+import { renderPipelineTemplate } from "../../../../packages/server/src/services/scan/pipeline/scan-pipeline-edge-transform";
 
 describe("research task artifact contract", () => {
 	it("writes, reads, and copies JSON artifacts using /task paths", async () => {
@@ -24,7 +24,12 @@ describe("research task artifact contract", () => {
 				value: { trustedDomain: "example.test", assets: ["db"] },
 			});
 			expect(sourcePath).toBe("/task/outputs/scope.json");
-			expect(await readTaskJsonArtifact({ taskDir: sourceTask, containerPath: sourcePath })).toEqual({
+			expect(
+				await readTaskJsonArtifact({
+					taskDir: sourceTask,
+					containerPath: sourcePath,
+				}),
+			).toEqual({
 				trustedDomain: "example.test",
 				assets: ["db"],
 			});
@@ -36,7 +41,12 @@ describe("research task artifact contract", () => {
 				toRelativePath: "inputs/scope.json",
 			});
 			expect(copiedPath).toBe("/task/inputs/scope.json");
-			expect(await readTaskJsonArtifact({ taskDir: targetTask, containerPath: copiedPath })).toEqual({
+			expect(
+				await readTaskJsonArtifact({
+					taskDir: targetTask,
+					containerPath: copiedPath,
+				}),
+			).toEqual({
 				trustedDomain: "example.test",
 				assets: ["db"],
 			});
@@ -54,11 +64,21 @@ describe("research task artifact contract", () => {
 				value: "# Research report\n",
 			});
 			expect(reportPath).toBe("/task/reports/final-report.md");
-			expect(await readFile(taskArtifactHostPath({ taskDir, containerPath: reportPath }), "utf8")).toBe(
-				"# Research report\n",
-			);
-			expect(() => taskArtifactHostPath({ taskDir, containerPath: "/task/../outside.json" })).toThrow();
-			expect(() => taskArtifactHostPath({ taskDir, containerPath: "/tmp/outside.json" })).toThrow();
+			expect(
+				await readFile(
+					taskArtifactHostPath({ taskDir, containerPath: reportPath }),
+					"utf8",
+				),
+			).toBe("# Research report\n");
+			expect(() =>
+				taskArtifactHostPath({
+					taskDir,
+					containerPath: "/task/../outside.json",
+				}),
+			).toThrow();
+			expect(() =>
+				taskArtifactHostPath({ taskDir, containerPath: "/tmp/outside.json" }),
+			).toThrow();
 		} finally {
 			await rm(taskDir, { recursive: true, force: true });
 		}
@@ -97,7 +117,12 @@ describe("research task artifact contract", () => {
 			});
 			const downstreamInput = { reviewPath };
 			expect(downstreamInput.reviewPath).toBe("/task/inputs/track-review.json");
-			expect(await readTaskJsonArtifact({ taskDir: targetTask, containerPath: reviewPath })).toEqual(output);
+			expect(
+				await readTaskJsonArtifact({
+					taskDir: targetTask,
+					containerPath: reviewPath,
+				}),
+			).toEqual(output);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
@@ -112,10 +137,7 @@ describe("research task artifact contract", () => {
 		await expect(
 			loadDiscoveryFindingArtifacts({
 				report: {
-					findingPaths: [
-						"/task/findings/one.json",
-						"/task/findings/two.json",
-					],
+					findingPaths: ["/task/findings/one.json", "/task/findings/two.json"],
 				},
 				readArtifactJson: async (path) => artifacts.get(path),
 			}),

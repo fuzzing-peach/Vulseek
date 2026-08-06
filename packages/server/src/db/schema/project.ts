@@ -68,4 +68,13 @@ export const apiRemoveProject = createSchema
 export const apiUpdateProject = createSchema.partial().extend({
 	projectId: z.string().min(1),
 });
+
+/** Server-side paginated project listing (shared contract with CollectionView). */
+export const apiListProjects = z.object({
+	search: z.string().trim().max(200).optional(),
+	sortKey: z.enum(["name", "createdAt", "services"]).default("createdAt"),
+	sortDirection: z.enum(["asc", "desc"]).default("desc"),
+	page: z.number().int().min(1).default(1),
+	pageSize: z.number().int().min(1).max(100).default(12),
+});
 // .omit({ serverId: true });

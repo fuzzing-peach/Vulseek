@@ -6,8 +6,6 @@ import {
 	canRebuildCheckoutTools,
 	createScanEvaluationResult,
 	createScanJob,
-	findAllScanJobsByApplicationId,
-	findAllScanJobsByComposeId,
 	findApplicationById,
 	findCandidateTaskLineage,
 	findCheckoutImageStatus,
@@ -22,6 +20,8 @@ import {
 	findScanJobById,
 	findScanJobResultSummary,
 	findScanJobStageGraph,
+	findScanJobsByApplicationIdPage,
+	findScanJobsByComposeIdPage,
 	findScanJobTerminalTasksPage,
 	findTaskById,
 	findTobGoalCandidateRepo,
@@ -73,8 +73,8 @@ import {
 	apiFindCheckoutStatus,
 	apiFindOneScanJob,
 	apiFindRunningCheckout,
-	apiFindScanJobsByApplication,
-	apiFindScanJobsByCompose,
+	apiListScanJobsByApplication,
+	apiListScanJobsByCompose,
 	apiUpdateScanJobNote,
 	ScanRuntimeSettingsSchema,
 } from "@/server/db/schema";
@@ -443,8 +443,8 @@ export const scanRouter = createTRPCRouter({
 			return scanJob;
 		}),
 
-	allByApplication: protectedProcedure
-		.input(apiFindScanJobsByApplication)
+	listByApplication: protectedProcedure
+		.input(apiListScanJobsByApplication)
 		.query(async ({ input, ctx }) => {
 			const application = await findApplicationById(input.applicationId);
 			if (
@@ -458,11 +458,16 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 
-			return await findAllScanJobsByApplicationId(input.applicationId);
+			return await findScanJobsByApplicationIdPage(input.applicationId, {
+				page: input.page,
+				pageSize: input.pageSize,
+				search: input.search,
+				status: input.status,
+			});
 		}),
 
-	allByCompose: protectedProcedure
-		.input(apiFindScanJobsByCompose)
+	listByCompose: protectedProcedure
+		.input(apiListScanJobsByCompose)
 		.query(async ({ input, ctx }) => {
 			const compose = await findComposeById(input.composeId);
 			if (
@@ -476,7 +481,12 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 
-			return await findAllScanJobsByComposeId(input.composeId);
+			return await findScanJobsByComposeIdPage(input.composeId, {
+				page: input.page,
+				pageSize: input.pageSize,
+				search: input.search,
+				status: input.status,
+			});
 		}),
 
 	one: protectedProcedure
@@ -486,7 +496,11 @@ export const scanRouter = createTRPCRouter({
 			let organizationId: string | undefined = scanJob.datasetEvaluationTrialId
 				? (ctx.session.activeOrganizationId ?? undefined)
 				: undefined;
-			if (scanJob.datasetEvaluationTrialId) await authorizeScanJobAccess(scanJob.scanJobId, ctx.session.activeOrganizationId);
+			if (scanJob.datasetEvaluationTrialId)
+				await authorizeScanJobAccess(
+					scanJob.scanJobId,
+					ctx.session.activeOrganizationId,
+				);
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
 				organizationId = application.environment.project.organizationId;
@@ -532,7 +546,11 @@ export const scanRouter = createTRPCRouter({
 			let organizationId: string | undefined = scanJob.datasetEvaluationTrialId
 				? (ctx.session.activeOrganizationId ?? undefined)
 				: undefined;
-			if (scanJob.datasetEvaluationTrialId) await authorizeScanJobAccess(scanJob.scanJobId, ctx.session.activeOrganizationId);
+			if (scanJob.datasetEvaluationTrialId)
+				await authorizeScanJobAccess(
+					scanJob.scanJobId,
+					ctx.session.activeOrganizationId,
+				);
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
 				organizationId = application.environment.project.organizationId;
@@ -1132,12 +1150,15 @@ export const scanRouter = createTRPCRouter({
 			return await listScanEvaluationResults(input.scanJobId);
 		}),
 
-		resultSummary: protectedProcedure
+	resultSummary: protectedProcedure
 		.input(apiFindOneScanJob)
 		.query(async ({ input, ctx }) => {
 			const scanJob = await findScanJobById(input.scanJobId);
 			let organizationId: string | undefined = scanJob.datasetEvaluationTrialId
-				? await authorizeScanJobAccess(scanJob.scanJobId, ctx.session.activeOrganizationId)
+				? await authorizeScanJobAccess(
+						scanJob.scanJobId,
+						ctx.session.activeOrganizationId,
+					)
 				: undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
@@ -1175,7 +1196,10 @@ export const scanRouter = createTRPCRouter({
 		.query(async ({ input, ctx }) => {
 			const scanJob = await findScanJobById(input.scanJobId);
 			let organizationId: string | undefined = scanJob.datasetEvaluationTrialId
-				? await authorizeScanJobAccess(scanJob.scanJobId, ctx.session.activeOrganizationId)
+				? await authorizeScanJobAccess(
+						scanJob.scanJobId,
+						ctx.session.activeOrganizationId,
+					)
 				: undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
@@ -1212,7 +1236,10 @@ export const scanRouter = createTRPCRouter({
 		.query(async ({ input, ctx }) => {
 			const scanJob = await findScanJobById(input.scanJobId);
 			let organizationId: string | undefined = scanJob.datasetEvaluationTrialId
-				? await authorizeScanJobAccess(scanJob.scanJobId, ctx.session.activeOrganizationId)
+				? await authorizeScanJobAccess(
+						scanJob.scanJobId,
+						ctx.session.activeOrganizationId,
+					)
 				: undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
@@ -1257,7 +1284,10 @@ export const scanRouter = createTRPCRouter({
 			}
 			const scanJob = await findScanJobById(task.scanJobId);
 			let organizationId: string | undefined = scanJob.datasetEvaluationTrialId
-				? await authorizeScanJobAccess(scanJob.scanJobId, ctx.session.activeOrganizationId)
+				? await authorizeScanJobAccess(
+						scanJob.scanJobId,
+						ctx.session.activeOrganizationId,
+					)
 				: undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);
@@ -1302,7 +1332,10 @@ export const scanRouter = createTRPCRouter({
 			}
 			const scanJob = await findScanJobById(task.scanJobId);
 			let organizationId: string | undefined = scanJob.datasetEvaluationTrialId
-				? await authorizeScanJobAccess(scanJob.scanJobId, ctx.session.activeOrganizationId)
+				? await authorizeScanJobAccess(
+						scanJob.scanJobId,
+						ctx.session.activeOrganizationId,
+					)
 				: undefined;
 			if (scanJob.applicationId) {
 				const application = await findApplicationById(scanJob.applicationId);

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { loadScanPipelineDefinitions } from "../../../../packages/server/src/services/scan/pipeline/scan-pipeline-definitions";
 import {
 	createJsonSchemaContract,
 	validateJsonSchemaContract,
 	validateJsonSchemaContractArtifacts,
 } from "../../../../packages/server/src/services/scan/pipeline/scan-pipeline-schema-contracts";
-import { loadScanPipelineDefinitions } from "../../../../packages/server/src/services/scan/pipeline/scan-pipeline-definitions";
 
 const definitions = loadScanPipelineDefinitions();
 const research = definitions.pipelines.research;
@@ -24,7 +24,7 @@ const expectedStages = [
 	"research-report",
 ];
 
-	const expectedRoutes = {
+const expectedRoutes = {
 	"track-review-to-track-plan": "continue",
 	"track-review-to-surface-map": "new-surface",
 	"track-review-to-finding-validation": "finding-found",
@@ -47,13 +47,16 @@ const stageOutputFixtures: Record<string, unknown> = {
 	"research-scope": { scopePath: "/task/scope.json" },
 	"surface-map": { surfaceMapPath: "/task/surface-map.json" },
 	"track-plan": {
-		tracks: [{
-			trackKey: "track-a",
-			approachFamily: "input-parsing",
-			researchIdea: "Trace attacker-controlled parser input to a security boundary.",
-			scope: { entrypoints: ["public-route"] },
-			mechanisms: ["parser-to-dispatch"],
-		}],
+		tracks: [
+			{
+				trackKey: "track-a",
+				approachFamily: "input-parsing",
+				researchIdea:
+					"Trace attacker-controlled parser input to a security boundary.",
+				scope: { entrypoints: ["public-route"] },
+				mechanisms: ["parser-to-dispatch"],
+			},
+		],
 		iteration: 0,
 	},
 	"vulnerability-discovery": {
@@ -90,36 +93,38 @@ const stageOutputFixtures: Record<string, unknown> = {
 		disproofResult: {},
 		verdict: "confirmed",
 	},
-		"finding-review": {
-			findingId: "track-a:root-cause-a",
-			decision: "confirmed",
-			summary: "Independent review confirmed the source-to-sink path.",
-			challenges: [],
-			requiredEvidence: [],
-			confirmedPrimitive: {
-				primitiveId: "primitive-a",
-				name: "controlled parser output",
-				capability: "controlled-dispatch",
-				requiredInput: { kind: "attacker-input" },
-				producedCapability: { kind: "route-selection" },
-				trustLevel: "untrusted-to-internal",
-				evidenceRefs: ["evidence-a"],
-			},
+	"finding-review": {
+		findingId: "track-a:root-cause-a",
+		decision: "confirmed",
+		summary: "Independent review confirmed the source-to-sink path.",
+		challenges: [],
+		requiredEvidence: [],
+		confirmedPrimitive: {
+			primitiveId: "primitive-a",
+			name: "controlled parser output",
+			capability: "controlled-dispatch",
+			requiredInput: { kind: "attacker-input" },
+			producedCapability: { kind: "route-selection" },
+			trustLevel: "untrusted-to-internal",
+			evidenceRefs: ["evidence-a"],
 		},
+	},
 	"chain-synthesis": {
-		chains: [{
-			chainId: "chain-a",
-			chainKey: "chain-a",
-			status: "candidate",
-			steps: [{ primitiveId: "primitive-a" }],
-			entrypoint: { kind: "public-route" },
-			requiredCapabilities: ["controlled-parser-input"],
-			producedCapabilities: ["controlled-dispatch"],
-			trustBoundaryCrossings: [],
-			deploymentConditions: [],
-			primitiveGaps: [],
-			successTarget: { kind: "protected-operation" },
-		}],
+		chains: [
+			{
+				chainId: "chain-a",
+				chainKey: "chain-a",
+				status: "candidate",
+				steps: [{ primitiveId: "primitive-a" }],
+				entrypoint: { kind: "public-route" },
+				requiredCapabilities: ["controlled-parser-input"],
+				producedCapabilities: ["controlled-dispatch"],
+				trustBoundaryCrossings: [],
+				deploymentConditions: [],
+				primitiveGaps: [],
+				successTarget: { kind: "protected-operation" },
+			},
+		],
 	},
 	"chain-review": {
 		chainId: "chain-a",
@@ -202,24 +207,29 @@ describe("research pipeline contract", () => {
 			attackerControl: "The request path is attacker controlled.",
 			trustBoundaryCrossings: [],
 			preconditions: ["The endpoint is reachable."],
-			evidence: [{
-				id: "evidence-1",
-				kind: "code",
-				summary: "Route is rebuilt from path.",
-				filePath: "src/server.ts",
-				line: 42,
-				symbol: "dispatch",
-				observation: "The route is reconstructed before dispatch.",
-				supports: ["route-path-only"],
-				contradicts: [],
-			}],
+			evidence: [
+				{
+					id: "evidence-1",
+					kind: "code",
+					summary: "Route is rebuilt from path.",
+					filePath: "src/server.ts",
+					line: 42,
+					symbol: "dispatch",
+					observation: "The route is reconstructed before dispatch.",
+					supports: ["route-path-only"],
+					contradicts: [],
+				},
+			],
 			quickDisproofAttempt: "Core dispatch behavior was checked.",
 			confidence: 0.7,
 		};
 		validateJsonSchemaContract(contract, finding);
-		expect(() => validateJsonSchemaContract(contract, { ...finding, candidateId: "old-id" })).toThrow(
-			/JSON Schema validation failed/,
-		);
+		expect(() =>
+			validateJsonSchemaContract(contract, {
+				...finding,
+				candidateId: "old-id",
+			}),
+		).toThrow(/JSON Schema validation failed/);
 	});
 
 	it("requires Discovery Reports to reference strict Finding artifacts", async () => {
@@ -245,17 +255,19 @@ describe("research pipeline contract", () => {
 			attackerControl: "The request path is attacker controlled.",
 			trustBoundaryCrossings: [],
 			preconditions: ["The endpoint is reachable."],
-			evidence: [{
-				id: "evidence-1",
-				kind: "code",
-				summary: "Route is rebuilt from path.",
-				filePath: "src/server.ts",
-				line: 42,
-				symbol: "dispatch",
-				observation: "The route is reconstructed before dispatch.",
-				supports: ["root-cause-a"],
-				contradicts: [],
-			}],
+			evidence: [
+				{
+					id: "evidence-1",
+					kind: "code",
+					summary: "Route is rebuilt from path.",
+					filePath: "src/server.ts",
+					line: 42,
+					symbol: "dispatch",
+					observation: "The route is reconstructed before dispatch.",
+					supports: ["root-cause-a"],
+					contradicts: [],
+				},
+			],
 			quickDisproofAttempt: "Core dispatch behavior was checked.",
 			confidence: 0.7,
 		};
@@ -280,10 +292,8 @@ describe("research pipeline contract", () => {
 		]);
 
 		validateJsonSchemaContract(contract, output);
-		await validateJsonSchemaContractArtifacts(
-			contract,
-			output,
-			async (path) => artifacts.get(path),
+		await validateJsonSchemaContractArtifacts(contract, output, async (path) =>
+			artifacts.get(path),
 		);
 
 		artifacts.set("/task/discovery-report.json", {
@@ -300,10 +310,8 @@ describe("research pipeline contract", () => {
 			newTrackSuggestions: [],
 		});
 		await expect(
-			validateJsonSchemaContractArtifacts(
-				contract,
-				output,
-				async (path) => artifacts.get(path),
+			validateJsonSchemaContractArtifacts(contract, output, async (path) =>
+				artifacts.get(path),
 			),
 		).rejects.toThrow(/JSON Schema validation failed/);
 	});
@@ -352,7 +360,9 @@ describe("research pipeline contract", () => {
 			);
 			const prompt = stage?.runtimeConfig?.prompt ?? "";
 			if (writeStages.has(stageId)) {
-				expect(stage?.runtimeConfig?.skills ?? [], stageId).toContain("research-db");
+				expect(stage?.runtimeConfig?.skills ?? [], stageId).toContain(
+					"research-db",
+				);
 				expect(prompt, stageId).toMatch(/research-db|research database/i);
 				expect(prompt, stageId).toMatch(/revision|conflict/i);
 			}
@@ -374,7 +384,8 @@ describe("research pipeline contract", () => {
 			const edges = research.edges.filter((edge) => edge.from === stageId);
 			const routed = edges.filter((edge) => edge.route);
 			if (routed.length === 0) return edges.map((edge) => edge.to);
-			const edge = routed.find((candidate) => candidate.route?.key === routeKey) ??
+			const edge =
+				routed.find((candidate) => candidate.route?.key === routeKey) ??
 				routed.find((candidate) => candidate.route?.default);
 			expect(edge, `${stageId}:${routeKey}`).toBeDefined();
 			return edge ? [edge.to] : [];
@@ -414,9 +425,12 @@ describe("research pipeline contract", () => {
 			).toThrow(/JSON Schema validation failed/);
 		}
 
-		const reviewEdges = (research?.edges ?? []).filter((edge) =>
-			["track-review", "chain-review", "exploit-review"].includes(edge.from) &&
-			edge.artifacts.some((artifact) => artifact.inputField === "reviewPath"),
+		const reviewEdges = (research?.edges ?? []).filter(
+			(edge) =>
+				["track-review", "chain-review", "exploit-review"].includes(
+					edge.from,
+				) &&
+				edge.artifacts.some((artifact) => artifact.inputField === "reviewPath"),
 		);
 		const allReviewEdges = (research?.edges ?? []).filter((edge) =>
 			["track-review", "chain-review", "exploit-review"].includes(edge.from),
@@ -464,30 +478,36 @@ describe("research pipeline contract", () => {
 				schema: outputSchema ?? {},
 			});
 			validateJsonSchemaContract(contract, output);
-			await validateJsonSchemaContractArtifacts(contract, output, async (path: string) => {
-				expect(path).toMatch(/^\/task\//);
-				if (stageId === "vulnerability-discovery") {
-					return {
-						trackId: "track-a",
-						source: {},
-						transformations: [],
-						guards: [],
-						sink: {},
-						reachability: {},
-						attackerControl: {},
-						preconditions: [],
-						findingPaths: [],
-						quickDisproofAttempt: {},
-						newTrackSuggestions: [],
-					};
-				}
-				return {};
-			});
+			await validateJsonSchemaContractArtifacts(
+				contract,
+				output,
+				async (path: string) => {
+					expect(path).toMatch(/^\/task\//);
+					if (stageId === "vulnerability-discovery") {
+						return {
+							trackId: "track-a",
+							source: {},
+							transformations: [],
+							guards: [],
+							sink: {},
+							reachability: {},
+							attackerControl: {},
+							preconditions: [],
+							findingPaths: [],
+							quickDisproofAttempt: {},
+							newTrackSuggestions: [],
+						};
+					}
+					return {};
+				},
+			);
 		}
 	});
 
 	it("marks the final report as required", () => {
-		const report = definitions.stages.find((stage) => stage.id === "research-report");
+		const report = definitions.stages.find(
+			(stage) => stage.id === "research-report",
+		);
 		expect(report?.report).toEqual({
 			path: "reports/final-report.md",
 			required: true,
@@ -498,7 +518,8 @@ describe("research pipeline contract", () => {
 		const track = {
 			trackKey: "track-a",
 			approachFamily: "input-parsing",
-			researchIdea: "Trace attacker-controlled parser input to a security boundary.",
+			researchIdea:
+				"Trace attacker-controlled parser input to a security boundary.",
 			scope: { entrypoints: ["public-route"] },
 			mechanisms: ["parser-to-dispatch"],
 		};
@@ -552,7 +573,9 @@ describe("research pipeline contract", () => {
 			...(stageOutputFixtures["finding-review"] as Record<string, unknown>),
 			confirmedPrimitive: primitive,
 		});
-		validateJsonSchemaContract(contractFor("chain-synthesis"), { chains: [chain] });
+		validateJsonSchemaContract(contractFor("chain-synthesis"), {
+			chains: [chain],
+		});
 		expect(() =>
 			validateJsonSchemaContract(contractFor("chain-synthesis"), {
 				chains: [{ ...chain, steps: [{}] }],

@@ -1,6 +1,6 @@
 import { ChevronRight, FileIcon, Folder, Loader2 } from "lucide-react";
-import type { ReactNode } from "react";
 import { useTranslation } from "next-i18next";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { scanT } from "./scan-i18n";
 
@@ -43,24 +43,74 @@ export const LazyFileTree = (props: {
 						}
 						className={cn(
 							"flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted/70",
-							!directory && props.selectedFilePath === item.id && "bg-accent text-accent-foreground",
+							!directory &&
+								props.selectedFilePath === item.id &&
+								"bg-accent text-accent-foreground",
 						)}
 						style={{ paddingLeft: `${depth * 14 + 10}px` }}
 					>
-						{directory ? <ChevronRight className={cn("size-4 shrink-0 transition-transform", expanded && "rotate-90")} /> : <span className="size-4 shrink-0" />}
-						{directory ? <Folder className="size-4 shrink-0 text-muted-foreground" /> : <FileIcon className="size-4 shrink-0 text-muted-foreground" />}
-						<span className="min-w-0 truncate font-mono text-sm">{item.name}</span>
+						{directory ? (
+							<ChevronRight
+								className={cn(
+									"size-4 shrink-0 transition-transform",
+									expanded && "rotate-90",
+								)}
+							/>
+						) : (
+							<span className="size-4 shrink-0" />
+						)}
+						{directory ? (
+							<Folder className="size-4 shrink-0 text-muted-foreground" />
+						) : (
+							<FileIcon className="size-4 shrink-0 text-muted-foreground" />
+						)}
+						<span className="min-w-0 truncate font-mono text-sm">
+							{item.name}
+						</span>
 					</button>
 					{directory && expanded ? (
-						cache?.status === "loading" ? <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />{scanT(t, "scan.files.loadingShort", "Loading...")}</div> :
-						cache?.status === "error" ? <div className="px-3 py-2 text-sm text-destructive">{scanT(t, "scan.files.directoryLoadError", "Failed to load directory")}</div> :
-						<div>{renderItems(cache?.items || [], depth + 1)}</div>
+						cache?.status === "loading" ? (
+							<div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
+								<Loader2 className="size-4 animate-spin" />
+								{scanT(t, "scan.files.loadingShort", "Loading...")}
+							</div>
+						) : cache?.status === "error" ? (
+							<div className="px-3 py-2 text-sm text-destructive">
+								{scanT(
+									t,
+									"scan.files.directoryLoadError",
+									"Failed to load directory",
+								)}
+							</div>
+						) : (
+							<div>{renderItems(cache?.items || [], depth + 1)}</div>
+						)
 					) : null}
 				</div>
 			);
 		});
-	if (props.rootStatus === "loading") return <div className="flex min-h-[320px] items-center justify-center gap-2 text-muted-foreground"><Loader2 className="size-4 animate-spin" />{scanT(t, "scan.files.loading", "Loading files...")}</div>;
-	if (props.rootStatus === "error") return <div className="flex min-h-[320px] items-center justify-center text-destructive">{scanT(t, "scan.files.loadError", "Failed to load files")}</div>;
-	if (!props.rootItems.length) return <div className="flex min-h-[320px] items-center justify-center text-muted-foreground">{scanT(t, "scan.files.empty", "No files available")}</div>;
-	return <div className="h-[65vh] overflow-auto p-2">{renderItems(props.rootItems)}</div>;
+	if (props.rootStatus === "loading")
+		return (
+			<div className="flex min-h-[320px] items-center justify-center gap-2 text-muted-foreground">
+				<Loader2 className="size-4 animate-spin" />
+				{scanT(t, "scan.files.loading", "Loading files...")}
+			</div>
+		);
+	if (props.rootStatus === "error")
+		return (
+			<div className="flex min-h-[320px] items-center justify-center text-destructive">
+				{scanT(t, "scan.files.loadError", "Failed to load files")}
+			</div>
+		);
+	if (!props.rootItems.length)
+		return (
+			<div className="flex min-h-[320px] items-center justify-center text-muted-foreground">
+				{scanT(t, "scan.files.empty", "No files available")}
+			</div>
+		);
+	return (
+		<div className="h-[65vh] overflow-auto p-2">
+			{renderItems(props.rootItems)}
+		</div>
+	);
 };

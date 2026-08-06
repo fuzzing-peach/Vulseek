@@ -1,27 +1,23 @@
-import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { db } from "@vulseek/server/db";
 import {
-	datasetProfiles,
-	datasetSamples,
 	datasetEvaluations,
 	datasetEvaluationTrials,
+	datasetProfiles,
+	datasetSamples,
 	datasets,
-	sshKeys,
-	type DatasetSource,
-	datasetSourceSchema,
 } from "@vulseek/server/db/schema";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { execAsync } from "../utils/process/execAsync";
 import {
+	assertDatasetPathInside,
 	datasetManifestRelativePath,
-	resolveDatasetPathInside,
-	resolveDatasetHostRoot as resolveDatasetHostRootContract,
+	parseDatasetManifest,
 	validateDatasetManifest as validateDatasetManifestContract,
-} from "./dataset-contracts";
+} from "./dataset-manifest";
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'"'"'`)}'`;
 
@@ -32,87 +28,70 @@ const sanitizeSegment = (value: string) =>
 		.replace(/-+/g, "-")
 		.replace(/^-|-$/g, "") || "unknown";
 
-export const resolveDatasetHostRoot = resolveDatasetHostRootContract;
 export const validateDatasetManifest = validateDatasetManifestContract;
 const manifestRelativePath = datasetManifestRelativePath;
 
-const resolveSourceDigest = async (hostRoot: string, source: DatasetSource) => {
-	if (source.type === "git") {
-		try {
-			const { stdout } = await execAsync(
-				`git -C ${shellQuote(hostRoot)} rev-parse HEAD`,
-			);
-			return stdout.trim();
-		} catch {
-			// A local checkout can be a non-git directory. Fall through to a
-			// content-derived digest so profiles remain reproducible enough to inspect.
-		}
-	}
-	const manifest = await fs.readFile(path.join(hostRoot, manifestRelativePath));
-	return createHash("sha256")
-		.update(JSON.stringify(source))
-		.update(manifest)
-		.digest("hex");
-};
-
-const prepareSource = async (
-	source: DatasetSource,
+const readDatasetManifestInCheckoutContainer = async (
 	hostRoot: string,
-	organizationId: string,
+	toolsImage: string,
 ) => {
-	await fs.mkdir(path.dirname(hostRoot), { recursive: true });
-
-	if (source.type === "local") {
-		const sourcePath = path.resolve(source.path);
-		const stat = await fs.stat(sourcePath);
-		if (!stat.isDirectory()) throw new Error("Dataset local source must be a directory");
-		const resolvedHostRoot = path.resolve(hostRoot);
-		if (
-			resolvedHostRoot === sourcePath ||
-			resolvedHostRoot.startsWith(`${sourcePath}${path.sep}`) ||
-			sourcePath.startsWith(`${resolvedHostRoot}${path.sep}`)
-		) {
-			throw new Error("Dataset local source cannot overlap the profile host root");
-		}
-		await fs.rm(hostRoot, { recursive: true, force: true });
-		await fs.cp(sourcePath, hostRoot, { recursive: true, errorOnExist: true });
-		return;
+	const configuredScanContextHostRoot =
+		process.env.VULSEEK_SCAN_CONTEXT_HOST_PATH?.trim();
+	if (!configuredScanContextHostRoot) {
+		throw new Error(
+			"Scan context host path is not configured for dataset checkout output",
+		);
 	}
-
-	await fs.rm(hostRoot, { recursive: true, force: true });
-	const refArgs = source.ref ? `--branch ${shellQuote(source.ref)}` : "";
-	let sshKeyPath: string | null = null;
+	const scanContextAppRoot =
+		process.env.VULSEEK_SCAN_CONTEXT_APP_PATH?.trim() ||
+		configuredScanContextHostRoot;
+	await fs.mkdir(path.join(scanContextAppRoot, "tmp"), { recursive: true });
+	const outputAppRoot = await fs.mkdtemp(
+		path.join(scanContextAppRoot, "tmp", "vulseek-dataset-checkout-"),
+	);
+	const outputHostRoot = path.resolve(
+		configuredScanContextHostRoot,
+		path.relative(scanContextAppRoot, outputAppRoot),
+	);
+	const validationScript = [
+		"import json, os",
+		"root = os.path.realpath('/dataset')",
+		"with open('/dataset/.vulseek/samples.json', encoding='utf-8') as handle: manifest = json.load(handle)",
+		"for sample in manifest.get('samples', []):",
+		"    relative = sample.get('repositoryPath')",
+		"    if not isinstance(relative, str) or os.path.isabs(relative): raise RuntimeError(f'Invalid dataset repositoryPath: {relative!r}')",
+		"    candidate = os.path.realpath(os.path.join('/dataset', relative))",
+		"    if candidate != root and not candidate.startswith(root + os.sep): raise RuntimeError(f'Dataset repositoryPath escapes the profile root: {relative}')",
+		"    if not os.path.isdir(candidate): raise RuntimeError(f'Dataset sample directory does not exist: {relative}')",
+		"temporary_output = '/result/manifest.json.tmp'",
+		"with open(temporary_output, 'w', encoding='utf-8') as handle: json.dump(manifest, handle, ensure_ascii=False, separators=(',', ':'))",
+		"os.replace(temporary_output, '/result/manifest.json')",
+		"print('validated sampleCount=' + str(len(manifest.get('samples', []))))",
+	].join("\n");
+	const command = [
+		"docker run --rm --network none",
+		"--mount type=bind,source=" +
+			shellQuote(hostRoot) +
+			",target=/dataset,readonly",
+		"--mount type=bind,source=" +
+			shellQuote(outputHostRoot) +
+			",target=/result",
+		shellQuote(toolsImage),
+		"bash -lc",
+		shellQuote(["python3 - <<'PY'", validationScript, "PY"].join("\n")),
+	].join(" ");
 	try {
-		if (source.sshKeyId) {
-			const key = await db
-				.select({ privateKey: sshKeys.privateKey })
-				.from(sshKeys)
-				.where(and(eq(sshKeys.sshKeyId, source.sshKeyId), eq(sshKeys.organizationId, organizationId)))
-				.limit(1)
-				.then((rows) => rows[0]);
-			if (!key?.privateKey?.trim()) {
-				throw new Error("Dataset SSH key was not found or has no private key");
-			}
-			sshKeyPath = path.join(os.tmpdir(), `vulseek-dataset-key-${nanoid(12)}`);
-			await fs.writeFile(sshKeyPath, `${key.privateKey.trim()}\n`, { mode: 0o600 });
-		}
-		const sshEnv = sshKeyPath
-			? `GIT_SSH_COMMAND=${shellQuote(`ssh -i ${sshKeyPath} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no`)}`
-			: "";
-		const gitCommand = `${sshEnv ? `${sshEnv} ` : ""}git clone --depth 1 ${refArgs} ${shellQuote(source.url)} ${shellQuote(hostRoot)}`;
-		await execAsync(gitCommand);
-		if (source.submodules) {
-			await execAsync(
-				`${sshEnv ? `${sshEnv} ` : ""}git -C ${shellQuote(hostRoot)} submodule update --init --recursive`,
-			);
-		}
+		await execAsync(command);
+		return await fs.readFile(path.join(outputAppRoot, "manifest.json"), "utf8");
 	} finally {
-		if (sshKeyPath) await fs.rm(sshKeyPath, { force: true }).catch(() => {});
+		await fs.rm(outputAppRoot, { recursive: true, force: true });
 	}
 };
 
 const buildCheckoutImage = async (profileId: string, toolsImage: string) => {
-	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "vulseek-dataset-image-"));
+	const tempDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "vulseek-dataset-image-"),
+	);
 	try {
 		const dockerfile = `FROM ${toolsImage}\nRUN mkdir -p /workspace/repo /workspace/dataset\n`;
 		await fs.writeFile(path.join(tempDir, "Dockerfile"), dockerfile);
@@ -134,7 +113,8 @@ const resolveDatasetToolsImage = async () => {
 		process.env.VULSEEK_SCAN_TOOLS_IMAGE?.trim() ||
 		process.env.VULSEEK_TOOLS_IMAGE?.trim();
 	if (configured) return configured;
-	const variant = process.env.VULSEEK_TOOLS_IMAGE_VARIANT?.trim() ||
+	const variant =
+		process.env.VULSEEK_TOOLS_IMAGE_VARIANT?.trim() ||
 		(process.env.NODE_ENV === "production" ? "release" : "dev");
 	const { stdout } = await execAsync(
 		`docker images --format '{{.Repository}}:{{.Tag}}' 'vulseek-scan-tools-${sanitizeSegment(variant)}:*' | head -n 1`,
@@ -156,30 +136,49 @@ export const prepareDatasetProfile = async (profileId: string) => {
 		.then((rows) => rows[0]);
 	if (!row) throw new Error("Dataset profile not found");
 
-	const hostRoot = row.profile.hostRoot;
 	await db
 		.update(datasetProfiles)
-		.set({ status: "preparing", errorMessage: null, updatedAt: new Date().toISOString() })
+		.set({
+			status: "preparing",
+			errorMessage: null,
+			updatedAt: new Date().toISOString(),
+		})
 		.where(eq(datasetProfiles.profileId, profileId));
 
 	try {
-		const source = datasetSourceSchema.parse(row.dataset.source);
-		await prepareSource(source, hostRoot, row.dataset.organizationId);
-		const manifest = await validateDatasetManifest(hostRoot);
-		const sourceDigest = await resolveSourceDigest(hostRoot, source);
+		if (
+			!row.profile.hostRoot.trim() ||
+			!path.isAbsolute(row.profile.hostRoot)
+		) {
+			throw new Error(
+				"Dataset Profile local path must be an absolute directory path",
+			);
+		}
+		const hostRoot = path.resolve(row.profile.hostRoot);
+		const source = { type: "local" as const, path: hostRoot };
 		const toolsImage = await resolveDatasetToolsImage();
+		const manifest = parseDatasetManifest(
+			await readDatasetManifestInCheckoutContainer(hostRoot, toolsImage),
+		);
+		const manifestSampleIds = new Set(
+			manifest.samples.map((sample) => sample.id),
+		);
+		const selectedSampleIds = row.profile.selectedSampleIds.filter((sampleId) =>
+			manifestSampleIds.has(sampleId),
+		);
 		const checkoutImage = await buildCheckoutImage(profileId, toolsImage);
 		await db.transaction(async (tx) => {
-			await tx.delete(datasetSamples).where(eq(datasetSamples.profileId, profileId));
+			await tx
+				.delete(datasetSamples)
+				.where(eq(datasetSamples.profileId, profileId));
 			if (manifest.samples.length > 0) {
 				await tx.insert(datasetSamples).values(
 					manifest.samples.map((sample) => ({
 						profileId,
-						sampleKey: sample.sampleKey,
+						id: sample.id,
 						title: sample.title ?? "",
 						repositoryPath: sample.repositoryPath,
-						scannerInput: sample.scannerInput ?? {},
-						evaluatorMetadata: sample.evaluatorMetadata ?? {},
+						metadata: sample.metadata ?? {},
 						ordinal: sample.ordinal,
 					})),
 				);
@@ -188,22 +187,37 @@ export const prepareDatasetProfile = async (profileId: string) => {
 				.update(datasetProfiles)
 				.set({
 					status: "ready",
-					sourceDigest,
+					hostRoot,
+					selectedSampleIds,
+					sourceDigest: null,
 					checkoutImage: checkoutImage.imageTag,
 					checkoutImageDigest: checkoutImage.imageDigest,
 					configSnapshot: {
 						source,
-						manifestPath: `/workspace/dataset/${manifestRelativePath}`,
+						manifestPath: path.join(hostRoot, manifestRelativePath),
 					},
 					errorMessage: null,
 					updatedAt: new Date().toISOString(),
 				})
 				.where(eq(datasetProfiles.profileId, profileId));
 		});
-		return { profileId, status: "ready" as const, sampleCount: manifest.samples.length, sourceDigest, checkoutImage: checkoutImage.imageTag };
+		return {
+			profileId,
+			status: "ready" as const,
+			sampleCount: manifest.samples.length,
+			sourceDigest: null,
+			checkoutImage: checkoutImage.imageTag,
+		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		await db.update(datasetProfiles).set({ status: "failed", errorMessage: message.slice(0, 4000), updatedAt: new Date().toISOString() }).where(eq(datasetProfiles.profileId, profileId));
+		await db
+			.update(datasetProfiles)
+			.set({
+				status: "failed",
+				errorMessage: message.slice(0, 4000),
+				updatedAt: new Date().toISOString(),
+			})
+			.where(eq(datasetProfiles.profileId, profileId));
 		throw error;
 	}
 };
@@ -221,12 +235,16 @@ export const pruneDatasetProfile = async (profileId: string) => {
 		.from(datasetEvaluations)
 		.where(eq(datasetEvaluations.profileId, profileId))
 		.limit(1);
-	if (referenced[0]) throw new Error("Dataset profile is referenced by an evaluation");
-	await fs.rm(profile.profile.hostRoot, { recursive: true, force: true });
+	if (referenced[0])
+		throw new Error("Dataset profile is referenced by an evaluation");
 	if (profile.profile.checkoutImage) {
-		await execAsync(`docker rmi ${shellQuote(profile.profile.checkoutImage)}`).catch(() => {});
+		await execAsync(
+			`docker rmi ${shellQuote(profile.profile.checkoutImage)}`,
+		).catch(() => {});
 	}
-	await db.delete(datasetProfiles).where(eq(datasetProfiles.profileId, profileId));
+	await db
+		.delete(datasetProfiles)
+		.where(eq(datasetProfiles.profileId, profileId));
 	return { profileId, status: "pruned" as const };
 };
 
@@ -240,17 +258,31 @@ export const resolveDatasetTrialRuntime = async (scanJobId: string) => {
 			dataset: datasets,
 		})
 		.from(datasetEvaluationTrials)
-		.innerJoin(datasetEvaluations, eq(datasetEvaluationTrials.evaluationId, datasetEvaluations.evaluationId))
-		.innerJoin(datasetSamples, eq(datasetEvaluationTrials.sampleId, datasetSamples.sampleId))
-		.innerJoin(datasetProfiles, eq(datasetSamples.profileId, datasetProfiles.profileId))
+		.innerJoin(
+			datasetEvaluations,
+			eq(datasetEvaluationTrials.evaluationId, datasetEvaluations.evaluationId),
+		)
+		.innerJoin(
+			datasetSamples,
+			eq(datasetEvaluationTrials.sampleId, datasetSamples.sampleId),
+		)
+		.innerJoin(
+			datasetProfiles,
+			eq(datasetSamples.profileId, datasetProfiles.profileId),
+		)
 		.innerJoin(datasets, eq(datasetEvaluations.datasetId, datasets.datasetId))
 		.where(eq(datasetEvaluationTrials.scanJobId, scanJobId))
 		.limit(1)
 		.then((rows) => rows[0]);
 	if (!row) return null;
-	const sampleHostPath = await resolveDatasetPathInside(row.profile.hostRoot, row.sample.repositoryPath);
+	const sampleHostPath = assertDatasetPathInside(
+		row.profile.hostRoot,
+		row.sample.repositoryPath,
+	);
 	if (!row.profile.checkoutImage) {
-		throw new Error(`Dataset profile ${row.profile.profileId} has no checkout image`);
+		throw new Error(
+			`Dataset profile ${row.profile.profileId} has no checkout image`,
+		);
 	}
 	return {
 		...row,

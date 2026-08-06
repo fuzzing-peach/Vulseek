@@ -16,6 +16,7 @@ import {
 import { getAgentProfileById } from "./ai";
 import { findApplicationById } from "./application";
 import { findComposeById } from "./compose";
+import { resolveDatasetTrialRuntime } from "./dataset";
 import { buildTaskAgentProfileSnapshot } from "./scan/agent-profile-snapshot";
 import { findCandidateTaskLineage } from "./scan/api/candidate-records";
 import {
@@ -48,20 +49,23 @@ import {
 	resolveCheckoutToolsImageVariant,
 } from "./scan/checkout-tools";
 import { DEFAULT_DELTA_COMMIT_WINDOW } from "./scan/constants";
-import { getPipelineIdForScanType, type ScanType } from "./scan/scan-type";
+import {
+	buildLocalCheckoutDockerfile,
+	buildLocalRepositoryPopulateScript,
+} from "./scan/local-checkout";
 import {
 	findVulnerabilityCandidateByIdAndScanJobIdRepo,
 	findVulnerabilityCandidateByIdRepo,
 	findVulnerabilityCandidatesByScanJobIdRepo,
 } from "./scan/persistence/candidate.repo";
 import { findCandidateProjectionByIdRepo } from "./scan/persistence/candidate-projection-list.repo";
+import { settleScanJobRepo } from "./scan/persistence/job-settlement.repo";
 import {
 	findScanJobByIdRepo,
 	listUnfinishedScanJobsRepo,
 	resetScanJobForRetryRepo,
 	updateScanJobStatusRepo,
 } from "./scan/persistence/scan-job.repo";
-import { settleScanJobRepo } from "./scan/persistence/job-settlement.repo";
 import {
 	findStageGroupInstanceByIdRepo,
 	listStageGroupInstancesByScanJobIdRepo,
@@ -74,10 +78,10 @@ import {
 	findLatestTriageResultByCandidateIdRepo,
 	findLatestVerificationResultByCandidateIdRepo,
 	findTaskByIdRepo,
-	listAnalysisResultsByScanJobIdRepo,
 	hasActiveCandidateAnalysisTaskRepo,
-	listRunningTaskViewsByScanJobIdRepo,
+	listAnalysisResultsByScanJobIdRepo,
 	listChildTasksByParentTaskIdAndStageRepo,
+	listRunningTaskViewsByScanJobIdRepo,
 	listTaskStatusCountsByScanJobIdRepo,
 	listTasksByScanJobAndStageRepo,
 	listTasksByScanJobIdRepo,
@@ -85,37 +89,27 @@ import {
 	listVerificationResultsByScanJobIdRepo,
 	requeueTaskRepo,
 	resetFailedTaskForRetryRepo,
+	transitionTaskStatusRepo,
 	updateTaskRepo,
 	updateTaskStatusRepo,
-	transitionTaskStatusRepo,
 } from "./scan/persistence/task.repo";
 import { readTaskJsonArtifactForTask } from "./scan/persistence/task-artifact-resolver";
-import { normalizeTerminalTaskFilters } from "./scan/terminal-task-filters";
-import { resolveStageTaskName } from "./scan/stage-task-name";
-import { resolveDatasetTrialRuntime } from "./dataset";
-import {
-	getResearchRunningTaskPresentation,
-	getTobGoalRunningTaskPresentation,
-	type RunningTaskStage,
-} from "./scan/running-task-stage";
 import type {
 	AnyStageDefinition,
 	PipelineDefinition,
 	PipelineEdge,
 } from "./scan/pipeline/pipeline-definition";
+import { createPipelineDefinition } from "./scan/pipeline/pipeline-definition";
 import {
-	createPipelineDefinition,
-} from "./scan/pipeline/pipeline-definition";
-import {
-	runPipeline,
 	finalizeScanJob,
+	runPipeline,
 	startPipelineRuntime,
 	stopPipelineRuntimesForScanJob,
 } from "./scan/pipeline/pipeline-runner";
 import {
+	loadScanPipelineDefinitions,
 	normalizeLegacyVerificationSchema,
 	normalizePipelineDefinitionSnapshot,
-	loadScanPipelineDefinitions,
 	readScanPipelineDefinitionsYaml,
 	type ScanPipelineConfig,
 	type ScanPipelineDefinitions,
@@ -136,17 +130,14 @@ import {
 	buildQueueTaskJobId,
 } from "./scan/queue-job-ids";
 import {
-	forceRemoveStageQueueJob,
-	removeKnownQueueJobsForTask,
-} from "./scan/task-queue-cleanup";
-import {
 	isRetryableTaskStageName,
 	retryFailedScanJobTasksWithDeps,
 } from "./scan/retry-failed-tasks";
 import {
-	buildLocalCheckoutDockerfile,
-	buildLocalRepositoryPopulateScript,
-} from "./scan/local-checkout";
+	getResearchRunningTaskPresentation,
+	getTobGoalRunningTaskPresentation,
+	type RunningTaskStage,
+} from "./scan/running-task-stage";
 import {
 	ensureCodexGoalsFeature,
 	sanitizeCodexAcpConfigToml,
@@ -156,14 +147,10 @@ import {
 	getRuntimeStageConcurrency,
 	getRuntimeStageSetting,
 } from "./scan/runtime-settings";
+import { getPipelineIdForScanType, type ScanType } from "./scan/scan-type";
 import { SCAN_STAGE_IDS, SCAN_STAGE_METADATA } from "./scan/stage-metadata";
-import type {
-	CandidateAnalysisTaskInput,
-	CandidateVerificationTaskInput,
-} from "./scan/stages/generic-stage-inputs";
-import type {
-	PipelineContext,
-} from "./scan/stages/full-scan-stage.runtime";
+import { resolveStageTaskName } from "./scan/stage-task-name";
+import type { PipelineContext } from "./scan/stages/full-scan-stage.runtime";
 import {
 	resolveScanProfileConcurrencySettingsFromTarget,
 	resolveStageAgentProfile,
@@ -172,7 +159,16 @@ import {
 	resolveTaskRuntimeDirForTask,
 } from "./scan/stages/full-scan-stage.runtime";
 import { createGenericAgentStageDefinition } from "./scan/stages/generic-agent.stage";
+import type {
+	CandidateAnalysisTaskInput,
+	CandidateVerificationTaskInput,
+} from "./scan/stages/generic-stage-inputs";
 import { createShortTaskId, createTaskIdForDispatchKey } from "./scan/task-id";
+import {
+	forceRemoveStageQueueJob,
+	removeKnownQueueJobsForTask,
+} from "./scan/task-queue-cleanup";
+import { normalizeTerminalTaskFilters } from "./scan/terminal-task-filters";
 import type {
 	AgentProfileLike,
 	Candidate as CanonicalCandidate,
@@ -200,7 +196,6 @@ const RUNTIME_CUSTOM_SKILLS = [
 	"search-registries",
 	"tree-sitter",
 ] as const;
-
 
 type UnifiedModuleTaskView = {
 	taskId: string;
@@ -578,9 +573,8 @@ const cleanupScanJobCredentialFiles = async (
 	if (!configuredHostRoot) {
 		return false;
 	}
-	const { projectName, profileName } = await resolveScanJobTargetIdentity(
-		scanJob,
-	);
+	const { projectName, profileName } =
+		await resolveScanJobTargetIdentity(scanJob);
 	// This command is executed by the Docker daemon. Do not pass the
 	// container-side /scan-context path as a host bind source.
 	const hostProfileDir = buildHostProjectProfileContextRoot(
@@ -592,7 +586,7 @@ const cleanupScanJobCredentialFiles = async (
 	const jobId = sanitizeContextPathPart(scanJob.scanJobId);
 	const hostJobRoot = path.join(hostProfileDir, "jobs", jobId);
 	const credentialExpression =
-		`-type f \\( -name auth.json -o -name .credentials.json \\) -delete`;
+		"-type f \\( -name auth.json -o -name .credentials.json \\) -delete";
 
 	// Prefer the host path so cleanup does not depend on a task image still
 	// existing. Fall back to a root-owned container for agent-owned files.
@@ -2101,7 +2095,7 @@ export const findCheckoutImageStatus = async (
 	}
 };
 
-const escapeSingleQuotes = (value: string) => value.replace(/'/g, `'\"'\"'`);
+const escapeSingleQuotes = (value: string) => value.replace(/'/g, `'"'"'`);
 
 const buildNamespaceEnabledContainerArgs = () => {
 	const configured = process.env.VULSEEK_SCAN_CONTAINER_EXTRA_ARGS?.trim();
@@ -2402,12 +2396,16 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 	if (scanJob.datasetEvaluationTrialId) {
 		const datasetRuntime = await resolveDatasetTrialRuntime(scanJob.scanJobId);
 		if (!datasetRuntime) {
-			throw new Error(`Dataset trial not found for scan job ${scanJob.scanJobId}`);
+			throw new Error(
+				`Dataset trial not found for scan job ${scanJob.scanJobId}`,
+			);
 		}
 		const projectName = `dataset-${datasetRuntime.dataset.datasetId}`;
-		const serviceName = `${datasetRuntime.profile.profileId}-${datasetRuntime.sample.sampleKey}`;
+		const serviceName = `${datasetRuntime.profile.profileId}-${datasetRuntime.sample.id}`;
 		const imageTag = datasetRuntime.checkoutImage;
-		await execAsync(`docker image inspect ${escapeSingleQuotes(imageTag)}`).catch(() => {
+		await execAsync(
+			`docker image inspect ${escapeSingleQuotes(imageTag)}`,
+		).catch(() => {
 			throw new Error(`Dataset checkout image not found: ${imageTag}`);
 		});
 		const configuredHostRoot = resolveConfiguredScanContextHostPath();
@@ -2418,7 +2416,7 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 		}
 		const target = {
 			appName: serviceName,
-			name: datasetRuntime.sample.title || datasetRuntime.sample.sampleKey,
+			name: datasetRuntime.sample.title || datasetRuntime.sample.id,
 			environment: {
 				project: { name: projectName, scanContextVolumeName: "" },
 			},
@@ -2426,12 +2424,15 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 			memoryLimit: null,
 			memoryReservation: null,
 		};
-		const repositoryProfileAgentProfileId = getRuntimeStageSetting(
-			scanJob.scanRuntimeSettings,
-			SCAN_STAGE_IDS.repositoryProfile,
-		).agentProfileId || null;
+		const repositoryProfileAgentProfileId =
+			getRuntimeStageSetting(
+				scanJob.scanRuntimeSettings,
+				SCAN_STAGE_IDS.repositoryProfile,
+			).agentProfileId || null;
 		const scanAgentProfile = repositoryProfileAgentProfileId
-			? await getAgentProfileById(repositoryProfileAgentProfileId).catch(() => null)
+			? await getAgentProfileById(repositoryProfileAgentProfileId).catch(
+					() => null,
+				)
 			: null;
 		return {
 			isApplicationJob: false,
@@ -2771,10 +2772,11 @@ const resolveCandidateTaskRuntimeDir = async (
 const resolveScanJobTargetIdentity = async (scanJob: ScanJob) => {
 	if (scanJob.datasetEvaluationTrialId) {
 		const datasetRuntime = await resolveDatasetTrialRuntime(scanJob.scanJobId);
-		if (!datasetRuntime) throw new Error("Invalid dataset evaluation trial target");
+		if (!datasetRuntime)
+			throw new Error("Invalid dataset evaluation trial target");
 		return {
 			projectName: `dataset-${datasetRuntime.dataset.datasetId}`,
-			profileName: `${datasetRuntime.profile.profileId}-${datasetRuntime.sample.sampleKey}`,
+			profileName: `${datasetRuntime.profile.profileId}-${datasetRuntime.sample.id}`,
 		};
 	}
 	if (scanJob.applicationId) {
@@ -3183,7 +3185,6 @@ const resolveBrowsableFilePath = (input: {
 	return path.join(input.rootPath, normalizedInput);
 };
 
-
 const resolveCandidateBrowsableFilePath = async (input: {
 	scanJobId: string;
 	candidateId: string;
@@ -3516,7 +3517,6 @@ export const readScanTaskFileContent = async (input: {
 	};
 };
 
-
 export const listCandidateDirectory = async (input: {
 	scanJobId: string;
 	candidateId: string;
@@ -3534,8 +3534,12 @@ export const listCandidateDirectory = async (input: {
 				name: root.name,
 				type: "directory" as const,
 				hasChildren: Boolean(
-					(await fs.readdir(root.hostRootPath, { withFileTypes: true }).catch(() => []))
-						.some((entry) =>
+					(
+						await fs
+							.readdir(root.hostRootPath, { withFileTypes: true })
+							.catch(() => [])
+					).some(
+						(entry) =>
 							!shouldHideCandidateFileTreeEntry({
 								entryName: entry.name,
 								containerDirPath: root.containerRootPath,
@@ -3554,7 +3558,10 @@ export const listCandidateDirectory = async (input: {
 	if (!root) {
 		throw new TRPCError({ code: "NOT_FOUND", message: "Directory not found" });
 	}
-	const relativePath = path.posix.relative(root.containerRootPath, requestedPath);
+	const relativePath = path.posix.relative(
+		root.containerRootPath,
+		requestedPath,
+	);
 	const hostDirectory = path.join(
 		root.hostRootPath,
 		relativePath.split("/").join(path.sep),
@@ -3564,7 +3571,9 @@ export const listCandidateDirectory = async (input: {
 	if (!stat?.isDirectory()) {
 		throw new TRPCError({ code: "NOT_FOUND", message: "Directory not found" });
 	}
-	const entries = (await fs.readdir(hostDirectory, { withFileTypes: true })).filter(
+	const entries = (
+		await fs.readdir(hostDirectory, { withFileTypes: true })
+	).filter(
 		(entry) =>
 			!shouldHideCandidateFileTreeEntry({
 				entryName: entry.name,
@@ -3584,7 +3593,13 @@ export const listCandidateDirectory = async (input: {
 				name: entry.name,
 				type: entry.isDirectory() ? ("directory" as const) : ("file" as const),
 				hasChildren: entry.isDirectory()
-					? (await fs.readdir(path.join(hostDirectory, entry.name), { withFileTypes: true }).catch(() => [])).some(
+					? (
+							await fs
+								.readdir(path.join(hostDirectory, entry.name), {
+									withFileTypes: true,
+								})
+								.catch(() => [])
+						).some(
 							(child) =>
 								!shouldHideCandidateFileTreeEntry({
 									entryName: child.name,
@@ -3627,7 +3642,10 @@ export const findScanJobRunningTasks = async (scanJobId: string) =>
 export const findScanJobQueueCounts = async (scanJobId: string) => {
 	const scanJob = await findScanJobByIdRepo(scanJobId);
 	const pipelineDefinitions = resolveScanJobPipelineDefinitions(scanJob);
-	const pipeline = pipelineDefinitions.pipelines[getPipelineIdForScanType(scanJob.scanType as ScanType)];
+	const pipeline =
+		pipelineDefinitions.pipelines[
+			getPipelineIdForScanType(scanJob.scanType as ScanType)
+		];
 	if (!pipeline) throw new Error(`Unknown scan pipeline: ${scanJob.scanType}`);
 	const taskStatusCounts = await listTaskStatusCountsByScanJobIdRepo(scanJobId);
 	return await listQueuePendingCountsByScanJobId(
@@ -3804,7 +3822,7 @@ export const findFullScanStageGraph = async (
 	return {
 		pipelineName: pipeline.name,
 		nodes: await Promise.all(
-		stages.map(async (stage, index) => {
+			stages.map(async (stage, index) => {
 				const agentProfile = await resolveStageAgentProfileFromTarget(
 					target,
 					stage.id,
@@ -4306,24 +4324,25 @@ const attachStageRuntimeConfigs = <TStage extends FullScanPipelineStage>(
 		runtimeConfig: createStageRuntimeConfig(scanJobId, stage.id),
 	}));
 
-const toGenericStageConfig = (stage: ScanPipelineStageConfig) => ({
-	id: stage.id,
-	name: stage.name,
-	role: stage.role,
-	mode: stage.runtimeConfig?.mode || "serial",
-	concurrency: stage.concurrency,
-	maxConcurrency: stage.maxConcurrency ?? undefined,
-	runtime: stage.runtimeConfig || {},
-	inputArtifacts: stage.inputArtifacts,
-	outputArtifacts: stage.outputArtifacts,
-	effects: stage.effects,
-	report: stage.report ?? undefined,
-	disableable: stage.disableable,
-	taskName: stage.taskName || undefined,
-	promptValues: stage.promptValues,
-	containerNameParts: stage.containerNameParts,
-	allowAgentExit: stage.allowAgentExit,
-}) as Parameters<typeof createGenericAgentStageDefinition>[0]["config"];
+const toGenericStageConfig = (stage: ScanPipelineStageConfig) =>
+	({
+		id: stage.id,
+		name: stage.name,
+		role: stage.role,
+		mode: stage.runtimeConfig?.mode || "serial",
+		concurrency: stage.concurrency,
+		maxConcurrency: stage.maxConcurrency ?? undefined,
+		runtime: stage.runtimeConfig || {},
+		inputArtifacts: stage.inputArtifacts,
+		outputArtifacts: stage.outputArtifacts,
+		effects: stage.effects,
+		report: stage.report ?? undefined,
+		disableable: stage.disableable,
+		taskName: stage.taskName || undefined,
+		promptValues: stage.promptValues,
+		containerNameParts: stage.containerNameParts,
+		allowAgentExit: stage.allowAgentExit,
+	}) as Parameters<typeof createGenericAgentStageDefinition>[0]["config"];
 
 const resolveResearchTaskNameInput = async (input: {
 	scanJobId: string;
@@ -4379,14 +4398,18 @@ const buildGenericYamlPipeline = (
 	for (const stageId of pipelineConfig.stageIds) {
 		const stage = definitions.stages.find((item) => item.id === stageId);
 		if (!stage) throw new Error(`Unknown YAML stage: ${stageId}`);
-		const genericStage = createGenericAgentStageDefinition<FullScanPipelineContext>({
+		const genericStage =
+			createGenericAgentStageDefinition<FullScanPipelineContext>({
 				config: toGenericStageConfig(stage),
 				outputSchema: getDefinitionsStageOutputSchema(definitions, stageId),
 				queue: createGenericStageQueueBinding(context, stageId),
-		});
+			});
 		stageRegistry.set(stageId, {
 			...genericStage,
-			runtimeConfig: createStageRuntimeConfig(context.scanJob.scanJobId, stageId),
+			runtimeConfig: createStageRuntimeConfig(
+				context.scanJob.scanJobId,
+				stageId,
+			),
 		});
 	}
 
@@ -4410,7 +4433,11 @@ const buildGenericYamlPipeline = (
 				definitions,
 				edgeConfig.outputSchema,
 			),
-			transformOutput: async ({ stageInput, stageOutput, fromTaskId }: {
+			transformOutput: async ({
+				stageInput,
+				stageOutput,
+				fromTaskId,
+			}: {
 				stageInput: unknown;
 				stageOutput: unknown;
 				fromTaskId: string;
@@ -4462,7 +4489,8 @@ const buildGenericYamlPipeline = (
 				const targetConfig = definitions.stages.find(
 					(stage) => stage.id === edgeConfig.to,
 				);
-				if (!targetConfig) throw new Error(`Missing target stage: ${edgeConfig.to}`);
+				if (!targetConfig)
+					throw new Error(`Missing target stage: ${edgeConfig.to}`);
 				const taskIds: string[] = [];
 				for (const [index, nextInput] of nextInputObjects.entries()) {
 					const input = {
@@ -4502,12 +4530,10 @@ const buildGenericYamlPipeline = (
 						!/:\s*$/.test(renderedTaskName)
 							? renderedTaskName
 							: context.scanJob.scanType === "research" ||
-								  context.scanJob.scanType === "tob-goal"
+									context.scanJob.scanType === "tob-goal"
 								? resolveStageTaskName(edgeConfig.to, taskNameInput)
 								: `${targetConfig.name} ${index + 1}`;
-					const taskId = createTaskIdForDispatchKey(
-						dispatchKeyForItem(index),
-					);
+					const taskId = createTaskIdForDispatchKey(dispatchKeyForItem(index));
 					const toTaskDir = await resolveFullScanTaskRuntimeDir(context, {
 						taskId,
 						stageName: edgeConfig.to,
@@ -4515,23 +4541,29 @@ const buildGenericYamlPipeline = (
 					});
 					for (const artifact of edgeConfig.artifacts) {
 						const fromValue = await renderPipelineTemplate(artifact.from, {
-								ctx,
-								stageInput: input,
-								stageOutput,
-								readJsonFile: async (containerPath) =>
-									await readTaskJsonArtifact({
-										taskDir: fromTaskDir,
-										containerPath,
-									}),
-								allowedRoots: [fromTaskDir],
-							});
+							ctx,
+							stageInput: input,
+							stageOutput,
+							readJsonFile: async (containerPath) =>
+								await readTaskJsonArtifact({
+									taskDir: fromTaskDir,
+									containerPath,
+								}),
+							allowedRoots: [fromTaskDir],
+						});
 						if (
-							(fromValue === null || fromValue === undefined || fromValue === "") &&
+							(fromValue === null ||
+								fromValue === undefined ||
+								fromValue === "") &&
 							!artifact.required
 						) {
 							continue;
 						}
-						if (fromValue === null || fromValue === undefined || fromValue === "") {
+						if (
+							fromValue === null ||
+							fromValue === undefined ||
+							fromValue === ""
+						) {
 							throw new Error(
 								`Required edge artifact ${artifact.from} resolved to an empty value`,
 							);
@@ -4567,8 +4599,8 @@ const buildGenericYamlPipeline = (
 								? input.vulnerabilityCandidateId
 								: null,
 						input,
-						});
-						taskIds.push(task.taskId);
+					});
+					taskIds.push(task.taskId);
 				}
 				return taskIds;
 			},
@@ -4792,10 +4824,7 @@ const runFullScan = async (
 		}),
 	);
 	const context = await buildFullScanPipelineContext(scanJobId);
-	const pipeline = buildYamlPipeline(
-		context,
-		getPipelineIdForScanType("full"),
-	);
+	const pipeline = buildYamlPipeline(context, getPipelineIdForScanType("full"));
 
 	try {
 		await assertScanJobNotCancelled(scanJobId);
@@ -4920,7 +4949,8 @@ const runResearchScan = async (
 		awaitCompletion?: boolean;
 	},
 ) => {
-	const enqueueInitialResearchTask = options?.enqueueInitialResearchTask ?? true;
+	const enqueueInitialResearchTask =
+		options?.enqueueInitialResearchTask ?? true;
 	const awaitCompletion = options?.awaitCompletion ?? true;
 	await assertScanJobNotCancelled(scanJobId);
 	const context = await buildFullScanPipelineContext(scanJobId);
@@ -4982,7 +5012,10 @@ const startScanPipelineRuntimeForExistingQueues = async (scanJobId: string) => {
 		return;
 	}
 	if (scanJob.scanType === "research") {
-		await runResearchScan(scanJobId, { enqueueInitialResearchTask: false, awaitCompletion: false });
+		await runResearchScan(scanJobId, {
+			enqueueInitialResearchTask: false,
+			awaitCompletion: false,
+		});
 		return;
 	}
 	if (scanJob.scanType === "tob-goal") {
@@ -5166,7 +5199,7 @@ const removeQueuedTaskForRetry = async (scanJobId: string, task: Task) => {
 				scanJobId,
 				task.stageGroupInstanceId,
 				task.stageName,
-		  )
+			)
 		: getScanStageQueue(scanJobId, task.stageName);
 	await removeKnownQueueJobsForTask(taskQueue, task).catch(() => {});
 
@@ -5426,7 +5459,10 @@ export const cancelScanJob = async (scanJobId: string) => {
 	}
 	const tasksToCancel = [...tasksToCancelById.values()];
 	const pipelineDefinitions = resolveScanJobPipelineDefinitions(scanJob);
-	const pipeline = pipelineDefinitions.pipelines[getPipelineIdForScanType(scanJob.scanType as ScanType)];
+	const pipeline =
+		pipelineDefinitions.pipelines[
+			getPipelineIdForScanType(scanJob.scanType as ScanType)
+		];
 	if (!pipeline) {
 		throw new Error(`Unknown scan pipeline for type ${scanJob.scanType}`);
 	}
@@ -5472,9 +5508,7 @@ export const cancelScanJob = async (scanJobId: string) => {
 					scanJobId,
 					group.groupInstanceId,
 					pipeline.stageIds,
-				).catch(
-					() => {},
-				),
+				).catch(() => {}),
 			),
 	]);
 	// The scan container may disappear before cancellation reaches this point.
@@ -5500,7 +5534,9 @@ export const cancelScanJob = async (scanJobId: string) => {
 			[...containerNames].map((name) => stopScanContainer(name)),
 		)
 	).filter(Boolean).length;
-	await cleanupScanJobCredentialFiles(scanJob, scanContainerImage).catch(() => false);
+	await cleanupScanJobCredentialFiles(scanJob, scanContainerImage).catch(
+		() => false,
+	);
 
 	await Promise.all([
 		...tasksToCancel.map((task) =>
@@ -5701,7 +5737,8 @@ export const recoverPendingFullScanQueues = async (input?: {
 					JSON.stringify({
 						event: "finalization.recovery_failed",
 						scanJobId: job.scanJobId,
-						errorMessage: error instanceof Error ? error.message : String(error),
+						errorMessage:
+							error instanceof Error ? error.message : String(error),
 					}),
 				);
 			});
@@ -5935,8 +5972,7 @@ export const startCandidateAnalysis = async (input: {
 	) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
-			message:
-				"Candidate analysis is already queued or running",
+			message: "Candidate analysis is already queued or running",
 		});
 	}
 

@@ -1,7 +1,6 @@
 import { format } from "date-fns";
 import {
 	AlertCircle,
-	ArrowLeft,
 	Ban,
 	ChevronRight,
 	FileIcon,
@@ -19,19 +18,21 @@ import { toast } from "sonner";
 import { LiveTaskActivityButton } from "@/components/dashboard/scanning/live-task-activity";
 import { ScanMonitoring } from "@/components/dashboard/scanning/scan-monitoring";
 import { TaskSessionStream } from "@/components/dashboard/scanning/task-session-stream";
+import {
+	DashboardPage,
+	DashboardPageBody,
+	DashboardPageHeader,
+	DashboardPageTabContent,
+	DashboardPageTabs,
+} from "@/components/dashboard/ui-system";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { CopyValueButton } from "@/components/shared/copy-value-button";
-import { DashboardPanelShell } from "@/components/shared/dashboard-panel-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
-} from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { cachedInputPercent } from "@/lib/scan/token-usage";
+import type { ScanNavigationContext } from "@/lib/ui-system/route-builders";
+import { parseTabParam } from "@/lib/ui-system/tab-query";
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
 import {
@@ -42,8 +43,14 @@ import {
 } from "./scan-i18n";
 
 interface Props {
-	serviceType: "application" | "compose";
-	routeSegment: "profiles" | "services";
+	serviceType?: "application" | "compose";
+	routeSegment?: "profiles" | "services";
+	/**
+	 * Shared scan navigation context. Dataset task pages pass this instead of
+	 * the project route params; breadcrumbs, back and sibling-task links then
+	 * come from the context and service-specific logic is skipped.
+	 */
+	navigation?: ScanNavigationContext;
 }
 
 const ACTIVE_TASK_STATUSES = new Set([
@@ -57,6 +64,7 @@ const RERUNNABLE_TASK_STATUSES = new Set(["completed", "failed", "exited"]);
 const ROOT_DIRECTORY_KEY = "__root__";
 
 type ScanTaskTab = "details" | "session" | "monitoring" | "files";
+const TASK_TAB_VALUES = ["details", "session", "monitoring", "files"] as const;
 
 type DirectoryListItem = {
 	id: string;
@@ -458,7 +466,11 @@ const LazyFileTree = ({
 	);
 };
 
-export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
+export const ShowScanTaskDetail = ({
+	serviceType,
+	routeSegment,
+	navigation,
+}: Props) => {
 	const { t } = useTranslation("scan");
 	const router = useRouter();
 	const utils = api.useUtils();
@@ -479,13 +491,22 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 	const taskId =
 		typeof router.query.taskId === "string" ? router.query.taskId : "";
 
-	const jobTasksHref = `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}?tab=tasks`;
+	const jobTasksHref = navigation
+		? navigation.jobsListHref
+		: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}?tab=tasks`;
 
-	const serviceQuery =
+	const applicationServiceQuery = api.application.one.useQuery(
+		{ applicationId: serviceId },
+		{ enabled: serviceType === "application" && !!serviceId },
+	);
+	const composeServiceQuery = api.compose.one.useQuery(
+		{ composeId: serviceId },
+		{ enabled: serviceType === "compose" && !!serviceId },
+	);
+	const serviceData =
 		serviceType === "application"
-			? api.application.one.useQuery({ applicationId: serviceId })
-			: api.compose.one.useQuery({ composeId: serviceId });
-	const serviceData = serviceQuery.data;
+			? applicationServiceQuery.data
+			: composeServiceQuery.data;
 
 	const { data, isLoading, isError, error } = api.scan.task.useQuery(
 		{ taskId, scanJobId },
@@ -500,6 +521,15 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 	const rerunTaskMutation = api.scan.rerunTask.useMutation();
 	const cancelTaskMutation = api.scan.cancelTask.useMutation();
 	const [activeTab, setActiveTab] = useState<ScanTaskTab>("details");
+	const requestedTab = parseTabParam(
+		router.query,
+		TASK_TAB_VALUES,
+		"details",
+	) as ScanTaskTab;
+
+	useEffect(() => {
+		if (requestedTab !== activeTab) setActiveTab(requestedTab);
+	}, [activeTab, requestedTab]);
 	const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
 	const [expandedDirectories, setExpandedDirectories] = useState<
 		Record<string, boolean>
@@ -528,7 +558,9 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 	const canCancelTask = task ? ACTIVE_TASK_STATUSES.has(task.status) : false;
 	const buildTaskHref = (targetTaskId?: string | null) =>
 		targetTaskId
-			? `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}/tasks/${encodeURIComponent(targetTaskId)}`
+			? navigation
+				? navigation.taskHref(scanJobId, targetTaskId)
+				: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}/tasks/${encodeURIComponent(targetTaskId)}`
 			: undefined;
 	const handleRerunTask = async () => {
 		if (!task) {
@@ -567,11 +599,15 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 			]);
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : scanT(t, "scan.task.cancelError", "Failed to cancel task"),
+				error instanceof Error
+					? error.message
+					: scanT(t, "scan.task.cancelError", "Failed to cancel task"),
 			);
 		}
 	};
 
+	// Reset file navigation when either route identifier changes.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: route changes reset local file state.
 	useEffect(() => {
 		setSelectedFilePath(null);
 		setExpandedDirectories({});
@@ -664,36 +700,56 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 	return (
 		<div className="pb-10">
 			<BreadcrumbSidebar
-				list={[
-					{
-						name: scanT(t, "scan.breadcrumb.projects", "Projects"),
-						href: "/dashboard/projects",
-					},
-					{ name: serviceData?.environment.project.name || "" },
-					{
-						name: serviceData?.environment.name || "",
-						href: `/dashboard/project/${projectId}/environment/${environmentId}`,
-					},
-					{
-						name: serviceData?.name || "",
-						href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}?tab=deployments`,
-					},
-					{
-						name: scanT(t, "scan.jobs.title", "Jobs"),
-						href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}?tab=deployments`,
-					},
-					{
-						name: scanT(t, "scan.job.shortTitle", "Job {{id}}", {
-							id: scanJobId.slice(0, 6),
-						}),
-						href: jobTasksHref,
-					},
-					{
-						name: scanT(t, "scan.task.title", "Task {{id}}", {
-							id: taskId.slice(0, 6),
-						}),
-					},
-				]}
+				list={
+					navigation
+						? [
+								...navigation.breadcrumbs.map((item) => ({
+									name: item.label,
+									href: item.href,
+								})),
+								{
+									name: scanT(t, "scan.job.shortTitle", "Job {{id}}", {
+										id: scanJobId.slice(0, 6),
+									}),
+									href: jobTasksHref,
+								},
+								{
+									name: scanT(t, "scan.task.title", "Task {{id}}", {
+										id: taskId.slice(0, 6),
+									}),
+								},
+							]
+						: [
+								{
+									name: scanT(t, "scan.breadcrumb.projects", "Projects"),
+									href: "/dashboard/projects",
+								},
+								{ name: serviceData?.environment.project.name || "" },
+								{
+									name: serviceData?.environment.name || "",
+									href: `/dashboard/project/${projectId}/environment/${environmentId}`,
+								},
+								{
+									name: serviceData?.name || "",
+									href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}?tab=deployments`,
+								},
+								{
+									name: scanT(t, "scan.jobs.title", "Jobs"),
+									href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}?tab=deployments`,
+								},
+								{
+									name: scanT(t, "scan.job.shortTitle", "Job {{id}}", {
+										id: scanJobId.slice(0, 6),
+									}),
+									href: jobTasksHref,
+								},
+								{
+									name: scanT(t, "scan.task.title", "Task {{id}}", {
+										id: taskId.slice(0, 6),
+									}),
+								},
+							]
+				}
 			/>
 			<Head>
 				<title>
@@ -704,22 +760,22 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 				</title>
 			</Head>
 
-			<DashboardPanelShell>
-				<CardHeader>
-					<div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-						<div className="min-w-0">
-							<CardTitle className="text-xl">{title}</CardTitle>
-							<CardDescription className="mt-2 flex items-center gap-2 break-all">
-								<span>{taskId}</span>
-								{taskId ? (
-									<CopyValueButton
-										value={taskId}
-										label={scanT(t, "scan.field.taskId", "Task ID")}
-										className="size-7 shrink-0"
-									/>
-								) : null}
-							</CardDescription>
+			<DashboardPage>
+				<DashboardPageHeader
+					title={title}
+					description={
+						<div className="flex min-w-0 items-center gap-2 break-all">
+							<span>{taskId}</span>
+							{taskId ? (
+								<CopyValueButton
+									value={taskId}
+									label={scanT(t, "scan.field.taskId", "Task ID")}
+									className="size-7 shrink-0"
+								/>
+							) : null}
 						</div>
+					}
+					actions={
 						<div className="flex shrink-0 flex-wrap items-center gap-2">
 							<LiveTaskActivityButton
 								taskId={taskId}
@@ -757,380 +813,387 @@ export const ShowScanTaskDetail = ({ serviceType, routeSegment }: Props) => {
 								<RefreshCw className="mr-2 size-4" />
 								{scanT(t, "scan.task.rerun", "重新运行")}
 							</Button>
-							<Button asChild variant="outline">
-								<Link href={jobTasksHref}>
-									<ArrowLeft className="mr-2 size-4" />
-									{scanT(t, "scan.task.backToTasks", "返回阶段任务")}
-								</Link>
-							</Button>
 						</div>
-					</div>
-				</CardHeader>
-				<CardContent>
-					{isLoading ? (
-						<div className="flex items-center gap-2 text-muted-foreground">
-							<Loader2 className="size-4 animate-spin" />
-							{scanT(t, "scan.task.loading", "Loading task...")}
-						</div>
-					) : isError ? (
-						<div className="flex items-center gap-2 text-muted-foreground">
-							<AlertCircle className="size-4" />
-							{error?.message ||
-								scanT(t, "scan.task.notFound", "Task not found")}
-						</div>
-					) : !task ? (
-						<div className="flex items-center gap-2 text-muted-foreground">
-							<AlertCircle className="size-4" />
-							{scanT(t, "scan.task.notFound", "Task not found")}
-						</div>
-					) : (
-						<Tabs
-							value={activeTab}
-							onValueChange={(value) => setActiveTab(value as ScanTaskTab)}
-							className="w-full"
-						>
-							<TabsList className="flex gap-4 justify-start">
-								<TabsTrigger value="details">
-									{scanT(t, "scan.task.tabs.details", "Details")}
-								</TabsTrigger>
-								<TabsTrigger value="session">
-									{scanT(t, "scan.task.tabs.session", "Session")}
-								</TabsTrigger>
-								<TabsTrigger value="monitoring">
-									{scanT(t, "scan.monitoring.title", "Monitoring")}
-								</TabsTrigger>
-								<TabsTrigger value="files">
-									{scanT(t, "scan.files.title", "Files")}
-								</TabsTrigger>
-							</TabsList>
+					}
+				/>
+				<DashboardPageTabs
+					fallback="details"
+					tabs={[
+						{
+							value: "details",
+							label: scanT(t, "scan.task.tabs.details", "Details"),
+						},
+						{
+							value: "session",
+							label: scanT(t, "scan.task.tabs.session", "Session"),
+						},
+						{
+							value: "monitoring",
+							label: scanT(t, "scan.monitoring.title", "Monitoring"),
+						},
+						{ value: "files", label: scanT(t, "scan.files.title", "Files") },
+					]}
+				/>
+				<DashboardPageBody>
+					<DashboardPageTabContent>
+						{isLoading ? (
+							<div className="flex items-center gap-2 text-muted-foreground">
+								<Loader2 className="size-4 animate-spin" />
+								{scanT(t, "scan.task.loading", "Loading task...")}
+							</div>
+						) : isError ? (
+							<div className="flex items-center gap-2 text-muted-foreground">
+								<AlertCircle className="size-4" />
+								{error?.message ||
+									scanT(t, "scan.task.notFound", "Task not found")}
+							</div>
+						) : !task ? (
+							<div className="flex items-center gap-2 text-muted-foreground">
+								<AlertCircle className="size-4" />
+								{scanT(t, "scan.task.notFound", "Task not found")}
+							</div>
+						) : (
+							<Tabs
+								value={activeTab}
+								onValueChange={(value) => setActiveTab(value as ScanTaskTab)}
+								className="w-full"
+							>
+								<TabsContent value="details" className="mt-0 pt-0">
+									<div className="grid gap-6">
+										<div className="flex flex-wrap items-center gap-2">
+											<Badge
+												variant="outline"
+												className={getTaskStatusBadgeClassName(task.status)}
+											>
+												{getTaskStatusLabel(t, task.status)}
+											</Badge>
+											<Badge variant="outline">
+												{getTaskStageLabel(t, task.stageName)}
+											</Badge>
+										</div>
 
-							<TabsContent value="details" className="pt-4">
-								<div className="grid gap-6">
-									<div className="flex flex-wrap items-center gap-2">
-										<Badge
-											variant="outline"
-											className={getTaskStatusBadgeClassName(task.status)}
+										<DetailSection
+											title={scanT(t, "scan.section.general", "General")}
 										>
-											{getTaskStatusLabel(t, task.status)}
-										</Badge>
-										<Badge variant="outline">
-											{getTaskStageLabel(t, task.stageName)}
-										</Badge>
+											<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+												<DetailField
+													label={scanT(t, "scan.field.taskId", "Task ID")}
+													value={task.taskId}
+												/>
+												<DetailField
+													label={scanT(
+														t,
+														"scan.field.scanJobId",
+														"Scan Job ID",
+													)}
+													value={task.scanJobId}
+													href={jobTasksHref}
+												/>
+												<DetailField
+													label={scanT(t, "scan.field.name", "Name")}
+													value={task.name}
+												/>
+												<DetailField
+													label={scanT(t, "scan.field.stage", "Stage")}
+													value={getTaskStageLabel(t, task.stageName)}
+												/>
+												<DetailField
+													label={scanT(t, "scan.field.status", "Status")}
+													value={getTaskStatusLabel(t, task.status)}
+													badgeClassName={getTaskStatusBadgeClassName(
+														task.status,
+													)}
+												/>
+												<DetailField
+													label={scanT(t, "scan.field.priority", "Priority")}
+													value={task.priority}
+												/>
+												<DetailField
+													label={scanT(t, "scan.field.attempt", "Attempt")}
+													value={task.attempt}
+												/>
+												<DetailField
+													label={scanT(
+														t,
+														"scan.field.runtimeMode",
+														"Runtime Mode",
+													)}
+													value={task.runtimeMode}
+												/>
+												<DetailField
+													label={scanT(
+														t,
+														"scan.field.parentTaskId",
+														"Parent Task ID",
+													)}
+													value={task.parentTaskId}
+													href={buildTaskHref(task.parentTaskId)}
+												/>
+												<DetailField
+													label={scanT(
+														t,
+														"scan.field.forkedFromTaskId",
+														"Forked From Task ID",
+													)}
+													value={task.forkedFromTaskId}
+													href={buildTaskHref(task.forkedFromTaskId)}
+												/>
+												<DetailField
+													label={scanT(
+														t,
+														"scan.field.forkedFromThreadId",
+														"Forked From Thread ID",
+													)}
+													value={task.forkedFromThreadId}
+												/>
+												<DetailField
+													label={scanT(
+														t,
+														"scan.field.stageGroupInstanceId",
+														"Stage Group Instance ID",
+													)}
+													value={task.stageGroupInstanceId}
+												/>
+												<DetailField
+													label={scanT(t, "scan.field.threadId", "Thread ID")}
+													value={task.threadId}
+												/>
+												<DetailField
+													label={scanT(
+														t,
+														"scan.field.containerName",
+														"Container Name",
+													)}
+													value={task.containerName}
+												/>
+												<DetailField
+													label={scanT(
+														t,
+														"scan.field.exitReason",
+														"Exit Reason",
+													)}
+													value={task.exitReason}
+												/>
+												<DetailField
+													label={scanT(t, "scan.field.exitNote", "Exit Note")}
+													value={task.exitNote}
+												/>
+												<DetailField
+													label={scanT(t, "scan.field.created", "Created")}
+													value={task.createdAt}
+													date={task.createdAt}
+												/>
+												<DetailField
+													label={scanT(t, "scan.field.updated", "Updated")}
+													value={task.updatedAt}
+													date={task.updatedAt}
+												/>
+												<DetailField
+													label={scanT(t, "scan.field.started", "Started")}
+													value={task.startedAt}
+													date={task.startedAt}
+												/>
+												<DetailField
+													label={scanT(t, "scan.field.completed", "Completed")}
+													value={task.completedAt}
+													date={task.completedAt}
+												/>
+											</div>
+										</DetailSection>
+
+										<DetailSection
+											title={scanT(t, "scan.section.usage", "Usage")}
+										>
+											<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+												<DetailField
+													label={scanT(
+														t,
+														"scan.field.inputCacheRead",
+														"Input Tokens / Cache Read",
+													)}
+													value={formatTokenUsageWithCache(
+														t,
+														task.inputTokens,
+														task.cachedReadTokens,
+													)}
+													copyLabel={scanT(
+														t,
+														"scan.field.inputCacheRead",
+														"Input Tokens / Cache Read",
+													)}
+												/>
+												<DetailField
+													label={scanT(
+														t,
+														"scan.field.outputTokens",
+														"Output Tokens",
+													)}
+													value={formatTokenUsage(t, task.outputTokens)}
+													copyLabel={scanT(
+														t,
+														"scan.field.outputTokens",
+														"Output Tokens",
+													)}
+												/>
+												<DetailField
+													label={scanT(
+														t,
+														"scan.field.totalTokens",
+														"Total Tokens",
+													)}
+													value={formatTokenUsage(t, task.totalTokens)}
+													copyLabel={scanT(
+														t,
+														"scan.field.totalTokens",
+														"Total Tokens",
+													)}
+												/>
+												<DetailField
+													label={scanT(
+														t,
+														"scan.field.thoughtTokens",
+														"Thought Tokens",
+													)}
+													value={formatTokenUsage(t, task.thoughtTokens)}
+													copyLabel={scanT(
+														t,
+														"scan.field.thoughtTokens",
+														"Thought Tokens",
+													)}
+												/>
+											</div>
+										</DetailSection>
+
+										{task.errorMessage ? (
+											<div className="rounded-lg border p-3">
+												<div className="text-sm text-muted-foreground">
+													{scanT(t, "scan.field.errorMessage", "Error Message")}
+												</div>
+												<div className="mt-1 whitespace-pre-wrap break-words text-sm">
+													{task.errorMessage}
+												</div>
+											</div>
+										) : null}
+
+										<DetailSection
+											title={scanT(t, "scan.section.output", "Output")}
+										>
+											<div className="grid gap-4 xl:grid-cols-2">
+												<JsonBlock
+													label={scanT(
+														t,
+														"scan.field.agentProfile",
+														"Agent Profile",
+													)}
+													value={task.agentProfile}
+												/>
+												<JsonBlock
+													label={scanT(t, "scan.field.input", "Input")}
+													value={task.input}
+												/>
+												<JsonBlock
+													label={scanT(t, "scan.field.output", "Output")}
+													value={task.output}
+												/>
+											</div>
+										</DetailSection>
 									</div>
+								</TabsContent>
 
-									<DetailSection
-										title={scanT(t, "scan.section.general", "General")}
-									>
-										<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-											<DetailField
-												label={scanT(t, "scan.field.taskId", "Task ID")}
-												value={task.taskId}
-											/>
-											<DetailField
-												label={scanT(t, "scan.field.scanJobId", "Scan Job ID")}
-												value={task.scanJobId}
-												href={jobTasksHref}
-											/>
-											<DetailField
-												label={scanT(t, "scan.field.name", "Name")}
-												value={task.name}
-											/>
-											<DetailField
-												label={scanT(t, "scan.field.stage", "Stage")}
-												value={getTaskStageLabel(t, task.stageName)}
-											/>
-											<DetailField
-												label={scanT(t, "scan.field.status", "Status")}
-												value={getTaskStatusLabel(t, task.status)}
-												badgeClassName={getTaskStatusBadgeClassName(
-													task.status,
-												)}
-											/>
-											<DetailField
-												label={scanT(t, "scan.field.priority", "Priority")}
-												value={task.priority}
-											/>
-											<DetailField
-												label={scanT(t, "scan.field.attempt", "Attempt")}
-												value={task.attempt}
-											/>
-											<DetailField
-												label={scanT(
-													t,
-													"scan.field.runtimeMode",
-													"Runtime Mode",
-												)}
-												value={task.runtimeMode}
-											/>
-											<DetailField
-												label={scanT(
-													t,
-													"scan.field.parentTaskId",
-													"Parent Task ID",
-												)}
-												value={task.parentTaskId}
-												href={buildTaskHref(task.parentTaskId)}
-											/>
-											<DetailField
-												label={scanT(
-													t,
-													"scan.field.forkedFromTaskId",
-													"Forked From Task ID",
-												)}
-												value={task.forkedFromTaskId}
-												href={buildTaskHref(task.forkedFromTaskId)}
-											/>
-											<DetailField
-												label={scanT(
-													t,
-													"scan.field.forkedFromThreadId",
-													"Forked From Thread ID",
-												)}
-												value={task.forkedFromThreadId}
-											/>
-											<DetailField
-												label={scanT(
-													t,
-													"scan.field.stageGroupInstanceId",
-													"Stage Group Instance ID",
-												)}
-												value={task.stageGroupInstanceId}
-											/>
-											<DetailField
-												label={scanT(t, "scan.field.threadId", "Thread ID")}
-												value={task.threadId}
-											/>
-											<DetailField
-												label={scanT(
-													t,
-													"scan.field.containerName",
-													"Container Name",
-												)}
-												value={task.containerName}
-											/>
-											<DetailField
-												label={scanT(t, "scan.field.exitReason", "Exit Reason")}
-												value={task.exitReason}
-											/>
-											<DetailField
-												label={scanT(t, "scan.field.exitNote", "Exit Note")}
-												value={task.exitNote}
-											/>
-											<DetailField
-												label={scanT(t, "scan.field.created", "Created")}
-												value={task.createdAt}
-												date={task.createdAt}
-											/>
-											<DetailField
-												label={scanT(t, "scan.field.updated", "Updated")}
-												value={task.updatedAt}
-												date={task.updatedAt}
-											/>
-											<DetailField
-												label={scanT(t, "scan.field.started", "Started")}
-												value={task.startedAt}
-												date={task.startedAt}
-											/>
-											<DetailField
-												label={scanT(t, "scan.field.completed", "Completed")}
-												value={task.completedAt}
-												date={task.completedAt}
-											/>
-										</div>
-									</DetailSection>
+								<TabsContent value="session" className="mt-0 pt-0">
+									<TaskSessionStream key={task.taskId} taskId={task.taskId} />
+								</TabsContent>
 
-									<DetailSection
-										title={scanT(t, "scan.section.usage", "Usage")}
-									>
-										<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-											<DetailField
-												label={scanT(
-													t,
-													"scan.field.inputCacheRead",
-													"Input Tokens / Cache Read",
-												)}
-												value={formatTokenUsageWithCache(
-													t,
-													task.inputTokens,
-													task.cachedReadTokens,
-												)}
-												copyLabel={scanT(
-													t,
-													"scan.field.inputCacheRead",
-													"Input Tokens / Cache Read",
-												)}
-											/>
-											<DetailField
-												label={scanT(
-													t,
-													"scan.field.outputTokens",
-													"Output Tokens",
-												)}
-												value={formatTokenUsage(t, task.outputTokens)}
-												copyLabel={scanT(
-													t,
-													"scan.field.outputTokens",
-													"Output Tokens",
-												)}
-											/>
-											<DetailField
-												label={scanT(
-													t,
-													"scan.field.totalTokens",
-													"Total Tokens",
-												)}
-												value={formatTokenUsage(t, task.totalTokens)}
-												copyLabel={scanT(
-													t,
-													"scan.field.totalTokens",
-													"Total Tokens",
-												)}
-											/>
-											<DetailField
-												label={scanT(
-													t,
-													"scan.field.thoughtTokens",
-													"Thought Tokens",
-												)}
-												value={formatTokenUsage(t, task.thoughtTokens)}
-												copyLabel={scanT(
-													t,
-													"scan.field.thoughtTokens",
-													"Thought Tokens",
-												)}
-											/>
-										</div>
-									</DetailSection>
+								<TabsContent value="monitoring" className="mt-0 pt-0">
+									<ScanMonitoring
+										mode="task"
+										scanJobId={scanJobId}
+										taskId={task.taskId}
+									/>
+								</TabsContent>
 
-									{task.errorMessage ? (
-										<div className="rounded-lg border p-3">
+								<TabsContent value="files" className="mt-0 pt-0">
+									<div className="rounded-lg border">
+										<div className="border-b px-4 py-3">
+											<div className="font-medium">
+												{scanT(t, "scan.files.title", "Files")}
+											</div>
 											<div className="text-sm text-muted-foreground">
-												{scanT(t, "scan.field.errorMessage", "Error Message")}
-											</div>
-											<div className="mt-1 whitespace-pre-wrap break-words text-sm">
-												{task.errorMessage}
-											</div>
-										</div>
-									) : null}
-
-									<DetailSection
-										title={scanT(t, "scan.section.output", "Output")}
-									>
-										<div className="grid gap-4 xl:grid-cols-2">
-											<JsonBlock
-												label={scanT(
+												{scanT(
 													t,
-													"scan.field.agentProfile",
-													"Agent Profile",
+													"scan.files.taskDescription",
+													"Browse this task runtime directory.",
 												)}
-												value={task.agentProfile}
-											/>
-											<JsonBlock
-												label={scanT(t, "scan.field.input", "Input")}
-												value={task.input}
-											/>
-											<JsonBlock
-												label={scanT(t, "scan.field.output", "Output")}
-												value={task.output}
-											/>
+											</div>
 										</div>
-									</DetailSection>
-								</div>
-							</TabsContent>
+										<div className="grid min-h-[65vh] grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]">
+											<div className="border-b lg:border-b-0 lg:border-r">
+												<LazyFileTree
+													rootItems={
+														directoryCache[ROOT_DIRECTORY_KEY]?.items || []
+													}
+													rootStatus={
+														directoryCache[ROOT_DIRECTORY_KEY]?.status ||
+														(rootDirectoryQuery.isLoading ? "loading" : "idle")
+													}
+													expandedDirectories={expandedDirectories}
+													selectedFilePath={selectedFilePath}
+													directoryCache={directoryCache}
+													onToggleDirectory={handleToggleDirectory}
+													onSelectFile={setSelectedFilePath}
+												/>
+											</div>
 
-							<TabsContent value="session" className="pt-4">
-								<TaskSessionStream key={task.taskId} taskId={task.taskId} />
-							</TabsContent>
-
-							<TabsContent value="monitoring" className="pt-4">
-								<ScanMonitoring
-									mode="task"
-									scanJobId={scanJobId}
-									taskId={task.taskId}
-								/>
-							</TabsContent>
-
-							<TabsContent value="files" className="pt-4">
-								<div className="rounded-lg border">
-									<div className="border-b px-4 py-3">
-										<div className="font-medium">
-											{scanT(t, "scan.files.title", "Files")}
-										</div>
-										<div className="text-sm text-muted-foreground">
-											{scanT(
-												t,
-												"scan.files.taskDescription",
-												"Browse this task runtime directory.",
-											)}
-										</div>
-									</div>
-									<div className="grid min-h-[65vh] grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]">
-										<div className="border-b lg:border-b-0 lg:border-r">
-											<LazyFileTree
-												rootItems={
-													directoryCache[ROOT_DIRECTORY_KEY]?.items || []
-												}
-												rootStatus={
-													directoryCache[ROOT_DIRECTORY_KEY]?.status ||
-													(rootDirectoryQuery.isLoading ? "loading" : "idle")
-												}
-												expandedDirectories={expandedDirectories}
-												selectedFilePath={selectedFilePath}
-												directoryCache={directoryCache}
-												onToggleDirectory={handleToggleDirectory}
-												onSelectFile={setSelectedFilePath}
-											/>
-										</div>
-
-										<div className="min-w-0">
-											<div className="border-b px-4 py-3">
-												<div className="flex items-center gap-2 text-sm text-muted-foreground">
-													<FileIcon className="size-4" />
-													<span className="truncate">
-														{selectedFile?.relativePath ||
-															selectedFilePath ||
-															scanT(
+											<div className="min-w-0">
+												<div className="border-b px-4 py-3">
+													<div className="flex items-center gap-2 text-sm text-muted-foreground">
+														<FileIcon className="size-4" />
+														<span className="truncate">
+															{selectedFile?.relativePath ||
+																selectedFilePath ||
+																scanT(
+																	t,
+																	"scan.files.noFileSelected",
+																	"No file selected",
+																)}
+														</span>
+													</div>
+												</div>
+												<div className="max-h-[calc(65vh-49px)] overflow-auto px-4 py-3">
+													{!selectedFilePath ? (
+														<div className="flex min-h-[280px] flex-col items-center justify-center gap-2 text-muted-foreground">
+															<FileIcon className="size-6" />
+															{scanT(
 																t,
 																"scan.files.noFileSelected",
 																"No file selected",
 															)}
-													</span>
+														</div>
+													) : isLoadingSelectedFile ? (
+														<div className="flex min-h-[280px] items-center justify-center gap-2 text-muted-foreground">
+															<Loader2 className="size-4 animate-spin" />
+															{scanT(
+																t,
+																"scan.files.loadingFile",
+																"Loading file...",
+															)}
+														</div>
+													) : (
+														<pre className="whitespace-pre-wrap break-words font-mono text-sm">
+															{selectedFile?.content ||
+																scanT(t, "scan.files.emptyFile", "(empty)")}
+														</pre>
+													)}
 												</div>
-											</div>
-											<div className="max-h-[calc(65vh-49px)] overflow-auto px-4 py-3">
-												{!selectedFilePath ? (
-													<div className="flex min-h-[280px] flex-col items-center justify-center gap-2 text-muted-foreground">
-														<FileIcon className="size-6" />
-														{scanT(
-															t,
-															"scan.files.noFileSelected",
-															"No file selected",
-														)}
-													</div>
-												) : isLoadingSelectedFile ? (
-													<div className="flex min-h-[280px] items-center justify-center gap-2 text-muted-foreground">
-														<Loader2 className="size-4 animate-spin" />
-														{scanT(
-															t,
-															"scan.files.loadingFile",
-															"Loading file...",
-														)}
-													</div>
-												) : (
-													<pre className="whitespace-pre-wrap break-words font-mono text-sm">
-														{selectedFile?.content ||
-															scanT(t, "scan.files.emptyFile", "(empty)")}
-													</pre>
-												)}
 											</div>
 										</div>
 									</div>
-								</div>
-							</TabsContent>
-						</Tabs>
-					)}
-				</CardContent>
-			</DashboardPanelShell>
+								</TabsContent>
+							</Tabs>
+						)}
+					</DashboardPageTabContent>
+				</DashboardPageBody>
+			</DashboardPage>
 		</div>
 	);
 };

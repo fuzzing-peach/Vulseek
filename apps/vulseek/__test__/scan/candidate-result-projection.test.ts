@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
 import {
 	buildCandidateProjectionPatch,
 	compareProjectionResultVersions,
 	getCandidateResultRank,
 } from "@vulseek/server/services/scan/persistence/candidate-result-projection";
+import { describe, expect, it } from "vitest";
 
 describe("candidate result projection", () => {
 	it("assigns stable ranks for analysis and verification outcomes", () => {
@@ -40,11 +40,11 @@ describe("candidate result projection", () => {
 				resultAt: "2026-07-13T10:00:00.000Z",
 			}),
 		).toEqual({
-				verificationTaskId: "task-1",
-				verificationOutput: { id: "result-1", result: "likely" },
-				verificationResult: "likely",
-				verificationRank: 3,
-				verificationResultAt: "2026-07-13T10:00:00.000Z",
+			verificationTaskId: "task-1",
+			verificationOutput: { id: "result-1", result: "likely" },
+			verificationResult: "likely",
+			verificationRank: 3,
+			verificationResultAt: "2026-07-13T10:00:00.000Z",
 		});
 	});
 

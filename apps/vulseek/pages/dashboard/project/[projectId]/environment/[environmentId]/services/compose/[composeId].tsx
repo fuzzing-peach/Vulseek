@@ -1,1 +1,4 @@
-export { default, getServerSideProps } from "../../profiles/compose/[composeId]";
+export {
+	default,
+	getServerSideProps,
+} from "../../profiles/compose/[composeId]";

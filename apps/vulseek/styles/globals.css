@@ -2,6 +2,38 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+	font-family: "Inter";
+	font-style: normal;
+	font-display: swap;
+	font-weight: 400;
+	src: url("/fonts/inter-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Inter";
+	font-style: normal;
+	font-display: swap;
+	font-weight: 500;
+	src: url("/fonts/inter-latin-500-normal.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Inter";
+	font-style: normal;
+	font-display: swap;
+	font-weight: 600;
+	src: url("/fonts/inter-latin-600-normal.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Inter";
+	font-style: normal;
+	font-display: swap;
+	font-weight: 700;
+	src: url("/fonts/inter-latin-700-normal.woff2") format("woff2");
+}
+
 @layer base {
 	:root {
 		--terminal-paste: rgba(0, 0, 0, 0.2);
@@ -33,7 +65,8 @@
 		--input: 240 5.9% 90%;
 		--ring: 240 10% 3.9%;
 
-		--radius: 0.5rem;
+		/* Align with current dokploy (0.625rem) for rounded-xl ≈ 14px cards */
+		--radius: 0.625rem;
 		--overlay: rgba(0, 0, 0, 0.2);
 
 		--chart-1: 173 58% 39%;
@@ -42,13 +75,14 @@
 		--chart-4: 43 74% 66%;
 		--chart-5: 27 87% 67%;
 		--sidebar-background: 0 0% 98%;
-		--sidebar-foreground: 240 5.3% 26.1%;
-		--sidebar-primary: 240 5.9% 10%;
-		--sidebar-primary-foreground: 0 0% 98%;
-		--sidebar-accent: 240 4.8% 95.9%;
-		--sidebar-accent-foreground: 240 5.9% 10%;
-		--sidebar-border: 220 13% 91%;
-		--sidebar-ring: 217.2 91.2% 59.8%;
+		/* Match Dokploy's current neutral sidebar palette. */
+		--sidebar-foreground: 0 0% 14.5%;
+		--sidebar-primary: 0 0% 20.5%;
+		--sidebar-primary-foreground: 0 0% 98.5%;
+		--sidebar-accent: 0 0% 97%;
+		--sidebar-accent-foreground: 0 0% 20.5%;
+		--sidebar-border: 0 0% 92.2%;
+		--sidebar-ring: 0 0% 70.8%;
 	}
 
 	.dark {

@@ -5,8 +5,8 @@ import {
 	buildResearchProgressSignature,
 	diffResearchProgress,
 	groupResearchJobsBySnapshotHash,
-	resolveResearchCostStatus,
 	type ResearchProgressSnapshot,
+	resolveResearchCostStatus,
 } from "./research-progress-audit";
 
 const snapshot = (
@@ -14,7 +14,13 @@ const snapshot = (
 ): ResearchProgressSnapshot => ({
 	snapshotHash: "definition-a",
 	stageCounts: {
-		"track-plan": { queued: 0, active: 1, completed: 2, failed: 0, canceled: 0 },
+		"track-plan": {
+			queued: 0,
+			active: 1,
+			completed: 2,
+			failed: 0,
+			canceled: 0,
+		},
 	},
 	frontier: ["track-plan:active"],
 	tracks: [{ key: "track-a", revision: 1, status: "active" }],
@@ -96,9 +102,22 @@ describe("research progress audit", () => {
 		const second = snapshot({
 			capturedAt: "2026-07-26T10:05:00.000Z",
 			stageCounts: {
-				"track-plan": { queued: 4, active: 0, completed: 6, failed: 0, canceled: 0 },
+				"track-plan": {
+					queued: 4,
+					active: 0,
+					completed: 6,
+					failed: 0,
+					canceled: 0,
+				},
 			},
-			cycles: [{ kind: "finding-review", key: "finding-a", cycles: 3, meaningfulRevision: 0 }],
+			cycles: [
+				{
+					kind: "finding-review",
+					key: "finding-a",
+					cycles: 3,
+					meaningfulRevision: 0,
+				},
+			],
 			resources: { ...first.resources, totalTokens: 42_000, taskCount: 8 },
 		});
 
@@ -145,13 +164,13 @@ describe("research progress audit", () => {
 		const result = diffResearchProgress(
 			snapshot({
 				cycles: [
-				{
-					kind: "finding-review",
-					key: "finding-a",
-					cycles: 1,
-					meaningfulRevision: 2,
-					progressFingerprint: "evidence-unchanged",
-				},
+					{
+						kind: "finding-review",
+						key: "finding-a",
+						cycles: 1,
+						meaningfulRevision: 2,
+						progressFingerprint: "evidence-unchanged",
+					},
 				],
 			}),
 			snapshot({
@@ -159,17 +178,17 @@ describe("research progress audit", () => {
 					{
 						kind: "finding-review",
 						key: "finding-a",
-					cycles: 3,
-					meaningfulRevision: 2,
-					progressFingerprint: "evidence-unchanged",
-				},
-				{
-					kind: "surface-map",
-					key: "surface-a",
-					cycles: 2,
-					meaningfulRevision: 0,
-					progressFingerprint: "inventory-unchanged",
-				},
+						cycles: 3,
+						meaningfulRevision: 2,
+						progressFingerprint: "evidence-unchanged",
+					},
+					{
+						kind: "surface-map",
+						key: "surface-a",
+						cycles: 2,
+						meaningfulRevision: 0,
+						progressFingerprint: "inventory-unchanged",
+					},
 				],
 			}),
 		);
@@ -212,7 +231,7 @@ describe("research progress audit", () => {
 		const result = diffResearchProgress(
 			snapshot(),
 			snapshot({
-			snapshotHash: "definition-b",
+				snapshotHash: "definition-b",
 				frontier: ["track-plan:queued"],
 				trackQueue: {
 					queued: 2,
@@ -250,18 +269,52 @@ describe("research progress audit", () => {
 	it("marks a history stalled only after repeated unchanged semantic signatures", () => {
 		const history = [
 			snapshot({ capturedAt: "2026-07-26T10:00:00.000Z" }),
-			snapshot({ capturedAt: "2026-07-26T10:15:00.000Z", resources: { ...snapshot().resources, totalTokens: 50_000, taskCount: 5 } }),
-			snapshot({ capturedAt: "2026-07-26T10:30:00.000Z", resources: { ...snapshot().resources, totalTokens: 90_000, taskCount: 9 } }),
+			snapshot({
+				capturedAt: "2026-07-26T10:15:00.000Z",
+				resources: {
+					...snapshot().resources,
+					totalTokens: 50_000,
+					taskCount: 5,
+				},
+			}),
+			snapshot({
+				capturedAt: "2026-07-26T10:30:00.000Z",
+				resources: {
+					...snapshot().resources,
+					totalTokens: 90_000,
+					taskCount: 9,
+				},
+			}),
 		];
 
-		const result = auditResearchProgressHistory(history, { noProgressWindows: 2 });
+		const result = auditResearchProgressHistory(history, {
+			noProgressWindows: 2,
+		});
 		expect(result.stalled).toBe(true);
 		expect(result.unchangedWindows).toBe(2);
 	});
 
 	it("distinguishes unavailable pricing from an incorrectly zero calculated cost", () => {
-		expect(resolveResearchCostStatus({ totalTokens: 10_000, estimatedCost: 0, pricingConfigured: false })).toBe("unavailable");
-		expect(resolveResearchCostStatus({ totalTokens: 10_000, estimatedCost: 0, pricingConfigured: true })).toBe("invalid");
-		expect(resolveResearchCostStatus({ totalTokens: 10_000, estimatedCost: 0.25, pricingConfigured: true })).toBe("computed");
+		expect(
+			resolveResearchCostStatus({
+				totalTokens: 10_000,
+				estimatedCost: 0,
+				pricingConfigured: false,
+			}),
+		).toBe("unavailable");
+		expect(
+			resolveResearchCostStatus({
+				totalTokens: 10_000,
+				estimatedCost: 0,
+				pricingConfigured: true,
+			}),
+		).toBe("invalid");
+		expect(
+			resolveResearchCostStatus({
+				totalTokens: 10_000,
+				estimatedCost: 0.25,
+				pricingConfigured: true,
+			}),
+		).toBe("computed");
 	});
 });

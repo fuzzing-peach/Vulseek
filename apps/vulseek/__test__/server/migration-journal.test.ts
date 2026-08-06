@@ -26,8 +26,10 @@ describe("migration journal", () => {
 			.filter((tag) => !journalTags.has(tag))
 			.sort();
 
-		expect(journal.entries).toHaveLength(224);
-		expect(journal.entries.at(-1)?.tag).toBe("0223_scan_stage_lane_driver_pid");
+		expect(journal.entries).toHaveLength(226);
+		expect(journal.entries.at(-1)?.tag).toBe(
+			"0225_dataset_profile_sample_selection",
+		);
 		expect(unregisteredTags).toEqual(["0057_damp_prism"]);
 		expect(journal.entries.map((entry) => entry.idx)).toEqual(
 			journal.entries.map((_, index) => index),
@@ -61,11 +63,11 @@ describe("migration journal", () => {
 			"exploit_primitive_events",
 			"exploit_chain_events",
 		]) {
-			expect(migration).toContain(`DROP TABLE IF EXISTS \"${table}\"`);
+			expect(migration).toContain(`DROP TABLE IF EXISTS "${table}"`);
 			expect(schema).not.toContain(`export const ${table}`);
 		}
 		expect(schema).not.toContain("currentTaskId");
-		expect(schema).toContain("revision: integer(\"revision\")");
+		expect(schema).toContain('revision: integer("revision")');
 	});
 
 	it("migrates prompt file names stored in pipeline snapshots", () => {

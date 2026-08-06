@@ -1,1 +1,4 @@
-export { default, getServerSideProps } from "../../profiles/application/[applicationId]";
+export {
+	default,
+	getServerSideProps,
+} from "../../profiles/application/[applicationId]";

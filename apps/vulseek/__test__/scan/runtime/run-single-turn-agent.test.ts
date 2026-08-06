@@ -3,8 +3,8 @@ import { z } from "zod";
 import {
 	buildCodexConfigToml,
 	buildResearchContainerEnvPairs,
-	requireResearchDatabaseContext,
 	buildStructuredOutputPromptSuffix,
+	requireResearchDatabaseContext,
 } from "../../../../../packages/server/src/services/scan/runtime/run-single-turn-agent";
 
 const schema = z.object({
@@ -34,7 +34,7 @@ describe("buildStructuredOutputPromptSuffix", () => {
 		expect(suffix).not.toMatch(/\/scan-context\//);
 		expect(suffix).not.toMatch(/\/workspace\/repo/);
 		expect(suffix).toMatch(
-		/FINAL CHECK BEFORE ENDING THIS TURN:[\s\S]*Only then end the turn\./,
+			/FINAL CHECK BEFORE ENDING THIS TURN:[\s\S]*Only then end the turn\./,
 		);
 	});
 
@@ -115,20 +115,18 @@ describe("buildResearchContainerEnvPairs", () => {
 	});
 
 	test("does not add Research database context to Full or Delta scans", () => {
-			expect(buildResearchContainerEnvPairs("full", "job-a", "task-a")).toEqual(
+		expect(buildResearchContainerEnvPairs("full", "job-a", "task-a")).toEqual(
 			[],
 		);
-			expect(buildResearchContainerEnvPairs("delta", "job-a", "task-a")).toEqual(
+		expect(buildResearchContainerEnvPairs("delta", "job-a", "task-a")).toEqual(
 			[],
 		);
 	});
 
 	test("rejects a Research launch without database context", () => {
-		expect(() =>
-			requireResearchDatabaseContext("research", {}),
-		).toThrow(/VULSEEK_RESEARCH_DATABASE_URL/);
-		expect(() =>
-				requireResearchDatabaseContext("full", {}),
-		).not.toThrow();
+		expect(() => requireResearchDatabaseContext("research", {})).toThrow(
+			/VULSEEK_RESEARCH_DATABASE_URL/,
+		);
+		expect(() => requireResearchDatabaseContext("full", {})).not.toThrow();
 	});
 });

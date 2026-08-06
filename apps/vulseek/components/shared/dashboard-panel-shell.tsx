@@ -1,7 +1,11 @@
 import type { ReactNode } from "react";
-import { Card } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+import { DashboardPage } from "@/components/dashboard/ui-system";
 
+/**
+ * Legacy page container, kept as a thin compatibility alias of the new
+ * DashboardPage surface so pages can migrate one at a time. New pages use
+ * `DashboardPage` from "@/components/dashboard/ui-system" directly.
+ */
 type DashboardPanelShellProps = {
 	children: ReactNode;
 	className?: string;
@@ -13,19 +17,7 @@ export const DashboardPanelShell = ({
 	className,
 	contentClassName,
 }: DashboardPanelShellProps) => (
-	<Card
-		className={cn(
-			"h-full w-full rounded-xl bg-sidebar p-2.5",
-			className,
-		)}
-	>
-		<div
-			className={cn(
-				"rounded-xl bg-background shadow-md",
-				contentClassName,
-			)}
-		>
-			{children}
-		</div>
-	</Card>
+	<DashboardPage className={className} contentClassName={contentClassName}>
+		{children}
+	</DashboardPage>
 );

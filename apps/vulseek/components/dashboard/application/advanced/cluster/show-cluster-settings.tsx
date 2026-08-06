@@ -5,15 +5,12 @@ import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
-import { AlertBlock } from "@/components/shared/alert-block";
-import { Button } from "@/components/ui/button";
 import {
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
-} from "@/components/ui/card";
+	FormActions,
+	FormSection,
+	useFormSaveStatus,
+} from "@/components/dashboard/ui-system";
+import { AlertBlock } from "@/components/shared/alert-block";
 import {
 	Form,
 	FormControl,
@@ -73,7 +70,7 @@ export const ShowClusterSettings = ({ id, type }: Props) => {
 		mongo: () => api.mongo.update.useMutation(),
 	};
 
-	const { mutateAsync, isLoading } = mutationMap[type]
+	const { mutateAsync } = mutationMap[type]
 		? mutationMap[type]()
 		: api.mongo.update.useMutation();
 
@@ -102,52 +99,55 @@ export const ShowClusterSettings = ({ id, type }: Props) => {
 		}
 	}, [form, form.reset, form.formState.isSubmitSuccessful, data?.command]);
 
+	const [status, setStatus] = useFormSaveStatus(form.formState.isDirty);
+
 	const onSubmit = async (data: AddCommand) => {
-		await mutateAsync({
-			applicationId: id || "",
-			postgresId: id || "",
-			redisId: id || "",
-			mysqlId: id || "",
-			mariadbId: id || "",
-			mongoId: id || "",
-			...(type === "application"
-				? {
-						registryId:
-							data?.registryId === "none" || !data?.registryId
-								? null
-								: data?.registryId,
-					}
-				: {}),
-			replicas: data?.replicas,
-		})
-			.then(async () => {
-				toast.success("Command Updated");
-				await refetch();
-			})
-			.catch(() => {
-				toast.error("Error updating the command");
+		setStatus("saving");
+		try {
+			await mutateAsync({
+				applicationId: id || "",
+				postgresId: id || "",
+				redisId: id || "",
+				mysqlId: id || "",
+				mariadbId: id || "",
+				mongoId: id || "",
+				...(type === "application"
+					? {
+							registryId:
+								data?.registryId === "none" || !data?.registryId
+									? null
+									: data?.registryId,
+						}
+					: {}),
+				replicas: data?.replicas,
 			});
+			setStatus("saved");
+			toast.success("Command Updated");
+			await refetch();
+		} catch {
+			setStatus("error");
+			toast.error("Error updating the command");
+		}
+	};
+
+	const handleSave = () => {
+		void form.handleSubmit(onSubmit, () => setStatus("error"))();
 	};
 
 	return (
-		<Card className="bg-background">
-			<CardHeader className="flex flex-row justify-between">
-				<div>
-					<CardTitle className="text-xl">Cluster Settings</CardTitle>
-					<CardDescription>
-						Modify swarm settings for the service.
-					</CardDescription>
-				</div>
-				<AddSwarmSettings id={id} type={type} />
-			</CardHeader>
-			<CardContent className="flex flex-col gap-4">
+		<FormSection
+			title="Cluster Settings"
+			description="Modify swarm settings for the service."
+			action={<AddSwarmSettings id={id} type={type} />}
+		>
+			<div className="flex flex-col gap-4">
 				<AlertBlock type="info">
 					Please remember to click Redeploy after modify the cluster settings to
 					apply the changes.
 				</AlertBlock>
 				<Form {...form}>
 					<form
-						onSubmit={form.handleSubmit(onSubmit)}
+						onSubmit={form.handleSubmit(onSubmit, () => setStatus("error"))}
 						className="grid w-full gap-4"
 					>
 						<div className="flex flex-col gap-4">
@@ -235,14 +235,14 @@ export const ShowClusterSettings = ({ id, type }: Props) => {
 							</>
 						)}
 
-						<div className="flex justify-end">
-							<Button isLoading={isLoading} type="submit" className="w-fit">
-								Save
-							</Button>
-						</div>
+						<FormActions
+							status={status}
+							onSave={handleSave}
+							onReset={() => form.reset()}
+						/>
 					</form>
 				</Form>
-			</CardContent>
-		</Card>
+			</div>
+		</FormSection>
 	);
 };

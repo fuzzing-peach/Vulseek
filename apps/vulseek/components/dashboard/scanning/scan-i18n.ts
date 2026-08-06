@@ -12,9 +12,7 @@ export const scanT = (
 const normalizedKey = (value: string) => value.replace(/_/g, "-");
 
 const titleCase = (value: string) =>
-	value
-		.replace(/[-_]/g, " ")
-		.replace(/\b\w/g, (char) => char.toUpperCase());
+	value.replace(/[-_]/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 
 const STAGE_DEFAULTS: Record<string, string> = {
 	"delta-scope": "Delta Scope",
@@ -71,7 +69,8 @@ export const formatScanStageLabel = (
 		return "-";
 	}
 	const normalized = normalizedKey(stage.toLowerCase());
-	const canonical = STAGE_ALIASES[stage.toLowerCase().replace(/[_-]/g, " ")] || normalized;
+	const canonical =
+		STAGE_ALIASES[stage.toLowerCase().replace(/[_-]/g, " ")] || normalized;
 	return scanT(
 		t,
 		`scan.stage.${canonical}`,
@@ -102,7 +101,11 @@ export const formatScanStatusLabel = (
 		return "-";
 	}
 	const key = normalizedKey(status.toLowerCase());
-	return scanT(t, `scan.status.${key}`, TASK_STATUS_DEFAULTS[key] || titleCase(status));
+	return scanT(
+		t,
+		`scan.status.${key}`,
+		TASK_STATUS_DEFAULTS[key] || titleCase(status),
+	);
 };
 
 const SCAN_JOB_STATUS_DEFAULTS: Record<string, string> = {
@@ -210,7 +213,7 @@ export const formatScanTypeLabel = (
 			? scanT(t, "scan.scanType.research", "Research Scan")
 			: scanType === "tob-goal"
 				? scanT(t, "scan.scanType.goal", "Goal Scan")
-		: scanT(t, "scan.scanType.full", "Full Scan");
+				: scanT(t, "scan.scanType.full", "Full Scan");
 
 export const formatResourceTypeLabel = (
 	t: ScanTranslation,

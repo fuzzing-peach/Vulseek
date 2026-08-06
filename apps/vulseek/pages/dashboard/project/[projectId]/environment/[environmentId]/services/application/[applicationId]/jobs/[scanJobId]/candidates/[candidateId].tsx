@@ -6,7 +6,12 @@ import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { getLocale, serverSideTranslations } from "@/utils/i18n";
 
 const Page = () => {
-	return <ShowScanCandidateDetail serviceType="application" routeSegment="services" />;
+	return (
+		<ShowScanCandidateDetail
+			serviceType="application"
+			routeSegment="services"
+		/>
+	);
 };
 
 export default Page;

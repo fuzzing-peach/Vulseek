@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "next-i18next";
+import { useEffect, useMemo, useState } from "react";
 import {
 	FullScanStageGraphPreview,
 	type ScanRuntimeSettingsDraft,
@@ -117,11 +117,11 @@ export const CreateScanDialog = ({
 							"scan.dialog.goalPreview",
 							"Goal Scan crafts a red-teamed goal, dispatches hunt goals from attack surfaces, judges candidates, and stores novel findings.",
 						)
-				: scanT(
-					t,
-					"scan.dialog.fullPreview",
-					"Full Scan checks out the selected source, profiles the repository, models attack surfaces, identifies targets, scans candidate findings, and sends verified or likely findings to triage.",
-				);
+					: scanT(
+							t,
+							"scan.dialog.fullPreview",
+							"Full Scan checks out the selected source, profiles the repository, models attack surfaces, identifies targets, scans candidate findings, and sends verified or likely findings to triage.",
+						);
 
 	useEffect(() => {
 		if (!open) {
@@ -162,9 +162,7 @@ export const CreateScanDialog = ({
 							focus: threatFocus.trim(),
 							attackerModel: threatAttackerModel.trim(),
 							...(nonGoals.length > 0 ? { nonGoals } : {}),
-							...(threatNotes.trim()
-								? { notes: threatNotes.trim() }
-								: {}),
+							...(threatNotes.trim() ? { notes: threatNotes.trim() } : {}),
 						}
 					: undefined,
 		});

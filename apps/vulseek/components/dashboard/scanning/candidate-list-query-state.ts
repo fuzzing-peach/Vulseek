@@ -1,4 +1,4 @@
-import type { ParsedUrlQuery } from "querystring";
+import type { ParsedUrlQuery } from "node:querystring";
 
 export type CandidateSortKey =
 	| "latestResultUpdatedAt"
@@ -17,11 +17,7 @@ export const ANALYSIS_RESULT_OPTIONS = [
 	"api_misuse",
 ] as const;
 
-export const VERIFY_RESULT_OPTIONS = [
-	"true",
-	"likely",
-	"false",
-] as const;
+export const VERIFY_RESULT_OPTIONS = ["true", "likely", "false"] as const;
 
 export const TRIAGE_RESULT_OPTIONS = [
 	"security_issue",
@@ -128,8 +124,10 @@ export const parseCandidateListQueryState = (
 			1,
 		),
 		candidatePageSize: CANDIDATE_PAGE_SIZES.includes(
-			normalizePositiveInteger(getFirstQueryValue(query[PAGE_SIZE_PARAM]), 20) as
-				(typeof CANDIDATE_PAGE_SIZES)[number],
+			normalizePositiveInteger(
+				getFirstQueryValue(query[PAGE_SIZE_PARAM]),
+				20,
+			) as (typeof CANDIDATE_PAGE_SIZES)[number],
 		)
 			? normalizePositiveInteger(getFirstQueryValue(query[PAGE_SIZE_PARAM]), 20)
 			: 20,

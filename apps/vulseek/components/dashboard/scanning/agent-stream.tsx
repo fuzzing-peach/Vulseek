@@ -116,12 +116,12 @@ const TurnView = memo(function TurnView({
 								<details className={styles.thinking}>
 									<summary>
 										{blockLabel(block.kind)}
-						{showSpinner ? (
-							<span
-								className={styles.spinner}
-								aria-label={labels.running}
-								title={labels.running}
-							/>
+										{showSpinner ? (
+											<span
+												className={styles.spinner}
+												aria-label={labels.running}
+												title={labels.running}
+											/>
 										) : null}
 									</summary>
 									<div className={styles.thinkingBody}>{block.text}</div>
@@ -135,10 +135,10 @@ const TurnView = memo(function TurnView({
 											{toolPreview(tool)}
 										</span>
 										{showSpinner ? (
-													<span
-														className={styles.spinner}
-														aria-label={labels.running}
-														title={labels.running}
+											<span
+												className={styles.spinner}
+												aria-label={labels.running}
+												title={labels.running}
 											/>
 										) : null}
 									</summary>

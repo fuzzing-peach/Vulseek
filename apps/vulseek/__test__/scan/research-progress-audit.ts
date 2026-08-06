@@ -309,7 +309,7 @@ const detectLoop = (
 			!prior ||
 			(cycle.cycles > prior.cycles &&
 				(cycle.progressFingerprint !== undefined &&
-					prior.progressFingerprint !== undefined
+				prior.progressFingerprint !== undefined
 					? cycle.progressFingerprint === prior.progressFingerprint
 					: cycle.meaningfulRevision === prior.meaningfulRevision))
 		);
@@ -363,7 +363,8 @@ export const diffResearchProgress = (
 	}
 	if (
 		current.resources.taskCount > 0 &&
-		current.resources.artifactBytes / current.resources.taskCount > 15 * 1024 * 1024
+		current.resources.artifactBytes / current.resources.taskCount >
+			15 * 1024 * 1024
 	) {
 		addAlert(alerts, "artifact_growth");
 	}

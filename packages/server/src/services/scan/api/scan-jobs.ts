@@ -1,32 +1,35 @@
+import { TRPCError } from "@trpc/server";
 import { db } from "@vulseek/server/db";
+import type {
+	apiCreateScanJob,
+	ScanStageSettings,
+} from "@vulseek/server/db/schema";
 import { applications, compose } from "@vulseek/server/db/schema";
-import type { apiCreateScanJob } from "@vulseek/server/db/schema";
-import type { ScanStageSettings } from "@vulseek/server/db/schema";
 import { eq } from "drizzle-orm";
 import { DEFAULT_DELTA_COMMIT_WINDOW } from "../constants";
 import {
 	createScanJobRepo,
 	findScanJobByIdRepo,
-	listScanJobsByApplicationIdRepo,
-	listScanJobsByComposeIdRepo,
+	listScanJobsByApplicationIdPageRepo,
+	listScanJobsByComposeIdPageRepo,
 	resetScanJobForRetryRepo,
+	type ScanJobListPageInput,
 	updateScanJobNoteRepo,
 	updateScanJobPipelineDefinitionSnapshotRepo,
-	updateScanJobRuntimeSettingsRepo,
 	updateScanJobRepositoryTaskStatusRepo,
+	updateScanJobRuntimeSettingsRepo,
 	updateScanJobStatusRepo,
 } from "../persistence/scan-job.repo";
-import {
-	buildCompleteScanRuntimeSettings,
-	normalizeScanRuntimeSettings,
-} from "../runtime-settings";
+import { findScanJobOrganizationIdRepo } from "../persistence/scan-job-access.repo";
+import { wakePipelineRuntimesForScanJob } from "../pipeline/pipeline-runner";
 import {
 	normalizePipelineDefinitionSnapshot,
 	type ScanPipelineDefinitions,
 } from "../pipeline/scan-pipeline-definitions";
-import { TRPCError } from "@trpc/server";
-import { findScanJobOrganizationIdRepo } from "../persistence/scan-job-access.repo";
-import { wakePipelineRuntimesForScanJob } from "../pipeline/pipeline-runner";
+import {
+	buildCompleteScanRuntimeSettings,
+	normalizeScanRuntimeSettings,
+} from "../runtime-settings";
 
 export const authorizeScanJobAccess = async (
 	scanJobId: string,
@@ -34,10 +37,16 @@ export const authorizeScanJobAccess = async (
 ) => {
 	const targetOrganizationId = await findScanJobOrganizationIdRepo(scanJobId);
 	if (!targetOrganizationId) {
-		throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid scan job target" });
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Invalid scan job target",
+		});
 	}
 	if (targetOrganizationId !== organizationId) {
-		throw new TRPCError({ code: "UNAUTHORIZED", message: "You are not authorized to access this scan job" });
+		throw new TRPCError({
+			code: "UNAUTHORIZED",
+			message: "You are not authorized to access this scan job",
+		});
 	}
 	return targetOrganizationId;
 };
@@ -92,11 +101,27 @@ export const findScanJobById = async (scanJobId: string) => {
 	return await findScanJobByIdRepo(scanJobId);
 };
 
-export const findAllScanJobsByApplicationId = async (applicationId: string) =>
-	await listScanJobsByApplicationIdRepo(applicationId);
+export const findScanJobsByApplicationIdPage = async (
+	applicationId: string,
+	input: ScanJobListPageInput,
+) => {
+	const { items, total } = await listScanJobsByApplicationIdPageRepo(
+		applicationId,
+		input,
+	);
+	return { items, total, page: input.page, pageSize: input.pageSize };
+};
 
-export const findAllScanJobsByComposeId = async (composeId: string) =>
-	await listScanJobsByComposeIdRepo(composeId);
+export const findScanJobsByComposeIdPage = async (
+	composeId: string,
+	input: ScanJobListPageInput,
+) => {
+	const { items, total } = await listScanJobsByComposeIdPageRepo(
+		composeId,
+		input,
+	);
+	return { items, total, page: input.page, pageSize: input.pageSize };
+};
 
 export const updateScanJobNote = async (
 	scanJobId: string,
@@ -106,7 +131,7 @@ export const updateScanJobNote = async (
 export const updateScanJobRuntimeSettings = async (
 	scanJobId: string,
 	scanRuntimeSettings: unknown,
-	) => {
+) => {
 	const updated = await updateScanJobRuntimeSettingsRepo(
 		scanJobId,
 		normalizeScanRuntimeSettings(scanRuntimeSettings),
@@ -152,21 +177,40 @@ export const updateScanJobStatus = async (
 export const resetScanJobForRetry = async (
 	scanJobId: string,
 	input?: {
-			status?:
-				| "pending"
-				| "running"
-				| "paused"
-				| "finalizing"
-				| "finished"
-				| "partially_finished"
+		status?:
+			| "pending"
+			| "running"
+			| "paused"
+			| "finalizing"
+			| "finished"
+			| "partially_finished"
 			| "failed"
 			| "canceled";
 		errorMessage?: string | null;
-		repositoryTaskStatus?: "pending" | "launching" | "launched" | "starting" | "running" | "completed" | "failed" | "exited" | "canceled";
+		repositoryTaskStatus?:
+			| "pending"
+			| "launching"
+			| "launched"
+			| "starting"
+			| "running"
+			| "completed"
+			| "failed"
+			| "exited"
+			| "canceled";
 	},
 ) => await resetScanJobForRetryRepo(scanJobId, input);
 
 export const updateScanJobRepositoryTaskStatus = async (
 	scanJobId: string,
-	repositoryTaskStatus: "pending" | "launching" | "launched" | "starting" | "running" | "completed" | "failed" | "exited" | "canceled",
-) => await updateScanJobRepositoryTaskStatusRepo(scanJobId, repositoryTaskStatus);
+	repositoryTaskStatus:
+		| "pending"
+		| "launching"
+		| "launched"
+		| "starting"
+		| "running"
+		| "completed"
+		| "failed"
+		| "exited"
+		| "canceled",
+) =>
+	await updateScanJobRepositoryTaskStatusRepo(scanJobId, repositoryTaskStatus);

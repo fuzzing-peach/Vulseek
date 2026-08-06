@@ -9,6 +9,7 @@ import {
 	findEnvironmentById,
 	findEnvironmentsByProjectId,
 	findMemberById,
+	listEnvironmentProfilesRepo,
 	updateEnvironmentById,
 } from "@vulseek/server";
 import { TRPCError } from "@trpc/server";
@@ -18,6 +19,7 @@ import {
 	apiCreateEnvironment,
 	apiDuplicateEnvironment,
 	apiFindOneEnvironment,
+	apiListEnvironmentProfiles,
 	apiRemoveEnvironment,
 	apiUpdateEnvironment,
 } from "@/server/db/schema";
@@ -190,6 +192,60 @@ export const environmentRouter = createTRPCRouter({
 				});
 			}
 		}),
+
+	profiles: createTRPCRouter({
+		list: protectedProcedure
+			.input(apiListEnvironmentProfiles)
+			.query(async ({ input, ctx }) => {
+				try {
+					if (ctx.user.role === "member") {
+						await checkEnvironmentAccess(
+							ctx.user.id,
+							input.environmentId,
+							ctx.session.activeOrganizationId,
+							"access",
+						);
+					}
+					const environment = await findEnvironmentById(input.environmentId);
+					if (
+						environment.project.organizationId !==
+						ctx.session.activeOrganizationId
+					) {
+						throw new TRPCError({
+							code: "FORBIDDEN",
+							message: "You are not allowed to access this environment",
+						});
+					}
+
+					// Members only see services they have been granted access to.
+					let accessedServiceIds: string[] | undefined;
+					if (ctx.user.role === "member") {
+						const { accessedEnvironments, accessedServices } =
+							await findMemberById(
+								ctx.user.id,
+								ctx.session.activeOrganizationId,
+							);
+
+						if (
+							!accessedEnvironments.includes(environment.environmentId)
+						) {
+							throw new TRPCError({
+								code: "FORBIDDEN",
+								message: "You are not allowed to access this environment",
+							});
+						}
+						accessedServiceIds = accessedServices;
+					}
+
+					return listEnvironmentProfilesRepo(input, accessedServiceIds);
+				} catch (error) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Environment not found",
+					});
+				}
+			}),
+	}),
 
 	remove: protectedProcedure
 		.input(apiRemoveEnvironment)

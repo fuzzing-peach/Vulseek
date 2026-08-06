@@ -153,10 +153,7 @@ const RESEARCH_MODULES = [
 	{
 		name: "scope",
 		label: "Scope",
-		stageNames: [
-			RESEARCH_STAGE_NAMES.scope,
-			RESEARCH_STAGE_NAMES.surface,
-		],
+		stageNames: [RESEARCH_STAGE_NAMES.scope, RESEARCH_STAGE_NAMES.surface],
 	},
 	{
 		name: "track-discovery",
@@ -435,18 +432,21 @@ const getEdgeLabelPoint = (
 		}
 	}
 
-	const longestSegment = points.slice(1).reduce<
-		{ start: Point; end: Point; length: number } | undefined
-	>((longest, end, index) => {
-		const start = points[index];
-		if (!start) {
-			return longest;
-		}
-		const length = Math.abs(end.x - start.x) + Math.abs(end.y - start.y);
-		return !longest || length > longest.length
-			? { start, end, length }
-			: longest;
-	}, undefined);
+	const longestSegment = points
+		.slice(1)
+		.reduce<{ start: Point; end: Point; length: number } | undefined>(
+			(longest, end, index) => {
+				const start = points[index];
+				if (!start) {
+					return longest;
+				}
+				const length = Math.abs(end.x - start.x) + Math.abs(end.y - start.y);
+				return !longest || length > longest.length
+					? { start, end, length }
+					: longest;
+			},
+			undefined,
+		);
 	return longestSegment
 		? {
 				x:
@@ -997,12 +997,7 @@ const buildResearchForwardEdgePoints = (source: Point, target: Point) => {
 	const start = getNodeAnchor(source, sourceIsAbove ? "bottom" : "top");
 	const end = getNodeAnchor(target, sourceIsAbove ? "top" : "bottom");
 	const corridorY = start.y + (end.y - start.y) / 2;
-	return [
-		start,
-		{ x: start.x, y: corridorY },
-		{ x: end.x, y: corridorY },
-		end,
-	];
+	return [start, { x: start.x, y: corridorY }, { x: end.x, y: corridorY }, end];
 };
 
 const buildResearchLocalLoopEdgePoints = (
@@ -1014,12 +1009,7 @@ const buildResearchLocalLoopEdgePoints = (
 		const start = getNodeAnchor(source, "bottom");
 		const end = getNodeAnchor(target, "bottom");
 		const loopY = source.y + NODE_HEIGHT + 42 + laneOffset;
-		return [
-			start,
-			{ x: start.x, y: loopY },
-			{ x: end.x, y: loopY },
-			end,
-		];
+		return [start, { x: start.x, y: loopY }, { x: end.x, y: loopY }, end];
 	}
 
 	const start = getNodeAnchor(source, "right");
@@ -1323,10 +1313,7 @@ const getVisibleStageGraphEdges = (
 		const endpointKey = `${edge.source}->${edge.target}`;
 		const existingEdge = edgesByEndpoints.get(endpointKey);
 		if (existingEdge) {
-			if (
-				edge.routeKey &&
-				!existingEdge.routeLabels.includes(edge.routeKey)
-			) {
+			if (edge.routeKey && !existingEdge.routeLabels.includes(edge.routeKey)) {
 				existingEdge.routeLabels.push(edge.routeKey);
 			}
 			continue;
@@ -1351,10 +1338,10 @@ const buildFlowElements = (
 		: getNodeAbsolutePositions(graph);
 	const syntheticResearchGroups = researchGraph
 		? RESEARCH_MODULES.map((module) => ({
-			id: `research-module-${module.name}`,
-			name: module.label,
-			stageNames: module.stageNames,
-		}))
+				id: `research-module-${module.name}`,
+				name: module.label,
+				stageNames: module.stageNames,
+			}))
 		: [];
 	const visibleGroups = [...graph.groups, ...syntheticResearchGroups];
 	const visibleGroupById = new Map(
@@ -1682,7 +1669,9 @@ const ScanStageGraphPanel = ({
 						panOnScroll={false}
 						zoomOnScroll
 						zoomOnPinch
-						minZoom={effectiveGraph && isResearchStageGraph(effectiveGraph) ? 0.1 : 0.5}
+						minZoom={
+							effectiveGraph && isResearchStageGraph(effectiveGraph) ? 0.1 : 0.5
+						}
 						onNodeClick={(_event, node) => {
 							const stageNode = node.data?.stageNode;
 							if (stageNode) {
@@ -1836,7 +1825,7 @@ export const FullScanStageGraphPreview = ({
 								? scanT(t, "scan.scanType.research", "Research Scan")
 								: scanType === "tob-goal"
 									? scanT(t, "scan.scanType.goal", "Goal Scan")
-							: scanT(t, "scan.scanType.full", "Full Scan"),
+									: scanT(t, "scan.scanType.full", "Full Scan"),
 				},
 			)}
 			heightClassName={

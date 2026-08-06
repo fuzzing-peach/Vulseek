@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "next-i18next";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
 	Area,
 	AreaChart,
@@ -440,7 +440,6 @@ export const ScanMonitoring = ({
 		prevSnapshotRef.current = snap;
 	}, [currentData.tokenSnapshot]);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: reset token state when monitoring target changes
 	useEffect(() => {
 		prevSnapshotRef.current = null;
 		setTokenSamples([]);
@@ -488,7 +487,11 @@ export const ScanMonitoring = ({
 				</div>
 				<div className="rounded-lg border px-3 py-2 text-sm">
 					<span className="text-muted-foreground">
-						{scanT(t, "scan.monitoring.runningContainers", "Running containers:")}{" "}
+						{scanT(
+							t,
+							"scan.monitoring.runningContainers",
+							"Running containers:",
+						)}{" "}
 					</span>
 					<span className="font-medium">
 						{currentData.runningContainerCount}

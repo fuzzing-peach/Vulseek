@@ -1,22 +1,18 @@
+import { createServerSideHelpers } from "@trpc/react-query/server";
 import type { findProjectById } from "@vulseek/server";
 import { validateRequest } from "@vulseek/server/lib/auth";
-import { createServerSideHelpers } from "@trpc/react-query/server";
 import {
 	Ban,
-	Check,
 	CheckCircle2,
-	ChevronsUpDown,
 	CircuitBoard,
 	FolderInput,
 	GlobeIcon,
 	Loader2,
 	Play,
 	PlusIcon,
-	Search,
 	ServerIcon,
 	SquareTerminal,
 	Trash2,
-	X,
 } from "lucide-react";
 import type {
 	GetServerSidePropsContext,
@@ -24,7 +20,7 @@ import type {
 } from "next";
 import Head from "next/head";
 import { useRouter } from "next/router";
-import { type ReactElement, useEffect, useMemo, useState } from "react";
+import { type ReactElement, useMemo, useState } from "react";
 import { toast } from "sonner";
 import superjson from "superjson";
 import { AddAiAssistant } from "@/components/dashboard/project/add-ai-assistant";
@@ -35,8 +31,8 @@ import { AddTemplate } from "@/components/dashboard/project/add-template";
 import { AdvancedEnvironmentSelector } from "@/components/dashboard/project/advanced-environment-selector";
 import { DuplicateProject } from "@/components/dashboard/project/duplicate-project";
 import { EnvironmentVariables } from "@/components/dashboard/project/environment-variables";
-import { ProjectEnvironment } from "@/components/dashboard/projects/project-environment";
 import { HandleProject } from "@/components/dashboard/projects/handle-project";
+import { ProjectEnvironment } from "@/components/dashboard/projects/project-environment";
 import {
 	MariadbIcon,
 	MongodbIcon,
@@ -49,25 +45,9 @@ import { AlertBlock } from "@/components/shared/alert-block";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { DateTooltip } from "@/components/shared/date-tooltip";
 import { DialogAction } from "@/components/shared/dialog-action";
-import { FocusShortcutInput } from "@/components/shared/focus-shortcut-input";
 import { StatusTooltip } from "@/components/shared/status-tooltip";
 import { Button } from "@/components/ui/button";
-import {
-	Card,
-	CardContent,
-	CardDescription,
-	CardFooter,
-	CardHeader,
-	CardTitle,
-} from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-	Command,
-	CommandEmpty,
-	CommandGroup,
-	CommandInput,
-	CommandItem,
-} from "@/components/ui/command";
 import {
 	Dialog,
 	DialogContent,
@@ -85,18 +65,24 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-	Popover,
-	PopoverContent,
-	PopoverTrigger,
-} from "@/components/ui/popover";
-import {
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
-import { cn } from "@/lib/utils";
+import {
+	CollectionView,
+	DashboardPage,
+	DashboardPageBody,
+	DashboardPageHeader,
+	ResourceCard,
+	useCollectionQuery,
+} from "@/components/dashboard/ui-system";
+import type {
+	ListQueryConfig,
+	ListSortDirection,
+} from "@/lib/ui-system/list-query";
 import { appRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
 
@@ -229,6 +215,62 @@ export const extractServicesFromEnvironment = (
 	return allServices;
 };
 
+const SERVICES_CONFIG: ListQueryConfig = {
+	prefix: "profiles",
+	sortOptions: [
+		{ value: "name", label: "Name" },
+		{ value: "type", label: "Type" },
+		{ value: "createdAt", label: "Created" },
+	],
+	filterKeys: ["type"],
+	allowedFilterValues: { type: [] },
+	defaultSortKey: "createdAt",
+	defaultSortDirection: "desc",
+	defaultPageSize: 12,
+	pageSizes: [12, 24, 48],
+};
+
+const SORT_VALUES: Record<
+	string,
+	{ key: string; direction: ListSortDirection }
+> = {
+	"name-asc": { key: "name", direction: "asc" },
+	"name-desc": { key: "name", direction: "desc" },
+	"type-asc": { key: "type", direction: "asc" },
+	"type-desc": { key: "type", direction: "desc" },
+	"createdAt-desc": { key: "createdAt", direction: "desc" },
+	"createdAt-asc": { key: "createdAt", direction: "asc" },
+};
+
+const SERVICE_TYPE_OPTIONS = [
+	{ value: "application", label: "Application" },
+	{ value: "postgres", label: "PostgreSQL" },
+	{ value: "mariadb", label: "MariaDB" },
+	{ value: "mongo", label: "MongoDB" },
+	{ value: "mysql", label: "MySQL" },
+	{ value: "redis", label: "Redis" },
+	{ value: "compose", label: "Compose" },
+];
+
+const ServiceTypeIcon = ({ type }: { type: Services["type"] }) => {
+	switch (type) {
+		case "postgres":
+			return <PostgresqlIcon className="h-7 w-7" />;
+		case "redis":
+			return <RedisIcon className="h-7 w-7" />;
+		case "mariadb":
+			return <MariadbIcon className="h-7 w-7" />;
+		case "mongo":
+			return <MongodbIcon className="h-7 w-7" />;
+		case "mysql":
+			return <MysqlIcon className="h-7 w-7" />;
+		case "application":
+			return <GlobeIcon className="h-6 w-6" />;
+		case "compose":
+			return <CircuitBoard className="h-6 w-6" />;
+	}
+};
+
 const EnvironmentPage = (
 	props: InferGetServerSidePropsType<typeof getServerSideProps>,
 ) => {
@@ -236,38 +278,6 @@ const EnvironmentPage = (
 	const [isBulkActionLoading, setIsBulkActionLoading] = useState(false);
 	const { projectId, environmentId } = props;
 	const { data: auth } = api.user.get.useQuery();
-	const [sortBy, setSortBy] = useState<string>(() => {
-		if (typeof window !== "undefined") {
-			return (localStorage.getItem("profilesSort") || localStorage.getItem("servicesSort") || "createdAt-desc");
-		}
-		return "createdAt-desc";
-	});
-
-	useEffect(() => {
-		localStorage.setItem("profilesSort", sortBy);
-	}, [sortBy]);
-
-	const sortServices = (services: Services[]) => {
-		const [field, direction] = sortBy.split("-");
-		return [...services].sort((a, b) => {
-			let comparison = 0;
-			switch (field) {
-				case "name":
-					comparison = a.name.localeCompare(b.name);
-					break;
-				case "type":
-					comparison = a.type.localeCompare(b.type);
-					break;
-				case "createdAt":
-					comparison =
-						new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-					break;
-				default:
-					comparison = 0;
-			}
-			return direction === "asc" ? comparison : -comparison;
-		});
-	};
 
 	const {
 		data: projectData,
@@ -292,52 +302,30 @@ const EnvironmentPage = (
 			{ enabled: !!selectedTargetProject },
 		);
 
-	const emptyServices =
-		!currentEnvironment ||
-		((currentEnvironment.mariadb?.length || 0) === 0 &&
-			(currentEnvironment.mongo?.length || 0) === 0 &&
-			(currentEnvironment.mysql?.length || 0) === 0 &&
-			(currentEnvironment.postgres?.length || 0) === 0 &&
-			(currentEnvironment.redis?.length || 0) === 0 &&
-			(currentEnvironment.applications?.length || 0) === 0 &&
-			(currentEnvironment.compose?.length || 0) === 0);
-
 	const applications = extractServicesFromEnvironment(currentEnvironment);
 
-	const [searchQuery, setSearchQuery] = useState("");
-	const serviceTypes = [
-		{ value: "application", label: "Application", icon: GlobeIcon },
-		{ value: "postgres", label: "PostgreSQL", icon: PostgresqlIcon },
-		{ value: "mariadb", label: "MariaDB", icon: MariadbIcon },
-		{ value: "mongo", label: "MongoDB", icon: MongodbIcon },
-		{ value: "mysql", label: "MySQL", icon: MysqlIcon },
-		{ value: "redis", label: "Redis", icon: RedisIcon },
-		{ value: "compose", label: "Compose", icon: CircuitBoard },
-	];
-
-	const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
-	const [openCombobox, setOpenCombobox] = useState(false);
-	const [selectedServices, setSelectedServices] = useState<string[]>([]);
+	const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(
+		() => new Set(),
+	);
 	const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 	const [isBulkDeleteDialogOpen, setIsBulkDeleteDialogOpen] = useState(false);
 	const [deleteVolumes, setDeleteVolumes] = useState(false);
 
-	const handleSelectAll = () => {
-		if (selectedServices.length === filteredServices.length) {
-			setSelectedServices([]);
-		} else {
-			setSelectedServices(filteredServices.map((service) => service.id));
-		}
-	};
+	const { state, setState, searchInput, setSearchInput, deferredQuery } =
+		useCollectionQuery(router, SERVICES_CONFIG);
 
-	const handleServiceSelect = (serviceId: string, event: React.MouseEvent) => {
-		event.stopPropagation();
-		setSelectedServices((prev) =>
-			prev.includes(serviceId)
-				? prev.filter((id) => id !== serviceId)
-				: [...prev, serviceId],
-		);
-	};
+	const profilesList = api.environment.profiles.list.useQuery(
+		{
+			environmentId,
+			page: state.page,
+			pageSize: state.pageSize,
+			types: state.filters.type as Services["type"][] | undefined,
+			sortKey: state.sortKey as "name" | "type" | "createdAt",
+			sortDirection: state.sortDirection,
+			search: deferredQuery || undefined,
+		},
+		{ keepPreviousData: true },
+	);
 
 	const composeActions = {
 		start: api.compose.start.useMutation(),
@@ -395,101 +383,92 @@ const EnvironmentPage = (
 		deploy: api.mongo.deploy.useMutation(),
 	};
 
-	const handleBulkStart = async () => {
+	const serviceTypeOf = (serviceId: string) =>
+		applications.find((service) => service.id === serviceId)?.type;
+
+	const runBulkAction = async (
+		action: (serviceId: string, type: Services["type"]) => Promise<unknown>,
+		successMessage: string,
+		errorMessage: (serviceId: string, error: unknown) => string,
+		onSuccess: () => void = () => {},
+	) => {
 		let success = 0;
 		setIsBulkActionLoading(true);
-		for (const serviceId of selectedServices) {
+		for (const serviceId of selectedIds) {
+			const type = serviceTypeOf(serviceId);
+			if (!type) continue;
 			try {
-				const service = filteredServices.find((s) => s.id === serviceId);
-				if (!service) continue;
-
-				switch (service.type) {
-					case "application":
-						await applicationActions.start.mutateAsync({
-							applicationId: serviceId,
-						});
-						break;
-					case "compose":
-						await composeActions.start.mutateAsync({ composeId: serviceId });
-						break;
-					case "postgres":
-						await postgresActions.start.mutateAsync({ postgresId: serviceId });
-						break;
-					case "mysql":
-						await mysqlActions.start.mutateAsync({ mysqlId: serviceId });
-						break;
-					case "mariadb":
-						await mariadbActions.start.mutateAsync({ mariadbId: serviceId });
-						break;
-					case "redis":
-						await redisActions.start.mutateAsync({ redisId: serviceId });
-						break;
-					case "mongo":
-						await mongoActions.start.mutateAsync({ mongoId: serviceId });
-						break;
-				}
+				await action(serviceId, type);
 				success++;
-			} catch {
-				toast.error(`Error starting profile ${serviceId}`);
+			} catch (error) {
+				toast.error(errorMessage(serviceId, error));
 			}
 		}
 		if (success > 0) {
-			toast.success(`${success} profiles started successfully`);
+			toast.success(successMessage);
 			refetch();
 		}
-		setIsBulkActionLoading(false);
-		setSelectedServices([]);
-		setIsDropdownOpen(false);
-	};
-
-	const handleBulkStop = async () => {
-		let success = 0;
-		setIsBulkActionLoading(true);
-		for (const serviceId of selectedServices) {
-			try {
-				const service = filteredServices.find((s) => s.id === serviceId);
-				if (!service) continue;
-
-				switch (service.type) {
-					case "application":
-						await applicationActions.stop.mutateAsync({
-							applicationId: serviceId,
-						});
-						break;
-					case "compose":
-						await composeActions.stop.mutateAsync({ composeId: serviceId });
-						break;
-					case "postgres":
-						await postgresActions.stop.mutateAsync({ postgresId: serviceId });
-						break;
-					case "mysql":
-						await mysqlActions.stop.mutateAsync({ mysqlId: serviceId });
-						break;
-					case "mariadb":
-						await mariadbActions.stop.mutateAsync({ mariadbId: serviceId });
-						break;
-					case "redis":
-						await redisActions.stop.mutateAsync({ redisId: serviceId });
-						break;
-					case "mongo":
-						await mongoActions.stop.mutateAsync({ mongoId: serviceId });
-						break;
-				}
-				success++;
-			} catch {
-				toast.error(`Error stopping profile ${serviceId}`);
-			}
-		}
-		if (success > 0) {
-			toast.success(`${success} profiles stopped successfully`);
-			refetch();
-		}
-		setSelectedServices([]);
+		onSuccess();
+		setSelectedIds(new Set());
 		setIsDropdownOpen(false);
 		setIsBulkActionLoading(false);
 	};
 
-	const handleBulkMove = async () => {
+	const handleBulkStart = () =>
+		runBulkAction(
+			(serviceId, type) => {
+				switch (type) {
+					case "application":
+						return applicationActions.start.mutateAsync({
+							applicationId: serviceId,
+						});
+					case "compose":
+						return composeActions.start.mutateAsync({ composeId: serviceId });
+					case "postgres":
+						return postgresActions.start.mutateAsync({ postgresId: serviceId });
+					case "mysql":
+						return mysqlActions.start.mutateAsync({ mysqlId: serviceId });
+					case "mariadb":
+						return mariadbActions.start.mutateAsync({ mariadbId: serviceId });
+					case "redis":
+						return redisActions.start.mutateAsync({ redisId: serviceId });
+					case "mongo":
+						return mongoActions.start.mutateAsync({ mongoId: serviceId });
+				}
+			},
+			`${selectedIds.size} profiles started successfully`,
+			(serviceId, error) =>
+				`Error starting profile ${serviceId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+		);
+
+	const handleBulkStop = () =>
+		runBulkAction(
+			(serviceId, type) => {
+				switch (type) {
+					case "application":
+						return applicationActions.stop.mutateAsync({
+							applicationId: serviceId,
+						});
+					case "compose":
+						return composeActions.stop.mutateAsync({ composeId: serviceId });
+					case "postgres":
+						return postgresActions.stop.mutateAsync({ postgresId: serviceId });
+					case "mysql":
+						return mysqlActions.stop.mutateAsync({ mysqlId: serviceId });
+					case "mariadb":
+						return mariadbActions.stop.mutateAsync({ mariadbId: serviceId });
+					case "redis":
+						return redisActions.stop.mutateAsync({ redisId: serviceId });
+					case "mongo":
+						return mongoActions.stop.mutateAsync({ mongoId: serviceId });
+				}
+			},
+			`${selectedIds.size} profiles stopped successfully`,
+			(serviceId, error) =>
+				`Error stopping profile ${serviceId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+		);
+
+	const handleBulkMove = () => {
 		if (!selectedTargetProject) {
 			toast.error("Please select a target project");
 			return;
@@ -499,15 +478,9 @@ const EnvironmentPage = (
 			return;
 		}
 
-		let success = 0;
-		setIsBulkActionLoading(true);
-		for (const serviceId of selectedServices) {
-			try {
-				const service = filteredServices.find((s) => s.id === serviceId);
-				if (!service) continue;
-
-				// TODO: Update move APIs to use targetEnvironmentId instead of targetProjectId
-				switch (service.type) {
+		void runBulkAction(
+			async (serviceId, type) => {
+				switch (type) {
 					case "application":
 						await applicationActions.move.mutateAsync({
 							applicationId: serviceId,
@@ -554,35 +527,22 @@ const EnvironmentPage = (
 				await utils.environment.one.invalidate({
 					environmentId,
 				});
-				success++;
-			} catch (error) {
-				toast.error(
-					`Error moving profile ${serviceId}: ${error instanceof Error ? error.message : "Unknown error"}`,
-				);
-			}
-		}
-		if (success > 0) {
-			toast.success(`${success} profiles moved successfully`);
-			refetch();
-		}
-		setSelectedServices([]);
-		setIsDropdownOpen(false);
-		setIsMoveDialogOpen(false);
-		setIsBulkActionLoading(false);
-		// Reset move dialog state
-		setSelectedTargetProject("");
-		setSelectedTargetEnvironment("");
+			},
+			`${selectedIds.size} profiles moved successfully`,
+			(serviceId, error) =>
+				`Error moving profile ${serviceId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+			() => {
+				setIsMoveDialogOpen(false);
+				setSelectedTargetProject("");
+				setSelectedTargetEnvironment("");
+			},
+		);
 	};
 
-	const handleBulkDelete = async (deleteVolumes = false) => {
-		let success = 0;
-		setIsBulkActionLoading(true);
-		for (const serviceId of selectedServices) {
-			try {
-				const service = filteredServices.find((s) => s.id === serviceId);
-				if (!service) continue;
-
-				switch (service.type) {
+	const handleBulkDelete = (deleteVolumesFlag = false) =>
+		runBulkAction(
+			async (serviceId, type) => {
+				switch (type) {
 					case "application":
 						await applicationActions.delete.mutateAsync({
 							applicationId: serviceId,
@@ -591,7 +551,7 @@ const EnvironmentPage = (
 					case "compose":
 						await composeActions.delete.mutateAsync({
 							composeId: serviceId,
-							deleteVolumes,
+							deleteVolumes: deleteVolumesFlag,
 						});
 						break;
 					case "postgres":
@@ -623,112 +583,60 @@ const EnvironmentPage = (
 				await utils.environment.one.invalidate({
 					environmentId,
 				});
-				success++;
-			} catch (error) {
-				toast.error(
-					`Error deleting profile ${serviceId}: ${error instanceof Error ? error.message : "Unknown error"}`,
-				);
-			}
-		}
-		if (success > 0) {
-			toast.success(`${success} profiles deleted successfully`);
-			refetch();
-		}
-		setSelectedServices([]);
-		setIsDropdownOpen(false);
-		setIsBulkActionLoading(false);
-	};
+			},
+			`${selectedIds.size} profiles deleted successfully`,
+			(serviceId, error) =>
+				`Error deleting profile ${serviceId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+		);
 
-	const handleBulkDeploy = async () => {
-		let success = 0;
-		let failed = 0;
-		setIsBulkActionLoading(true);
-
-		for (const serviceId of selectedServices) {
-			try {
-				const service = filteredServices.find((s) => s.id === serviceId);
-				if (!service) continue;
-
-				switch (service.type) {
+	const handleBulkDeploy = () =>
+		runBulkAction(
+			(serviceId, type) => {
+				switch (type) {
 					case "application":
-						await applicationActions.deploy.mutateAsync({
+						return applicationActions.deploy.mutateAsync({
 							applicationId: serviceId,
 						});
-						break;
 					case "compose":
-						await composeActions.deploy.mutateAsync({
+						return composeActions.deploy.mutateAsync({
 							composeId: serviceId,
 						});
-						break;
 					case "postgres":
-						await postgresActions.deploy.mutateAsync({
+						return postgresActions.deploy.mutateAsync({
 							postgresId: serviceId,
 						});
-						break;
 					case "mysql":
-						await mysqlActions.deploy.mutateAsync({
+						return mysqlActions.deploy.mutateAsync({
 							mysqlId: serviceId,
 						});
-						break;
 					case "mariadb":
-						await mariadbActions.deploy.mutateAsync({
+						return mariadbActions.deploy.mutateAsync({
 							mariadbId: serviceId,
 						});
-						break;
 					case "redis":
-						await redisActions.deploy.mutateAsync({
+						return redisActions.deploy.mutateAsync({
 							redisId: serviceId,
 						});
-						break;
 					case "mongo":
-						await mongoActions.deploy.mutateAsync({
+						return mongoActions.deploy.mutateAsync({
 							mongoId: serviceId,
 						});
-						break;
 				}
-				success++;
-			} catch (error) {
-				failed++;
-				toast.error(
-					`Error deploying profile ${serviceId}: ${error instanceof Error ? error.message : "Unknown error"}`,
-				);
-			}
-		}
-		if (success > 0) {
-			toast.success(
-				`${success} profile${success !== 1 ? "s" : ""} deployed successfully`,
-			);
-		}
-		if (failed > 0) {
-			toast.error(
-				`${failed} profile${failed !== 1 ? "s" : ""} failed to deploy`,
-			);
-		}
-
-		setSelectedServices([]);
-		setIsDropdownOpen(false);
-		setIsBulkActionLoading(false);
-	};
-
-	const filteredServices = useMemo(() => {
-		if (!applications) return [];
-		const filtered = applications.filter(
-			(service) =>
-				(service.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-					service.description
-						?.toLowerCase()
-						.includes(searchQuery.toLowerCase())) &&
-				(selectedTypes.length === 0 || selectedTypes.includes(service.type)),
+			},
+			`${selectedIds.size} profile${selectedIds.size !== 1 ? "s" : ""} deployed successfully`,
+			(serviceId, error) =>
+				`Error deploying profile ${serviceId}: ${error instanceof Error ? error.message : "Unknown error"}`,
 		);
-		return sortServices(filtered);
-	}, [applications, searchQuery, selectedTypes, sortBy]);
 
-	const selectedServicesWithRunningStatus = useMemo(() => {
-		return filteredServices.filter(
-			(service) =>
-				selectedServices.includes(service.id) && service.status === "running",
-		);
-	}, [filteredServices, selectedServices]);
+	const selectedServicesWithRunningStatus = useMemo(
+		() =>
+			[...selectedIds]
+				.map((id) => applications.find((service) => service.id === id))
+				.filter(
+					(service): service is Services => service?.status === "running",
+				),
+		[selectedIds, applications],
+	);
 
 	if (isLoading) {
 		return (
@@ -749,8 +657,49 @@ const EnvironmentPage = (
 		);
 	}
 
+	const canCreateProfile =
+		auth?.role === "owner" || auth?.canCreateServices === true;
+
+	const sortValue = `${state.sortKey}-${state.sortDirection}`;
+	const sortSelect = (
+		<Select
+			value={sortValue}
+			onValueChange={(value) => {
+				const sort = SORT_VALUES[value];
+				if (!sort) return;
+				setState((previous) => ({
+					...previous,
+					sortKey: sort.key,
+					sortDirection: sort.direction,
+					page: 1,
+				}));
+			}}
+		>
+			<SelectTrigger className="w-44" aria-label="Sort profiles">
+				<SelectValue />
+			</SelectTrigger>
+			<SelectContent>
+				<SelectItem value="name-asc">Name (A-Z)</SelectItem>
+				<SelectItem value="name-desc">Name (Z-A)</SelectItem>
+				<SelectItem value="type-asc">Type (A-Z)</SelectItem>
+				<SelectItem value="type-desc">Type (Z-A)</SelectItem>
+				<SelectItem value="createdAt-desc">Newest first</SelectItem>
+				<SelectItem value="createdAt-asc">Oldest first</SelectItem>
+			</SelectContent>
+		</Select>
+	);
+
+	const toggleRow = (id: string) => {
+		setSelectedIds((previous) => {
+			const next = new Set(previous);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
+			return next;
+		});
+	};
+
 	return (
-		<div>
+		<>
 			<BreadcrumbSidebar
 				list={[
 					{ name: "Projects", href: "/dashboard/projects" },
@@ -767,660 +716,505 @@ const EnvironmentPage = (
 					Environment: {currentEnvironment.name} | {projectData?.name} | Vulseek
 				</title>
 			</Head>
-			<div className="w-full">
-				<Card className="h-full bg-sidebar p-2.5 rounded-xl">
-					<div className="rounded-xl bg-background shadow-md">
-						<div className="flex justify-between gap-4 w-full items-center flex-wrap p-6">
-							<CardHeader className="p-0">
-								<CardTitle className="text-xl flex flex-row gap-2 items-center">
-									<FolderInput className="size-6 text-muted-foreground self-center" />
-									{currentEnvironment.project.name}
-									<AdvancedEnvironmentSelector
-										projectId={projectId}
-										currentEnvironmentId={environmentId}
-									/>
-									<EnvironmentVariables environmentId={environmentId}>
-										<Button variant="ghost" size="icon">
-											<SquareTerminal className="size-5 text-muted-foreground cursor-pointer" />
+			<DashboardPage>
+				<DashboardPageHeader
+					icon={<FolderInput />}
+					title={
+						// Project name + env selector must not share a compressed
+						// size-7 button slot (that overlapped "wordpress" / "production").
+						<span className="flex min-w-0 max-w-full items-center gap-2">
+							<span className="min-w-0 shrink truncate">
+								{currentEnvironment.project.name}
+							</span>
+							<span className="flex shrink-0 items-center gap-1">
+								<AdvancedEnvironmentSelector
+									projectId={projectId}
+									currentEnvironmentId={environmentId}
+								/>
+								<EnvironmentVariables environmentId={environmentId}>
+									<Button
+										variant="ghost"
+										size="icon"
+										className="size-7"
+										aria-label="Environment variables"
+									>
+										<SquareTerminal className="size-4 text-muted-foreground" />
+									</Button>
+								</EnvironmentVariables>
+							</span>
+						</span>
+					}
+					description={
+						projectData?.description ||
+						currentEnvironment.description ||
+						"No description provided"
+					}
+					actions={
+						<>
+							<HandleProject projectId={projectId} trigger="button" />
+							<ProjectEnvironment projectId={projectId}>
+								<Button variant="outline">Project Environment</Button>
+							</ProjectEnvironment>
+							{canCreateProfile && (
+								<DropdownMenu>
+									<DropdownMenuTrigger asChild>
+										<Button>
+											<PlusIcon className="h-4 w-4" />
+											Create Profile
 										</Button>
-									</EnvironmentVariables>
-								</CardTitle>
-								<CardDescription>
-									{currentEnvironment.description || "No description provided"}
-								</CardDescription>
-								{projectData?.description ? (
-									<p className="mt-2 max-w-3xl whitespace-pre-wrap text-sm text-muted-foreground">
-										{projectData.description}
-									</p>
-								) : null}
-							</CardHeader>
-							<div className="flex flex-row gap-4 flex-wrap justify-between items-center">
-								<div className="flex flex-row gap-4 flex-wrap">
-									<HandleProject projectId={projectId} trigger="button" />
-									<ProjectEnvironment projectId={projectId}>
-										<Button variant="outline">Project Environment</Button>
-									</ProjectEnvironment>
-									{(auth?.role === "owner" || auth?.canCreateServices) && (
-										<DropdownMenu>
-											<DropdownMenuTrigger asChild>
-												<Button>
-													<PlusIcon className="h-4 w-4" />
-													Create Profile
-												</Button>
-											</DropdownMenuTrigger>
-											<DropdownMenuContent
-												className="w-[200px] space-y-2"
-												align="end"
-											>
-												<DropdownMenuLabel className="text-sm font-normal">
-													Actions
-												</DropdownMenuLabel>
-												<DropdownMenuSeparator />
-												<AddApplication
-													projectName={projectData?.name}
-													environmentId={environmentId}
-												/>
-												<AddDatabase
-													projectName={projectData?.name}
-													environmentId={environmentId}
-												/>
-												<AddCompose
-													projectName={projectData?.name}
-													environmentId={environmentId}
-												/>
-												<AddTemplate environmentId={environmentId} />
-												<AddAiAssistant
-													projectName={projectData?.name}
-													environmentId={environmentId}
-												/>
-											</DropdownMenuContent>
-										</DropdownMenu>
-									)}
-								</div>
-							</div>
-						</div>
-						<CardContent className="space-y-2 py-8 border-t gap-4 flex flex-col min-h-[60vh]">
-							<>
-								<div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-									<div className="flex items-center gap-4">
-										<div className="flex items-center gap-2">
-											<Checkbox
-												checked={selectedServices.length > 0}
-												className={cn(
-													"data-[state=checked]:bg-primary",
-													selectedServices.length > 0 &&
-														selectedServices.length < filteredServices.length &&
-														"bg-primary/50",
-												)}
-												onCheckedChange={handleSelectAll}
-											/>
-											<span className="text-sm">
-												Select All{" "}
-												{selectedServices.length > 0 &&
-													`(${selectedServices.length}/${filteredServices.length})`}
-											</span>
-										</div>
-
-										<DropdownMenu
-											open={isDropdownOpen}
-											onOpenChange={setIsDropdownOpen}
+									</DropdownMenuTrigger>
+									<DropdownMenuContent
+										className="w-[200px] space-y-2"
+										align="end"
+									>
+										<DropdownMenuLabel className="text-sm font-normal">
+											Actions
+										</DropdownMenuLabel>
+										<DropdownMenuSeparator />
+										<AddApplication
+											projectName={projectData?.name}
+											environmentId={environmentId}
+										/>
+										<AddDatabase
+											projectName={projectData?.name}
+											environmentId={environmentId}
+										/>
+										<AddCompose
+											projectName={projectData?.name}
+											environmentId={environmentId}
+										/>
+										<AddTemplate environmentId={environmentId} />
+										<AddAiAssistant
+											projectName={projectData?.name}
+											environmentId={environmentId}
+										/>
+									</DropdownMenuContent>
+								</DropdownMenu>
+							)}
+						</>
+					}
+				/>
+				<DashboardPageBody>
+					<CollectionView
+						state={state}
+						onStateChange={setState}
+						pageSizes={SERVICES_CONFIG.pageSizes}
+						data={{
+							items: profilesList.data?.items ?? [],
+							total: profilesList.data?.total ?? 0,
+						}}
+						isLoading={profilesList.isLoading && !profilesList.data}
+						isRefreshing={profilesList.isFetching && Boolean(profilesList.data)}
+						getRowId={(service) => service.id}
+						getRowLabel={(service) => service.name}
+						searchValue={searchInput}
+						onSearchValueChange={setSearchInput}
+						searchPlaceholder="Filter profiles..."
+						toolbarChildren={sortSelect}
+						filters={[
+							{
+								key: "type",
+								label: "Type",
+								options: SERVICE_TYPE_OPTIONS,
+							},
+						]}
+						emptyTitle={
+							applications.length === 0
+								? "No profiles added yet"
+								: "No profiles found with the current filters"
+						}
+						emptyDescription={
+							applications.length === 0
+								? "Click on Create Profile to add one."
+								: "Try adjusting your search or filters"
+						}
+						bulkActions={
+							<DropdownMenu
+								open={isDropdownOpen}
+								onOpenChange={setIsDropdownOpen}
+							>
+								<DropdownMenuTrigger asChild>
+									<Button
+										variant="outline"
+										size="sm"
+										isLoading={isBulkActionLoading}
+									>
+										Bulk Actions
+									</Button>
+								</DropdownMenuTrigger>
+								<DropdownMenuContent align="end">
+									<DropdownMenuLabel>Actions</DropdownMenuLabel>
+									<DropdownMenuSeparator />
+									<DialogAction
+										title="Start Profiles"
+										description={`Are you sure you want to start ${selectedIds.size} profiles?`}
+										type="default"
+										onClick={handleBulkStart}
+									>
+										<Button variant="ghost" className="w-full justify-start">
+											<CheckCircle2 className="mr-2 h-4 w-4" />
+											Start
+										</Button>
+									</DialogAction>
+									<DialogAction
+										title="Deploy Profiles"
+										description={`Are you sure you want to deploy ${selectedIds.size} profile${selectedIds.size !== 1 ? "s" : ""}? This will redeploy/restart the selected profiles.`}
+										onClick={handleBulkDeploy}
+										type="default"
+										disabled={isBulkActionLoading}
+									>
+										<Button variant="ghost" className="w-full justify-start">
+											<Play className="mr-2 h-4 w-4" />
+											Deploy
+										</Button>
+									</DialogAction>
+									<DialogAction
+										title="Stop Profiles"
+										description={`Are you sure you want to stop ${selectedIds.size} profiles?`}
+										type="destructive"
+										onClick={handleBulkStop}
+									>
+										<Button
+											variant="ghost"
+											className="w-full justify-start text-destructive"
 										>
-											<DropdownMenuTrigger asChild>
+											<Ban className="mr-2 h-4 w-4" />
+											Stop
+										</Button>
+									</DialogAction>
+									{(auth?.role === "owner" || auth?.canDeleteServices) && (
+										<>
+											<DialogAction
+												title="Delete Profiles"
+												description={
+													<div className="space-y-3">
+														<p>
+															Are you sure you want to delete {selectedIds.size}{" "}
+															profiles? This action cannot be undone.
+														</p>
+														{selectedServicesWithRunningStatus.length > 0 && (
+															<AlertBlock type="warning">
+																Warning:{" "}
+																{selectedServicesWithRunningStatus.length} of
+																the selected profiles are currently running.
+																Please stop these profiles first before
+																deleting:{" "}
+																{selectedServicesWithRunningStatus
+																	.map((s) => s.name)
+																	.join(", ")}
+															</AlertBlock>
+														)}
+													</div>
+												}
+												type="destructive"
+												disabled={selectedServicesWithRunningStatus.length > 0}
+												onClick={() => setIsBulkDeleteDialogOpen(true)}
+											>
 												<Button
-													variant="outline"
-													disabled={selectedServices.length === 0}
-													isLoading={isBulkActionLoading}
+													variant="ghost"
+													className="w-full justify-start text-destructive"
 												>
-													Bulk Actions
+													<Trash2 className="mr-2 h-4 w-4" />
+													Delete
 												</Button>
-											</DropdownMenuTrigger>
-											<DropdownMenuContent align="end">
-												<DropdownMenuLabel>Actions</DropdownMenuLabel>
-												<DropdownMenuSeparator />
-												<DialogAction
-													title="Start Profiles"
-													description={`Are you sure you want to start ${selectedServices.length} profiles?`}
-													type="default"
-													onClick={handleBulkStart}
-												>
-													<Button
-														variant="ghost"
-														className="w-full justify-start"
-													>
-														<CheckCircle2 className="mr-2 h-4 w-4" />
-														Start
-													</Button>
-												</DialogAction>
-												<DialogAction
-													title="Deploy Profiles"
-													description={`Are you sure you want to deploy ${selectedServices.length} profile${selectedServices.length !== 1 ? "s" : ""}? This will redeploy/restart the selected profiles.`}
-													onClick={handleBulkDeploy}
-													type="default"
-													disabled={
-														selectedServices.length === 0 || isBulkActionLoading
-													}
-												>
-													<Button
-														variant="ghost"
-														className="w-full justify-start"
-													>
-														<Play className="mr-2 h-4 w-4" />
-														Deploy
-													</Button>
-												</DialogAction>
-												<DialogAction
-													title="Stop Profiles"
-													description={`Are you sure you want to stop ${selectedServices.length} profiles?`}
-													type="destructive"
-													onClick={handleBulkStop}
-												>
-													<Button
-														variant="ghost"
-														className="w-full justify-start text-destructive"
-													>
-														<Ban className="mr-2 h-4 w-4" />
-														Stop
-													</Button>
-												</DialogAction>
-												{(auth?.role === "owner" ||
-													auth?.canDeleteServices) && (
-													<>
-														<DialogAction
-															title="Delete Profiles"
-															description={
-																<div className="space-y-3">
-																	<p>
-																		Are you sure you want to delete{" "}
-																		{selectedServices.length} profiles? This
-																		action cannot be undone.
-																	</p>
-																	{selectedServicesWithRunningStatus.length >
-																		0 && (
-																		<AlertBlock type="warning">
-																			Warning:{" "}
-																			{selectedServicesWithRunningStatus.length}{" "}
-																			of the selected profiles are currently
-																			running. Please stop these profiles first
-																			before deleting:{" "}
-																			{selectedServicesWithRunningStatus
-																				.map((s) => s.name)
-																				.join(", ")}
-																		</AlertBlock>
-																	)}
-																</div>
-															}
-															type="destructive"
-															disabled={
-																selectedServicesWithRunningStatus.length > 0
-															}
-															onClick={() => setIsBulkDeleteDialogOpen(true)}
-														>
-															<Button
-																variant="ghost"
-																className="w-full justify-start text-destructive"
-															>
-																<Trash2 className="mr-2 h-4 w-4" />
-																Delete
-															</Button>
-														</DialogAction>
-														<DuplicateProject
-															environmentId={environmentId}
-															services={applications}
-															selectedServiceIds={selectedServices}
-														/>
-													</>
-												)}
-
-												<Dialog
-													open={isMoveDialogOpen}
-													onOpenChange={setIsMoveDialogOpen}
-												>
-													<DialogTrigger asChild>
-														<Button
-															variant="ghost"
-															className="w-full justify-start"
-														>
-															<FolderInput className="mr-2 h-4 w-4" />
-															Move
-														</Button>
-													</DialogTrigger>
-													<DialogContent>
-														<DialogHeader>
-															<DialogTitle>Move Profiles</DialogTitle>
-															<DialogDescription>
-																Select the target project and environment to
-																move {selectedServices.length} profiles
-															</DialogDescription>
-														</DialogHeader>
-														<div className="flex flex-col gap-4">
-															{allProjects?.length === 0 ? (
-																<div className="flex flex-col items-center justify-center gap-2 py-4">
-																	<FolderInput className="h-8 w-8 text-muted-foreground" />
-																	<p className="text-sm text-muted-foreground text-center">
-																		No other projects available. Create a new
-																		project first to move profiles.
-																	</p>
-																</div>
-															) : (
-																<>
-																	{/* Step 1: Select Project */}
-																	<div className="flex flex-col gap-2">
-																		<label
-																			htmlFor="target-project"
-																			className="text-sm font-medium"
-																		>
-																			Target Project
-																		</label>
-																		<Select
-																			value={selectedTargetProject}
-																			onValueChange={(value) => {
-																				setSelectedTargetProject(value);
-																				setSelectedTargetEnvironment(""); // Reset environment when project changes
-																			}}
-																		>
-																			<SelectTrigger>
-																				<SelectValue placeholder="Select target project" />
-																			</SelectTrigger>
-																			<SelectContent>
-																				{allProjects?.map((project) => (
-																					<SelectItem
-																						key={project.projectId}
-																						value={project.projectId}
-																					>
-																						{project.name}
-																					</SelectItem>
-																				))}
-																			</SelectContent>
-																		</Select>
-																	</div>
-
-																	{/* Step 2: Select Environment (only show if project is selected) */}
-																	{selectedTargetProject && (
-																		<div className="flex flex-col gap-2">
-																			<label
-																				htmlFor="target-environment"
-																				className="text-sm font-medium"
-																			>
-																				Target Environment
-																			</label>
-																			<Select
-																				value={selectedTargetEnvironment}
-																				onValueChange={
-																					setSelectedTargetEnvironment
-																				}
-																			>
-																				<SelectTrigger>
-																					<SelectValue placeholder="Select target environment" />
-																				</SelectTrigger>
-																				<SelectContent>
-																					{selectedProjectEnvironments
-																						?.filter(
-																							(env) =>
-																								env.environmentId !==
-																								environmentId,
-																						)
-																						.map((env) => (
-																							<SelectItem
-																								key={env.environmentId}
-																								value={env.environmentId}
-																							>
-																								{env.name}
-																							</SelectItem>
-																						))}
-																				</SelectContent>
-																			</Select>
-																		</div>
-																	)}
-																</>
-															)}
-														</div>
-														<DialogFooter>
-															<Button
-																variant="outline"
-																onClick={() => {
-																	setIsMoveDialogOpen(false);
-																	setSelectedTargetProject("");
-																	setSelectedTargetEnvironment("");
-																}}
-															>
-																Cancel
-															</Button>
-															<Button
-																onClick={handleBulkMove}
-																isLoading={isBulkActionLoading}
-																disabled={
-																	allProjects?.length === 0 ||
-																	!selectedTargetProject ||
-																	!selectedTargetEnvironment
-																}
-															>
-																Move Profiles
-															</Button>
-														</DialogFooter>
-													</DialogContent>
-												</Dialog>
-
-												{/* Bulk Delete Dialog */}
-												<Dialog
-													open={isBulkDeleteDialogOpen}
-													onOpenChange={setIsBulkDeleteDialogOpen}
-												>
-													<DialogContent>
-														<DialogHeader>
-															<DialogTitle>Delete Profiles</DialogTitle>
-															<DialogDescription>
-																Are you sure you want to delete{" "}
-																{selectedServices.length} profile
-																{selectedServices.length !== 1 ? "s" : ""}? This
-																action cannot be undone.
-															</DialogDescription>
-														</DialogHeader>
-
-														<div className="space-y-4">
-															{/* Show profiles to be deleted */}
-															<div className="max-h-40 overflow-y-auto space-y-2">
-																{selectedServices.map((serviceId) => {
-																	const service = filteredServices.find(
-																		(s) => s.id === serviceId,
-																	);
-																	return service ? (
-																		<div
-																			key={serviceId}
-																			className="flex items-center space-x-2 text-sm"
-																		>
-																			<span className="px-2 py-1 text-xs bg-secondary rounded">
-																				{service.type}
-																			</span>
-																			<span>{service.name}</span>
-																		</div>
-																	) : null;
-																})}
-															</div>
-
-															{/* Volume deletion option for compose profiles */}
-															{(() => {
-																const servicesWithVolumeSupport =
-																	selectedServices.filter((serviceId) => {
-																		const service = filteredServices.find(
-																			(s) => s.id === serviceId,
-																		);
-																		// Currently only compose profiles support volume deletion
-																		return service?.type === "compose";
-																	});
-
-																if (servicesWithVolumeSupport.length === 0)
-																	return null;
-
-																return (
-																	<div className="space-y-2">
-																		<div className="flex items-center space-x-2">
-																			<Checkbox
-																				id="deleteVolumes"
-																				checked={deleteVolumes}
-																				onCheckedChange={(checked) =>
-																					setDeleteVolumes(checked === true)
-																				}
-																			/>
-																			<label
-																				htmlFor="deleteVolumes"
-																				className="text-sm font-medium"
-																			>
-																				Delete volumes associated with profiles
-																			</label>
-																		</div>
-																		<p className="text-xs text-muted-foreground">
-																			Volume deletion is available for:{" "}
-																			{servicesWithVolumeSupport.length} compose
-																			profile
-																			{servicesWithVolumeSupport.length !== 1
-																				? "s"
-																				: ""}
-																		</p>
-																	</div>
-																);
-															})()}
-														</div>
-
-														<DialogFooter>
-															<Button
-																variant="outline"
-																onClick={() => {
-																	setIsBulkDeleteDialogOpen(false);
-																	setDeleteVolumes(false); // Reset checkbox
-																}}
-															>
-																Cancel
-															</Button>
-															<Button
-																variant="destructive"
-																onClick={() => {
-																	handleBulkDelete(deleteVolumes);
-																	setIsBulkDeleteDialogOpen(false);
-																	setDeleteVolumes(false); // Reset checkbox
-																}}
-																disabled={isBulkActionLoading}
-															>
-																Delete Profiles
-															</Button>
-														</DialogFooter>
-													</DialogContent>
-												</Dialog>
-											</DropdownMenuContent>
-										</DropdownMenu>
-									</div>
-
-									<div className="flex flex-col gap-2 lg:flex-row lg:gap-4 lg:items-center">
-										<div className="w-full relative">
-											<FocusShortcutInput
-												placeholder="Filter profiles..."
-												value={searchQuery}
-												onChange={(e) => setSearchQuery(e.target.value)}
-												className="pr-10"
+											</DialogAction>
+											<DuplicateProject
+												environmentId={environmentId}
+												services={applications}
+												selectedServiceIds={[...selectedIds]}
 											/>
-											<Search className="absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-										</div>
-										<Select value={sortBy} onValueChange={setSortBy}>
-											<SelectTrigger className="lg:w-[280px]">
-												<SelectValue placeholder="Sort by..." />
-											</SelectTrigger>
-											<SelectContent>
-												<SelectItem value="createdAt-desc">
-													Newest first
-												</SelectItem>
-												<SelectItem value="createdAt-asc">
-													Oldest first
-												</SelectItem>
-												<SelectItem value="name-asc">Name (A-Z)</SelectItem>
-												<SelectItem value="name-desc">Name (Z-A)</SelectItem>
-												<SelectItem value="type-asc">Type (A-Z)</SelectItem>
-												<SelectItem value="type-desc">Type (Z-A)</SelectItem>
-											</SelectContent>
-										</Select>
-										<Popover open={openCombobox} onOpenChange={setOpenCombobox}>
-											<PopoverTrigger asChild>
-												<Button
-													variant="outline"
-													aria-expanded={openCombobox}
-													className="min-w-[200px] justify-between"
-												>
-													{selectedTypes.length === 0
-														? "Select types..."
-														: `${selectedTypes.length} selected`}
-													<ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-												</Button>
-											</PopoverTrigger>
-											<PopoverContent className="w-[200px] p-0">
-												<Command>
-													<CommandInput placeholder="Search type..." />
-													<CommandEmpty>No type found.</CommandEmpty>
-													<CommandGroup>
-														{serviceTypes.map((type) => (
-															<CommandItem
-																key={type.value}
-																onSelect={() => {
-																	setSelectedTypes((prev) =>
-																		prev.includes(type.value)
-																			? prev.filter((t) => t !== type.value)
-																			: [...prev, type.value],
-																	);
-																	setOpenCombobox(false);
+										</>
+									)}
+
+									<Dialog
+										open={isMoveDialogOpen}
+										onOpenChange={setIsMoveDialogOpen}
+									>
+										<DialogTrigger asChild>
+											<Button variant="ghost" className="w-full justify-start">
+												<FolderInput className="mr-2 h-4 w-4" />
+												Move
+											</Button>
+										</DialogTrigger>
+										<DialogContent>
+											<DialogHeader>
+												<DialogTitle>Move Profiles</DialogTitle>
+												<DialogDescription>
+													Select the target project and environment to move{" "}
+													{selectedIds.size} profiles
+												</DialogDescription>
+											</DialogHeader>
+											<div className="flex flex-col gap-4">
+												{allProjects?.length === 0 ? (
+													<div className="flex flex-col items-center justify-center gap-2 py-4">
+														<FolderInput className="h-8 w-8 text-muted-foreground" />
+														<p className="text-sm text-muted-foreground text-center">
+															No other projects available. Create a new project
+															first to move profiles.
+														</p>
+													</div>
+												) : (
+													<>
+														{/* Step 1: Select Project */}
+														<div className="flex flex-col gap-2">
+															<label
+																htmlFor="target-project"
+																className="text-sm font-medium"
+															>
+																Target Project
+															</label>
+															<Select
+																value={selectedTargetProject}
+																onValueChange={(value) => {
+																	setSelectedTargetProject(value);
+																	setSelectedTargetEnvironment(""); // Reset environment when project changes
 																}}
 															>
-																<div className="flex flex-row">
-																	<Check
-																		className={cn(
-																			"mr-2 h-4 w-4",
-																			selectedTypes.includes(type.value)
-																				? "opacity-100"
-																				: "opacity-0",
-																		)}
-																	/>
-																	{type.icon && (
-																		<type.icon className="mr-2 h-4 w-4" />
-																	)}
-																	{type.label}
-																</div>
-															</CommandItem>
-														))}
-														<CommandItem
-															onSelect={() => {
-																setSelectedTypes([]);
-																setOpenCombobox(false);
-															}}
-															className="border-t"
-														>
-															<div className="flex flex-row items-center">
-																<X className="mr-2 h-4 w-4" />
-																Clear filters
-															</div>
-														</CommandItem>
-													</CommandGroup>
-												</Command>
-											</PopoverContent>
-										</Popover>
-									</div>
-								</div>
+																<SelectTrigger>
+																	<SelectValue placeholder="Select target project" />
+																</SelectTrigger>
+																<SelectContent>
+																	{allProjects?.map((project) => (
+																		<SelectItem
+																			key={project.projectId}
+																			value={project.projectId}
+																		>
+																			{project.name}
+																		</SelectItem>
+																	))}
+																</SelectContent>
+															</Select>
+														</div>
 
-								<div className="flex w-full gap-8">
-									{emptyServices ? (
-										<div className="flex h-[70vh] w-full flex-col items-center justify-center">
-											<FolderInput className="size-8 self-center text-muted-foreground" />
-											<span className="text-center font-medium text-muted-foreground">
-												No profiles added yet. Click on Create Profile.
-											</span>
-										</div>
-									) : filteredServices.length === 0 ? (
-										<div className="flex h-[70vh] w-full flex-col items-center justify-center">
-											<Search className="size-8 self-center text-muted-foreground" />
-											<span className="text-center font-medium text-muted-foreground">
-												No profiles found with the current filters
-											</span>
-											<span className="text-sm text-muted-foreground">
-												Try adjusting your search or filters
-											</span>
-										</div>
-									) : (
-										<div className="flex w-full flex-col gap-4">
-											<div className="gap-5 pb-10 grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
-												{filteredServices?.map((service) => (
-													<Card
-														key={service.id}
-														onClick={() => {
-															router.push(
-																`/dashboard/project/${projectId}/environment/${environmentId}/profiles/${service.type}/${service.id}`,
-															);
-														}}
-														className="flex flex-col group relative cursor-pointer bg-transparent transition-colors hover:bg-border"
-													>
-														{service.serverId && (
-															<div className="absolute -left-1 -top-2">
-																<ServerIcon className="size-4 text-muted-foreground" />
+														{/* Step 2: Select Environment (only show if project is selected) */}
+														{selectedTargetProject && (
+															<div className="flex flex-col gap-2">
+																<label
+																	htmlFor="target-environment"
+																	className="text-sm font-medium"
+																>
+																	Target Environment
+																</label>
+																<Select
+																	value={selectedTargetEnvironment}
+																	onValueChange={setSelectedTargetEnvironment}
+																>
+																	<SelectTrigger>
+																		<SelectValue placeholder="Select target environment" />
+																	</SelectTrigger>
+																	<SelectContent>
+																		{selectedProjectEnvironments
+																			?.filter(
+																				(env) =>
+																					env.environmentId !== environmentId,
+																			)
+																			.map((env) => (
+																				<SelectItem
+																					key={env.environmentId}
+																					value={env.environmentId}
+																				>
+																					{env.name}
+																				</SelectItem>
+																			))}
+																	</SelectContent>
+																</Select>
 															</div>
 														)}
-														<div className="absolute -right-1 -top-2">
-															<StatusTooltip status={service.status} />
-														</div>
-
-														<div
-															className={cn(
-																"absolute -left-3 -bottom-3 size-9 translate-y-1 rounded-full p-0 transition-all duration-200 z-10 bg-background border",
-																selectedServices.includes(service.id)
-																	? "opacity-100 translate-y-0"
-																	: "opacity-0 group-hover:translate-y-0 group-hover:opacity-100",
-															)}
-															onClick={(e) =>
-																handleServiceSelect(service.id, e)
-															}
-														>
-															<div className="h-full w-full flex items-center justify-center">
-																<Checkbox
-																	checked={selectedServices.includes(
-																		service.id,
-																	)}
-																	className="data-[state=checked]:bg-primary"
-																/>
-															</div>
-														</div>
-
-														<CardHeader>
-															<CardTitle className="flex items-center justify-between">
-																<div className="flex flex-row items-center gap-2 justify-between w-full">
-																	<div className="flex flex-col gap-2">
-																		<span className="text-base flex items-center gap-2 font-medium leading-none flex-wrap">
-																			{service.name}
-																		</span>
-																		{service.description && (
-																			<span className="text-sm font-medium text-muted-foreground">
-																				{service.description}
-																			</span>
-																		)}
-																	</div>
-
-																	<span className="text-sm font-medium text-muted-foreground self-start">
-																		{service.type === "postgres" && (
-																			<PostgresqlIcon className="h-7 w-7" />
-																		)}
-																		{service.type === "redis" && (
-																			<RedisIcon className="h-7 w-7" />
-																		)}
-																		{service.type === "mariadb" && (
-																			<MariadbIcon className="h-7 w-7" />
-																		)}
-																		{service.type === "mongo" && (
-																			<MongodbIcon className="h-7 w-7" />
-																		)}
-																		{service.type === "mysql" && (
-																			<MysqlIcon className="h-7 w-7" />
-																		)}
-																		{service.type === "application" && (
-																			<GlobeIcon className="h-6 w-6" />
-																		)}
-																		{service.type === "compose" && (
-																			<CircuitBoard className="h-6 w-6" />
-																		)}
-																	</span>
-																</div>
-															</CardTitle>
-														</CardHeader>
-														<CardFooter className="mt-auto">
-															<div className="space-y-1 text-sm">
-																<DateTooltip date={service.createdAt}>
-																	Created
-																</DateTooltip>
-															</div>
-														</CardFooter>
-													</Card>
-												))}
+													</>
+												)}
 											</div>
+											<DialogFooter>
+												<Button
+													variant="outline"
+													onClick={() => {
+														setIsMoveDialogOpen(false);
+														setSelectedTargetProject("");
+														setSelectedTargetEnvironment("");
+													}}
+												>
+													Cancel
+												</Button>
+												<Button
+													onClick={handleBulkMove}
+													isLoading={isBulkActionLoading}
+													disabled={
+														allProjects?.length === 0 ||
+														!selectedTargetProject ||
+														!selectedTargetEnvironment
+													}
+												>
+													Move Profiles
+												</Button>
+											</DialogFooter>
+										</DialogContent>
+									</Dialog>
+
+									{/* Bulk Delete Dialog */}
+									<Dialog
+										open={isBulkDeleteDialogOpen}
+										onOpenChange={setIsBulkDeleteDialogOpen}
+									>
+										<DialogContent>
+											<DialogHeader>
+												<DialogTitle>Delete Profiles</DialogTitle>
+												<DialogDescription>
+													Are you sure you want to delete {selectedIds.size}{" "}
+													profile
+													{selectedIds.size !== 1 ? "s" : ""}? This action
+													cannot be undone.
+												</DialogDescription>
+											</DialogHeader>
+
+											<div className="space-y-4">
+												{/* Show profiles to be deleted */}
+												<div className="max-h-40 overflow-y-auto space-y-2">
+													{[...selectedIds].map((serviceId) => {
+														const service = applications.find(
+															(s) => s.id === serviceId,
+														);
+														return service ? (
+															<div
+																key={serviceId}
+																className="flex items-center space-x-2 text-sm"
+															>
+																<span className="px-2 py-1 text-xs bg-secondary rounded">
+																	{service.type}
+																</span>
+																<span>{service.name}</span>
+															</div>
+														) : null;
+													})}
+												</div>
+
+												{/* Volume deletion option for compose profiles */}
+												{(() => {
+													const servicesWithVolumeSupport = [
+														...selectedIds,
+													].filter((serviceId) => {
+														const service = applications.find(
+															(s) => s.id === serviceId,
+														);
+														// Currently only compose profiles support volume deletion
+														return service?.type === "compose";
+													});
+
+													if (servicesWithVolumeSupport.length === 0)
+														return null;
+
+													return (
+														<div className="space-y-2">
+															<div className="flex items-center space-x-2">
+																<Checkbox
+																	id="deleteVolumes"
+																	checked={deleteVolumes}
+																	onCheckedChange={(checked) =>
+																		setDeleteVolumes(checked === true)
+																	}
+																/>
+																<label
+																	htmlFor="deleteVolumes"
+																	className="text-sm font-medium"
+																>
+																	Delete volumes associated with profiles
+																</label>
+															</div>
+															<p className="text-xs text-muted-foreground">
+																Volume deletion is available for:{" "}
+																{servicesWithVolumeSupport.length} compose
+																profile
+																{servicesWithVolumeSupport.length !== 1
+																	? "s"
+																	: ""}
+															</p>
+														</div>
+													);
+												})()}
+											</div>
+
+											<DialogFooter>
+												<Button
+													variant="outline"
+													onClick={() => {
+														setIsBulkDeleteDialogOpen(false);
+														setDeleteVolumes(false); // Reset checkbox
+													}}
+												>
+													Cancel
+												</Button>
+												<Button
+													variant="destructive"
+													onClick={() => {
+														handleBulkDelete(deleteVolumes);
+														setIsBulkDeleteDialogOpen(false);
+														setDeleteVolumes(false); // Reset checkbox
+													}}
+													disabled={isBulkActionLoading}
+												>
+													Delete Profiles
+												</Button>
+											</DialogFooter>
+										</DialogContent>
+									</Dialog>
+								</DropdownMenuContent>
+							</DropdownMenu>
+						}
+						selectedIds={selectedIds}
+						onToggleRow={toggleRow}
+						onTogglePage={(pageIds, allSelected) => {
+							setSelectedIds((previous) => {
+								const next = new Set(previous);
+								if (allSelected) {
+									for (const id of pageIds) next.delete(id);
+								} else {
+									for (const id of pageIds) next.add(id);
+								}
+								return next;
+							});
+						}}
+						onClearSelection={() => setSelectedIds(new Set())}
+						renderCard={(service) => (
+							<ResourceCard
+								key={service.id}
+								href={
+									"/dashboard/project/" +
+									projectId +
+									"/environment/" +
+									environmentId +
+									"/profiles/" +
+									service.type +
+									"/" +
+									service.id
+								}
+								title={service.name}
+								description={service.description || undefined}
+								icon={<ServiceTypeIcon type={service.type} />}
+								actions={
+									<div className="flex items-center gap-2">
+										{service.serverId ? (
+											<ServerIcon className="size-4 text-muted-foreground" />
+										) : null}
+										<StatusTooltip status={service.status} />
+									</div>
+								}
+								footer={
+									<div className="flex w-full items-center justify-between gap-4 text-xs leading-5 text-muted-foreground">
+										<DateTooltip date={service.createdAt}>Created</DateTooltip>
+										{/* h-5 matches text-xs row — size-8 checkbox made profile cards taller */}
+										<div className="relative z-20 flex h-5 items-center">
+											<Checkbox
+												checked={selectedIds.has(service.id)}
+												onCheckedChange={() => toggleRow(service.id)}
+												aria-label={`Select profile ${service.name}`}
+											/>
 										</div>
-									)}
-								</div>
-							</>
-						</CardContent>
-					</div>
-				</Card>
-			</div>
-		</div>
+									</div>
+								}
+							/>
+						)}
+					/>
+				</DashboardPageBody>
+			</DashboardPage>
+		</>
 	);
 };
 

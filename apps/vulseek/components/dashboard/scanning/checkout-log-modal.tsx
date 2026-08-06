@@ -1,6 +1,6 @@
 import { Loader2 } from "lucide-react";
-import { useTheme } from "next-themes";
 import { useTranslation } from "next-i18next";
+import { useTheme } from "next-themes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import {

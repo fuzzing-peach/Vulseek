@@ -1,45 +1,109 @@
-import { ArrowRight, Database, Loader2 } from "lucide-react";
-import Link from "next/link";
+import { Database } from "lucide-react";
+import { useRouter } from "next/router";
 import type { ReactElement } from "react";
-import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { DashboardLayout } from "@/components/layouts/dashboard-layout";
-import { api } from "@/utils/api";
 import { CreateDatasetDialog } from "@/components/dashboard/datasets/create-dataset-dialog";
+import {
+	CollectionView,
+	DashboardPage,
+	DashboardPageBody,
+	DashboardPageHeader,
+	ResourceCard,
+	useCollectionQuery,
+} from "@/components/dashboard/ui-system";
+import { DashboardLayout } from "@/components/layouts/dashboard-layout";
+import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
+import type { ListQueryConfig } from "@/lib/ui-system/list-query";
+import { api } from "@/utils/api";
+
+const DATASETS_LIST_CONFIG: ListQueryConfig = {
+	prefix: "datasets",
+	sortOptions: [
+		{ value: "name", label: "Name" },
+		{ value: "updatedAt", label: "Updated" },
+	],
+	filterKeys: [],
+	defaultSortKey: "updatedAt",
+	defaultSortDirection: "desc",
+	defaultPageSize: 12,
+	pageSizes: [12, 24, 48],
+};
 
 const DatasetsPage = () => {
-	const query = api.dataset.all.useQuery();
+	const router = useRouter();
 	const { data: auth } = api.user.get.useQuery();
+	const { state, setState, searchInput, setSearchInput, deferredQuery } =
+		useCollectionQuery(router, DATASETS_LIST_CONFIG);
+
+	const list = api.dataset.list.useQuery(
+		{
+			page: state.page,
+			pageSize: state.pageSize,
+			search: deferredQuery || undefined,
+			sortKey: (state.sortKey || "updatedAt") as "name" | "updatedAt",
+			sortDirection: state.sortDirection,
+		},
+		{ keepPreviousData: true },
+	);
+
+	const canCreate = auth?.role === "owner" || auth?.role === "admin";
+
 	return (
 		<>
-			<BreadcrumbSidebar list={[{ name: "Datasets", href: "/dashboard/datasets" }]} />
-			<div className="w-full">
-				<Card className="h-full bg-sidebar p-2.5 rounded-xl">
-					<div className="rounded-xl bg-background shadow-md">
-						<div className="flex items-center justify-between gap-4 p-6">
-							<div>
-								<CardTitle className="flex items-center gap-2"><Database className="size-5 text-muted-foreground" />Datasets</CardTitle>
-								<CardDescription>Evaluate scan pipelines against reproducible sample collections.</CardDescription>
-							</div>
-							{(auth?.role === "owner" || auth?.role === "admin") && <CreateDatasetDialog />}
-						</div>
-						<CardContent className="grid gap-4 border-t p-6 sm:grid-cols-2 xl:grid-cols-3">
-							{query.isLoading && <div className="col-span-full flex min-h-48 items-center justify-center"><Loader2 className="size-5 animate-spin" /></div>}
-							{!query.isLoading && query.data?.length === 0 && <div className="col-span-full py-20 text-center text-muted-foreground">No datasets yet.</div>}
-							{query.data?.map((dataset) => (
-								<Link key={dataset.datasetId} href={`/dashboard/datasets/${dataset.datasetId}`} className="group rounded-lg border bg-card p-5 transition-colors hover:border-primary">
-									<div className="flex items-start justify-between gap-3"><div><h2 className="font-semibold">{dataset.name}</h2><p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{dataset.description || "No description"}</p></div><ArrowRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-1" /></div>
-									<div className="mt-5 flex gap-4 text-xs text-muted-foreground"><span>{dataset.sampleCount} samples</span><span>{dataset.evaluationCount} evaluations</span></div>
-								</Link>
-							))}
-						</CardContent>
-					</div>
-				</Card>
-			</div>
+			<BreadcrumbSidebar
+				list={[{ name: "Datasets", href: "/dashboard/datasets" }]}
+			/>
+			<DashboardPage>
+				<DashboardPageHeader
+					icon={<Database />}
+					title="Datasets"
+					description="Evaluate scan pipelines against reproducible sample collections."
+					actions={canCreate ? <CreateDatasetDialog /> : undefined}
+				/>
+				<DashboardPageBody>
+					<CollectionView
+						state={state}
+						onStateChange={setState}
+						data={{
+							items: list.data?.items ?? [],
+							total: list.data?.total ?? 0,
+						}}
+						isLoading={list.isLoading && !list.data}
+						isRefreshing={list.isFetching && Boolean(list.data)}
+						getRowId={(dataset) => dataset.datasetId}
+						getRowLabel={(dataset) => dataset.name}
+						searchValue={searchInput}
+						onSearchValueChange={setSearchInput}
+						searchPlaceholder="Filter datasets..."
+						emptyTitle="No datasets yet"
+						emptyDescription="Create a dataset to prepare reproducible sample collections."
+						renderCard={(dataset) => (
+							<ResourceCard
+								key={dataset.datasetId}
+								href={`/dashboard/datasets/${dataset.datasetId}`}
+								title={dataset.name}
+								description={dataset.description || "No description"}
+								icon={<Database />}
+								footer={
+									<div className="flex w-full items-center justify-between gap-4 text-xs text-muted-foreground">
+										<span>{dataset.sampleCount} samples</span>
+										<span className="text-foreground/80">
+											{dataset.evaluationCount}{" "}
+											{dataset.evaluationCount === 1
+												? "evaluation"
+												: "evaluations"}
+										</span>
+									</div>
+								}
+							/>
+						)}
+					/>
+				</DashboardPageBody>
+			</DashboardPage>
 		</>
 	);
 };
 
-DatasetsPage.getLayout = (page: ReactElement) => <DashboardLayout>{page}</DashboardLayout>;
+DatasetsPage.getLayout = (page: ReactElement) => (
+	<DashboardLayout>{page}</DashboardLayout>
+);
 export default DatasetsPage;

@@ -1,5 +1,5 @@
-import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { getGlobalContainerEnvironmentPairs } from "../../../utils/docker/utils";
@@ -78,7 +78,7 @@ const buildProjectProfileContextRoot = () => TASK_ALIAS_ROOT_IN_CONTAINER;
 const buildProjectProfileCacheRoot = () =>
 	path.posix.join(buildProjectProfileContextRoot(), "cache");
 
-const escapeSingleQuotes = (value: string) => value.replace(/'/g, `'\"'\"'`);
+const escapeSingleQuotes = (value: string) => value.replace(/'/g, `'"'"'`);
 
 const buildNamespaceEnabledContainerArgs = () => {
 	const configured = process.env.VULSEEK_SCAN_CONTAINER_EXTRA_ARGS?.trim();
@@ -369,15 +369,18 @@ const writeDriverTaskToInputFile = async (input: {
 	inputPath: string;
 	taskInput: Record<string, unknown>;
 }) => {
-	const previousWrite = pendingDriverInputWrites.get(input.inputPath) || Promise.resolve();
-	const currentWrite = previousWrite.catch(() => {}).then(async () => {
-		await fs.mkdir(path.dirname(input.inputPath), { recursive: true });
-		await fs.appendFile(
-			input.inputPath,
-			`${JSON.stringify(input.taskInput)}\n`,
-			"utf-8",
-		);
-	});
+	const previousWrite =
+		pendingDriverInputWrites.get(input.inputPath) || Promise.resolve();
+	const currentWrite = previousWrite
+		.catch(() => {})
+		.then(async () => {
+			await fs.mkdir(path.dirname(input.inputPath), { recursive: true });
+			await fs.appendFile(
+				input.inputPath,
+				`${JSON.stringify(input.taskInput)}\n`,
+				"utf-8",
+			);
+		});
 	pendingDriverInputWrites.set(input.inputPath, currentWrite);
 	try {
 		await currentWrite;
@@ -642,7 +645,12 @@ const resolveScanExecutionContext = async (
 			target: {
 				appName: datasetAgentRuntime.serviceName,
 				name: datasetAgentRuntime.serviceName,
-				environment: { project: { name: datasetAgentRuntime.projectName, scanContextVolumeName: "" } },
+				environment: {
+					project: {
+						name: datasetAgentRuntime.projectName,
+						scanContextVolumeName: "",
+					},
+				},
 				scanStageSettings: {},
 				memoryLimit: null,
 				memoryReservation: null,
@@ -656,33 +664,43 @@ const resolveScanExecutionContext = async (
 			projectProfileCacheRoot: buildProjectProfileCacheRoot(),
 			scanAgentProfile: null,
 			datasetSampleHostPath: datasetAgentRuntime.workspaceHostPath,
-			datasetSampleMountReadOnly: datasetAgentRuntime.workspaceReadOnly !== false,
+			datasetSampleMountReadOnly:
+				datasetAgentRuntime.workspaceReadOnly !== false,
 		};
 	}
 	if (scanJob.datasetEvaluationTrialId) {
 		const datasetRuntime = await resolveDatasetTrialRuntime(scanJob.scanJobId);
 		if (!datasetRuntime) {
-			throw new Error(`Dataset trial not found for scan job ${scanJob.scanJobId}`);
+			throw new Error(
+				`Dataset trial not found for scan job ${scanJob.scanJobId}`,
+			);
 		}
 		const projectName = `dataset-${datasetRuntime.dataset.datasetId}`;
-		const serviceName = `${datasetRuntime.profile.profileId}-${datasetRuntime.sample.sampleKey}`;
+		const serviceName = `${datasetRuntime.profile.profileId}-${datasetRuntime.sample.id}`;
 		const imageTag = datasetRuntime.checkoutImage;
-		await execAsync(`docker image inspect ${escapeSingleQuotes(imageTag)}`).catch(() => {
+		await execAsync(
+			`docker image inspect ${escapeSingleQuotes(imageTag)}`,
+		).catch(() => {
 			throw new Error(`Dataset checkout image not found: ${imageTag}`);
 		});
-		const repositoryProfileAgentProfileId = getRuntimeStageSetting(
-			scanJob.scanRuntimeSettings,
-			SCAN_STAGE_IDS.repositoryProfile,
-		).agentProfileId || null;
+		const repositoryProfileAgentProfileId =
+			getRuntimeStageSetting(
+				scanJob.scanRuntimeSettings,
+				SCAN_STAGE_IDS.repositoryProfile,
+			).agentProfileId || null;
 		const scanAgentProfile = repositoryProfileAgentProfileId
-			? await getAgentProfileById(repositoryProfileAgentProfileId).catch(() => null)
+			? await getAgentProfileById(repositoryProfileAgentProfileId).catch(
+					() => null,
+				)
 			: null;
 		return {
 			isApplicationJob: false,
 			target: {
 				appName: serviceName,
-				name: datasetRuntime.sample.title || datasetRuntime.sample.sampleKey,
-				environment: { project: { name: projectName, scanContextVolumeName: "" } },
+				name: datasetRuntime.sample.title || datasetRuntime.sample.id,
+				environment: {
+					project: { name: projectName, scanContextVolumeName: "" },
+				},
 				scanStageSettings: {},
 				memoryLimit: null,
 				memoryReservation: null,
@@ -778,10 +796,7 @@ const copyCodexAssetsToContainerHome = async (
 				await writeContainerFile(
 					containerName,
 					`${codexHome}/config.toml`,
-					joinTomlBlocks(
-						buildCodexConfigToml(agentProfile),
-						mcpConfigToml,
-					),
+					joinTomlBlocks(buildCodexConfigToml(agentProfile), mcpConfigToml),
 				);
 				await execAsync(
 					`docker exec ${containerName} bash -lc "test -s '${codexHome}/auth.json' && test -s '${codexHome}/config.toml'"`,
@@ -1111,7 +1126,10 @@ export const requireResearchDatabaseContext = (
 	scanType: ScanJob["scanType"],
 	environment: Record<string, string | undefined>,
 ) => {
-	if (scanType === "research" && !environment.VULSEEK_RESEARCH_DATABASE_URL?.trim()) {
+	if (
+		scanType === "research" &&
+		!environment.VULSEEK_RESEARCH_DATABASE_URL?.trim()
+	) {
 		throw new Error(
 			"Research database context is not configured; set VULSEEK_RESEARCH_DATABASE_URL before starting Research tasks",
 		);
@@ -1126,14 +1144,19 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		target,
 		datasetSampleHostPath,
 		datasetSampleMountReadOnly,
-	} = await resolveScanExecutionContext(input.scanJob, input.datasetAgentRuntime);
+	} = await resolveScanExecutionContext(
+		input.scanJob,
+		input.datasetAgentRuntime,
+	);
 	requireResearchDatabaseContext(input.scanJob.scanType, process.env);
 	const globalContainerEnvPairs = getGlobalContainerEnvironmentPairs();
 	const agentsDir = await resolveAgentsDirectory();
-	const hostProfileDir = input.datasetAgentRuntime?.profileHostDir || (await resolveProjectProfileHostPath({
-		projectName,
-		profileName: serviceName,
-	}));
+	const hostProfileDir =
+		input.datasetAgentRuntime?.profileHostDir ||
+		(await resolveProjectProfileHostPath({
+			projectName,
+			profileName: serviceName,
+		}));
 	const mountedProfileDir = resolveMountedProjectProfilePath({
 		projectName,
 		profileName: serviceName,
@@ -1229,16 +1252,16 @@ export const startContainer = async (input: StageContainerInput) => {
 				execAsync(
 					`docker exec ${input.containerName} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}'"`,
 				),
-				);
-				if (input.taskRealRootInContainer) {
-					if (!input.persistent) {
-						await drainPreviousTaskAliasInContainer({
-							containerName: input.containerName,
-							nextTaskRootInContainer: input.taskRealRootInContainer,
-							logPath,
-						});
-					}
-					await updateTaskAliasSymlinkInContainer({
+			);
+			if (input.taskRealRootInContainer) {
+				if (!input.persistent) {
+					await drainPreviousTaskAliasInContainer({
+						containerName: input.containerName,
+						nextTaskRootInContainer: input.taskRealRootInContainer,
+						logPath,
+					});
+				}
+				await updateTaskAliasSymlinkInContainer({
 					containerName: input.containerName,
 					taskRootInContainer: input.taskRealRootInContainer,
 					logPath,
@@ -1333,7 +1356,7 @@ const updateTaskAliasSymlinkInContainer = async (input: {
 				`docker exec ${input.containerName} bash -lc '${escapeSingleQuotes(script)}'`,
 			),
 	);
-	};
+};
 
 const DRAIN_PREVIOUS_DRIVER_TIMEOUT_MS = 60_000;
 const ACP_DRIVER_FILE_NAME = "/opt/vulseek-acp/vulseek-acp-driver.mjs";
@@ -1351,20 +1374,20 @@ const drainPreviousTaskAliasInContainer = async (input: {
 		"if [ ! -L /task ]; then exit 0; fi",
 		"old_root=$(readlink -f /task)",
 		'if [ "$old_root" = "$next_root" ]; then exit 0; fi',
-		"input_path=\"$old_root/stdin\"",
+		'input_path="$old_root/stdin"',
 		"pid=''",
 		`pid=$(pgrep -f -- "${ACP_DRIVER_FILE_NAME} $input_path" | head -n 1 || true)`,
 		'if [ -z "$pid" ]; then exit 0; fi',
 		`deadline=$(($(date +%s) + ${timeoutSeconds}))`,
 		"while :; do",
-			"  process_alive=false",
-			"  if kill -0 \"$pid\" 2>/dev/null; then process_alive=true; fi",
-			"  if [ \"$process_alive\" = false ]; then exit 0; fi",
-			"  if [ \"$(date +%s)\" -ge \"$deadline\" ]; then",
-			"    echo \"previous driver did not drain: pid=$pid old_root=$old_root process_alive=$process_alive\" >&2",
-			"    exit 42",
-			"  fi",
-			"  sleep 0.2",
+		"  process_alive=false",
+		'  if kill -0 "$pid" 2>/dev/null; then process_alive=true; fi',
+		'  if [ "$process_alive" = false ]; then exit 0; fi',
+		'  if [ "$(date +%s)" -ge "$deadline" ]; then',
+		'    echo "previous driver did not drain: pid=$pid old_root=$old_root process_alive=$process_alive" >&2',
+		"    exit 42",
+		"  fi",
+		"  sleep 0.2",
 		"done",
 	].join("\n");
 	await withHostBootstrapLog(
@@ -1427,10 +1450,10 @@ const inspectDriverHealth = async (input: {
 		`expected_pid='${input.driverPid ?? ""}'`,
 		'pid="$expected_pid"',
 		'if [ -z "$pid" ]; then pid=$(pgrep -f -- "$driver_script $input_path" | head -n 1 || true); fi',
-		'if [ -z "$pid" ]; then echo \'alive=false\'; echo \'reason=process_not_running\'; exit 0; fi',
+		"if [ -z \"$pid\" ]; then echo 'alive=false'; echo 'reason=process_not_running'; exit 0; fi",
 		'if [ -n "$pid" ]; then command_line=$(ps -p "$pid" -o args= 2>/dev/null || true); case "$command_line" in *"$driver_script $input_path"*) ;; *) echo \'alive=false\'; echo \'reason=process_not_running\'; echo "pid=$pid"; exit 0;; esac; fi',
 		"state=$(ps -p \"$pid\" -o stat= 2>/dev/null | tr -d '[:space:]' || true)",
-		'if [ -z "$state" ]; then echo \'alive=false\'; echo \'reason=process_not_running\'; echo "pid=$pid"; exit 0; fi',
+		"if [ -z \"$state\" ]; then echo 'alive=false'; echo 'reason=process_not_running'; echo \"pid=$pid\"; exit 0; fi",
 		'case "$state" in *Z*) echo \'alive=false\'; echo \'reason=process_zombie\'; echo "pid=$pid"; echo "state=$state"; exit 0;; esac',
 		'if ! kill -0 "$pid" 2>/dev/null; then echo \'alive=false\'; echo \'reason=kill_check_failed\'; echo "pid=$pid"; echo "state=$state"; exit 0; fi',
 		'if [ ! -f "$stdout_path" ]; then echo \'alive=false\'; echo \'reason=missing_stdout\'; echo "pid=$pid"; echo "state=$state"; exit 0; fi',
@@ -1473,7 +1496,7 @@ const stopPersistentDriver = async (input: {
 		`driver_script='${escapeSingleQuotes(input.driverScriptPath)}'`,
 		`input_path='${escapeSingleQuotes(input.driverInputPath)}'`,
 		'pkill -TERM -f "$driver_script $input_path" 2>/dev/null || true',
-		'sleep 1',
+		"sleep 1",
 		'pkill -KILL -f "$driver_script $input_path" 2>/dev/null || true',
 	].join("; ");
 	await execAsync(
@@ -1694,31 +1717,31 @@ export const runSingleTurnAgentInContainer = async (
 	const persistentDriverHealth = input.persistent
 		? await withHostBootstrapLog(
 				taskStderrPath,
-					"inspect_persistent_driver_health",
-					"",
-					() =>
-						inspectDriverHealth({
-							containerName: input.containerName,
-							driverScriptPath,
-							driverInputPath: driverInputPath,
-							driverStdoutPath,
-							driverPid: input.laneDriverPid,
-						}),
+				"inspect_persistent_driver_health",
+				"",
+				() =>
+					inspectDriverHealth({
+						containerName: input.containerName,
+						driverScriptPath,
+						driverInputPath: driverInputPath,
+						driverStdoutPath,
+						driverPid: input.laneDriverPid,
+					}),
 			)
 		: null;
 	if (persistentDriverHealth) {
 		await appendHostBootstrapLog(
 			taskStderrPath,
-				`persistent_driver_health alive=${String(
-					persistentDriverHealth.alive,
-				)} reason=${JSON.stringify(persistentDriverHealth.reason || "")} pid=${JSON.stringify(
+			`persistent_driver_health alive=${String(
+				persistentDriverHealth.alive,
+			)} reason=${JSON.stringify(persistentDriverHealth.reason || "")} pid=${JSON.stringify(
 				persistentDriverHealth.pid || "",
 			)} state=${JSON.stringify(persistentDriverHealth.state || "")} lifecycle_age_ms=${
 				persistentDriverHealth.lifecycleAgeMs ?? ""
 			}`,
 		);
 	}
-	let persistentDriverAlive = Boolean(
+	const persistentDriverAlive = Boolean(
 		input.persistent && persistentDriverHealth?.alive,
 	);
 	const agentHomePathInContainer = buildJobAgentHomePathInContainer(
@@ -1799,9 +1822,25 @@ export const runSingleTurnAgentInContainer = async (
 	});
 	if (persistentDriverAlive) {
 		const driverTaskInput = buildDriverTaskInput();
-		await appendHostBootstrapLog(taskStderrPath, `persistent_driver_enqueue stdin task_id=${input.taskId || ""} lane_thread_id=${input.laneThreadId || ""}`);
-		await appendContainerFile(input.containerName, driverStdoutPath, `${JSON.stringify({ type: "log", level: "debug", source: "host", message: `persistent_driver_enqueue stdin task_id=${input.taskId || ""} lane_thread_id=${input.laneThreadId || ""}` })}\n`).catch(() => {});
-		await withHostBootstrapLog(taskStderrPath, "persistent_driver_append_stdin", "", () => writeDriverTaskToInputFile({ inputPath: driverInputHostPath, taskInput: driverTaskInput }));
+		await appendHostBootstrapLog(
+			taskStderrPath,
+			`persistent_driver_enqueue stdin task_id=${input.taskId || ""} lane_thread_id=${input.laneThreadId || ""}`,
+		);
+		await appendContainerFile(
+			input.containerName,
+			driverStdoutPath,
+			`${JSON.stringify({ type: "log", level: "debug", source: "host", message: `persistent_driver_enqueue stdin task_id=${input.taskId || ""} lane_thread_id=${input.laneThreadId || ""}` })}\n`,
+		).catch(() => {});
+		await withHostBootstrapLog(
+			taskStderrPath,
+			"persistent_driver_append_stdin",
+			"",
+			() =>
+				writeDriverTaskToInputFile({
+					inputPath: driverInputHostPath,
+					taskInput: driverTaskInput,
+				}),
+		);
 		return { threadId: input.laneThreadId || null };
 	}
 	const driverTaskInput = buildDriverTaskInput();

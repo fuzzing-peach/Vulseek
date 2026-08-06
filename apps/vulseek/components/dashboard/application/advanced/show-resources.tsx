@@ -4,15 +4,12 @@ import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
-import { AlertBlock } from "@/components/shared/alert-block";
-import { Button } from "@/components/ui/button";
 import {
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
-} from "@/components/ui/card";
+	FormActions,
+	FormSection,
+	useFormSaveStatus,
+} from "@/components/dashboard/ui-system";
+import { AlertBlock } from "@/components/shared/alert-block";
 import {
 	Form,
 	FormControl,
@@ -76,7 +73,7 @@ export const ShowResources = ({ id, type }: Props) => {
 		mongo: () => api.mongo.update.useMutation(),
 	};
 
-	const { mutateAsync, isLoading } = mutationMap[type]
+	const { mutateAsync } = mutationMap[type]
 		? mutationMap[type]()
 		: api.mongo.update.useMutation();
 
@@ -101,38 +98,42 @@ export const ShowResources = ({ id, type }: Props) => {
 		}
 	}, [data, form, form.reset]);
 
+	const [status, setStatus] = useFormSaveStatus(form.formState.isDirty);
+
 	const onSubmit = async (formData: AddResources) => {
-		await mutateAsync({
-			mongoId: id || "",
-			postgresId: id || "",
-			redisId: id || "",
-			mysqlId: id || "",
-			mariadbId: id || "",
-			applicationId: id || "",
-			cpuLimit: formData.cpuLimit || null,
-			cpuReservation: formData.cpuReservation || null,
-			memoryLimit: formData.memoryLimit || null,
-			memoryReservation: formData.memoryReservation || null,
-		})
-			.then(async () => {
-				toast.success("Resources Updated");
-				await refetch();
-			})
-			.catch(() => {
-				toast.error("Error updating the resources");
+		setStatus("saving");
+		try {
+			await mutateAsync({
+				mongoId: id || "",
+				postgresId: id || "",
+				redisId: id || "",
+				mysqlId: id || "",
+				mariadbId: id || "",
+				applicationId: id || "",
+				cpuLimit: formData.cpuLimit || null,
+				cpuReservation: formData.cpuReservation || null,
+				memoryLimit: formData.memoryLimit || null,
+				memoryReservation: formData.memoryReservation || null,
 			});
+			setStatus("saved");
+			toast.success("Resources Updated");
+			await refetch();
+		} catch {
+			setStatus("error");
+			toast.error("Error updating the resources");
+		}
+	};
+
+	const handleSave = () => {
+		void form.handleSubmit(onSubmit, () => setStatus("error"))();
 	};
 
 	return (
-		<Card className="bg-background">
-			<CardHeader>
-				<CardTitle className="text-xl">Resources</CardTitle>
-				<CardDescription>
-					If you want to decrease or increase the resources to a specific.
-					application or database
-				</CardDescription>
-			</CardHeader>
-			<CardContent className="flex flex-col gap-4">
+		<FormSection
+			title="Resources"
+			description="If you want to decrease or increase the resources to a specific application or database"
+		>
+			<div className="flex flex-col gap-4">
 				<AlertBlock type="info">
 					Please remember to click Redeploy after modify the resources to apply
 					the changes.
@@ -140,8 +141,8 @@ export const ShowResources = ({ id, type }: Props) => {
 				<Form {...form}>
 					<form
 						id="hook-form"
-						onSubmit={form.handleSubmit(onSubmit)}
-						className="grid w-full gap-8 "
+						onSubmit={form.handleSubmit(onSubmit, () => setStatus("error"))}
+						className="grid w-full gap-8"
 					>
 						<div className="grid w-full md:grid-cols-2 gap-4">
 							<FormField
@@ -286,14 +287,14 @@ export const ShowResources = ({ id, type }: Props) => {
 								}}
 							/>
 						</div>
-						<div className="flex w-full justify-end">
-							<Button isLoading={isLoading} type="submit">
-								Save
-							</Button>
-						</div>
+						<FormActions
+							status={status}
+							onSave={handleSave}
+							onReset={() => form.reset()}
+						/>
 					</form>
 				</Form>
-			</CardContent>
-		</Card>
+			</div>
+		</FormSection>
 	);
 };

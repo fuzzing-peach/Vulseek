@@ -107,7 +107,7 @@ export const LiveTaskActivityBadge = ({
 			<div
 				className={
 					noWrap
-					? "flex min-w-0 flex-nowrap items-center gap-2 overflow-hidden"
+						? "flex min-w-0 flex-nowrap items-center gap-2 overflow-hidden"
 						: "flex flex-wrap items-center gap-2"
 				}
 			>

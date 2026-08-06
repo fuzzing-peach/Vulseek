@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import { buildCandidateResultSummary } from "@vulseek/server/services/scan/persistence/candidate-result-summary";
+import { describe, expect, it } from "vitest";
 
 describe("candidate result summary", () => {
 	it("counts candidates without projections without inventing result nodes", () => {
@@ -133,13 +133,13 @@ describe("candidate result summary", () => {
 			},
 		]);
 
-		expect(summary.flow.links.map(({ source, target }) => [source, target])).toEqual(
-			[
-				["analysis_real_vulnerability", "verify_true"],
-				["analysis_likely_vulnerability", "verify_likely"],
-				["verify_true", "triage_security_issue"],
-				["verify_likely", "triage_needs_review"],
-			],
-		);
+		expect(
+			summary.flow.links.map(({ source, target }) => [source, target]),
+		).toEqual([
+			["analysis_real_vulnerability", "verify_true"],
+			["analysis_likely_vulnerability", "verify_likely"],
+			["verify_true", "triage_security_issue"],
+			["verify_likely", "triage_needs_review"],
+		]);
 	});
 });

@@ -1,5 +1,8 @@
 import { validateRequest } from "@vulseek/server/lib/auth";
-import type { GetServerSidePropsContext, InferGetServerSidePropsType } from "next";
+import type {
+	GetServerSidePropsContext,
+	InferGetServerSidePropsType,
+} from "next";
 import type { ReactElement } from "react";
 import { ShowScanJobDetail } from "@/components/dashboard/scanning/show-scan-job-detail";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
@@ -37,7 +40,8 @@ export async function getServerSideProps(context: GetServerSidePropsContext) {
 		};
 	}
 
-	const { projectId, environmentId, composeId, scanJobId } = context.params || {};
+	const { projectId, environmentId, composeId, scanJobId } =
+		context.params || {};
 
 	if (
 		typeof projectId !== "string" ||

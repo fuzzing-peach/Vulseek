@@ -1,1 +1,4 @@
-export { default, getServerSideProps } from "../../profiles/postgres/[postgresId]";
+export {
+	default,
+	getServerSideProps,
+} from "../../profiles/postgres/[postgresId]";

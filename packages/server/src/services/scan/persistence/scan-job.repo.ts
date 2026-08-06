@@ -1,12 +1,12 @@
-import { db } from "@vulseek/server/db";
-import { scanJobs, tasks } from "@vulseek/server/db/schema";
-import type { ScanRuntimeSettings } from "@vulseek/server/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { db } from "@vulseek/server/db";
+import type { ScanRuntimeSettings } from "@vulseek/server/db/schema";
+import { scanJobs, tasks } from "@vulseek/server/db/schema";
+import { and, desc, eq, ilike, or, type SQL, sql } from "drizzle-orm";
 import {
+	loadScanPipelineDefinitions,
 	normalizeLegacyVerificationSchema,
 	normalizePipelineDefinitionSnapshot,
-	loadScanPipelineDefinitions,
 	type ScanPipelineDefinitions,
 } from "../pipeline/scan-pipeline-definitions";
 import { normalizeScanRuntimeSettings } from "../runtime-settings";
@@ -100,33 +100,99 @@ export const sumClaudeCodeCachedReadTokensByScanJobIdRepo = async (
 		.where(eq(tasks.scanJobId, scanJobId))
 		.then((rows) => Number(rows[0]?.cachedReadTokens ?? 0));
 
-export const listScanJobsByApplicationIdRepo = async (applicationId: string) =>
-	await db
-		.select(selectScanJobWithRepositoryTaskStatus)
-		.from(scanJobs)
-		.leftJoin(
-			tasks,
-			and(
-				eq(tasks.scanJobId, scanJobs.scanJobId),
-				eq(tasks.stageName, scanJobRootStageName),
-			),
-		)
-		.where(eq(scanJobs.applicationId, applicationId))
-		.orderBy(desc(scanJobs.createdAt));
+export type ScanJobListPageInput = {
+	page: number;
+	pageSize: number;
+	search?: string;
+	status?:
+		| "pending"
+		| "running"
+		| "paused"
+		| "finalizing"
+		| "finished"
+		| "partially_finished"
+		| "failed"
+		| "canceled";
+};
 
-export const listScanJobsByComposeIdRepo = async (composeId: string) =>
-	await db
-		.select(selectScanJobWithRepositoryTaskStatus)
-		.from(scanJobs)
-		.leftJoin(
-			tasks,
-			and(
-				eq(tasks.scanJobId, scanJobs.scanJobId),
-				eq(tasks.stageName, scanJobRootStageName),
-			),
-		)
-		.where(eq(scanJobs.composeId, composeId))
-		.orderBy(desc(scanJobs.createdAt));
+const buildScanJobListConditions = (
+	baseCondition: SQL,
+	input: ScanJobListPageInput,
+) => {
+	const conditions: Array<SQL<unknown> | undefined> = [baseCondition];
+	if (input.status) conditions.push(eq(scanJobs.status, input.status));
+	if (input.search) {
+		const pattern = `%${input.search}%`;
+		conditions.push(
+			or(ilike(scanJobs.description, pattern), ilike(scanJobs.note, pattern)),
+		);
+	}
+	return conditions;
+};
+
+export const listScanJobsByApplicationIdPageRepo = async (
+	applicationId: string,
+	input: ScanJobListPageInput,
+) => {
+	const conditions = buildScanJobListConditions(
+		eq(scanJobs.applicationId, applicationId),
+		input,
+	);
+	const [items, total] = await Promise.all([
+		db
+			.select(selectScanJobWithRepositoryTaskStatus)
+			.from(scanJobs)
+			.leftJoin(
+				tasks,
+				and(
+					eq(tasks.scanJobId, scanJobs.scanJobId),
+					eq(tasks.stageName, scanJobRootStageName),
+				),
+			)
+			.where(and(...conditions))
+			.orderBy(desc(scanJobs.createdAt))
+			.limit(input.pageSize)
+			.offset((input.page - 1) * input.pageSize),
+		db
+			.select({ count: sql<number>`count(*)` })
+			.from(scanJobs)
+			.where(and(...conditions))
+			.then((rows) => Number(rows[0]?.count ?? 0)),
+	]);
+	return { items, total };
+};
+
+export const listScanJobsByComposeIdPageRepo = async (
+	composeId: string,
+	input: ScanJobListPageInput,
+) => {
+	const conditions = buildScanJobListConditions(
+		eq(scanJobs.composeId, composeId),
+		input,
+	);
+	const [items, total] = await Promise.all([
+		db
+			.select(selectScanJobWithRepositoryTaskStatus)
+			.from(scanJobs)
+			.leftJoin(
+				tasks,
+				and(
+					eq(tasks.scanJobId, scanJobs.scanJobId),
+					eq(tasks.stageName, scanJobRootStageName),
+				),
+			)
+			.where(and(...conditions))
+			.orderBy(desc(scanJobs.createdAt))
+			.limit(input.pageSize)
+			.offset((input.page - 1) * input.pageSize),
+		db
+			.select({ count: sql<number>`count(*)` })
+			.from(scanJobs)
+			.where(and(...conditions))
+			.then((rows) => Number(rows[0]?.count ?? 0)),
+	]);
+	return { items, total };
+};
 
 export const listUnfinishedScanJobsRepo = async () =>
 	await db
@@ -139,9 +205,7 @@ export const listUnfinishedScanJobsRepo = async () =>
 				eq(tasks.stageName, scanJobRootStageName),
 			),
 		)
-		.where(
-			sql`${scanJobs.status} in ('pending', 'running', 'finalizing')`,
-		);
+		.where(sql`${scanJobs.status} in ('pending', 'running', 'finalizing')`);
 
 export const createScanJobRepo = async (input: {
 	applicationId?: string | null;
@@ -157,7 +221,6 @@ export const createScanJobRepo = async (input: {
 	targetTag?: string | null;
 	scanRuntimeSettings?: ScanRuntimeSettings | null;
 	researchScope?: Record<string, unknown> | null;
-	datasetSampleInput?: Record<string, unknown> | null;
 	scanPipelineDefinitionSnapshot?: Record<string, unknown> | null;
 	threatDirection?: {
 		focus: string;
@@ -218,28 +281,22 @@ export const createScanJobRepo = async (input: {
 			? (input.scanRuntimeSettings as { threatDirection?: unknown })
 					.threatDirection
 			: undefined);
-	const datasetRootInput = input.datasetEvaluationTrialId
-		? { datasetSampleInput: input.datasetSampleInput ?? {} }
-		: {};
 	const rootInput =
 		input.scanType === "research"
-			? { researchScope: input.researchScope ?? {}, ...datasetRootInput }
+			? { researchScope: input.researchScope ?? {} }
 			: input.scanType === "tob-goal"
 				? {
 						threatDirection:
-							threatDirection &&
-							typeof threatDirection === "object"
+							threatDirection && typeof threatDirection === "object"
 								? threatDirection
 								: {
-										focus: "Find one high-impact vulnerability matching the attacker model",
+										focus:
+											"Find one high-impact vulnerability matching the attacker model",
 										attackerModel:
 											"Remote attacker with network access only; no local credential or admin preconditions",
-						},
-						...datasetRootInput,
+									},
 					}
-				: input.datasetEvaluationTrialId
-					? datasetRootInput
-					: undefined;
+				: undefined;
 	await createTaskRepo({
 		scanJobId: created[0].scanJobId,
 		name:
@@ -283,20 +340,24 @@ const hasUsableScanPipelineDefinitionSnapshot = (
 			"pipelines" in value,
 	);
 
-export const loadScanJobPipelineDefinitionSnapshotRepo = async (scanJobId: string) => {
+export const loadScanJobPipelineDefinitionSnapshotRepo = async (
+	scanJobId: string,
+) => {
 	const [row] = await db
-		.select({ scanPipelineDefinitionSnapshot: scanJobs.scanPipelineDefinitionSnapshot })
+		.select({
+			scanPipelineDefinitionSnapshot: scanJobs.scanPipelineDefinitionSnapshot,
+		})
 		.from(scanJobs)
 		.where(eq(scanJobs.scanJobId, scanJobId))
 		.limit(1);
 	if (!row) {
 		throw new TRPCError({ code: "NOT_FOUND", message: "Scan job not found" });
 	}
-	if (hasUsableScanPipelineDefinitionSnapshot(row.scanPipelineDefinitionSnapshot)) {
+	if (
+		hasUsableScanPipelineDefinitionSnapshot(row.scanPipelineDefinitionSnapshot)
+	) {
 		return normalizePipelineDefinitionSnapshot(
-			normalizeLegacyVerificationSchema(
-				row.scanPipelineDefinitionSnapshot,
-			),
+			normalizeLegacyVerificationSchema(row.scanPipelineDefinitionSnapshot),
 			{ useBaseline: false },
 		);
 	}

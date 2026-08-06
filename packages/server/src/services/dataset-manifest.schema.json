@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vulseek.dev/schemas/dataset-manifest-v1.json",
+  "title": "Vulseek Dataset Manifest",
+  "description": "Manifest for the samples in a Vulseek Dataset.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "samples"],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "samples": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/sample"
+      }
+    }
+  },
+  "$defs": {
+    "sample": {
+      "title": "Dataset Sample",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "repositoryPath"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "title": {
+          "type": "string",
+          "default": ""
+        },
+        "repositoryPath": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+          "description": "Relative directory containing this sample. It must exist below the Dataset root."
+        },
+        "metadata": {
+          "type": "object",
+          "default": {},
+          "description": "Evaluator-only metadata; it is not passed to scan agents."
+        }
+      }
+    }
+  }
+}

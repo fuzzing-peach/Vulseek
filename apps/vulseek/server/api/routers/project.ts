@@ -33,7 +33,17 @@ import {
 	updateProjectById,
 } from "@vulseek/server";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	ilike,
+	inArray,
+	or,
+	sql,
+	type SQL,
+} from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { createTRPCRouter, protectedProcedure } from "@/server/api/trpc";
@@ -41,6 +51,7 @@ import { db } from "@/server/db";
 import {
 	apiCreateProject,
 	apiFindOneProject,
+	apiListProjects,
 	apiRemoveProject,
 	apiUpdateProject,
 	applications,
@@ -73,6 +84,20 @@ const projectListComposeColumns = {
 	composeStatus: true,
 	serverId: true,
 } as const;
+
+/**
+ * Services (profiles) count per project across the seven service tables —
+ * used to sort the paginated project list by profile count in SQL.
+ */
+const projectServicesCountSql = sql<number>`(
+	(SELECT count(*) FROM ${applications} WHERE ${applications.environmentId} IN (SELECT ${environments.environmentId} FROM ${environments} WHERE ${environments.projectId} = ${projects.projectId})) +
+	(SELECT count(*) FROM ${compose} WHERE ${compose.environmentId} IN (SELECT ${environments.environmentId} FROM ${environments} WHERE ${environments.projectId} = ${projects.projectId})) +
+	(SELECT count(*) FROM ${mariadb} WHERE ${mariadb.environmentId} IN (SELECT ${environments.environmentId} FROM ${environments} WHERE ${environments.projectId} = ${projects.projectId})) +
+	(SELECT count(*) FROM ${mongo} WHERE ${mongo.environmentId} IN (SELECT ${environments.environmentId} FROM ${environments} WHERE ${environments.projectId} = ${projects.projectId})) +
+	(SELECT count(*) FROM ${mysql} WHERE ${mysql.environmentId} IN (SELECT ${environments.environmentId} FROM ${environments} WHERE ${environments.projectId} = ${projects.projectId})) +
+	(SELECT count(*) FROM ${postgres} WHERE ${postgres.environmentId} IN (SELECT ${environments.environmentId} FROM ${environments} WHERE ${environments.projectId} = ${projects.projectId})) +
+	(SELECT count(*) FROM ${redis} WHERE ${redis.environmentId} IN (SELECT ${environments.environmentId} FROM ${environments} WHERE ${environments.projectId} = ${projects.projectId}))
+)`;
 
 export const projectRouter = createTRPCRouter({
 	create: protectedProcedure
@@ -301,6 +326,121 @@ export const projectRouter = createTRPCRouter({
 			orderBy: desc(projects.createdAt),
 		});
 	}),
+
+	list: protectedProcedure
+		.input(apiListProjects)
+		.query(async ({ ctx, input }) => {
+			const isMember = ctx.user.role === "member";
+			const member = isMember
+				? await findMemberById(ctx.user.id, ctx.session.activeOrganizationId)
+				: null;
+			if (isMember && member?.accessedProjects.length === 0) {
+				return {
+					items: [],
+					total: 0,
+					page: input.page,
+					pageSize: input.pageSize,
+				};
+			}
+
+			const conditions: Array<SQL | undefined> = [
+				eq(projects.organizationId, ctx.session.activeOrganizationId),
+			];
+			if (member) {
+				conditions.push(inArray(projects.projectId, member.accessedProjects));
+			}
+			if (input.search) {
+				const pattern = `%${input.search}%`;
+				conditions.push(
+					or(
+						ilike(projects.name, pattern),
+						ilike(projects.description, pattern),
+					),
+				);
+			}
+			const where = and(...conditions);
+
+			const environmentFilter =
+				isMember && member
+					? member.accessedEnvironments.length === 0
+						? sql`false`
+						: sql`${environments.environmentId} IN (${sql.join(
+								member.accessedEnvironments.map((envId) => sql`${envId}`),
+								sql`, `,
+							)})`
+					: undefined;
+			const serviceFilter = (column: AnyPgColumn) =>
+				buildServiceFilter(column, member?.accessedServices ?? []);
+
+			const orderBy =
+				input.sortKey === "name"
+					? input.sortDirection === "asc"
+						? asc(projects.name)
+						: desc(projects.name)
+					: input.sortKey === "services"
+						? input.sortDirection === "asc"
+							? asc(projectServicesCountSql)
+							: desc(projectServicesCountSql)
+						: input.sortDirection === "asc"
+							? asc(projects.createdAt)
+							: desc(projects.createdAt);
+
+			const [rows, total] = await Promise.all([
+				db.query.projects.findMany({
+					where,
+					with: {
+						environments: {
+							...(environmentFilter ? { where: environmentFilter } : {}),
+							with: {
+								applications: {
+									...(isMember
+										? { where: serviceFilter(applications.applicationId) }
+										: {}),
+									columns: projectListApplicationColumns,
+									with: { domains: true },
+								},
+								mariadb: {
+									...(isMember
+										? { where: serviceFilter(mariadb.mariadbId) }
+										: {}),
+								},
+								mongo: {
+									...(isMember ? { where: serviceFilter(mongo.mongoId) } : {}),
+								},
+								mysql: {
+									...(isMember ? { where: serviceFilter(mysql.mysqlId) } : {}),
+								},
+								postgres: {
+									...(isMember
+										? { where: serviceFilter(postgres.postgresId) }
+										: {}),
+								},
+								redis: {
+									...(isMember ? { where: serviceFilter(redis.redisId) } : {}),
+								},
+								compose: {
+									...(isMember
+										? { where: serviceFilter(compose.composeId) }
+										: {}),
+									columns: projectListComposeColumns,
+									with: { domains: true },
+								},
+							},
+						},
+					},
+					orderBy,
+					limit: input.pageSize,
+					offset: (input.page - 1) * input.pageSize,
+				}),
+				db
+					.select({ count: sql<number>`count(*)` })
+					.from(projects)
+					.where(where)
+					.then((rows) => Number(rows[0]?.count ?? 0)),
+			]);
+
+			return { items: rows, total, page: input.page, pageSize: input.pageSize };
+		}),
 
 	remove: protectedProcedure
 		.input(apiRemoveProject)
