@@ -75,6 +75,24 @@ void app.prepare().then(async () => {
 			await syncContainerEnvironmentSettingToProcess();
 		}
 
+		// Organization system pipelines: seed built-ins for every org and
+		// backfill profile defaults. Idempotent; also upgrades templates on
+		// ship when their content hash changed.
+		try {
+			const { seedAllOrganizationsSystemPipelines, backfillProfileDefaultPipelines } =
+				await import("@vulseek/server/services/pipeline-system");
+			await seedAllOrganizationsSystemPipelines();
+			await backfillProfileDefaultPipelines();
+		} catch (error) {
+			console.log(
+				"[pipeline-system]",
+				JSON.stringify({
+					event: "seed.failed",
+					errorMessage: error instanceof Error ? error.message : String(error),
+				}),
+			);
+		}
+
 		server.listen(PORT, HOST);
 		console.log(`Server Started on: http://${HOST}:${PORT}`);
 		if (!IS_CLOUD) {
