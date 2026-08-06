@@ -18,16 +18,25 @@ import {
 import {
 	Form,
 	FormControl,
+	FormDescription,
 	FormField,
 	FormItem,
 	FormLabel,
 	FormMessage,
 } from "@/components/ui/form";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/utils/api";
 
 const updateApplicationSchema = z.object({
+	defaultPipelineId: z.string().min(1).nullable().optional(),
 	name: z.string().min(1, {
 		message: "Name is required",
 	}),
@@ -53,10 +62,15 @@ export const UpdateApplication = ({ applicationId }: Props) => {
 			enabled: !!applicationId,
 		},
 	);
+	const pipelineOptions = api.pipeline.publishedOptions.useQuery(
+		{ targetType: "project" },
+		{ enabled: !!data },
+	);
 	const form = useForm<UpdateApplication>({
 		defaultValues: {
 			description: data?.description ?? "",
 			name: data?.name ?? "",
+			defaultPipelineId: data?.defaultPipelineId ?? null,
 		},
 		resolver: zodResolver(updateApplicationSchema),
 	});
@@ -65,6 +79,7 @@ export const UpdateApplication = ({ applicationId }: Props) => {
 			form.reset({
 				description: data.description ?? "",
 				name: data.name,
+				defaultPipelineId: data.defaultPipelineId ?? null,
 			});
 		}
 	}, [data, form, form.reset]);
@@ -74,6 +89,7 @@ export const UpdateApplication = ({ applicationId }: Props) => {
 			name: formData.name,
 			applicationId: applicationId,
 			description: formData.description || "",
+			defaultPipelineId: formData.defaultPipelineId ?? null,
 		})
 			.then(() => {
 				toast.success("Application updated successfully");
@@ -142,6 +158,40 @@ export const UpdateApplication = ({ applicationId }: Props) => {
 												/>
 											</FormControl>
 
+											<FormMessage />
+										</FormItem>
+									)}
+								/>
+								<FormField
+									control={form.control}
+									name="defaultPipelineId"
+									render={({ field }) => (
+										<FormItem>
+											<FormLabel>Default pipeline</FormLabel>
+											<FormControl>
+												<Select
+													value={field.value ?? ""}
+													onValueChange={(value) => field.onChange(value || null)}
+												>
+													<SelectTrigger className="h-9">
+														<SelectValue placeholder="Use pipeline default…" />
+													</SelectTrigger>
+													<SelectContent>
+														{pipelineOptions.data?.map((option) => (
+															<SelectItem
+																key={option.pipelineId}
+																value={option.pipelineId}
+															>
+																{option.name} · v{option.currentVersionNumber}
+															</SelectItem>
+														))}
+													</SelectContent>
+												</Select>
+											</FormControl>
+											<FormDescription>
+												The Run Pipeline dialog preselects this pipeline&apos;s
+												current version.
+											</FormDescription>
 											<FormMessage />
 										</FormItem>
 									)}

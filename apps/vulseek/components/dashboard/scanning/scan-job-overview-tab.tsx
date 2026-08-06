@@ -298,7 +298,11 @@ export const ScanJobOverviewTab = ({
 								{scanT(t, "scan.field.scanType", "Scan Type")}
 							</div>
 							<div className="font-medium">
-								{formatScanTypeLabel(t, scanJob.scanType)}
+								{scanJob.pipelineVersionId ? (
+									<span className="text-primary">V3 pipeline run</span>
+								) : (
+									formatScanTypeLabel(t, scanJob.scanType)
+								)}
 							</div>
 						</div>
 						<div className="border rounded-lg p-3">
