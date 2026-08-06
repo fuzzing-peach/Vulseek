@@ -1,0 +1,3250 @@
+version: 3
+name: security-research-programmatic
+supportedTargets:
+  - project
+  - evaluation
+root: research-scope
+limits:
+  maxTasks: 10000
+  maxDurationSeconds: 86400
+schemas:
+  analyze-finding-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - functionPath
+      - candidatePath
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      functionPath:
+        $pathOf: "#/schemas/target"
+      candidatePath:
+        $pathOf: "#/schemas/candidate"
+      analysisReportTemplatePath:
+        type:
+          - string
+          - "null"
+      feedbackPath:
+        type:
+          - string
+          - "null"
+  attack-surface-model-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - moduleId
+      - moduleName
+      - priority
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      priority:
+        type:
+          - integer
+          - "null"
+  module-threat-model-manifest:
+    type: object
+    required:
+      - repository
+      - module
+      - threatModel
+    additionalProperties: false
+    properties:
+      repository:
+        $pathOf: "#/schemas/repository"
+      module:
+        $pathOf: "#/schemas/module"
+      threatModel:
+        $pathOf: "#/schemas/module-threat-model"
+  critique-finding-stage-input:
+    allOf:
+      - $ref: "#/schemas/analyze-finding-stage-input"
+      - type: object
+        required:
+          - draftAnalysisPath
+          - analysisFingerprint
+        properties:
+          draftAnalysisPath:
+            $pathOf: "#/schemas/analysis"
+          analysisFingerprint:
+            type: string
+  null-stage-input:
+    type: "null"
+  delta-scope-manifest:
+    type: object
+    required:
+      - repository
+      - module
+      - threatModel
+      - functions
+    additionalProperties: false
+    properties:
+      repository:
+        $pathOf: "#/schemas/repository"
+      module:
+        $pathOf: "#/schemas/module"
+      threatModel:
+        $pathOf: "#/schemas/module-threat-model"
+      functions:
+        type: array
+        items:
+          $pathOf: "#/schemas/target"
+  identify-target-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - threatModelPath
+      - moduleId
+      - moduleName
+      - priority
+      - vulnerabilityClassFocus
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      threatModelPath:
+        $pathOf: "#/schemas/module-threat-model"
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      priority:
+        type:
+          - integer
+          - "null"
+      vulnerabilityClassFocus:
+        type: string
+  identify-target-manifest:
+    type: object
+    required:
+      - repository
+      - module
+      - threatModel
+      - targets
+    additionalProperties: false
+    properties:
+      repository:
+        $pathOf: "#/schemas/repository"
+      module:
+        $pathOf: "#/schemas/module"
+      threatModel:
+        $pathOf: "#/schemas/module-threat-model"
+      targets:
+        type: array
+        items:
+          $pathOf: "#/schemas/target"
+  repository-profile-manifest:
+    type: object
+    required:
+      - repository
+      - modules
+    properties:
+      repository:
+        $pathOf: "#/schemas/repository"
+      modules:
+        type: array
+        items:
+          $pathOf: "#/schemas/module"
+  research-scope-stage-input:
+    type: object
+    additionalProperties: false
+    properties: {}
+    required: []
+  research-scope:
+    type: object
+    additionalProperties: false
+    properties:
+      attackerModel:
+        type: object
+      trustedDomain:
+        type: object
+      protectedAssets:
+        type: array
+        items:
+          type: string
+      deploymentAssumptions:
+        type: array
+        items:
+          type: string
+      rulesOfEngagement:
+        type: array
+        items:
+          type: string
+      minimumResearchDeadlineAt:
+        type: string
+      successCriteria:
+        type: object
+    required:
+      - attackerModel
+      - trustedDomain
+      - protectedAssets
+      - deploymentAssumptions
+      - rulesOfEngagement
+      - minimumResearchDeadlineAt
+      - successCriteria
+  scope-manifest:
+    type: object
+    additionalProperties: false
+    properties:
+      scopePath:
+        type: string
+    required:
+      - scopePath
+  surface-map:
+    type: object
+    additionalProperties: false
+    properties:
+      entrypoints:
+        type: array
+        items:
+          type: object
+      trustBoundaries:
+        type: array
+        items:
+          type: object
+      sources:
+        type: array
+        items:
+          type: object
+      sinks:
+        type: array
+        items:
+          type: object
+      components:
+        type: array
+        items:
+          type: object
+      dependencyFlows:
+        type: array
+        items:
+          type: object
+      coverage:
+        type: object
+      openQuestions:
+        type: array
+        items:
+          type: string
+    required:
+      - entrypoints
+      - trustBoundaries
+      - sources
+      - sinks
+      - components
+      - dependencyFlows
+      - coverage
+      - openQuestions
+  surface-map-manifest:
+    type: object
+    additionalProperties: false
+    properties:
+      surfaceMapPath:
+        type: string
+    required:
+      - surfaceMapPath
+  track-plan:
+    type: object
+    additionalProperties: false
+    properties:
+      tracks:
+        type: array
+        items:
+          $ref: "#/schemas/research-track"
+      iteration:
+        type: integer
+    required:
+      - tracks
+      - iteration
+  research-track:
+    type: object
+    additionalProperties: false
+    properties:
+      trackKey:
+        type: string
+        minLength: 1
+      approachFamily:
+        type: string
+        minLength: 1
+      researchIdea:
+        type: string
+        minLength: 1
+      scope:
+        type: object
+      mechanisms:
+        type: array
+        items:
+          type: string
+      coverage:
+        type: object
+      evidenceRefs:
+        type: array
+        items:
+          type: string
+      findingIds:
+        type: array
+        items:
+          type: string
+      nextStep:
+        type: string
+      status:
+        type: string
+        enum:
+          - queued
+          - active
+          - blocked
+          - exhausted
+    required:
+      - trackKey
+      - approachFamily
+      - researchIdea
+      - scope
+      - mechanisms
+  research-track-reference:
+    type: object
+    additionalProperties: false
+    properties:
+      trackKey:
+        type: string
+        minLength: 1
+      approachFamily:
+        type: string
+        minLength: 1
+      researchIdea:
+        type: string
+        minLength: 1
+      scope:
+        type: object
+      mechanisms:
+        type: array
+        items:
+          type: string
+      coverage:
+        type: object
+      evidenceRefs:
+        type: array
+        items:
+          type: string
+      findingIds:
+        type: array
+        items:
+          type: string
+      nextStep:
+        type: string
+    required:
+      - trackKey
+  finding:
+    type: object
+    additionalProperties: false
+    properties:
+      findingId:
+        type: string
+        minLength: 1
+      trackKey:
+        type: string
+        minLength: 1
+      title:
+        type: string
+        minLength: 1
+      description:
+        type: string
+        minLength: 1
+      vulnerabilityClass:
+        type:
+          - string
+          - "null"
+      location:
+        type: object
+        additionalProperties: false
+        properties:
+          filePath:
+            type: string
+            minLength: 1
+          line:
+            type:
+              - integer
+              - "null"
+          symbol:
+            type:
+              - string
+              - "null"
+        required:
+          - filePath
+          - line
+          - symbol
+      claim:
+        type: string
+        minLength: 1
+      rootCauseKey:
+        type: string
+        minLength: 1
+      source:
+        type: object
+      sink:
+        type: object
+      attackerControl:
+        type: string
+        minLength: 1
+      trustBoundaryCrossings:
+        type: array
+        items:
+          type: object
+      preconditions:
+        type: array
+        items:
+          type: string
+      evidence:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          properties:
+            id:
+              type: string
+              minLength: 1
+            kind:
+              type: string
+              minLength: 1
+            summary:
+              type: string
+              minLength: 1
+            filePath:
+              type:
+                - string
+                - "null"
+            line:
+              type:
+                - integer
+                - "null"
+            symbol:
+              type:
+                - string
+                - "null"
+            observation:
+              type: string
+              minLength: 1
+            supports:
+              type: array
+              items:
+                type: string
+            contradicts:
+              type: array
+              items:
+                type: string
+          required:
+            - id
+            - kind
+            - summary
+            - filePath
+            - line
+            - symbol
+            - observation
+            - supports
+            - contradicts
+      quickDisproofAttempt:
+        type: string
+        minLength: 1
+      confidence:
+        type: number
+        minimum: 0
+        maximum: 1
+    required:
+      - findingId
+      - trackKey
+      - title
+      - description
+      - vulnerabilityClass
+      - location
+      - claim
+      - rootCauseKey
+      - source
+      - sink
+      - attackerControl
+      - trustBoundaryCrossings
+      - preconditions
+      - evidence
+      - quickDisproofAttempt
+      - confidence
+  discovery-report:
+    type: object
+    additionalProperties: false
+    properties:
+      trackId:
+        type: string
+      source:
+        type: object
+      transformations:
+        type: array
+        items:
+          type: object
+      guards:
+        type: array
+        items:
+          type: object
+      sink:
+        type: object
+      reachability:
+        type: object
+      attackerControl:
+        type: object
+      preconditions:
+        type: array
+        items:
+          type: string
+      findingPaths:
+        type: array
+        items:
+          $pathOf: "#/schemas/finding"
+      quickDisproofAttempt:
+        type: object
+      newTrackSuggestions:
+        type: array
+        items:
+          type: object
+    required:
+      - trackId
+      - source
+      - transformations
+      - guards
+      - sink
+      - reachability
+      - attackerControl
+      - preconditions
+      - findingPaths
+      - quickDisproofAttempt
+      - newTrackSuggestions
+  discovery-manifest:
+    type: object
+    additionalProperties: false
+    properties:
+      trackId:
+        type: string
+      discoveryReportPath:
+        $pathOf: "#/schemas/discovery-report"
+    required:
+      - trackId
+      - discoveryReportPath
+  track-review:
+    type: object
+    additionalProperties: false
+    properties:
+      trackKey:
+        type: string
+        minLength: 1
+      decision:
+        type: string
+        enum:
+          - continue
+          - finding-found
+          - new-surface
+          - blocked
+          - exhausted
+      summary:
+        type: string
+        minLength: 1
+      findingIds:
+        type: array
+        items:
+          type: string
+      coverageGaps:
+        type: array
+        items:
+          type: string
+      nextStep:
+        anyOf:
+          - type: string
+            minLength: 1
+          - type: "null"
+      blockReason:
+        anyOf:
+          - type: string
+            minLength: 1
+          - type: "null"
+      reopenCondition:
+        anyOf:
+          - type: string
+            minLength: 1
+          - type: "null"
+    required:
+      - trackKey
+      - decision
+      - summary
+      - findingIds
+      - coverageGaps
+      - nextStep
+      - blockReason
+      - reopenCondition
+  finding-validation:
+    type: object
+    additionalProperties: false
+    properties:
+      findingId:
+        type: string
+      reachability:
+        type: object
+      controllability:
+        type: object
+      trustBoundaryCrossings:
+        type: array
+        items:
+          type: object
+      guardAnalysis:
+        type: object
+      deploymentConditions:
+        type: array
+        items:
+          type: string
+      primitive:
+        anyOf:
+          - $ref: "#/schemas/research-primitive"
+          - type: object
+            additionalProperties: false
+            properties: {}
+      evidenceRefs:
+        type: array
+        items:
+          type: string
+      disproofResult:
+        type: object
+      verdict:
+        type: string
+    required:
+      - findingId
+      - reachability
+      - controllability
+      - trustBoundaryCrossings
+      - guardAnalysis
+      - deploymentConditions
+      - primitive
+      - evidenceRefs
+      - disproofResult
+      - verdict
+  finding-review:
+    type: object
+    additionalProperties: false
+    properties:
+      findingId:
+        type: string
+      decision:
+        type: string
+        enum:
+          - confirmed
+          - needs-more-evidence
+          - false-positive
+      summary:
+        type: string
+      challenges:
+        type: array
+        items:
+          type: object
+      requiredEvidence:
+        type: array
+        items:
+          type: string
+      confirmedPrimitive:
+        anyOf:
+          - $ref: "#/schemas/research-primitive"
+          - type: object
+            additionalProperties: false
+            properties: {}
+    required:
+      - findingId
+      - decision
+      - summary
+      - challenges
+      - requiredEvidence
+      - confirmedPrimitive
+  research-primitive:
+    type: object
+    additionalProperties: false
+    properties:
+      primitiveId:
+        type: string
+        minLength: 1
+      name:
+        type: string
+        minLength: 1
+      capability:
+        type: string
+        minLength: 1
+      requiredInput:
+        type: object
+      producedCapability:
+        type: object
+      trustLevel:
+        type: string
+        minLength: 1
+      evidenceRefs:
+        type: array
+        items:
+          type: string
+    required:
+      - primitiveId
+      - name
+      - capability
+      - requiredInput
+      - producedCapability
+      - trustLevel
+      - evidenceRefs
+  chain-synthesis:
+    type: object
+    additionalProperties: false
+    properties:
+      chains:
+        type: array
+        items:
+          $ref: "#/schemas/research-chain"
+    required:
+      - chains
+  research-chain:
+    type: object
+    additionalProperties: false
+    properties:
+      chainId:
+        type: string
+        minLength: 1
+      chainKey:
+        type: string
+        minLength: 1
+      status:
+        type: string
+        enum:
+          - candidate
+          - incomplete
+          - accepted
+          - confirmed
+          - primitive-gap
+          - revise-chain
+      steps:
+        type: array
+        minItems: 1
+        items:
+          $ref: "#/schemas/research-chain-step"
+      entrypoint:
+        type: object
+      requiredCapabilities:
+        type: array
+        items:
+          type: string
+      producedCapabilities:
+        type: array
+        items:
+          type: string
+      trustBoundaryCrossings:
+        type: array
+        items:
+          type: object
+      deploymentConditions:
+        type: array
+        items:
+          type: string
+      primitiveGaps:
+        type: array
+        items:
+          type: object
+      successTarget:
+        type: object
+    required:
+      - chainId
+      - chainKey
+      - status
+      - steps
+      - entrypoint
+      - requiredCapabilities
+      - producedCapabilities
+      - trustBoundaryCrossings
+      - deploymentConditions
+      - primitiveGaps
+      - successTarget
+  research-chain-step:
+    type: object
+    additionalProperties: false
+    properties:
+      primitiveId:
+        type: string
+        minLength: 1
+      findingId:
+        type: string
+        minLength: 1
+      entrypoint:
+        type: object
+      requiredCapabilities:
+        type: array
+        items:
+          type: string
+      producedCapabilities:
+        type: array
+        items:
+          type: string
+      trustBoundaryCrossings:
+        type: array
+        items:
+          type: object
+      deploymentConditions:
+        type: array
+        items:
+          type: string
+    required:
+      - primitiveId
+  chain-review:
+    type: object
+    additionalProperties: false
+    properties:
+      chainId:
+        type: string
+        minLength: 1
+      decision:
+        type: string
+        enum:
+          - accepted
+          - revise-chain
+          - primitive-gap
+          - invalid-finding
+      brokenTransitions:
+        type: array
+        items:
+          type: object
+      invalidatedFindings:
+        type: array
+        items:
+          type: string
+      invalidFindingId:
+        type:
+          - string
+          - "null"
+      requiredRevisions:
+        type: array
+        items:
+          type: string
+    required:
+      - chainId
+      - decision
+      - brokenTransitions
+      - invalidatedFindings
+      - invalidFindingId
+      - requiredRevisions
+  exploit-validation:
+    type: object
+    additionalProperties: false
+    properties:
+      chainId:
+        type: string
+        minLength: 1
+      steps:
+        type: array
+        items:
+          type: object
+      evidenceRefs:
+        type: array
+        items:
+          type: string
+      executionContext:
+        type: object
+      failurePoint:
+        type:
+          - object
+          - "null"
+      successCriteriaResult:
+        type: string
+        enum:
+          - not_attempted
+          - satisfied
+          - not_satisfied
+          - inconclusive
+      verdict:
+        type: string
+    required:
+      - chainId
+      - steps
+      - evidenceRefs
+      - executionContext
+      - failurePoint
+      - successCriteriaResult
+      - verdict
+  exploit-review:
+    type: object
+    additionalProperties: false
+    properties:
+      chainId:
+        type: string
+        minLength: 1
+      decision:
+        type: string
+        enum:
+          - confirmed
+          - runtime-retry
+          - chain-revision
+          - finding-revalidation
+      reproducibility:
+        type: object
+      environmentAssumptions:
+        type: array
+        items:
+          type: string
+      invalidatedSteps:
+        type: array
+        items:
+          type: object
+      invalidFindingId:
+        type:
+          - string
+          - "null"
+    required:
+      - chainId
+      - decision
+      - reproducibility
+      - environmentAssumptions
+      - invalidatedSteps
+      - invalidFindingId
+  research-report:
+    type: object
+    additionalProperties: false
+    properties:
+      chainId:
+        type: string
+      reportPath:
+        type: string
+      verdict:
+        type: string
+    required:
+      - chainId
+      - reportPath
+      - verdict
+  scan-target-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - threatModelPath
+      - targetPath
+      - moduleId
+      - moduleName
+      - targetId
+      - targetName
+      - targetKind
+      - priority
+      - vulnerabilityClassFocus
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      threatModelPath:
+        $pathOf: "#/schemas/module-threat-model"
+      targetPath:
+        $pathOf: "#/schemas/target"
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      targetId:
+        type: string
+      targetName:
+        type: string
+      targetKind:
+        type: string
+      filePath:
+        type:
+          - string
+          - "null"
+      line:
+        type:
+          - integer
+          - "null"
+      summary:
+        type:
+          - string
+          - "null"
+      priority:
+        type:
+          - integer
+          - "null"
+      vulnerabilityClassFocus:
+        type: string
+  scan-target-manifest:
+    type: object
+    required:
+      - candidates
+    properties:
+      candidates:
+        type: array
+        items:
+          $pathOf: "#/schemas/candidate"
+  scan-job-snapshot:
+    type: object
+    required:
+      - scanJobId
+    additionalProperties: true
+    properties:
+      scanJobId:
+        type: string
+  evidence:
+    type: object
+    required:
+      - id
+      - kind
+      - summary
+      - filePath
+      - line
+      - symbol
+      - command
+      - artifactPath
+      - observation
+      - supports
+      - contradicts
+      - confidenceImpact
+    additionalProperties: false
+    properties:
+      id:
+        type: string
+      kind:
+        enum:
+          - code
+          - runtime
+          - fuzz
+          - negative
+          - assumption
+          - external
+      summary:
+        type: string
+      filePath:
+        type:
+          - string
+          - "null"
+      line:
+        type:
+          - integer
+          - "null"
+      symbol:
+        type:
+          - string
+          - "null"
+      command:
+        type:
+          - string
+          - "null"
+      artifactPath:
+        type:
+          - string
+          - "null"
+      observation:
+        type:
+          - string
+          - "null"
+      supports:
+        type: array
+        items:
+          type: string
+      contradicts:
+        type: array
+        items:
+          type: string
+      confidenceImpact:
+        type:
+          - string
+          - "null"
+  repository:
+    type: object
+    required:
+      - id
+      - name
+      - summary
+      - languages
+      - buildSystems
+      - runtimeDirectories
+      - downrankedDirectories
+      - notes
+      - targetRef
+      - targetTag
+      - commitSha
+      - baseSha
+      - commitWindow
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+      summary:
+        type: string
+      languages:
+        type: array
+        items:
+          type: string
+      buildSystems:
+        type: array
+        items:
+          type: string
+      runtimeDirectories:
+        type: array
+        items:
+          type: string
+      downrankedDirectories:
+        type: array
+        items:
+          type: string
+      notes:
+        type: array
+        items:
+          type: string
+      targetRef:
+        type:
+          - string
+          - "null"
+      targetTag:
+        type:
+          - string
+          - "null"
+      commitSha:
+        type:
+          - string
+          - "null"
+      baseSha:
+        type:
+          - string
+          - "null"
+      commitWindow:
+        type: integer
+  module:
+    type: object
+    required:
+      - id
+      - moduleId
+      - name
+      - summary
+      - priority
+      - files
+      - entryPoints
+      - trustBoundaries
+      - attackSurfaces
+      - vulnerabilityThemes
+      - runtimeComponents
+      - notes
+    additionalProperties: false
+    properties:
+      id:
+        type: string
+      moduleId:
+        type: string
+      name:
+        type: string
+      summary:
+        type: string
+      priority:
+        type: integer
+      files:
+        type: array
+        items:
+          type: string
+      entryPoints:
+        type: array
+        items:
+          type: string
+      trustBoundaries:
+        type: array
+        items:
+          type: string
+      attackSurfaces:
+        type: array
+        items:
+          type: string
+      vulnerabilityThemes:
+        type: array
+        items:
+          type: string
+      runtimeComponents:
+        type: array
+        items:
+          type: string
+      notes:
+        type: array
+        items:
+          type: string
+  function:
+    type: object
+    required:
+      - id
+      - moduleId
+      - moduleName
+      - functionId
+      - functionName
+      - filePath
+      - line
+      - priority
+      - summary
+      - vulnerabilityType
+      - score
+      - role
+      - reachability
+      - sourceToSinkHint
+      - excludeReason
+      - priorityReason
+      - securityModelRelation
+      - attackSurface
+      - trustBoundary
+      - likelyVulnerabilityTypes
+    properties:
+      id:
+        type: string
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      functionId:
+        type: string
+      functionName:
+        type: string
+      filePath:
+        type:
+          - string
+          - "null"
+      line:
+        type:
+          - integer
+          - "null"
+      priority:
+        type: integer
+      summary:
+        type:
+          - string
+          - "null"
+      vulnerabilityType:
+        type:
+          - string
+          - "null"
+      score:
+        type:
+          - number
+          - "null"
+      role:
+        type: string
+      reachability:
+        type: string
+      sourceToSinkHint:
+        type:
+          - string
+          - "null"
+      excludeReason:
+        type:
+          - string
+          - "null"
+      priorityReason:
+        type: string
+      securityModelRelation:
+        type: string
+      attackSurface:
+        type:
+          - string
+          - "null"
+      trustBoundary:
+        type:
+          - string
+          - "null"
+      likelyVulnerabilityTypes:
+        type: array
+        items:
+          type: string
+  target-kind:
+    enum:
+      - function
+      - route-handler
+      - middleware
+      - api-route
+      - server-action
+      - page-loader
+      - controller-action
+      - view-function
+      - resolver
+      - job-handler
+      - cli-command
+      - security-config
+      - template-render
+      - parser-deserializer
+      - data-access
+      - unknown
+  target:
+    type: object
+    required:
+      - id
+      - moduleId
+      - moduleName
+      - targetId
+      - targetName
+      - targetKind
+      - language
+      - framework
+      - sourceFiles
+      - filePath
+      - line
+      - routePath
+      - httpMethods
+      - priority
+      - summary
+      - attackerInputs
+      - sinks
+      - trustBoundary
+      - likelyVulnerabilityTypes
+      - evidence
+      - score
+      - excludeReason
+      - priorityReason
+    additionalProperties: false
+    properties:
+      id:
+        type: string
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      targetId:
+        type: string
+      targetName:
+        type: string
+      targetKind:
+        $ref: "#/schemas/target-kind"
+      language:
+        type:
+          - string
+          - "null"
+      framework:
+        type:
+          - string
+          - "null"
+      sourceFiles:
+        type: array
+        minItems: 1
+        items:
+          type: string
+      filePath:
+        type:
+          - string
+          - "null"
+      line:
+        type:
+          - integer
+          - "null"
+      routePath:
+        type:
+          - string
+          - "null"
+      httpMethods:
+        type: array
+        items:
+          type: string
+      priority:
+        type: integer
+      summary:
+        type:
+          - string
+          - "null"
+      attackerInputs:
+        type: array
+        items:
+          type: string
+      sinks:
+        type: array
+        items:
+          type: string
+      trustBoundary:
+        type:
+          - string
+          - "null"
+      likelyVulnerabilityTypes:
+        type: array
+        items:
+          type: string
+      evidence:
+        type: array
+        items:
+          type: string
+      score:
+        type:
+          - number
+          - "null"
+      excludeReason:
+        type:
+          - string
+          - "null"
+      priorityReason:
+        type: string
+  module-threat-model:
+    type: object
+    required:
+      - moduleId
+      - moduleName
+      - modulePath
+      - assets
+      - entrypoints
+      - trustBoundaries
+      - attackerInputs
+      - sinkClasses
+      - likelyVulnerabilityClasses
+      - rulePriorities
+      - securityAssumptions
+      - assumptions
+      - limitations
+      - summary
+    additionalProperties: false
+    properties:
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      modulePath:
+        type: string
+      assets:
+        type: array
+        items:
+          type: string
+      entrypoints:
+        type: array
+        items:
+          type: string
+      trustBoundaries:
+        type: array
+        items:
+          type: string
+      attackerInputs:
+        type: array
+        items:
+          type: string
+      sinkClasses:
+        type: array
+        items:
+          type: string
+      likelyVulnerabilityClasses:
+        type: array
+        items:
+          type: string
+        $normalize:
+          - trim
+          - remove-empty
+          - unique
+      rulePriorities:
+        type: array
+        items:
+          type: string
+      securityAssumptions:
+        type: array
+        items:
+          type: string
+      assumptions:
+        type: array
+        items:
+          type: string
+      limitations:
+        type: array
+        items:
+          type: string
+      summary:
+        type: string
+  candidate:
+    type: object
+    required:
+      - id
+      - functionId
+      - title
+      - description
+      - filePath
+      - line
+      - vulnerabilityType
+      - confidence
+      - score
+      - claim
+      - rootCauseKey
+      - evidence
+      - attackerControl
+      - affectedSink
+      - preconditions
+      - quickDisproofAttempt
+      - needsFuzzing
+      - needsManualAnalysis
+    properties:
+      id:
+        type: string
+        $generate:
+          function: uuid
+          length: 6
+          prefix: candidate-
+      functionId:
+        type:
+          - string
+          - "null"
+      title:
+        type: string
+      description:
+        type: string
+      filePath:
+        type:
+          - string
+          - "null"
+      line:
+        type:
+          - integer
+          - "null"
+      vulnerabilityType:
+        type:
+          - string
+          - "null"
+      confidence:
+        type:
+          - number
+          - "null"
+      score:
+        type:
+          - number
+          - "null"
+      claim:
+        type: string
+      rootCauseKey:
+        type:
+          - string
+          - "null"
+      targetId:
+        type:
+          - string
+          - "null"
+      targetKind:
+        anyOf:
+          - $ref: "#/schemas/target-kind"
+          - type: "null"
+      evidence:
+        type: array
+        items:
+          $ref: "#/schemas/evidence"
+      attackerControl:
+        type:
+          - string
+          - "null"
+      affectedSink:
+        type:
+          - string
+          - "null"
+      preconditions:
+        type: array
+        items:
+          type: string
+      quickDisproofAttempt:
+        type:
+          - string
+          - "null"
+      needsFuzzing:
+        type: boolean
+      needsManualAnalysis:
+        type: boolean
+  analysis-feedback-item:
+    type: object
+    required:
+      - kind
+      - summary
+      - evidence
+    properties:
+      kind:
+        enum:
+          - candidate
+          - critic
+          - manual
+      summary:
+        type: string
+      evidence:
+        type: array
+        items:
+          $ref: "#/schemas/evidence"
+  analysis:
+    type: object
+    required:
+      - id
+      - result
+      - summary
+      - confidence
+      - score
+      - reportPath
+      - runtimeSeconds
+      - hypothesis
+      - evidenceTable
+      - attackPath
+      - blockers
+      - rulingRationale
+      - missingEvidenceRequest
+      - feedbackHistory
+    properties:
+      id:
+        type: string
+      result:
+        enum:
+          - real_vulnerability
+          - likely_vulnerability
+          - plausible_but_unproven
+          - false_positive
+      summary:
+        type: string
+      confidence:
+        type:
+          - number
+          - "null"
+      score:
+        type:
+          - number
+          - "null"
+      reportPath:
+        type:
+          - string
+          - "null"
+      runtimeSeconds:
+        type:
+          - number
+          - "null"
+      analysisFingerprint:
+        type: string
+      hypothesis:
+        type: string
+      evidenceTable:
+        type: array
+        items:
+          $ref: "#/schemas/evidence"
+      attackPath:
+        type: array
+        items:
+          type: string
+      blockers:
+        type: array
+        items:
+          type: string
+      rulingRationale:
+        type: string
+      missingEvidenceRequest:
+        type: array
+        items:
+          type: string
+      feedbackHistory:
+        type: array
+        items:
+          $ref: "#/schemas/analysis-feedback-item"
+  critic-response:
+    type: object
+    required:
+      - id
+      - stance
+      - reviewedAnalysisFingerprint
+      - summary
+      - objections
+      - requiredAdditionalEvidence
+      - codeExistenceChecks
+      - citationValidityChecks
+      - reachabilityAssessment
+      - preconditionAssessment
+      - falsePositiveAlternatives
+      - severityExploitabilityAssessment
+      - refutedClaims
+      - missingEvidenceFields
+      - suggestedNextAction
+    properties:
+      id:
+        type: string
+      stance:
+        enum:
+          - object
+          - convinced
+      reviewedAnalysisFingerprint:
+        type: string
+      summary:
+        type: string
+      objections:
+        type: array
+        items:
+          type: string
+      requiredAdditionalEvidence:
+        type: array
+        items:
+          type: string
+      codeExistenceChecks:
+        type: array
+        items:
+          type: string
+      citationValidityChecks:
+        type: array
+        items:
+          type: string
+      reachabilityAssessment:
+        type: string
+      preconditionAssessment:
+        type: string
+      falsePositiveAlternatives:
+        type: array
+        items:
+          type: string
+      severityExploitabilityAssessment:
+        type: string
+      refutedClaims:
+        type: array
+        items:
+          type: string
+      missingEvidenceFields:
+        type: array
+        items:
+          type: string
+      suggestedNextAction:
+        type:
+          - string
+          - "null"
+  final-analysis:
+    allOf:
+      - $ref: "#/schemas/analysis"
+      - type: object
+        required:
+          - analysisFingerprint
+          - criticApproval
+          - evidenceBundle
+          - fuzzEvidence
+        properties:
+          analysisFingerprint:
+            type: string
+          criticApproval:
+            type: object
+            required:
+              - criticTaskId
+              - reviewedAnalysisFingerprint
+              - stance
+              - summary
+            properties:
+              criticTaskId:
+                type: string
+              reviewedAnalysisFingerprint:
+                type: string
+              stance:
+                const: convinced
+              summary:
+                type: string
+          evidenceBundle:
+            type: array
+            items:
+              $ref: "#/schemas/evidence"
+          fuzzEvidence:
+            type: array
+            items:
+              $ref: "#/schemas/evidence"
+  verification:
+    type: object
+    required:
+      - id
+      - result
+      - summary
+      - confidence
+      - score
+      - reportPath
+      - runtimeSeconds
+      - evidenceBundle
+      - residualUncertainty
+    properties:
+      id:
+        type: string
+      result:
+        enum:
+          - "true"
+          - likely
+          - "false"
+      summary:
+        type: string
+      confidence:
+        type:
+          - number
+          - "null"
+      score:
+        type:
+          - number
+          - "null"
+      reportPath:
+        type:
+          - string
+          - "null"
+      runtimeSeconds:
+        type:
+          - number
+          - "null"
+      evidenceBundle:
+        type: array
+        items:
+          $ref: "#/schemas/evidence"
+      residualUncertainty:
+        type: array
+        items:
+          type: string
+  triage:
+    type: object
+    required:
+      - id
+      - result
+      - disqualifier
+      - disqualifierReason
+      - securityClassification
+      - isSecurityIssue
+      - impactType
+      - cvssVector
+      - cvssScore
+      - cvssSeverity
+      - exploitability
+      - isExploitable
+      - commonTriggerConditions
+      - hardeningOrRobustness
+      - epssProbability30d
+      - epssSource
+      - summary
+      - reportPath
+      - runtimeSeconds
+      - evidenceBundle
+      - residualUncertainty
+    properties:
+      id:
+        type: string
+      result:
+        enum:
+          - security_issue
+          - non_security
+          - hardening
+          - needs_review
+      disqualifier:
+        enum:
+          - D-0
+          - D-1
+          - D-1.5
+          - D-2
+          - D-3
+          - D-4
+          - D-5
+          - null
+      disqualifierReason:
+        type:
+          - string
+          - "null"
+      securityClassification:
+        enum:
+          - vulnerability
+          - security_hardening
+          - robustness
+          - non_security
+          - unknown
+      isSecurityIssue:
+        type: boolean
+      impactType:
+        type: string
+      cvssVector:
+        type:
+          - string
+          - "null"
+      cvssScore:
+        type:
+          - number
+          - "null"
+        minimum: 0
+        maximum: 10
+      cvssSeverity:
+        enum:
+          - none
+          - low
+          - medium
+          - high
+          - critical
+          - unknown
+      exploitability:
+        enum:
+          - none
+          - theoretical
+          - proof_of_concept
+          - practical
+          - unknown
+      isExploitable:
+        type:
+          - boolean
+          - "null"
+      commonTriggerConditions:
+        type: array
+        items:
+          type: string
+      hardeningOrRobustness:
+        type: boolean
+      epssProbability30d:
+        type:
+          - number
+          - "null"
+        minimum: 0
+        maximum: 1
+      epssSource:
+        type: string
+      summary:
+        type: string
+      reportPath:
+        type:
+          - string
+          - "null"
+      runtimeSeconds:
+        type:
+          - number
+          - "null"
+      evidenceBundle:
+        type: array
+        items:
+          $ref: "#/schemas/evidence"
+      residualUncertainty:
+        type: array
+        items:
+          type: string
+  goal-threat-direction:
+    type: object
+    additionalProperties: false
+    properties:
+      focus:
+        type: string
+        minLength: 1
+      attackerModel:
+        type: string
+        minLength: 1
+      nonGoals:
+        type: array
+        items:
+          type: string
+      notes:
+        type: string
+    required:
+      - focus
+      - attackerModel
+  goal-spec:
+    type: object
+    additionalProperties: false
+    properties:
+      goalId:
+        type: string
+        minLength: 1
+      title:
+        type: string
+        minLength: 1
+      successCriteria:
+        type: string
+        minLength: 1
+      nonGoals:
+        type: array
+        items:
+          type: string
+      attackerModel:
+        type: string
+        minLength: 1
+      stopCondition:
+        type: string
+        minLength: 1
+      persistenceLanguage:
+        type: string
+        minLength: 1
+      redTeamClosedLoopholes:
+        type: array
+        items:
+          type: string
+      goalPrompt:
+        type: string
+        minLength: 1
+    required:
+      - goalId
+      - title
+      - successCriteria
+      - nonGoals
+      - attackerModel
+      - stopCondition
+      - persistenceLanguage
+      - redTeamClosedLoopholes
+      - goalPrompt
+  goal-craft-output:
+    type: object
+    additionalProperties: false
+    properties:
+      goalSpecPath:
+        type: string
+        minLength: 1
+      goalSpec:
+        $ref: "#/schemas/goal-spec"
+    required:
+      - goalSpecPath
+      - goalSpec
+  hunt-goal:
+    type: object
+    additionalProperties: false
+    properties:
+      huntGoalId:
+        type: string
+        minLength: 1
+      title:
+        type: string
+        minLength: 1
+      objective:
+        type: string
+        minLength: 1
+      focusPaths:
+        type: array
+        items:
+          type: string
+      riskPathways:
+        type: array
+        items:
+          type: string
+      rationale:
+        type: string
+      partitionDimension:
+        type: string
+    required:
+      - huntGoalId
+      - title
+      - objective
+  surface-dispatch:
+    type: object
+    additionalProperties: false
+    properties:
+      globalExhausted:
+        type: boolean
+      exhaustionReason:
+        type: string
+      partitionDimension:
+        type: string
+      huntGoals:
+        type: array
+        items:
+          $ref: "#/schemas/hunt-goal"
+    required:
+      - globalExhausted
+      - huntGoals
+  goal-candidate-finding:
+    type: object
+    additionalProperties: false
+    properties:
+      candidateId:
+        type: string
+        minLength: 1
+      huntGoalId:
+        type: string
+        minLength: 1
+      title:
+        type: string
+        minLength: 1
+      description:
+        type: string
+        minLength: 1
+      vulnerabilityClass:
+        type: string
+      location:
+        type: object
+        additionalProperties: false
+        properties:
+          filePath:
+            type: string
+            minLength: 1
+          line:
+            type:
+              - integer
+              - "null"
+          symbol:
+            type:
+              - string
+              - "null"
+        required:
+          - filePath
+      claim:
+        type: string
+        minLength: 1
+      rootCauseKey:
+        type: string
+        minLength: 1
+      evidence:
+        type: array
+        items:
+          type: object
+      attackerControl:
+        type: string
+      preconditions:
+        type: array
+        items:
+          type: string
+      quickDisproofAttempt:
+        type: string
+      confidence:
+        type: number
+    required:
+      - candidateId
+      - huntGoalId
+      - title
+      - description
+      - location
+      - claim
+      - rootCauseKey
+  goal-exhaustion-declaration:
+    type: object
+    additionalProperties: false
+    properties:
+      huntGoalId:
+        type: string
+        minLength: 1
+      exhausted:
+        type: boolean
+        const: true
+      methodsTried:
+        type: array
+        items:
+          type: string
+      coveredPaths:
+        type: array
+        items:
+          type: string
+      reason:
+        type: string
+        minLength: 1
+    required:
+      - huntGoalId
+      - exhausted
+      - methodsTried
+      - coveredPaths
+      - reason
+  goal-hunt-output:
+    type: object
+    additionalProperties: false
+    properties:
+      outcome:
+        type: string
+        enum:
+          - candidate
+          - exhausted
+      candidate:
+        anyOf:
+          - $ref: "#/schemas/goal-candidate-finding"
+          - type: "null"
+      exhaustion:
+        anyOf:
+          - $ref: "#/schemas/goal-exhaustion-declaration"
+          - type: "null"
+    required:
+      - outcome
+  goal-judge-verdict:
+    type: object
+    additionalProperties: false
+    properties:
+      candidateId:
+        type: string
+        minLength: 1
+      decision:
+        type: string
+        enum:
+          - confirmed
+          - rejected
+          - needs-more-evidence
+      summary:
+        type: string
+        minLength: 1
+      attackPathValid:
+        type: boolean
+      pocFeasible:
+        type: boolean
+      reasons:
+        type: array
+        items:
+          type: string
+    required:
+      - candidateId
+      - decision
+      - summary
+      - attackPathValid
+      - pocFeasible
+      - reasons
+  goal-dedup-result:
+    type: object
+    additionalProperties: false
+    properties:
+      candidateId:
+        type: string
+        minLength: 1
+      novelty:
+        type: string
+        enum:
+          - novel
+          - duplicate
+          - known-fixed
+          - unknown
+      summary:
+        type: string
+        minLength: 1
+      references:
+        type: array
+        items:
+          type: string
+    required:
+      - candidateId
+      - novelty
+      - summary
+      - references
+  surface-feedback:
+    type: object
+    additionalProperties: false
+    properties:
+      kind:
+        type: string
+        enum:
+          - hunt-candidate
+          - hunt-exhausted
+          - judge-reject
+          - dedup-reject
+          - dedup-novel
+      huntGoalId:
+        type: string
+      candidateId:
+        type:
+          - string
+          - "null"
+      summary:
+        type: string
+      payload:
+        type: object
+    required:
+      - kind
+      - summary
+  triage-finding-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - functionPath
+      - candidatePath
+      - analysisResultPath
+      - verifyResultPath
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      functionPath:
+        $pathOf: "#/schemas/target"
+      candidatePath:
+        $pathOf: "#/schemas/candidate"
+      analysisResultPath:
+        $pathOf: "#/schemas/final-analysis"
+      verifyResultPath:
+        $pathOf: "#/schemas/verification"
+  verify-finding-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - functionPath
+      - candidatePath
+      - analysisResultPath
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      functionPath:
+        $pathOf: "#/schemas/target"
+      candidatePath:
+        $pathOf: "#/schemas/candidate"
+      analysisResultPath:
+        $pathOf: "#/schemas/final-analysis"
+stages:
+  research-scope:
+    name: Research Scope
+    description: Define the attacker model, trusted domain, protected assets, and success criteria for this research job.
+    role: scan
+    group: research
+    mode: serial
+    concurrency: 1
+    disableable: false
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - research-agent
+        - research-db
+      prompt: |
+        You are the Research Scope stage for a generic security research job.
+
+        Read the target project source and `/task/inputs/task-input.json`. Define the attacker starting point, trusted domain, protected assets, deployment assumptions, permitted information sources, and success criteria supplied by the job. Do not invent project-specific assumptions. The minimum research deadline is {{researchDeadlineAt}}; include it in the scope artifact and do not conclude the research as exhausted before that deadline unless the job is explicitly stopped. Write the complete scope object to /task/scope.json.
+
+        Persist the scope as the reserved Track `__scope__` using the research-db skill. Use a stable Track ID derived from the current scan job (for example `scope-{{scanJobId}}`), create it with `approachFamily=scope`, `researchIdea=job scope`, `status=active`, and the complete scope object, or read and update it with the current revision when it already exists. Resolve conflicts with the documented three-round CAS loop. Do not include `__scope__` in the ordinary research tracks returned by Track Planning.
+
+        Return {"scopePath":"/task/scope.json"} in output only after the scope artifact and reserved Track write have succeeded.
+      prepareRepository: target
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      $ref: "#/schemas/research-scope-stage-input"
+    outputSchema:
+      $ref: "#/schemas/scope-manifest"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+  surface-map:
+    name: Surface Mapping
+    description: Map attacker-facing entrypoints, trust boundaries, sources, sinks, and dependency flows.
+    role: scan
+    group: research
+    mode: serial
+    concurrency: 1
+    disableable: false
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - research-agent
+      prompt: |
+        You are the Surface Mapping stage for a generic security research job.
+
+        Read the scope artifact before inspecting source. Enumerate attacker-facing entrypoints, trust boundaries, sources, sinks, runtime components, dependency flows, coverage, and open questions. Do not claim exploitability. Write the inventory to /task/surface-map.json and return {"surfaceMapPath":"/task/surface-map.json"} in output.
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/surface-map-manifest"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+  track-plan:
+    name: Track Planning
+    description: Select diverse research tracks from surface coverage and Registry state.
+    role: scan
+    group: research
+    mode: serial
+    concurrency: 1
+    disableable: true
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - research-agent
+        - research-db
+      prompt: |
+        You are the serial Track Planning stage for a generic security research job. This stage is the only owner of the global Track portfolio: creation, deduplication, ordering, prioritization, and cross-Track adjustments happen here. Track Review tasks only decide what to do next for their current Track and must not be treated as a source of global portfolio mutations.
+
+        Read the scope and surface artifacts. Use the research-db skill to inspect current tracks, findings, primitives, and chains. Select materially different approach families, preserve underexplored routes, and turn primitive gaps into targeted tracks. Persist every new or changed Track directly with `create-track` or `update-track`; use the returned revision and the read -> CAS conflict loop from the skill. Do not wait for TypeScript to persist the returned array. Return an object containing the persisted tracks and the current iteration. Every track must contain a stable non-empty trackKey, approachFamily, researchIdea, scope object, and mechanisms string array; do not use id, candidateId, or a generated random identifier. Do not validate findings.
+
+        Treat the reserved `__scope__` Track as read-only context and never include it in the returned `tracks` array or downstream Discovery tasks.
+
+        Finding references are ownership data, not general context. Only put a Finding ID in a Track's findingIds when that Finding is already owned by the same Track. For a new Track, return findingIds as an empty array; mention related Findings only as context in coverage or researchIdea. Never copy an existingFinding or findingIds from another Track into a new Track. When updating an existing Track, preserve its complete existing findingIds set exactly.
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/track-plan"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+  vulnerability-discovery:
+    name: Vulnerability Discovery
+    description: Trace attacker-controlled data through one assigned research track.
+    role: scan
+    group: research
+    mode: fanout
+    concurrency: 8
+    disableable: true
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - research-agent
+        - research-db
+      prompt: |
+        You are the Vulnerability Discovery stage for one assigned research track.
+
+        Use the exact canonical `track.trackId` supplied in the task input and task
+        context for the Discovery Report `trackId`. It is a Registry entity ID, not
+        the human-readable `track.trackKey`; never substitute the key for the ID.
+        If the ID is absent, run `research-db list-tracks`, find the row whose
+        `trackKey` exactly matches the assigned track, and use that row's `trackId`.
+        If no exact row exists, stop and report the identity error instead of
+        inventing an ID.
+
+        Read the scope and surface artifacts and inspect only the assigned track's target scope. Trace attacker-controlled data through parsing, guards, transformations, persistence, queues, and sinks. Record precise source evidence, quick disproof attempts, Research Findings, and materially new track suggestions.
+
+        Write each Finding as one strict JSON object in its own `/task/findings/<safe-finding-id>.json` file. Every Finding must use the strict Finding artifact shape and set `findingId` to exactly `trackKey:rootCauseKey`, with one colon separator and no `::`, spaces, or alternate delimiter. For example, `admin-dispatch-csrf:ajax-dismiss-pointer-commented-out-nonce`. Do not embed Finding objects in the Discovery Report and do not JSON-encode a Finding as a string.
+
+        Write the full report to `/task/discovery-report.json`. Its `findingPaths` array must contain the `/task/findings/*.json` paths in deterministic order. Validate the report and every Finding artifact before returning the report path and track identifier.
+
+        After validating each Finding artifact, persist it directly with the `research-db create-finding` command. Use the exact current Track ID and the stable Finding ID from the artifact. If the Finding already exists, read it and use the revision conflict loop; never silently overwrite a different Finding. Update the owning Track's absolute `findingIds` set only with IDs that this Track owns, using `update-track` and its expected revision. A successful Discovery task must leave the database rows committed before returning its report.
+
+        Before ending the turn, you must also write `/task/output.json` yourself. It must be the final structured envelope, not a prose response:
+
+        ```json
+        {"route":null,"exit":false,"output":{"trackId":"<the assigned track identifier>","discoveryReportPath":"/task/discovery-report.json"}}
+        ```
+
+        Replace the placeholder with the exact assigned `trackId`. This write is mandatory even when the report contains no Findings. Re-open `/task/output.json` and validate it against `/task/output.schema.json` immediately before ending the turn.
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/discovery-manifest"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+  track-review:
+    name: Track Review
+    description: Review discovery results and route tracks, findings, or new surfaces.
+    role: verification
+    group: research
+    mode: fanout
+    concurrency: 4
+    disableable: true
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - research-agent
+        - research-db
+      prompt: |
+        You are the Track Review stage for a generic security research job.
+
+        Review only the current Track supplied in the task input. Read the discovery report for current-track context and use `research-db list-findings` to inspect persisted Findings owned by this Track. The report's `findingPaths` belong to the producing Discovery task; do not dereference those paths from this task. Track portfolio creation, deduplication, ordering, and changes to other Tracks belong exclusively to the serial Track Planning stage. Do not create, block, exhaust, rank, or otherwise mutate another Track from this task.
+
+        Return exactly one structured decision object with these fields: `trackKey`, `decision`, `summary`, `findingIds`, `coverageGaps`, `nextStep`, `blockReason`, and `reopenCondition`. `trackKey` must exactly match the current Track. `decision` must be one of `continue`, `finding-found`, `new-surface`, `blocked`, or `exhausted`; the pipeline route must use the same value. Put only non-empty Finding IDs owned by the current Track in `findingIds`, and use an empty array unless the decision is `finding-found`. Use a non-empty `blockReason` for `blocked`; otherwise use `null` when not applicable. Use `null` for `nextStep` or `reopenCondition` when not applicable. Do not return the legacy `continueTracks`, `newTracks`, `blockedTracks`, or `exhaustedTracks` buckets. Do not create a separate review file or return a `reviewPath`. Do not confirm a vulnerability.
+
+        Before returning, update only the current Track through `research-db update-track` with an absolute `status`, `nextStep`, `blockReason`, `reopenCondition`, `coverage`, and `evidenceRefs` patch as applicable. Read the Track first, pass its current revision, and resolve a conflict by rereading and recomputing this Track's decision. Never create, block, exhaust, rank, or update another Track.
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/track-review"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+  finding-validation:
+    name: Finding Validation
+    description: Validate one finding and characterize the supported capability.
+    role: analysis
+    group: research
+    mode: fanout
+    concurrency: 8
+    disableable: true
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - research-agent
+        - research-db
+      prompt: |
+        You are the Finding Validation stage for one Research Finding.
+
+        Read the scope, Finding data, discovery evidence, and relevant source. Verify attacker reachability, controllability, guards, trust-boundary crossings, deployment conditions, and a concrete disproof attempt. Describe only the capability supported by evidence. When a primitive is supported, set primitive to an object containing stable primitiveId, name, capability, requiredInput, producedCapability, trustLevel, and evidenceRefs. When no primitive is supported, set primitive to {}. Return only the structured validation object; do not write a validation artifact or return a file path because the pipeline persists the complete output for downstream stages.
+
+        After writing and validating the artifact, use `research-db get-finding` to read the current revision and persist the validation outcome with `update-finding`. Set an absolute `status` and `latestValidationVerdict`, replace `requiredEvidence` when the validation identifies it, and resolve conflicts by rereading the Finding. If the validation supports a primitive, persist it directly with `create-primitive` using the stable `primitiveId`; if it already exists, reread it and apply an absolute `update-primitive` only when its desired values changed. Do not rely on TypeScript to create or update either entity.
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/finding-validation"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+  finding-review:
+    name: Finding Review
+    description: Independently challenge one finding validation result.
+    role: verification
+    group: research
+    mode: fanout
+    concurrency: 4
+    disableable: true
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - research-agent
+        - research-db
+      prompt: |
+        You are the independent Finding Review stage.
+
+        Read the Finding and validation artifacts. Recheck the source-to-sink path independently, challenge omitted guards and deployment assumptions, and choose exactly one decision: confirmed, needs-more-evidence, or false-positive. When decision is confirmed, confirmedPrimitive must contain stable primitiveId, name, capability, requiredInput, producedCapability, trustLevel, and evidenceRefs. For needs-more-evidence or false-positive, set confirmedPrimitive to {}. Return the Finding ID, decision, a short summary of the review rationale, challenges, required evidence, and confirmed primitive. Do not write a separate review file or return a reviewPath. Do not broaden into unrelated discovery.
+
+        Using the research-db skill, persist the review directly before returning: read the Finding revision, then use `update-finding` with an absolute `status`, `latestReviewDecision`, and `requiredEvidence`. For a confirmed primitive, use `create-primitive` or the revision conflict loop for an existing primitive. For a non-confirmed decision, do not create a primitive. A conflict must be reread and resolved by the Agent; no TypeScript Registry effect will apply this result.
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/finding-review"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+  chain-synthesis:
+    name: Chain Synthesis
+    description: Combine confirmed capabilities into exploit chains and identify gaps.
+    role: analysis
+    group: research
+    mode: serial
+    concurrency: 1
+    disableable: true
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - research-agent
+        - research-db
+      prompt: |
+        You are the Chain Synthesis stage for a generic security research job.
+
+        Use research-db to inspect confirmed primitives, finding reviews, prior chains, and primitive gaps. Build only chains whose adjacent steps have real data-flow compatibility. Every chain must contain stable chainId and chainKey, status, steps, entrypoint, requiredCapabilities, producedCapabilities, trustBoundaryCrossings, deploymentConditions, primitiveGaps, and successTarget. chainId must be reused by Chain Review and later Exploit stages; never use id or generate a second identifier. Every referenced primitive must exist in the current scan job and every step must preserve its primitiveId. Represent unsupported bridges as primitive gaps and return a chains array. Do not claim the configured success criteria is satisfied merely because a high-impact primitive exists.
+
+        Persist each chain directly with `research-db create-chain` or `update-chain`. For an existing chain, read its revision and submit the complete absolute chain state; on conflict, reread and merge only compatible current fields before retrying. Do not create a second chain ID for an existing `chainKey`, and do not wait for TypeScript to persist the returned array.
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/chain-synthesis"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+  chain-review:
+    name: Chain Review
+    description: Audit the continuity and assumptions of one exploit chain.
+    role: verification
+    group: research
+    mode: fanout
+    concurrency: 4
+    disableable: true
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - research-agent
+        - research-db
+      prompt: |
+        You are the independent Chain Review stage for exactly one exploit chain.
+
+        Read the current chain and its referenced Finding evidence. Audit every transition, trust boundary, input/output compatibility, deployment condition, and primitive gap. Choose exactly one route decision: accepted, revise-chain, primitive-gap, or invalid-finding. When the decision is invalid-finding, set invalidFindingId to the affected Finding ID; otherwise set it to null. Treat other chains and Findings as read-only context. Do not mutate or invalidate a Finding in this stage; the downstream Finding Validation stage owns that state transition. Return only the required structured review fields. Do not create a separate review file or return a reviewPath.
+
+        Using the research-db skill, before returning update only the current Chain with `update-chain`, using its expected revision and an absolute `status` matching the decision (`accepted`, `revise-chain`, or `primitive-gap`). On a revision conflict, reread the Chain and retry or abandon with an explicit conflict explanation. Never update another Chain or a Finding from this stage.
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/chain-review"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+  exploit-validation:
+    name: Exploit Validation
+    description: Perform source-only validation against the configured success criteria.
+    role: verification
+    group: research
+    mode: fanout
+    concurrency: 4
+    disableable: true
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - research-agent
+        - research-db
+      prompt: |
+        You are the source-only Exploit Validation stage.
+
+        Do not execute payloads, access protected assets, alter the target project, or perform runtime exploitation. Validate the accepted chain statically against the configured attacker model and success criteria. Return the chain steps, source evidence references, execution context assumptions, failure point, successCriteriaResult=not_attempted, and verdict. Do not write a validation artifact or return a file path because the pipeline persists the complete output for downstream stages.
+
+        After validation, use the research-db skill to read the current Chain and use `update-chain` to persist the absolute validation-relevant state that belongs to this stage, including status and evidence fields where applicable. Use the revision conflict loop; do not mark a chain confirmed solely because static validation completed.
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/exploit-validation"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+  exploit-review:
+    name: Exploit Review
+    description: Independently review the source-only chain validation.
+    role: verification
+    group: research
+    mode: fanout
+    concurrency: 4
+    disableable: true
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - research-agent
+        - research-db
+      prompt: |
+        You are the independent Exploit Review stage for exactly one exploit chain.
+
+        Read the source-only validation and current chain. Check that each transition follows from source evidence and that no hidden credentials, privileged setup, or unsupported environment assumption was used. Choose confirmed, runtime-retry, chain-revision, or finding-revalidation. When the decision is finding-revalidation, set invalidFindingId to the affected Finding ID; otherwise set it to null. Treat other chains and Findings as read-only context. Do not mutate or invalidate a Finding in this stage; the downstream Finding Validation stage owns that state transition. Return only the required structured review fields. Do not create a separate review file or return a reviewPath.
+
+        Using the research-db skill, persist the review on the current Chain with `update-chain` before returning. Use an absolute status (`confirmed`, `runtime-retry`, or `chain-revision` mapped to the chain schema), pass the current revision, and resolve conflicts by rereading. Never update a Finding or another Chain.
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/exploit-review"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+  research-report:
+    name: Research Report
+    description: Produce the final evidence-backed report for the configured research criteria.
+    role: verification
+    group: research
+    mode: fanout
+    concurrency: 2
+    disableable: false
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - research-agent
+        - research-db
+      prompt: |
+        You are the final Research Report stage.
+
+        Use research-db and the supplied artifacts to produce an evidence-backed report against the configured success criteria. Include the attacker model, source-to-sink path, trust boundaries, confirmed primitives, chain prerequisites, rejected routes, limitations, and confidence. Write the report to /task/reports/final-report.md and return its path, chainId, and verdict.
+
+        Use the research-db skill to read the final Chain state and revision directly from the Registry before writing the report. The report file and task output are the report source; there is no TypeScript Registry effect or report event to invoke.
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/research-report"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    report:
+      path: reports/final-report.md
+      required: true
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+edges:
+  - id: research-scope-to-surface-map
+    name: research-scope-to-surface-map
+    from: research-scope
+    to: surface-map
+    fork: false
+    mode: map
+    input:
+      scopePath: $output.scopePath
+    artifacts:
+      - from: $output.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+  - id: surface-map-to-track-plan
+    name: surface-map-to-track-plan
+    from: surface-map
+    to: track-plan
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $output.surfaceMapPath
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $output.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+  - id: track-plan-to-vulnerability-discovery
+    name: track-plan-to-vulnerability-discovery
+    from: track-plan
+    to: vulnerability-discovery
+    fork: false
+    mode: fanOut
+    foreach: $.tracks[*]
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+      track: $item
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+  - id: vulnerability-discovery-to-track-review
+    name: vulnerability-discovery-to-track-review
+    from: vulnerability-discovery
+    to: track-review
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+      track: $input.track
+      discoveryReportPath: $output.discoveryReportPath
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output.discoveryReportPath
+        to: inputs/discovery-report.json
+        inputField: discoveryReportPath
+        required: true
+  - id: track-review-to-track-plan
+    name: track-review-to-track-plan
+    from: track-review
+    to: track-plan
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output
+        to: inputs/track-review.json
+        inputField: reviewPath
+        required: true
+    route:
+      key: continue
+      default: true
+  - id: track-review-to-surface-map
+    name: track-review-to-surface-map
+    from: track-review
+    to: surface-map
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $output
+        to: inputs/track-review.json
+        inputField: reviewPath
+        required: true
+    route:
+      key: new-surface
+  - id: track-review-to-finding-validation
+    name: track-review-to-finding-validation
+    from: track-review
+    to: finding-validation
+    fork: false
+    mode: fanOut
+    foreach: $.findingIds[*]
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+      findingId: $item
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output
+        to: inputs/track-review.json
+        inputField: reviewPath
+        required: true
+    route:
+      key: finding-found
+  - id: track-review-exhausted-to-track-plan
+    name: track-review-exhausted-to-track-plan
+    from: track-review
+    to: track-plan
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output
+        to: inputs/track-review.json
+        inputField: reviewPath
+        required: true
+    route:
+      key: exhausted
+  - id: track-review-blocked-to-track-plan
+    name: track-review-blocked-to-track-plan
+    from: track-review
+    to: track-plan
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output
+        to: inputs/track-review.json
+        inputField: reviewPath
+        required: true
+    route:
+      key: blocked
+  - id: finding-validation-to-finding-review
+    name: finding-validation-to-finding-review
+    from: finding-validation
+    to: finding-review
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      findingId: $input.findingId
+      surfaceMapPath: $input.surfaceMapPath
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output
+        to: inputs/finding-validation.json
+        inputField: validationPath
+        required: true
+  - id: finding-review-to-finding-validation
+    name: finding-review-to-finding-validation
+    from: finding-review
+    to: finding-validation
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      findingId: $input.findingId
+      surfaceMapPath: $input.surfaceMapPath
+      validationPath: $input.validationPath
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $input.validationPath
+        to: inputs/finding-validation.json
+        inputField: validationPath
+        required: true
+    route:
+      key: needs-more-evidence
+      default: true
+  - id: finding-review-to-track-plan
+    name: finding-review-to-track-plan
+    from: finding-review
+    to: track-plan
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output
+        to: inputs/finding-review.json
+        inputField: reviewPath
+        required: true
+    route:
+      key: false-positive
+  - id: finding-review-to-chain-synthesis
+    name: finding-review-to-chain-synthesis
+    from: finding-review
+    to: chain-synthesis
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output
+        to: inputs/finding-review.json
+        inputField: reviewPath
+        required: true
+    route:
+      key: confirmed
+  - id: chain-synthesis-to-chain-review
+    name: chain-synthesis-to-chain-review
+    from: chain-synthesis
+    to: chain-review
+    fork: false
+    mode: fanOut
+    foreach: $.chains[*]
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+      chain: $item
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+  - id: chain-review-to-chain-synthesis
+    name: chain-review-to-chain-synthesis
+    from: chain-review
+    to: chain-synthesis
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+      chain: $input.chain
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output
+        to: inputs/chain-review.json
+        inputField: reviewPath
+        required: true
+    route:
+      key: revise-chain
+      default: true
+  - id: chain-review-to-track-plan
+    name: chain-review-to-track-plan
+    from: chain-review
+    to: track-plan
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+      chain: $input.chain
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output
+        to: inputs/chain-review.json
+        inputField: reviewPath
+        required: true
+    route:
+      key: primitive-gap
+  - id: chain-review-to-finding-validation
+    name: chain-review-to-finding-validation
+    from: chain-review
+    to: finding-validation
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+      findingId: $output.invalidFindingId
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output
+        to: inputs/chain-review.json
+        inputField: reviewPath
+        required: true
+    route:
+      key: invalid-finding
+  - id: chain-review-to-exploit-validation
+    name: chain-review-to-exploit-validation
+    from: chain-review
+    to: exploit-validation
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+      chain: $input.chain
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output
+        to: inputs/chain-review.json
+        inputField: reviewPath
+        required: true
+    route:
+      key: accepted
+  - id: exploit-validation-to-exploit-review
+    name: exploit-validation-to-exploit-review
+    from: exploit-validation
+    to: exploit-review
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+      chain: $input.chain
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output
+        to: inputs/exploit-validation.json
+        inputField: validationPath
+        required: true
+  - id: exploit-review-to-exploit-validation
+    name: exploit-review-to-exploit-validation
+    from: exploit-review
+    to: exploit-validation
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+      chain: $input.chain
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output
+        to: inputs/exploit-review.json
+        inputField: reviewPath
+        required: true
+    route:
+      key: runtime-retry
+      default: true
+  - id: exploit-review-to-chain-synthesis
+    name: exploit-review-to-chain-synthesis
+    from: exploit-review
+    to: chain-synthesis
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+      chain: $input.chain
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output
+        to: inputs/exploit-review.json
+        inputField: reviewPath
+        required: true
+    route:
+      key: chain-revision
+  - id: exploit-review-to-finding-validation
+    name: exploit-review-to-finding-validation
+    from: exploit-review
+    to: finding-validation
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      surfaceMapPath: $input.surfaceMapPath
+      findingId: $output.invalidFindingId
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $input.surfaceMapPath
+        to: inputs/surface-map.json
+        inputField: surfaceMapPath
+        required: true
+      - from: $output
+        to: inputs/exploit-review.json
+        inputField: reviewPath
+        required: true
+    route:
+      key: finding-revalidation
+  - id: exploit-review-to-research-report
+    name: exploit-review-to-research-report
+    from: exploit-review
+    to: research-report
+    fork: false
+    mode: map
+    input:
+      scopePath: $input.scopePath
+      chain: $input.chain
+    artifacts:
+      - from: $input.scopePath
+        to: inputs/scope.json
+        inputField: scopePath
+        required: true
+      - from: $output
+        to: inputs/exploit-review.json
+        inputField: reviewPath
+        required: true
+    route:
+      key: confirmed
+groups: []

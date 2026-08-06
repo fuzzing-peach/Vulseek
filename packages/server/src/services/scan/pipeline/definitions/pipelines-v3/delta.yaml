@@ -1,0 +1,2991 @@
+version: 3
+name: delta-scan-programmatic
+supportedTargets:
+  - project
+  - evaluation
+root: delta-scope
+limits:
+  maxTasks: 10000
+  maxDurationSeconds: 86400
+schemas:
+  analyze-finding-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - functionPath
+      - candidatePath
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      functionPath:
+        $pathOf: "#/schemas/target"
+      candidatePath:
+        $pathOf: "#/schemas/candidate"
+      analysisReportTemplatePath:
+        type:
+          - string
+          - "null"
+      feedbackPath:
+        type:
+          - string
+          - "null"
+  attack-surface-model-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - moduleId
+      - moduleName
+      - priority
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      priority:
+        type:
+          - integer
+          - "null"
+  module-threat-model-manifest:
+    type: object
+    required:
+      - repository
+      - module
+      - threatModel
+    additionalProperties: false
+    properties:
+      repository:
+        $pathOf: "#/schemas/repository"
+      module:
+        $pathOf: "#/schemas/module"
+      threatModel:
+        $pathOf: "#/schemas/module-threat-model"
+  critique-finding-stage-input:
+    allOf:
+      - $ref: "#/schemas/analyze-finding-stage-input"
+      - type: object
+        required:
+          - draftAnalysisPath
+          - analysisFingerprint
+        properties:
+          draftAnalysisPath:
+            $pathOf: "#/schemas/analysis"
+          analysisFingerprint:
+            type: string
+  null-stage-input:
+    type: "null"
+  delta-scope-manifest:
+    type: object
+    required:
+      - repository
+      - module
+      - threatModel
+      - functions
+    additionalProperties: false
+    properties:
+      repository:
+        $pathOf: "#/schemas/repository"
+      module:
+        $pathOf: "#/schemas/module"
+      threatModel:
+        $pathOf: "#/schemas/module-threat-model"
+      functions:
+        type: array
+        items:
+          $pathOf: "#/schemas/target"
+  identify-target-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - threatModelPath
+      - moduleId
+      - moduleName
+      - priority
+      - vulnerabilityClassFocus
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      threatModelPath:
+        $pathOf: "#/schemas/module-threat-model"
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      priority:
+        type:
+          - integer
+          - "null"
+      vulnerabilityClassFocus:
+        type: string
+  identify-target-manifest:
+    type: object
+    required:
+      - repository
+      - module
+      - threatModel
+      - targets
+    additionalProperties: false
+    properties:
+      repository:
+        $pathOf: "#/schemas/repository"
+      module:
+        $pathOf: "#/schemas/module"
+      threatModel:
+        $pathOf: "#/schemas/module-threat-model"
+      targets:
+        type: array
+        items:
+          $pathOf: "#/schemas/target"
+  repository-profile-manifest:
+    type: object
+    required:
+      - repository
+      - modules
+    properties:
+      repository:
+        $pathOf: "#/schemas/repository"
+      modules:
+        type: array
+        items:
+          $pathOf: "#/schemas/module"
+  research-scope-stage-input:
+    type: object
+    additionalProperties: false
+    properties: {}
+    required: []
+  research-scope:
+    type: object
+    additionalProperties: false
+    properties:
+      attackerModel:
+        type: object
+      trustedDomain:
+        type: object
+      protectedAssets:
+        type: array
+        items:
+          type: string
+      deploymentAssumptions:
+        type: array
+        items:
+          type: string
+      rulesOfEngagement:
+        type: array
+        items:
+          type: string
+      minimumResearchDeadlineAt:
+        type: string
+      successCriteria:
+        type: object
+    required:
+      - attackerModel
+      - trustedDomain
+      - protectedAssets
+      - deploymentAssumptions
+      - rulesOfEngagement
+      - minimumResearchDeadlineAt
+      - successCriteria
+  scope-manifest:
+    type: object
+    additionalProperties: false
+    properties:
+      scopePath:
+        type: string
+    required:
+      - scopePath
+  surface-map:
+    type: object
+    additionalProperties: false
+    properties:
+      entrypoints:
+        type: array
+        items:
+          type: object
+      trustBoundaries:
+        type: array
+        items:
+          type: object
+      sources:
+        type: array
+        items:
+          type: object
+      sinks:
+        type: array
+        items:
+          type: object
+      components:
+        type: array
+        items:
+          type: object
+      dependencyFlows:
+        type: array
+        items:
+          type: object
+      coverage:
+        type: object
+      openQuestions:
+        type: array
+        items:
+          type: string
+    required:
+      - entrypoints
+      - trustBoundaries
+      - sources
+      - sinks
+      - components
+      - dependencyFlows
+      - coverage
+      - openQuestions
+  surface-map-manifest:
+    type: object
+    additionalProperties: false
+    properties:
+      surfaceMapPath:
+        type: string
+    required:
+      - surfaceMapPath
+  track-plan:
+    type: object
+    additionalProperties: false
+    properties:
+      tracks:
+        type: array
+        items:
+          $ref: "#/schemas/research-track"
+      iteration:
+        type: integer
+    required:
+      - tracks
+      - iteration
+  research-track:
+    type: object
+    additionalProperties: false
+    properties:
+      trackKey:
+        type: string
+        minLength: 1
+      approachFamily:
+        type: string
+        minLength: 1
+      researchIdea:
+        type: string
+        minLength: 1
+      scope:
+        type: object
+      mechanisms:
+        type: array
+        items:
+          type: string
+      coverage:
+        type: object
+      evidenceRefs:
+        type: array
+        items:
+          type: string
+      findingIds:
+        type: array
+        items:
+          type: string
+      nextStep:
+        type: string
+      status:
+        type: string
+        enum:
+          - queued
+          - active
+          - blocked
+          - exhausted
+    required:
+      - trackKey
+      - approachFamily
+      - researchIdea
+      - scope
+      - mechanisms
+  research-track-reference:
+    type: object
+    additionalProperties: false
+    properties:
+      trackKey:
+        type: string
+        minLength: 1
+      approachFamily:
+        type: string
+        minLength: 1
+      researchIdea:
+        type: string
+        minLength: 1
+      scope:
+        type: object
+      mechanisms:
+        type: array
+        items:
+          type: string
+      coverage:
+        type: object
+      evidenceRefs:
+        type: array
+        items:
+          type: string
+      findingIds:
+        type: array
+        items:
+          type: string
+      nextStep:
+        type: string
+    required:
+      - trackKey
+  finding:
+    type: object
+    additionalProperties: false
+    properties:
+      findingId:
+        type: string
+        minLength: 1
+      trackKey:
+        type: string
+        minLength: 1
+      title:
+        type: string
+        minLength: 1
+      description:
+        type: string
+        minLength: 1
+      vulnerabilityClass:
+        type:
+          - string
+          - "null"
+      location:
+        type: object
+        additionalProperties: false
+        properties:
+          filePath:
+            type: string
+            minLength: 1
+          line:
+            type:
+              - integer
+              - "null"
+          symbol:
+            type:
+              - string
+              - "null"
+        required:
+          - filePath
+          - line
+          - symbol
+      claim:
+        type: string
+        minLength: 1
+      rootCauseKey:
+        type: string
+        minLength: 1
+      source:
+        type: object
+      sink:
+        type: object
+      attackerControl:
+        type: string
+        minLength: 1
+      trustBoundaryCrossings:
+        type: array
+        items:
+          type: object
+      preconditions:
+        type: array
+        items:
+          type: string
+      evidence:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          properties:
+            id:
+              type: string
+              minLength: 1
+            kind:
+              type: string
+              minLength: 1
+            summary:
+              type: string
+              minLength: 1
+            filePath:
+              type:
+                - string
+                - "null"
+            line:
+              type:
+                - integer
+                - "null"
+            symbol:
+              type:
+                - string
+                - "null"
+            observation:
+              type: string
+              minLength: 1
+            supports:
+              type: array
+              items:
+                type: string
+            contradicts:
+              type: array
+              items:
+                type: string
+          required:
+            - id
+            - kind
+            - summary
+            - filePath
+            - line
+            - symbol
+            - observation
+            - supports
+            - contradicts
+      quickDisproofAttempt:
+        type: string
+        minLength: 1
+      confidence:
+        type: number
+        minimum: 0
+        maximum: 1
+    required:
+      - findingId
+      - trackKey
+      - title
+      - description
+      - vulnerabilityClass
+      - location
+      - claim
+      - rootCauseKey
+      - source
+      - sink
+      - attackerControl
+      - trustBoundaryCrossings
+      - preconditions
+      - evidence
+      - quickDisproofAttempt
+      - confidence
+  discovery-report:
+    type: object
+    additionalProperties: false
+    properties:
+      trackId:
+        type: string
+      source:
+        type: object
+      transformations:
+        type: array
+        items:
+          type: object
+      guards:
+        type: array
+        items:
+          type: object
+      sink:
+        type: object
+      reachability:
+        type: object
+      attackerControl:
+        type: object
+      preconditions:
+        type: array
+        items:
+          type: string
+      findingPaths:
+        type: array
+        items:
+          $pathOf: "#/schemas/finding"
+      quickDisproofAttempt:
+        type: object
+      newTrackSuggestions:
+        type: array
+        items:
+          type: object
+    required:
+      - trackId
+      - source
+      - transformations
+      - guards
+      - sink
+      - reachability
+      - attackerControl
+      - preconditions
+      - findingPaths
+      - quickDisproofAttempt
+      - newTrackSuggestions
+  discovery-manifest:
+    type: object
+    additionalProperties: false
+    properties:
+      trackId:
+        type: string
+      discoveryReportPath:
+        $pathOf: "#/schemas/discovery-report"
+    required:
+      - trackId
+      - discoveryReportPath
+  track-review:
+    type: object
+    additionalProperties: false
+    properties:
+      trackKey:
+        type: string
+        minLength: 1
+      decision:
+        type: string
+        enum:
+          - continue
+          - finding-found
+          - new-surface
+          - blocked
+          - exhausted
+      summary:
+        type: string
+        minLength: 1
+      findingIds:
+        type: array
+        items:
+          type: string
+      coverageGaps:
+        type: array
+        items:
+          type: string
+      nextStep:
+        anyOf:
+          - type: string
+            minLength: 1
+          - type: "null"
+      blockReason:
+        anyOf:
+          - type: string
+            minLength: 1
+          - type: "null"
+      reopenCondition:
+        anyOf:
+          - type: string
+            minLength: 1
+          - type: "null"
+    required:
+      - trackKey
+      - decision
+      - summary
+      - findingIds
+      - coverageGaps
+      - nextStep
+      - blockReason
+      - reopenCondition
+  finding-validation:
+    type: object
+    additionalProperties: false
+    properties:
+      findingId:
+        type: string
+      reachability:
+        type: object
+      controllability:
+        type: object
+      trustBoundaryCrossings:
+        type: array
+        items:
+          type: object
+      guardAnalysis:
+        type: object
+      deploymentConditions:
+        type: array
+        items:
+          type: string
+      primitive:
+        anyOf:
+          - $ref: "#/schemas/research-primitive"
+          - type: object
+            additionalProperties: false
+            properties: {}
+      evidenceRefs:
+        type: array
+        items:
+          type: string
+      disproofResult:
+        type: object
+      verdict:
+        type: string
+    required:
+      - findingId
+      - reachability
+      - controllability
+      - trustBoundaryCrossings
+      - guardAnalysis
+      - deploymentConditions
+      - primitive
+      - evidenceRefs
+      - disproofResult
+      - verdict
+  finding-review:
+    type: object
+    additionalProperties: false
+    properties:
+      findingId:
+        type: string
+      decision:
+        type: string
+        enum:
+          - confirmed
+          - needs-more-evidence
+          - false-positive
+      summary:
+        type: string
+      challenges:
+        type: array
+        items:
+          type: object
+      requiredEvidence:
+        type: array
+        items:
+          type: string
+      confirmedPrimitive:
+        anyOf:
+          - $ref: "#/schemas/research-primitive"
+          - type: object
+            additionalProperties: false
+            properties: {}
+    required:
+      - findingId
+      - decision
+      - summary
+      - challenges
+      - requiredEvidence
+      - confirmedPrimitive
+  research-primitive:
+    type: object
+    additionalProperties: false
+    properties:
+      primitiveId:
+        type: string
+        minLength: 1
+      name:
+        type: string
+        minLength: 1
+      capability:
+        type: string
+        minLength: 1
+      requiredInput:
+        type: object
+      producedCapability:
+        type: object
+      trustLevel:
+        type: string
+        minLength: 1
+      evidenceRefs:
+        type: array
+        items:
+          type: string
+    required:
+      - primitiveId
+      - name
+      - capability
+      - requiredInput
+      - producedCapability
+      - trustLevel
+      - evidenceRefs
+  chain-synthesis:
+    type: object
+    additionalProperties: false
+    properties:
+      chains:
+        type: array
+        items:
+          $ref: "#/schemas/research-chain"
+    required:
+      - chains
+  research-chain:
+    type: object
+    additionalProperties: false
+    properties:
+      chainId:
+        type: string
+        minLength: 1
+      chainKey:
+        type: string
+        minLength: 1
+      status:
+        type: string
+        enum:
+          - candidate
+          - incomplete
+          - accepted
+          - confirmed
+          - primitive-gap
+          - revise-chain
+      steps:
+        type: array
+        minItems: 1
+        items:
+          $ref: "#/schemas/research-chain-step"
+      entrypoint:
+        type: object
+      requiredCapabilities:
+        type: array
+        items:
+          type: string
+      producedCapabilities:
+        type: array
+        items:
+          type: string
+      trustBoundaryCrossings:
+        type: array
+        items:
+          type: object
+      deploymentConditions:
+        type: array
+        items:
+          type: string
+      primitiveGaps:
+        type: array
+        items:
+          type: object
+      successTarget:
+        type: object
+    required:
+      - chainId
+      - chainKey
+      - status
+      - steps
+      - entrypoint
+      - requiredCapabilities
+      - producedCapabilities
+      - trustBoundaryCrossings
+      - deploymentConditions
+      - primitiveGaps
+      - successTarget
+  research-chain-step:
+    type: object
+    additionalProperties: false
+    properties:
+      primitiveId:
+        type: string
+        minLength: 1
+      findingId:
+        type: string
+        minLength: 1
+      entrypoint:
+        type: object
+      requiredCapabilities:
+        type: array
+        items:
+          type: string
+      producedCapabilities:
+        type: array
+        items:
+          type: string
+      trustBoundaryCrossings:
+        type: array
+        items:
+          type: object
+      deploymentConditions:
+        type: array
+        items:
+          type: string
+    required:
+      - primitiveId
+  chain-review:
+    type: object
+    additionalProperties: false
+    properties:
+      chainId:
+        type: string
+        minLength: 1
+      decision:
+        type: string
+        enum:
+          - accepted
+          - revise-chain
+          - primitive-gap
+          - invalid-finding
+      brokenTransitions:
+        type: array
+        items:
+          type: object
+      invalidatedFindings:
+        type: array
+        items:
+          type: string
+      invalidFindingId:
+        type:
+          - string
+          - "null"
+      requiredRevisions:
+        type: array
+        items:
+          type: string
+    required:
+      - chainId
+      - decision
+      - brokenTransitions
+      - invalidatedFindings
+      - invalidFindingId
+      - requiredRevisions
+  exploit-validation:
+    type: object
+    additionalProperties: false
+    properties:
+      chainId:
+        type: string
+        minLength: 1
+      steps:
+        type: array
+        items:
+          type: object
+      evidenceRefs:
+        type: array
+        items:
+          type: string
+      executionContext:
+        type: object
+      failurePoint:
+        type:
+          - object
+          - "null"
+      successCriteriaResult:
+        type: string
+        enum:
+          - not_attempted
+          - satisfied
+          - not_satisfied
+          - inconclusive
+      verdict:
+        type: string
+    required:
+      - chainId
+      - steps
+      - evidenceRefs
+      - executionContext
+      - failurePoint
+      - successCriteriaResult
+      - verdict
+  exploit-review:
+    type: object
+    additionalProperties: false
+    properties:
+      chainId:
+        type: string
+        minLength: 1
+      decision:
+        type: string
+        enum:
+          - confirmed
+          - runtime-retry
+          - chain-revision
+          - finding-revalidation
+      reproducibility:
+        type: object
+      environmentAssumptions:
+        type: array
+        items:
+          type: string
+      invalidatedSteps:
+        type: array
+        items:
+          type: object
+      invalidFindingId:
+        type:
+          - string
+          - "null"
+    required:
+      - chainId
+      - decision
+      - reproducibility
+      - environmentAssumptions
+      - invalidatedSteps
+      - invalidFindingId
+  research-report:
+    type: object
+    additionalProperties: false
+    properties:
+      chainId:
+        type: string
+      reportPath:
+        type: string
+      verdict:
+        type: string
+    required:
+      - chainId
+      - reportPath
+      - verdict
+  scan-target-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - threatModelPath
+      - targetPath
+      - moduleId
+      - moduleName
+      - targetId
+      - targetName
+      - targetKind
+      - priority
+      - vulnerabilityClassFocus
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      threatModelPath:
+        $pathOf: "#/schemas/module-threat-model"
+      targetPath:
+        $pathOf: "#/schemas/target"
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      targetId:
+        type: string
+      targetName:
+        type: string
+      targetKind:
+        type: string
+      filePath:
+        type:
+          - string
+          - "null"
+      line:
+        type:
+          - integer
+          - "null"
+      summary:
+        type:
+          - string
+          - "null"
+      priority:
+        type:
+          - integer
+          - "null"
+      vulnerabilityClassFocus:
+        type: string
+  scan-target-manifest:
+    type: object
+    required:
+      - candidates
+    properties:
+      candidates:
+        type: array
+        items:
+          $pathOf: "#/schemas/candidate"
+  scan-job-snapshot:
+    type: object
+    required:
+      - scanJobId
+    additionalProperties: true
+    properties:
+      scanJobId:
+        type: string
+  evidence:
+    type: object
+    required:
+      - id
+      - kind
+      - summary
+      - filePath
+      - line
+      - symbol
+      - command
+      - artifactPath
+      - observation
+      - supports
+      - contradicts
+      - confidenceImpact
+    additionalProperties: false
+    properties:
+      id:
+        type: string
+      kind:
+        enum:
+          - code
+          - runtime
+          - fuzz
+          - negative
+          - assumption
+          - external
+      summary:
+        type: string
+      filePath:
+        type:
+          - string
+          - "null"
+      line:
+        type:
+          - integer
+          - "null"
+      symbol:
+        type:
+          - string
+          - "null"
+      command:
+        type:
+          - string
+          - "null"
+      artifactPath:
+        type:
+          - string
+          - "null"
+      observation:
+        type:
+          - string
+          - "null"
+      supports:
+        type: array
+        items:
+          type: string
+      contradicts:
+        type: array
+        items:
+          type: string
+      confidenceImpact:
+        type:
+          - string
+          - "null"
+  repository:
+    type: object
+    required:
+      - id
+      - name
+      - summary
+      - languages
+      - buildSystems
+      - runtimeDirectories
+      - downrankedDirectories
+      - notes
+      - targetRef
+      - targetTag
+      - commitSha
+      - baseSha
+      - commitWindow
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+      summary:
+        type: string
+      languages:
+        type: array
+        items:
+          type: string
+      buildSystems:
+        type: array
+        items:
+          type: string
+      runtimeDirectories:
+        type: array
+        items:
+          type: string
+      downrankedDirectories:
+        type: array
+        items:
+          type: string
+      notes:
+        type: array
+        items:
+          type: string
+      targetRef:
+        type:
+          - string
+          - "null"
+      targetTag:
+        type:
+          - string
+          - "null"
+      commitSha:
+        type:
+          - string
+          - "null"
+      baseSha:
+        type:
+          - string
+          - "null"
+      commitWindow:
+        type: integer
+  module:
+    type: object
+    required:
+      - id
+      - moduleId
+      - name
+      - summary
+      - priority
+      - files
+      - entryPoints
+      - trustBoundaries
+      - attackSurfaces
+      - vulnerabilityThemes
+      - runtimeComponents
+      - notes
+    additionalProperties: false
+    properties:
+      id:
+        type: string
+      moduleId:
+        type: string
+      name:
+        type: string
+      summary:
+        type: string
+      priority:
+        type: integer
+      files:
+        type: array
+        items:
+          type: string
+      entryPoints:
+        type: array
+        items:
+          type: string
+      trustBoundaries:
+        type: array
+        items:
+          type: string
+      attackSurfaces:
+        type: array
+        items:
+          type: string
+      vulnerabilityThemes:
+        type: array
+        items:
+          type: string
+      runtimeComponents:
+        type: array
+        items:
+          type: string
+      notes:
+        type: array
+        items:
+          type: string
+  function:
+    type: object
+    required:
+      - id
+      - moduleId
+      - moduleName
+      - functionId
+      - functionName
+      - filePath
+      - line
+      - priority
+      - summary
+      - vulnerabilityType
+      - score
+      - role
+      - reachability
+      - sourceToSinkHint
+      - excludeReason
+      - priorityReason
+      - securityModelRelation
+      - attackSurface
+      - trustBoundary
+      - likelyVulnerabilityTypes
+    properties:
+      id:
+        type: string
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      functionId:
+        type: string
+      functionName:
+        type: string
+      filePath:
+        type:
+          - string
+          - "null"
+      line:
+        type:
+          - integer
+          - "null"
+      priority:
+        type: integer
+      summary:
+        type:
+          - string
+          - "null"
+      vulnerabilityType:
+        type:
+          - string
+          - "null"
+      score:
+        type:
+          - number
+          - "null"
+      role:
+        type: string
+      reachability:
+        type: string
+      sourceToSinkHint:
+        type:
+          - string
+          - "null"
+      excludeReason:
+        type:
+          - string
+          - "null"
+      priorityReason:
+        type: string
+      securityModelRelation:
+        type: string
+      attackSurface:
+        type:
+          - string
+          - "null"
+      trustBoundary:
+        type:
+          - string
+          - "null"
+      likelyVulnerabilityTypes:
+        type: array
+        items:
+          type: string
+  target-kind:
+    enum:
+      - function
+      - route-handler
+      - middleware
+      - api-route
+      - server-action
+      - page-loader
+      - controller-action
+      - view-function
+      - resolver
+      - job-handler
+      - cli-command
+      - security-config
+      - template-render
+      - parser-deserializer
+      - data-access
+      - unknown
+  target:
+    type: object
+    required:
+      - id
+      - moduleId
+      - moduleName
+      - targetId
+      - targetName
+      - targetKind
+      - language
+      - framework
+      - sourceFiles
+      - filePath
+      - line
+      - routePath
+      - httpMethods
+      - priority
+      - summary
+      - attackerInputs
+      - sinks
+      - trustBoundary
+      - likelyVulnerabilityTypes
+      - evidence
+      - score
+      - excludeReason
+      - priorityReason
+    additionalProperties: false
+    properties:
+      id:
+        type: string
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      targetId:
+        type: string
+      targetName:
+        type: string
+      targetKind:
+        $ref: "#/schemas/target-kind"
+      language:
+        type:
+          - string
+          - "null"
+      framework:
+        type:
+          - string
+          - "null"
+      sourceFiles:
+        type: array
+        minItems: 1
+        items:
+          type: string
+      filePath:
+        type:
+          - string
+          - "null"
+      line:
+        type:
+          - integer
+          - "null"
+      routePath:
+        type:
+          - string
+          - "null"
+      httpMethods:
+        type: array
+        items:
+          type: string
+      priority:
+        type: integer
+      summary:
+        type:
+          - string
+          - "null"
+      attackerInputs:
+        type: array
+        items:
+          type: string
+      sinks:
+        type: array
+        items:
+          type: string
+      trustBoundary:
+        type:
+          - string
+          - "null"
+      likelyVulnerabilityTypes:
+        type: array
+        items:
+          type: string
+      evidence:
+        type: array
+        items:
+          type: string
+      score:
+        type:
+          - number
+          - "null"
+      excludeReason:
+        type:
+          - string
+          - "null"
+      priorityReason:
+        type: string
+  module-threat-model:
+    type: object
+    required:
+      - moduleId
+      - moduleName
+      - modulePath
+      - assets
+      - entrypoints
+      - trustBoundaries
+      - attackerInputs
+      - sinkClasses
+      - likelyVulnerabilityClasses
+      - rulePriorities
+      - securityAssumptions
+      - assumptions
+      - limitations
+      - summary
+    additionalProperties: false
+    properties:
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      modulePath:
+        type: string
+      assets:
+        type: array
+        items:
+          type: string
+      entrypoints:
+        type: array
+        items:
+          type: string
+      trustBoundaries:
+        type: array
+        items:
+          type: string
+      attackerInputs:
+        type: array
+        items:
+          type: string
+      sinkClasses:
+        type: array
+        items:
+          type: string
+      likelyVulnerabilityClasses:
+        type: array
+        items:
+          type: string
+        $normalize:
+          - trim
+          - remove-empty
+          - unique
+      rulePriorities:
+        type: array
+        items:
+          type: string
+      securityAssumptions:
+        type: array
+        items:
+          type: string
+      assumptions:
+        type: array
+        items:
+          type: string
+      limitations:
+        type: array
+        items:
+          type: string
+      summary:
+        type: string
+  candidate:
+    type: object
+    required:
+      - id
+      - functionId
+      - title
+      - description
+      - filePath
+      - line
+      - vulnerabilityType
+      - confidence
+      - score
+      - claim
+      - rootCauseKey
+      - evidence
+      - attackerControl
+      - affectedSink
+      - preconditions
+      - quickDisproofAttempt
+      - needsFuzzing
+      - needsManualAnalysis
+    properties:
+      id:
+        type: string
+        $generate:
+          function: uuid
+          length: 6
+          prefix: candidate-
+      functionId:
+        type:
+          - string
+          - "null"
+      title:
+        type: string
+      description:
+        type: string
+      filePath:
+        type:
+          - string
+          - "null"
+      line:
+        type:
+          - integer
+          - "null"
+      vulnerabilityType:
+        type:
+          - string
+          - "null"
+      confidence:
+        type:
+          - number
+          - "null"
+      score:
+        type:
+          - number
+          - "null"
+      claim:
+        type: string
+      rootCauseKey:
+        type:
+          - string
+          - "null"
+      targetId:
+        type:
+          - string
+          - "null"
+      targetKind:
+        anyOf:
+          - $ref: "#/schemas/target-kind"
+          - type: "null"
+      evidence:
+        type: array
+        items:
+          $ref: "#/schemas/evidence"
+      attackerControl:
+        type:
+          - string
+          - "null"
+      affectedSink:
+        type:
+          - string
+          - "null"
+      preconditions:
+        type: array
+        items:
+          type: string
+      quickDisproofAttempt:
+        type:
+          - string
+          - "null"
+      needsFuzzing:
+        type: boolean
+      needsManualAnalysis:
+        type: boolean
+  analysis-feedback-item:
+    type: object
+    required:
+      - kind
+      - summary
+      - evidence
+    properties:
+      kind:
+        enum:
+          - candidate
+          - critic
+          - manual
+      summary:
+        type: string
+      evidence:
+        type: array
+        items:
+          $ref: "#/schemas/evidence"
+  analysis:
+    type: object
+    required:
+      - id
+      - result
+      - summary
+      - confidence
+      - score
+      - reportPath
+      - runtimeSeconds
+      - hypothesis
+      - evidenceTable
+      - attackPath
+      - blockers
+      - rulingRationale
+      - missingEvidenceRequest
+      - feedbackHistory
+    properties:
+      id:
+        type: string
+      result:
+        enum:
+          - real_vulnerability
+          - likely_vulnerability
+          - plausible_but_unproven
+          - false_positive
+      summary:
+        type: string
+      confidence:
+        type:
+          - number
+          - "null"
+      score:
+        type:
+          - number
+          - "null"
+      reportPath:
+        type:
+          - string
+          - "null"
+      runtimeSeconds:
+        type:
+          - number
+          - "null"
+      analysisFingerprint:
+        type: string
+      hypothesis:
+        type: string
+      evidenceTable:
+        type: array
+        items:
+          $ref: "#/schemas/evidence"
+      attackPath:
+        type: array
+        items:
+          type: string
+      blockers:
+        type: array
+        items:
+          type: string
+      rulingRationale:
+        type: string
+      missingEvidenceRequest:
+        type: array
+        items:
+          type: string
+      feedbackHistory:
+        type: array
+        items:
+          $ref: "#/schemas/analysis-feedback-item"
+  critic-response:
+    type: object
+    required:
+      - id
+      - stance
+      - reviewedAnalysisFingerprint
+      - summary
+      - objections
+      - requiredAdditionalEvidence
+      - codeExistenceChecks
+      - citationValidityChecks
+      - reachabilityAssessment
+      - preconditionAssessment
+      - falsePositiveAlternatives
+      - severityExploitabilityAssessment
+      - refutedClaims
+      - missingEvidenceFields
+      - suggestedNextAction
+    properties:
+      id:
+        type: string
+      stance:
+        enum:
+          - object
+          - convinced
+      reviewedAnalysisFingerprint:
+        type: string
+      summary:
+        type: string
+      objections:
+        type: array
+        items:
+          type: string
+      requiredAdditionalEvidence:
+        type: array
+        items:
+          type: string
+      codeExistenceChecks:
+        type: array
+        items:
+          type: string
+      citationValidityChecks:
+        type: array
+        items:
+          type: string
+      reachabilityAssessment:
+        type: string
+      preconditionAssessment:
+        type: string
+      falsePositiveAlternatives:
+        type: array
+        items:
+          type: string
+      severityExploitabilityAssessment:
+        type: string
+      refutedClaims:
+        type: array
+        items:
+          type: string
+      missingEvidenceFields:
+        type: array
+        items:
+          type: string
+      suggestedNextAction:
+        type:
+          - string
+          - "null"
+  final-analysis:
+    allOf:
+      - $ref: "#/schemas/analysis"
+      - type: object
+        required:
+          - analysisFingerprint
+          - criticApproval
+          - evidenceBundle
+          - fuzzEvidence
+        properties:
+          analysisFingerprint:
+            type: string
+          criticApproval:
+            type: object
+            required:
+              - criticTaskId
+              - reviewedAnalysisFingerprint
+              - stance
+              - summary
+            properties:
+              criticTaskId:
+                type: string
+              reviewedAnalysisFingerprint:
+                type: string
+              stance:
+                const: convinced
+              summary:
+                type: string
+          evidenceBundle:
+            type: array
+            items:
+              $ref: "#/schemas/evidence"
+          fuzzEvidence:
+            type: array
+            items:
+              $ref: "#/schemas/evidence"
+  verification:
+    type: object
+    required:
+      - id
+      - result
+      - summary
+      - confidence
+      - score
+      - reportPath
+      - runtimeSeconds
+      - evidenceBundle
+      - residualUncertainty
+    properties:
+      id:
+        type: string
+      result:
+        enum:
+          - "true"
+          - likely
+          - "false"
+      summary:
+        type: string
+      confidence:
+        type:
+          - number
+          - "null"
+      score:
+        type:
+          - number
+          - "null"
+      reportPath:
+        type:
+          - string
+          - "null"
+      runtimeSeconds:
+        type:
+          - number
+          - "null"
+      evidenceBundle:
+        type: array
+        items:
+          $ref: "#/schemas/evidence"
+      residualUncertainty:
+        type: array
+        items:
+          type: string
+  triage:
+    type: object
+    required:
+      - id
+      - result
+      - disqualifier
+      - disqualifierReason
+      - securityClassification
+      - isSecurityIssue
+      - impactType
+      - cvssVector
+      - cvssScore
+      - cvssSeverity
+      - exploitability
+      - isExploitable
+      - commonTriggerConditions
+      - hardeningOrRobustness
+      - epssProbability30d
+      - epssSource
+      - summary
+      - reportPath
+      - runtimeSeconds
+      - evidenceBundle
+      - residualUncertainty
+    properties:
+      id:
+        type: string
+      result:
+        enum:
+          - security_issue
+          - non_security
+          - hardening
+          - needs_review
+      disqualifier:
+        enum:
+          - D-0
+          - D-1
+          - D-1.5
+          - D-2
+          - D-3
+          - D-4
+          - D-5
+          - null
+      disqualifierReason:
+        type:
+          - string
+          - "null"
+      securityClassification:
+        enum:
+          - vulnerability
+          - security_hardening
+          - robustness
+          - non_security
+          - unknown
+      isSecurityIssue:
+        type: boolean
+      impactType:
+        type: string
+      cvssVector:
+        type:
+          - string
+          - "null"
+      cvssScore:
+        type:
+          - number
+          - "null"
+        minimum: 0
+        maximum: 10
+      cvssSeverity:
+        enum:
+          - none
+          - low
+          - medium
+          - high
+          - critical
+          - unknown
+      exploitability:
+        enum:
+          - none
+          - theoretical
+          - proof_of_concept
+          - practical
+          - unknown
+      isExploitable:
+        type:
+          - boolean
+          - "null"
+      commonTriggerConditions:
+        type: array
+        items:
+          type: string
+      hardeningOrRobustness:
+        type: boolean
+      epssProbability30d:
+        type:
+          - number
+          - "null"
+        minimum: 0
+        maximum: 1
+      epssSource:
+        type: string
+      summary:
+        type: string
+      reportPath:
+        type:
+          - string
+          - "null"
+      runtimeSeconds:
+        type:
+          - number
+          - "null"
+      evidenceBundle:
+        type: array
+        items:
+          $ref: "#/schemas/evidence"
+      residualUncertainty:
+        type: array
+        items:
+          type: string
+  goal-threat-direction:
+    type: object
+    additionalProperties: false
+    properties:
+      focus:
+        type: string
+        minLength: 1
+      attackerModel:
+        type: string
+        minLength: 1
+      nonGoals:
+        type: array
+        items:
+          type: string
+      notes:
+        type: string
+    required:
+      - focus
+      - attackerModel
+  goal-spec:
+    type: object
+    additionalProperties: false
+    properties:
+      goalId:
+        type: string
+        minLength: 1
+      title:
+        type: string
+        minLength: 1
+      successCriteria:
+        type: string
+        minLength: 1
+      nonGoals:
+        type: array
+        items:
+          type: string
+      attackerModel:
+        type: string
+        minLength: 1
+      stopCondition:
+        type: string
+        minLength: 1
+      persistenceLanguage:
+        type: string
+        minLength: 1
+      redTeamClosedLoopholes:
+        type: array
+        items:
+          type: string
+      goalPrompt:
+        type: string
+        minLength: 1
+    required:
+      - goalId
+      - title
+      - successCriteria
+      - nonGoals
+      - attackerModel
+      - stopCondition
+      - persistenceLanguage
+      - redTeamClosedLoopholes
+      - goalPrompt
+  goal-craft-output:
+    type: object
+    additionalProperties: false
+    properties:
+      goalSpecPath:
+        type: string
+        minLength: 1
+      goalSpec:
+        $ref: "#/schemas/goal-spec"
+    required:
+      - goalSpecPath
+      - goalSpec
+  hunt-goal:
+    type: object
+    additionalProperties: false
+    properties:
+      huntGoalId:
+        type: string
+        minLength: 1
+      title:
+        type: string
+        minLength: 1
+      objective:
+        type: string
+        minLength: 1
+      focusPaths:
+        type: array
+        items:
+          type: string
+      riskPathways:
+        type: array
+        items:
+          type: string
+      rationale:
+        type: string
+      partitionDimension:
+        type: string
+    required:
+      - huntGoalId
+      - title
+      - objective
+  surface-dispatch:
+    type: object
+    additionalProperties: false
+    properties:
+      globalExhausted:
+        type: boolean
+      exhaustionReason:
+        type: string
+      partitionDimension:
+        type: string
+      huntGoals:
+        type: array
+        items:
+          $ref: "#/schemas/hunt-goal"
+    required:
+      - globalExhausted
+      - huntGoals
+  goal-candidate-finding:
+    type: object
+    additionalProperties: false
+    properties:
+      candidateId:
+        type: string
+        minLength: 1
+      huntGoalId:
+        type: string
+        minLength: 1
+      title:
+        type: string
+        minLength: 1
+      description:
+        type: string
+        minLength: 1
+      vulnerabilityClass:
+        type: string
+      location:
+        type: object
+        additionalProperties: false
+        properties:
+          filePath:
+            type: string
+            minLength: 1
+          line:
+            type:
+              - integer
+              - "null"
+          symbol:
+            type:
+              - string
+              - "null"
+        required:
+          - filePath
+      claim:
+        type: string
+        minLength: 1
+      rootCauseKey:
+        type: string
+        minLength: 1
+      evidence:
+        type: array
+        items:
+          type: object
+      attackerControl:
+        type: string
+      preconditions:
+        type: array
+        items:
+          type: string
+      quickDisproofAttempt:
+        type: string
+      confidence:
+        type: number
+    required:
+      - candidateId
+      - huntGoalId
+      - title
+      - description
+      - location
+      - claim
+      - rootCauseKey
+  goal-exhaustion-declaration:
+    type: object
+    additionalProperties: false
+    properties:
+      huntGoalId:
+        type: string
+        minLength: 1
+      exhausted:
+        type: boolean
+        const: true
+      methodsTried:
+        type: array
+        items:
+          type: string
+      coveredPaths:
+        type: array
+        items:
+          type: string
+      reason:
+        type: string
+        minLength: 1
+    required:
+      - huntGoalId
+      - exhausted
+      - methodsTried
+      - coveredPaths
+      - reason
+  goal-hunt-output:
+    type: object
+    additionalProperties: false
+    properties:
+      outcome:
+        type: string
+        enum:
+          - candidate
+          - exhausted
+      candidate:
+        anyOf:
+          - $ref: "#/schemas/goal-candidate-finding"
+          - type: "null"
+      exhaustion:
+        anyOf:
+          - $ref: "#/schemas/goal-exhaustion-declaration"
+          - type: "null"
+    required:
+      - outcome
+  goal-judge-verdict:
+    type: object
+    additionalProperties: false
+    properties:
+      candidateId:
+        type: string
+        minLength: 1
+      decision:
+        type: string
+        enum:
+          - confirmed
+          - rejected
+          - needs-more-evidence
+      summary:
+        type: string
+        minLength: 1
+      attackPathValid:
+        type: boolean
+      pocFeasible:
+        type: boolean
+      reasons:
+        type: array
+        items:
+          type: string
+    required:
+      - candidateId
+      - decision
+      - summary
+      - attackPathValid
+      - pocFeasible
+      - reasons
+  goal-dedup-result:
+    type: object
+    additionalProperties: false
+    properties:
+      candidateId:
+        type: string
+        minLength: 1
+      novelty:
+        type: string
+        enum:
+          - novel
+          - duplicate
+          - known-fixed
+          - unknown
+      summary:
+        type: string
+        minLength: 1
+      references:
+        type: array
+        items:
+          type: string
+    required:
+      - candidateId
+      - novelty
+      - summary
+      - references
+  surface-feedback:
+    type: object
+    additionalProperties: false
+    properties:
+      kind:
+        type: string
+        enum:
+          - hunt-candidate
+          - hunt-exhausted
+          - judge-reject
+          - dedup-reject
+          - dedup-novel
+      huntGoalId:
+        type: string
+      candidateId:
+        type:
+          - string
+          - "null"
+      summary:
+        type: string
+      payload:
+        type: object
+    required:
+      - kind
+      - summary
+  triage-finding-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - functionPath
+      - candidatePath
+      - analysisResultPath
+      - verifyResultPath
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      functionPath:
+        $pathOf: "#/schemas/target"
+      candidatePath:
+        $pathOf: "#/schemas/candidate"
+      analysisResultPath:
+        $pathOf: "#/schemas/final-analysis"
+      verifyResultPath:
+        $pathOf: "#/schemas/verification"
+  verify-finding-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - functionPath
+      - candidatePath
+      - analysisResultPath
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      functionPath:
+        $pathOf: "#/schemas/target"
+      candidatePath:
+        $pathOf: "#/schemas/candidate"
+      analysisResultPath:
+        $pathOf: "#/schemas/final-analysis"
+stages:
+  delta-scope:
+    name: Delta Scope
+    description: Scope changed repository targets for a delta scan.
+    role: scan
+    group: delta
+    mode: serial
+    concurrency: 1
+    disableable: false
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      nullableOutput: false
+      cwd: /workspace/repo
+      skills:
+        - delta-scope
+      prompt: |
+        You are the Delta Scope stage for a delta scan job.
+        {{taskIsolation}}
+        Use the installed skill named delta-scope as your working method.
+        The delta-scope skill file is /workspace/repo/.agents/skills/delta-scope/SKILL.md.
+        Do not emit candidate, candidate_batch, module, analysis, verification, or triage results.
+        Choose functions only by diff impact from base to target. Do not decide whether a vulnerability candidate exists.
+        Repository id: {{repositoryId}}.
+        Repository name: {{repositoryName}}.
+        Target ref: {{targetRef}}.
+        Target tag: {{targetTag}}.
+        Target commit: {{targetCommit}}.
+        Base commit: {{baseCommit}}.
+        Commit window k: {{commitWindow}}.
+        Diff range: {{baseCommit}}..{{targetCommit}}.
+        {{agentInstruction}}
+        Repository state JSON: {{repositoryStatePath}}.
+        Read repository state before analysis and work from /workspace/repo at the checked-out target revision.
+        Use git diff, rg, sed, tree-sitter, and local code inspection to identify functions that were changed by or are directly impacted by the diff.
+        Write the repository object to /task/repository.json.
+        Write each affected target object to /task/targets/<target-id>.json.
+        Every target object must satisfy the target schema. Use moduleId "delta-scope" and moduleName "Delta Scope" unless a more precise existing logical module is obvious from local code context.
+        Write one logical Delta Scope module object to /task/module.json and one threat model object to /task/outputs/module-threat-model.json.
+        Return a schema-valid path manifest: repository is /task/repository.json, module is /task/module.json, threatModel is /task/outputs/module-threat-model.json, and functions is the list of function JSON file paths.
+        If no affected functions exist, still write /task/repository.json and return exactly `{ "repository": "/task/repository.json", "functions": [] }`.
+        Before returning, validate the structured JSON against the runtime-provided output.schema.json.
+        Set output.json exit to true so Vulseek can discard this Delta Scope lane after end_turn.
+      prepareRepository: diff
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      $ref: "#/schemas/null-stage-input"
+    outputSchema:
+      $ref: "#/schemas/delta-scope-manifest"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    taskName: $ctx.projectName
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues:
+      repositoryId: $ctx.taskId
+      repositoryName: $ctx.serviceName
+      targetRef: $ctx.scanJob.targetRef
+      targetTag: $ctx.scanJob.targetTag
+      targetCommit: $ctx.scanJob.commitSha
+      baseCommit: $ctx.scanJob.baseSha
+      commitWindow: $ctx.scanJob.commitWindow
+      agentInstruction: Use the configured scan agent.
+      repositoryStatePath: $ctx.taskDir/00_repository_state.json
+  scan-target:
+    name: Scan Target
+    description: Target-level candidate discovery.
+    role: scan
+    group: full-scan
+    mode: fanout
+    concurrency: 4
+    disableable: true
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      nullableOutput: true
+      cwd: /workspace/repo
+      skills:
+        - scan-target
+      prompt: |
+        You are the Scan Target stage for one full-scan target task.
+        {{taskIsolation}}
+        Use the installed skill named scan-target as your working method.
+        The scan-target skill file is /workspace/repo/.agents/skills/scan-target/SKILL.md.
+        scan_job_id: {{scanJobId}}
+        module_id: {{moduleId}}
+        module_name: {{moduleName}}
+        target_id: {{targetId}}
+        target_name: {{targetName}}
+        target_kind: {{targetKind}}
+        target_file: {{targetFile}}
+        target_line: {{targetLine}}
+        target_summary: {{targetSummary}}
+        {{thinkingInstruction}}
+        repository_json_path: {{repositoryJsonPath}}
+        module_json_path: {{moduleJsonPath}}
+        threat_model_json_path: {{threatModelJsonPath}}
+        target_json_path: {{targetJsonPath}}
+
+        Read repository_json_path, module_json_path, threat_model_json_path, and target_json_path before analysis.
+        Analyze this target for all concrete, security-relevant vulnerability candidates supported by the supplied repository, module, threat-model, and target context. Do not limit the analysis to a single vulnerability class, and do not claim final exploitability.
+        The target may be a route, middleware, resolver, controller action, job handler, security config, template render point, parser, data-access boundary, or native function.
+        Look for source -> missing/weak check -> sink paths across applicable vulnerability classes. Set each candidate.vulnerabilityType to the concrete class supported by its evidence.
+        Write each candidate object to /task/candidates/<candidate-id>.json.
+        Set candidate.targetId to target_id and candidate.targetKind to target_kind.
+        Keep candidate.functionId null unless a legacy consumer requires the target id there.
+        Return a schema-valid path manifest with a `candidates` array containing the candidate JSON file paths.
+        Always return an object, even when there are no candidates; use `{ "candidates": [] }`.
+        Before returning, validate the structured JSON against the runtime-provided output.schema.json.
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      $ref: "#/schemas/scan-target-stage-input"
+    outputSchema:
+      $ref: "#/schemas/scan-target-manifest"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects:
+      - type: sync-candidates
+    taskName: $file($input.targetPath).targetName:$input.vulnerabilityClassFocus
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues:
+      scanJobId: $ctx.scanJobId
+      moduleId: $file($input.modulePath).id
+      moduleName: $file($input.modulePath).name
+      targetId: $file($input.targetPath).id
+      targetName: $file($input.targetPath).name
+      targetKind: $file($input.targetPath).targetKind
+      vulnerabilityClassFocus: $input.vulnerabilityClassFocus
+      targetFile: $file($input.targetPath).filePath
+      targetLine: $file($input.targetPath).line
+      targetSummary: $file($input.targetPath).summary
+      repositoryJsonPath: $input.repositoryPath
+      moduleJsonPath: $input.modulePath
+      threatModelJsonPath: $input.threatModelPath
+      targetJsonPath: $input.targetPath
+  analyze-finding:
+    name: Analyze Finding
+    description: Candidate analysis and critic routing.
+    role: analysis
+    group: review
+    mode: fanout
+    concurrency: 2
+    disableable: true
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      nullableOutput: false
+      cwd: /workspace/repo
+      skills:
+        - analyze-finding
+      prompt: |
+        You are the Analyze Finding agent for one vulnerability candidate.
+        {{taskIsolation}}
+        Work only on this candidate and decide whether it is a real issue.
+        scan_job_id: {{scanJobId}}
+        candidate_id: {{candidateId}}
+        candidate_title: {{candidateTitle}}
+        candidate_description: {{candidateDescription}}
+        candidate_file: {{candidateFile}}
+        candidate_line: {{candidateLine}}
+        repository_json_path: {{repositoryJsonPath}}
+        module_json_path: {{moduleJsonPath}}
+        target_json_path: {{functionJsonPath}}
+        candidate_json_path: {{candidateJsonPath}}
+        analysis_report_template_path: {{analysisReportTemplatePath}}
+        task_dir: {{taskDir}}
+        write_report_to: {{reportPath}}
+        feedback_json_path: {{feedbackJsonPath}}
+
+        Use the installed skill named analyze-finding as your working method.
+        The analyze-finding skill file is /workspace/repo/.agents/skills/analyze-finding/SKILL.md.
+        Follow the coordinator workflow and evidence rules defined in the skill.
+        Read the JSON files referenced above before analysis. If feedback_json_path is not "none", read that JSON file too. If analysis_report_template_path is not "none", read that file and format the markdown report to match it.
+        Write every task artifact only under task_dir.
+        Decide whether this turn should submit a draft analysis to critic or finalize a critic-approved analysis.
+        The selected object type must match the selected route key.
+        Do not request fuzzer construction in this pipeline version. If dynamic evidence would materially change confidence, record it in blockers or missingEvidenceRequest instead.
+        Before returning, validate the structured JSON against the runtime-provided output.schema.json.
+        Use {{taskId}} as the id when the selected schema has an id field.
+        Set reportPath to {{reportPath}} when returning an analysis result.
+        When analysis_report_template_path is not "none", follow that file as the required markdown report template.
+        Set runtimeSeconds to null if unknown.
+        Set status to completed when the run succeeds.
+        Route mapping:
+        - analysisSchema draft for critic -> critic, when evidence is organized enough for adversarial review
+        - finalAnalysisSchema after matching critic convinced response -> verification and set output.json exit to true
+        Do not route verification unless the latest critic response is convinced for the same analysis fingerprint.
+        Compute score as a 0-10 estimated severity score. Consider CVSS-style dimensions and real-world impact breadth, including whether the vulnerable path appears in common usage scenarios.
+
+        Recommended result enum values:
+        - real_vulnerability
+        - likely_vulnerability
+        - plausible_but_unproven
+        - false_positive
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      $ref: "#/schemas/analyze-finding-stage-input"
+    outputSchema:
+      $ref: "#/schemas/analysis"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects:
+      - type: project-candidate-result
+        resultStage: analyze
+    report:
+      path: /task/01_report.md
+      required: true
+    taskName: "Candidate Analysis: $file($input.candidatePath).title"
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues:
+      scanJobId: $ctx.scanJobId
+      candidateId: $file($input.candidatePath).id
+      candidateTitle: $file($input.candidatePath).title
+      candidateDescription: $file($input.candidatePath).description
+      candidateFile: $file($input.candidatePath).filePath
+      candidateLine: $file($input.candidatePath).line
+      repositoryJsonPath: $input.repositoryPath
+      moduleJsonPath: $input.modulePath
+      functionJsonPath: $input.functionPath
+      candidateJsonPath: $input.candidatePath
+      analysisReportTemplatePath: $input.analysisReportTemplatePath
+      taskDir: $ctx.taskDir
+      reportPath: /task/01_report.md
+      feedbackJsonPath: $input.feedbackPath
+      taskId: $ctx.taskId
+  critique-finding:
+    name: Critique Finding
+    description: Challenge analysis results before verification.
+    role: analysis
+    group: review
+    mode: fanout
+    concurrency: 2
+    disableable: true
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      nullableOutput: false
+      cwd: /workspace/repo
+      skills:
+        - critique-finding
+      prompt: |
+        You are the critic agent for one vulnerability analysis.
+        {{taskIsolation}}
+        Use the installed skill named critique-finding as your working method.
+        The critique-finding skill file is /workspace/repo/.agents/skills/critique-finding/SKILL.md.
+        candidate_id: {{candidateId}}
+        candidate_title: {{candidateTitle}}
+        candidate_json_path: {{candidateJsonPath}}
+        task_dir: {{taskDir}}
+        analysis_fingerprint: {{analysisFingerprint}}
+        draft_analysis_json_path: {{draftAnalysisJsonPath}}
+
+        Follow the criticize skill for the detailed adversarial review checklist.
+        Read candidate_json_path and draft_analysis_json_path before review.
+        Use stance=convinced only when the analysis survives sanity/review checks and has enough evidence for verification.
+        If you are convinced, set stance to convinced and bind reviewedAnalysisFingerprint to the draft analysis fingerprint supplied by the analysis agent.
+        Before returning, validate the structured JSON against the runtime-provided output.schema.json.
+        Use {{taskId}} as id.
+        Always route back to analysis.
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      $ref: "#/schemas/critique-finding-stage-input"
+    outputSchema:
+      $ref: "#/schemas/critic-response"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    taskName: "Analysis Critic: $file($input.candidatePath).title"
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues:
+      candidateId: $file($input.candidatePath).id
+      candidateTitle: $file($input.candidatePath).title
+      taskDir: $ctx.taskDir
+      analysisFingerprint: $input.analysisFingerprint
+      candidateJsonPath: $input.candidatePath
+      draftAnalysisJsonPath: $input.draftAnalysisPath
+      taskId: $ctx.taskId
+  verify-finding:
+    name: Verify Finding
+    description: Fact-check target, paths, and evidence.
+    role: verification
+    group: review
+    mode: fanout
+    concurrency: 1
+    disableable: true
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      nullableOutput: false
+      cwd: /workspace/repo
+      skills:
+        - verify-finding
+      prompt: |
+        You are the sanity-check verifier agent for one vulnerability candidate.
+        {{taskIsolation}}
+        Work only on this candidate and validate the factual basis of the existing analysis result.
+        scan_job_id: {{scanJobId}}
+        candidate_id: {{candidateId}}
+        candidate_title: {{candidateTitle}}
+        candidate_description: {{candidateDescription}}
+        candidate_file: {{candidateFile}}
+        candidate_line: {{candidateLine}}
+        analysis_result: {{analysisResult}}
+        analysis_summary: {{analysisSummary}}
+        analysis_fingerprint: {{analysisFingerprint}}
+        critic_approval: {{criticApproval}}
+        critic_task_id: {{criticTaskId}}
+        analysis_report_path: {{analysisReportPath}}
+        repository_json_path: {{repositoryJsonPath}}
+        module_json_path: {{moduleJsonPath}}
+        target_json_path: {{functionJsonPath}}
+        candidate_json_path: {{candidateJsonPath}}
+        analysis_result_json_path: {{analysisResultJsonPath}}
+        task_dir: {{taskDir}}
+        write_verify_report_to: {{reportPath}}
+
+        Use the installed skill named verify-finding as your working method.
+        The verify-finding skill file is /workspace/repo/.agents/skills/verify-finding/SKILL.md.
+        Read the JSON files referenced above before verification.
+        Do not repeat broad exploration. This stage is a sanity check only.
+        Check whether the analysis report's factual claims, code paths, target descriptions, symbols, data-flow descriptions, and trigger/precondition descriptions really exist or basically hold in the repository.
+        Do not judge security impact, exploitability, CVSS, EPSS, whether this is a bug, or whether it should be reported as a vulnerability. Those decisions belong to triage.
+        Write a concise markdown sanity-check report to write_verify_report_to.
+        Write every task artifact only under task_dir.
+        Before returning, validate the structured JSON against the runtime-provided output.schema.json.
+        Set id to {{taskId}}.
+        Set reportPath to {{reportPath}}.
+        Set runtimeSeconds to null if unknown.
+        Set status to completed when the run succeeds.
+        Set result to the JSON string "true", "likely", or "false".
+        Do not return boolean true/false.
+        Use result exactly as:
+        - "true": core facts, paths, code locations, and trigger conditions are present and materially support the analysis.
+        - "likely": most core facts hold, but some uncertainty remains that does not clearly refute the analysis.
+        - "false": a central factual claim, code path, trigger, or precondition is absent or contradicted.
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      $ref: "#/schemas/verify-finding-stage-input"
+    outputSchema:
+      $ref: "#/schemas/verification"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects:
+      - type: project-candidate-result
+        resultStage: verify
+    report:
+      path: /task/01_verify_report.md
+      required: true
+    taskName: "Candidate Verification: $file($input.candidatePath).title"
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues:
+      scanJobId: $ctx.scanJobId
+      candidateId: $file($input.candidatePath).id
+      candidateTitle: $file($input.candidatePath).title
+      candidateDescription: $file($input.candidatePath).description
+      candidateFile: $file($input.candidatePath).filePath
+      candidateLine: $file($input.candidatePath).line
+      analysisResult: $file($input.analysisResultPath).result
+      analysisSummary: $file($input.analysisResultPath).summary
+      analysisFingerprint: $file($input.analysisResultPath).analysisFingerprint
+      criticApproval: $file($input.analysisResultPath).criticApproval.summary
+      criticTaskId: $file($input.analysisResultPath).criticApproval.criticTaskId
+      analysisReportPath: $file($input.analysisResultPath).reportPath
+      repositoryJsonPath: $input.repositoryPath
+      moduleJsonPath: $input.modulePath
+      functionJsonPath: $input.functionPath
+      candidateJsonPath: $input.candidatePath
+      analysisResultJsonPath: $input.analysisResultPath
+      taskDir: $ctx.taskDir
+      reportPath: /task/01_verify_report.md
+      taskId: $ctx.taskId
+  triage-finding:
+    name: Triage Finding
+    description: Final security classification and severity.
+    role: verification
+    group: review
+    mode: fanout
+    concurrency: 1
+    disableable: true
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      nullableOutput: false
+      cwd: /workspace/repo
+      skills:
+        - triage-finding
+      prompt: |
+        You are the triage agent for one sanity-checked vulnerability candidate.
+        {{taskIsolation}}
+        Work only on this candidate and classify security impact after verify passed.
+        Use the installed skill named triage-finding as your working method.
+        The triage-finding skill file is /workspace/repo/.agents/skills/triage-finding/SKILL.md.
+        scan_job_id: {{scanJobId}}
+        candidate_id: {{candidateId}}
+        candidate_title: {{candidateTitle}}
+        candidate_description: {{candidateDescription}}
+        candidate_file: {{candidateFile}}
+        candidate_line: {{candidateLine}}
+        analysis_result: {{analysisResult}}
+        analysis_summary: {{analysisSummary}}
+        verify_result: {{verifyResult}}
+        verify_summary: {{verifySummary}}
+        repository_json_path: {{repositoryJsonPath}}
+        module_json_path: {{moduleJsonPath}}
+        target_json_path: {{functionJsonPath}}
+        candidate_json_path: {{candidateJsonPath}}
+        analysis_result_json_path: {{analysisResultJsonPath}}
+        verify_result_json_path: {{verifyResultJsonPath}}
+        task_dir: {{taskDir}}
+        write_triage_report_to: {{reportPath}}
+
+        Read the JSON files referenced above before triage.
+        Use verify only as a factual sanity-check input. Do not reinterpret verify as a security verdict.
+        Classify whether the sanity-checked facts amount to a security issue, non-security bug, hardening finding, or unresolved review item.
+        Evaluate disqualifiers before assigning the final security classification. Set disqualifier to null and disqualifierReason to null when no disqualifier applies. If a disqualifier applies, set disqualifierReason to the concrete evidence-based reason.
+        - D-0: the vulnerability hypothesis is disproven by code, runtime evidence, or verification facts.
+        - D-1: the affected path is only test, mock, example, fixture, sample, benchmark, or dead code.
+        - D-1.5: privilege tautology; exploitation already requires the exact privilege or authority that the alleged impact would grant.
+        - D-2: required preconditions are unrealistic, contradictory to supported deployments, or require attacker powers outside the threat model.
+        - D-3: the claim depends on hedging language or unverifiable speculation that cannot be validated from available evidence.
+        - D-4: the behavior has no security impact; it may be a normal bug, robustness issue, or quality issue only.
+        - D-5: API misuse or violation of an explicit code/API contract causes the finding; use this for contract errors that should be tracked but are not a confirmed vulnerability by themselves. Do not use D-5 to dismiss a contract violation that produces attacker-controllable security impact.
+        When a disqualifier applies, keep result, securityClassification, CVSS, and exploitability consistent with that disqualification.
+        Assess CVSS, exploitability, common trigger conditions, and whether this is security impact versus robustness/hardening.
+        For EPSS, prefer an official CVE/EPSS mapping when the candidate clearly maps to a CVE. If no CVE maps, provide a heuristic 30-day probability estimate and set epssSource to describe that fallback.
+        Write a concise markdown triage report to write_triage_report_to, including the selected disqualifier and disqualifierReason when present.
+        Write every task artifact only under task_dir.
+        Before returning, validate the structured JSON against the runtime-provided output.schema.json.
+        Set id to {{taskId}}.
+        Set reportPath to {{reportPath}}.
+        Set runtimeSeconds to null if unknown.
+        Set status to completed when the run succeeds.
+      prepareRepository: none
+      includePolicy: false
+      plugins: []
+    inputSchema:
+      $ref: "#/schemas/triage-finding-stage-input"
+    outputSchema:
+      $ref: "#/schemas/triage"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects:
+      - type: project-candidate-result
+        resultStage: triage
+    report:
+      path: /task/01_triage_report.md
+      required: true
+    taskName: "Candidate Triage: $file($input.candidatePath).title"
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues:
+      scanJobId: $ctx.scanJobId
+      candidateId: $file($input.candidatePath).id
+      candidateTitle: $file($input.candidatePath).title
+      candidateDescription: $file($input.candidatePath).description
+      candidateFile: $file($input.candidatePath).filePath
+      candidateLine: $file($input.candidatePath).line
+      analysisResult: $file($input.analysisResultPath).result
+      analysisSummary: $file($input.analysisResultPath).summary
+      verifyResult: $file($input.verifyResultPath).result
+      verifySummary: $file($input.verifyResultPath).summary
+      repositoryJsonPath: $input.repositoryPath
+      moduleJsonPath: $input.modulePath
+      functionJsonPath: $input.functionPath
+      candidateJsonPath: $input.candidatePath
+      analysisResultJsonPath: $input.analysisResultPath
+      verifyResultJsonPath: $input.verifyResultPath
+      taskDir: $ctx.taskDir
+      reportPath: /task/01_triage_report.md
+      taskId: $ctx.taskId
+edges:
+  - id: delta-scope-to-function
+    name: delta-scope-to-function
+    from: delta-scope
+    to: scan-target
+    fork: false
+    mode: fanOut
+    foreach: $.functions[*]
+    input:
+      scanJob: $ctx.scanJob
+      repositoryPath: $.repository
+      modulePath: $.module
+      threatModelPath: $.threatModel
+      targetPath: $item
+      moduleId: delta-scope
+      moduleName: Delta Scope
+      targetId: ""
+      targetName: ""
+      targetKind: function
+      priority: null
+      vulnerabilityClassFocus: delta-scoped
+    artifacts:
+      - from: $input.repositoryPath
+        to: inputs/repository.json
+        inputField: repositoryPath
+        required: true
+      - from: $input.modulePath
+        to: inputs/module.json
+        inputField: modulePath
+        required: true
+      - from: $input.threatModelPath
+        to: inputs/threat-model.json
+        inputField: threatModelPath
+        required: true
+      - from: $input.targetPath
+        to: inputs/target.json
+        inputField: targetPath
+        required: true
+  - id: scan-target-to-analyze-finding
+    name: scan-target-to-analyze-finding
+    from: scan-target
+    to: analyze-finding
+    fork: false
+    mode: fanOut
+    foreach: $.candidates[*]
+    input:
+      scanJob: $input.scanJob
+      repositoryPath: $input.repositoryPath
+      modulePath: $input.modulePath
+      functionPath: $input.targetPath
+      candidatePath: $item
+    artifacts:
+      - from: $input.repositoryPath
+        to: inputs/repository.json
+        inputField: repositoryPath
+        required: true
+      - from: $input.modulePath
+        to: inputs/module.json
+        inputField: modulePath
+        required: false
+      - from: $input.functionPath
+        to: inputs/target.json
+        inputField: functionPath
+        required: true
+      - from: $input.candidatePath
+        to: inputs/candidate.json
+        inputField: candidatePath
+        required: true
+  - id: analyze-finding-to-critique-finding
+    name: analyze-finding-to-critique-finding
+    from: analyze-finding
+    to: critique-finding
+    fork: false
+    mode: map
+    input:
+      scanJob: $input.scanJob
+      repositoryPath: $input.repositoryPath
+      modulePath: $input.modulePath
+      functionPath: $input.functionPath
+      candidatePath: $input.candidatePath
+      draftAnalysisPath: ""
+      analysisFingerprint: $computed.analysisFingerprint
+    artifacts:
+      - from: $input.repositoryPath
+        to: inputs/repository.json
+        inputField: repositoryPath
+        required: true
+      - from: $input.modulePath
+        to: inputs/module.json
+        inputField: modulePath
+        required: false
+      - from: $input.functionPath
+        to: inputs/target.json
+        inputField: functionPath
+        required: true
+      - from: $input.candidatePath
+        to: inputs/candidate.json
+        inputField: candidatePath
+        required: true
+      - from: $output
+        to: inputs/analysis.json
+        inputField: draftAnalysisPath
+        required: true
+    outputSchema:
+      $ref: "#/schemas/analysis"
+    outputSchemaDescription: Draft analysisSchema result for critic review
+    route:
+      key: critic
+      default: true
+  - id: critique-finding-to-analyze-finding
+    name: critique-finding-to-analyze-finding
+    from: critique-finding
+    to: analyze-finding
+    fork: false
+    mode: map
+    input:
+      scanJob: $input.scanJob
+      repositoryPath: $input.repositoryPath
+      modulePath: $input.modulePath
+      functionPath: $input.functionPath
+      candidatePath: $input.candidatePath
+      feedbackPath: ""
+    artifacts:
+      - from: $input.repositoryPath
+        to: inputs/repository.json
+        inputField: repositoryPath
+        required: true
+      - from: $input.modulePath
+        to: inputs/module.json
+        inputField: modulePath
+        required: false
+      - from: $input.functionPath
+        to: inputs/target.json
+        inputField: functionPath
+        required: true
+      - from: $input.candidatePath
+        to: inputs/candidate.json
+        inputField: candidatePath
+        required: true
+      - from: $output
+        to: inputs/feedback.json
+        inputField: feedbackPath
+        required: true
+    outputSchema:
+      $ref: "#/schemas/critic-response"
+    outputSchemaDescription: CriticResponse feedback for analysis
+    route:
+      key: analysis
+      default: true
+  - id: analyze-finding-to-verify-finding
+    name: analyze-finding-to-verify-finding
+    from: analyze-finding
+    to: verify-finding
+    fork: false
+    mode: map
+    input:
+      scanJob: $input.scanJob
+      repositoryPath: $input.repositoryPath
+      modulePath: $input.modulePath
+      functionPath: $input.functionPath
+      candidatePath: $input.candidatePath
+      analysisResultPath: ""
+    artifacts:
+      - from: $input.repositoryPath
+        to: inputs/repository.json
+        inputField: repositoryPath
+        required: true
+      - from: $input.modulePath
+        to: inputs/module.json
+        inputField: modulePath
+        required: false
+      - from: $input.functionPath
+        to: inputs/target.json
+        inputField: functionPath
+        required: true
+      - from: $input.candidatePath
+        to: inputs/candidate.json
+        inputField: candidatePath
+        required: true
+      - from: $output
+        to: inputs/analysis.json
+        inputField: analysisResultPath
+        required: true
+    outputSchema:
+      $ref: "#/schemas/final-analysis"
+    outputSchemaDescription: Final critic-approved analysis result
+    route:
+      key: verification
+      default: false
+  - id: verify-finding-to-triage-finding
+    name: verify-finding-to-triage-finding
+    from: verify-finding
+    to: triage-finding
+    fork: false
+    mode: map
+    input:
+      scanJob: $input.scanJob
+      repositoryPath: $input.repositoryPath
+      modulePath: $input.modulePath
+      functionPath: $input.functionPath
+      candidatePath: $input.candidatePath
+      analysisResultPath: $input.analysisResultPath
+      verifyResultPath: ""
+    artifacts:
+      - from: $input.repositoryPath
+        to: inputs/repository.json
+        inputField: repositoryPath
+        required: true
+      - from: $input.modulePath
+        to: inputs/module.json
+        inputField: modulePath
+        required: false
+      - from: $input.functionPath
+        to: inputs/target.json
+        inputField: functionPath
+        required: true
+      - from: $input.candidatePath
+        to: inputs/candidate.json
+        inputField: candidatePath
+        required: true
+      - from: $input.analysisResultPath
+        to: inputs/analysis.json
+        inputField: analysisResultPath
+        required: true
+      - from: $output
+        to: inputs/verification.json
+        inputField: verifyResultPath
+        required: true
+    outputSchema:
+      $ref: "#/schemas/verification"
+groups: []

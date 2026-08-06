@@ -1,0 +1,2704 @@
+version: 3
+name: tob-goal-programmatic
+supportedTargets:
+  - project
+  - evaluation
+root: goal-craft
+limits:
+  maxTasks: 10000
+  maxDurationSeconds: 86400
+schemas:
+  analyze-finding-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - functionPath
+      - candidatePath
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      functionPath:
+        $pathOf: "#/schemas/target"
+      candidatePath:
+        $pathOf: "#/schemas/candidate"
+      analysisReportTemplatePath:
+        type:
+          - string
+          - "null"
+      feedbackPath:
+        type:
+          - string
+          - "null"
+  attack-surface-model-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - moduleId
+      - moduleName
+      - priority
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      priority:
+        type:
+          - integer
+          - "null"
+  module-threat-model-manifest:
+    type: object
+    required:
+      - repository
+      - module
+      - threatModel
+    additionalProperties: false
+    properties:
+      repository:
+        $pathOf: "#/schemas/repository"
+      module:
+        $pathOf: "#/schemas/module"
+      threatModel:
+        $pathOf: "#/schemas/module-threat-model"
+  critique-finding-stage-input:
+    allOf:
+      - $ref: "#/schemas/analyze-finding-stage-input"
+      - type: object
+        required:
+          - draftAnalysisPath
+          - analysisFingerprint
+        properties:
+          draftAnalysisPath:
+            $pathOf: "#/schemas/analysis"
+          analysisFingerprint:
+            type: string
+  null-stage-input:
+    type: "null"
+  delta-scope-manifest:
+    type: object
+    required:
+      - repository
+      - module
+      - threatModel
+      - functions
+    additionalProperties: false
+    properties:
+      repository:
+        $pathOf: "#/schemas/repository"
+      module:
+        $pathOf: "#/schemas/module"
+      threatModel:
+        $pathOf: "#/schemas/module-threat-model"
+      functions:
+        type: array
+        items:
+          $pathOf: "#/schemas/target"
+  identify-target-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - threatModelPath
+      - moduleId
+      - moduleName
+      - priority
+      - vulnerabilityClassFocus
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      threatModelPath:
+        $pathOf: "#/schemas/module-threat-model"
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      priority:
+        type:
+          - integer
+          - "null"
+      vulnerabilityClassFocus:
+        type: string
+  identify-target-manifest:
+    type: object
+    required:
+      - repository
+      - module
+      - threatModel
+      - targets
+    additionalProperties: false
+    properties:
+      repository:
+        $pathOf: "#/schemas/repository"
+      module:
+        $pathOf: "#/schemas/module"
+      threatModel:
+        $pathOf: "#/schemas/module-threat-model"
+      targets:
+        type: array
+        items:
+          $pathOf: "#/schemas/target"
+  repository-profile-manifest:
+    type: object
+    required:
+      - repository
+      - modules
+    properties:
+      repository:
+        $pathOf: "#/schemas/repository"
+      modules:
+        type: array
+        items:
+          $pathOf: "#/schemas/module"
+  research-scope-stage-input:
+    type: object
+    additionalProperties: false
+    properties: {}
+    required: []
+  research-scope:
+    type: object
+    additionalProperties: false
+    properties:
+      attackerModel:
+        type: object
+      trustedDomain:
+        type: object
+      protectedAssets:
+        type: array
+        items:
+          type: string
+      deploymentAssumptions:
+        type: array
+        items:
+          type: string
+      rulesOfEngagement:
+        type: array
+        items:
+          type: string
+      minimumResearchDeadlineAt:
+        type: string
+      successCriteria:
+        type: object
+    required:
+      - attackerModel
+      - trustedDomain
+      - protectedAssets
+      - deploymentAssumptions
+      - rulesOfEngagement
+      - minimumResearchDeadlineAt
+      - successCriteria
+  scope-manifest:
+    type: object
+    additionalProperties: false
+    properties:
+      scopePath:
+        type: string
+    required:
+      - scopePath
+  surface-map:
+    type: object
+    additionalProperties: false
+    properties:
+      entrypoints:
+        type: array
+        items:
+          type: object
+      trustBoundaries:
+        type: array
+        items:
+          type: object
+      sources:
+        type: array
+        items:
+          type: object
+      sinks:
+        type: array
+        items:
+          type: object
+      components:
+        type: array
+        items:
+          type: object
+      dependencyFlows:
+        type: array
+        items:
+          type: object
+      coverage:
+        type: object
+      openQuestions:
+        type: array
+        items:
+          type: string
+    required:
+      - entrypoints
+      - trustBoundaries
+      - sources
+      - sinks
+      - components
+      - dependencyFlows
+      - coverage
+      - openQuestions
+  surface-map-manifest:
+    type: object
+    additionalProperties: false
+    properties:
+      surfaceMapPath:
+        type: string
+    required:
+      - surfaceMapPath
+  track-plan:
+    type: object
+    additionalProperties: false
+    properties:
+      tracks:
+        type: array
+        items:
+          $ref: "#/schemas/research-track"
+      iteration:
+        type: integer
+    required:
+      - tracks
+      - iteration
+  research-track:
+    type: object
+    additionalProperties: false
+    properties:
+      trackKey:
+        type: string
+        minLength: 1
+      approachFamily:
+        type: string
+        minLength: 1
+      researchIdea:
+        type: string
+        minLength: 1
+      scope:
+        type: object
+      mechanisms:
+        type: array
+        items:
+          type: string
+      coverage:
+        type: object
+      evidenceRefs:
+        type: array
+        items:
+          type: string
+      findingIds:
+        type: array
+        items:
+          type: string
+      nextStep:
+        type: string
+      status:
+        type: string
+        enum:
+          - queued
+          - active
+          - blocked
+          - exhausted
+    required:
+      - trackKey
+      - approachFamily
+      - researchIdea
+      - scope
+      - mechanisms
+  research-track-reference:
+    type: object
+    additionalProperties: false
+    properties:
+      trackKey:
+        type: string
+        minLength: 1
+      approachFamily:
+        type: string
+        minLength: 1
+      researchIdea:
+        type: string
+        minLength: 1
+      scope:
+        type: object
+      mechanisms:
+        type: array
+        items:
+          type: string
+      coverage:
+        type: object
+      evidenceRefs:
+        type: array
+        items:
+          type: string
+      findingIds:
+        type: array
+        items:
+          type: string
+      nextStep:
+        type: string
+    required:
+      - trackKey
+  finding:
+    type: object
+    additionalProperties: false
+    properties:
+      findingId:
+        type: string
+        minLength: 1
+      trackKey:
+        type: string
+        minLength: 1
+      title:
+        type: string
+        minLength: 1
+      description:
+        type: string
+        minLength: 1
+      vulnerabilityClass:
+        type:
+          - string
+          - "null"
+      location:
+        type: object
+        additionalProperties: false
+        properties:
+          filePath:
+            type: string
+            minLength: 1
+          line:
+            type:
+              - integer
+              - "null"
+          symbol:
+            type:
+              - string
+              - "null"
+        required:
+          - filePath
+          - line
+          - symbol
+      claim:
+        type: string
+        minLength: 1
+      rootCauseKey:
+        type: string
+        minLength: 1
+      source:
+        type: object
+      sink:
+        type: object
+      attackerControl:
+        type: string
+        minLength: 1
+      trustBoundaryCrossings:
+        type: array
+        items:
+          type: object
+      preconditions:
+        type: array
+        items:
+          type: string
+      evidence:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          properties:
+            id:
+              type: string
+              minLength: 1
+            kind:
+              type: string
+              minLength: 1
+            summary:
+              type: string
+              minLength: 1
+            filePath:
+              type:
+                - string
+                - "null"
+            line:
+              type:
+                - integer
+                - "null"
+            symbol:
+              type:
+                - string
+                - "null"
+            observation:
+              type: string
+              minLength: 1
+            supports:
+              type: array
+              items:
+                type: string
+            contradicts:
+              type: array
+              items:
+                type: string
+          required:
+            - id
+            - kind
+            - summary
+            - filePath
+            - line
+            - symbol
+            - observation
+            - supports
+            - contradicts
+      quickDisproofAttempt:
+        type: string
+        minLength: 1
+      confidence:
+        type: number
+        minimum: 0
+        maximum: 1
+    required:
+      - findingId
+      - trackKey
+      - title
+      - description
+      - vulnerabilityClass
+      - location
+      - claim
+      - rootCauseKey
+      - source
+      - sink
+      - attackerControl
+      - trustBoundaryCrossings
+      - preconditions
+      - evidence
+      - quickDisproofAttempt
+      - confidence
+  discovery-report:
+    type: object
+    additionalProperties: false
+    properties:
+      trackId:
+        type: string
+      source:
+        type: object
+      transformations:
+        type: array
+        items:
+          type: object
+      guards:
+        type: array
+        items:
+          type: object
+      sink:
+        type: object
+      reachability:
+        type: object
+      attackerControl:
+        type: object
+      preconditions:
+        type: array
+        items:
+          type: string
+      findingPaths:
+        type: array
+        items:
+          $pathOf: "#/schemas/finding"
+      quickDisproofAttempt:
+        type: object
+      newTrackSuggestions:
+        type: array
+        items:
+          type: object
+    required:
+      - trackId
+      - source
+      - transformations
+      - guards
+      - sink
+      - reachability
+      - attackerControl
+      - preconditions
+      - findingPaths
+      - quickDisproofAttempt
+      - newTrackSuggestions
+  discovery-manifest:
+    type: object
+    additionalProperties: false
+    properties:
+      trackId:
+        type: string
+      discoveryReportPath:
+        $pathOf: "#/schemas/discovery-report"
+    required:
+      - trackId
+      - discoveryReportPath
+  track-review:
+    type: object
+    additionalProperties: false
+    properties:
+      trackKey:
+        type: string
+        minLength: 1
+      decision:
+        type: string
+        enum:
+          - continue
+          - finding-found
+          - new-surface
+          - blocked
+          - exhausted
+      summary:
+        type: string
+        minLength: 1
+      findingIds:
+        type: array
+        items:
+          type: string
+      coverageGaps:
+        type: array
+        items:
+          type: string
+      nextStep:
+        anyOf:
+          - type: string
+            minLength: 1
+          - type: "null"
+      blockReason:
+        anyOf:
+          - type: string
+            minLength: 1
+          - type: "null"
+      reopenCondition:
+        anyOf:
+          - type: string
+            minLength: 1
+          - type: "null"
+    required:
+      - trackKey
+      - decision
+      - summary
+      - findingIds
+      - coverageGaps
+      - nextStep
+      - blockReason
+      - reopenCondition
+  finding-validation:
+    type: object
+    additionalProperties: false
+    properties:
+      findingId:
+        type: string
+      reachability:
+        type: object
+      controllability:
+        type: object
+      trustBoundaryCrossings:
+        type: array
+        items:
+          type: object
+      guardAnalysis:
+        type: object
+      deploymentConditions:
+        type: array
+        items:
+          type: string
+      primitive:
+        anyOf:
+          - $ref: "#/schemas/research-primitive"
+          - type: object
+            additionalProperties: false
+            properties: {}
+      evidenceRefs:
+        type: array
+        items:
+          type: string
+      disproofResult:
+        type: object
+      verdict:
+        type: string
+    required:
+      - findingId
+      - reachability
+      - controllability
+      - trustBoundaryCrossings
+      - guardAnalysis
+      - deploymentConditions
+      - primitive
+      - evidenceRefs
+      - disproofResult
+      - verdict
+  finding-review:
+    type: object
+    additionalProperties: false
+    properties:
+      findingId:
+        type: string
+      decision:
+        type: string
+        enum:
+          - confirmed
+          - needs-more-evidence
+          - false-positive
+      summary:
+        type: string
+      challenges:
+        type: array
+        items:
+          type: object
+      requiredEvidence:
+        type: array
+        items:
+          type: string
+      confirmedPrimitive:
+        anyOf:
+          - $ref: "#/schemas/research-primitive"
+          - type: object
+            additionalProperties: false
+            properties: {}
+    required:
+      - findingId
+      - decision
+      - summary
+      - challenges
+      - requiredEvidence
+      - confirmedPrimitive
+  research-primitive:
+    type: object
+    additionalProperties: false
+    properties:
+      primitiveId:
+        type: string
+        minLength: 1
+      name:
+        type: string
+        minLength: 1
+      capability:
+        type: string
+        minLength: 1
+      requiredInput:
+        type: object
+      producedCapability:
+        type: object
+      trustLevel:
+        type: string
+        minLength: 1
+      evidenceRefs:
+        type: array
+        items:
+          type: string
+    required:
+      - primitiveId
+      - name
+      - capability
+      - requiredInput
+      - producedCapability
+      - trustLevel
+      - evidenceRefs
+  chain-synthesis:
+    type: object
+    additionalProperties: false
+    properties:
+      chains:
+        type: array
+        items:
+          $ref: "#/schemas/research-chain"
+    required:
+      - chains
+  research-chain:
+    type: object
+    additionalProperties: false
+    properties:
+      chainId:
+        type: string
+        minLength: 1
+      chainKey:
+        type: string
+        minLength: 1
+      status:
+        type: string
+        enum:
+          - candidate
+          - incomplete
+          - accepted
+          - confirmed
+          - primitive-gap
+          - revise-chain
+      steps:
+        type: array
+        minItems: 1
+        items:
+          $ref: "#/schemas/research-chain-step"
+      entrypoint:
+        type: object
+      requiredCapabilities:
+        type: array
+        items:
+          type: string
+      producedCapabilities:
+        type: array
+        items:
+          type: string
+      trustBoundaryCrossings:
+        type: array
+        items:
+          type: object
+      deploymentConditions:
+        type: array
+        items:
+          type: string
+      primitiveGaps:
+        type: array
+        items:
+          type: object
+      successTarget:
+        type: object
+    required:
+      - chainId
+      - chainKey
+      - status
+      - steps
+      - entrypoint
+      - requiredCapabilities
+      - producedCapabilities
+      - trustBoundaryCrossings
+      - deploymentConditions
+      - primitiveGaps
+      - successTarget
+  research-chain-step:
+    type: object
+    additionalProperties: false
+    properties:
+      primitiveId:
+        type: string
+        minLength: 1
+      findingId:
+        type: string
+        minLength: 1
+      entrypoint:
+        type: object
+      requiredCapabilities:
+        type: array
+        items:
+          type: string
+      producedCapabilities:
+        type: array
+        items:
+          type: string
+      trustBoundaryCrossings:
+        type: array
+        items:
+          type: object
+      deploymentConditions:
+        type: array
+        items:
+          type: string
+    required:
+      - primitiveId
+  chain-review:
+    type: object
+    additionalProperties: false
+    properties:
+      chainId:
+        type: string
+        minLength: 1
+      decision:
+        type: string
+        enum:
+          - accepted
+          - revise-chain
+          - primitive-gap
+          - invalid-finding
+      brokenTransitions:
+        type: array
+        items:
+          type: object
+      invalidatedFindings:
+        type: array
+        items:
+          type: string
+      invalidFindingId:
+        type:
+          - string
+          - "null"
+      requiredRevisions:
+        type: array
+        items:
+          type: string
+    required:
+      - chainId
+      - decision
+      - brokenTransitions
+      - invalidatedFindings
+      - invalidFindingId
+      - requiredRevisions
+  exploit-validation:
+    type: object
+    additionalProperties: false
+    properties:
+      chainId:
+        type: string
+        minLength: 1
+      steps:
+        type: array
+        items:
+          type: object
+      evidenceRefs:
+        type: array
+        items:
+          type: string
+      executionContext:
+        type: object
+      failurePoint:
+        type:
+          - object
+          - "null"
+      successCriteriaResult:
+        type: string
+        enum:
+          - not_attempted
+          - satisfied
+          - not_satisfied
+          - inconclusive
+      verdict:
+        type: string
+    required:
+      - chainId
+      - steps
+      - evidenceRefs
+      - executionContext
+      - failurePoint
+      - successCriteriaResult
+      - verdict
+  exploit-review:
+    type: object
+    additionalProperties: false
+    properties:
+      chainId:
+        type: string
+        minLength: 1
+      decision:
+        type: string
+        enum:
+          - confirmed
+          - runtime-retry
+          - chain-revision
+          - finding-revalidation
+      reproducibility:
+        type: object
+      environmentAssumptions:
+        type: array
+        items:
+          type: string
+      invalidatedSteps:
+        type: array
+        items:
+          type: object
+      invalidFindingId:
+        type:
+          - string
+          - "null"
+    required:
+      - chainId
+      - decision
+      - reproducibility
+      - environmentAssumptions
+      - invalidatedSteps
+      - invalidFindingId
+  research-report:
+    type: object
+    additionalProperties: false
+    properties:
+      chainId:
+        type: string
+      reportPath:
+        type: string
+      verdict:
+        type: string
+    required:
+      - chainId
+      - reportPath
+      - verdict
+  scan-target-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - threatModelPath
+      - targetPath
+      - moduleId
+      - moduleName
+      - targetId
+      - targetName
+      - targetKind
+      - priority
+      - vulnerabilityClassFocus
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      threatModelPath:
+        $pathOf: "#/schemas/module-threat-model"
+      targetPath:
+        $pathOf: "#/schemas/target"
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      targetId:
+        type: string
+      targetName:
+        type: string
+      targetKind:
+        type: string
+      filePath:
+        type:
+          - string
+          - "null"
+      line:
+        type:
+          - integer
+          - "null"
+      summary:
+        type:
+          - string
+          - "null"
+      priority:
+        type:
+          - integer
+          - "null"
+      vulnerabilityClassFocus:
+        type: string
+  scan-target-manifest:
+    type: object
+    required:
+      - candidates
+    properties:
+      candidates:
+        type: array
+        items:
+          $pathOf: "#/schemas/candidate"
+  scan-job-snapshot:
+    type: object
+    required:
+      - scanJobId
+    additionalProperties: true
+    properties:
+      scanJobId:
+        type: string
+  evidence:
+    type: object
+    required:
+      - id
+      - kind
+      - summary
+      - filePath
+      - line
+      - symbol
+      - command
+      - artifactPath
+      - observation
+      - supports
+      - contradicts
+      - confidenceImpact
+    additionalProperties: false
+    properties:
+      id:
+        type: string
+      kind:
+        enum:
+          - code
+          - runtime
+          - fuzz
+          - negative
+          - assumption
+          - external
+      summary:
+        type: string
+      filePath:
+        type:
+          - string
+          - "null"
+      line:
+        type:
+          - integer
+          - "null"
+      symbol:
+        type:
+          - string
+          - "null"
+      command:
+        type:
+          - string
+          - "null"
+      artifactPath:
+        type:
+          - string
+          - "null"
+      observation:
+        type:
+          - string
+          - "null"
+      supports:
+        type: array
+        items:
+          type: string
+      contradicts:
+        type: array
+        items:
+          type: string
+      confidenceImpact:
+        type:
+          - string
+          - "null"
+  repository:
+    type: object
+    required:
+      - id
+      - name
+      - summary
+      - languages
+      - buildSystems
+      - runtimeDirectories
+      - downrankedDirectories
+      - notes
+      - targetRef
+      - targetTag
+      - commitSha
+      - baseSha
+      - commitWindow
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+      summary:
+        type: string
+      languages:
+        type: array
+        items:
+          type: string
+      buildSystems:
+        type: array
+        items:
+          type: string
+      runtimeDirectories:
+        type: array
+        items:
+          type: string
+      downrankedDirectories:
+        type: array
+        items:
+          type: string
+      notes:
+        type: array
+        items:
+          type: string
+      targetRef:
+        type:
+          - string
+          - "null"
+      targetTag:
+        type:
+          - string
+          - "null"
+      commitSha:
+        type:
+          - string
+          - "null"
+      baseSha:
+        type:
+          - string
+          - "null"
+      commitWindow:
+        type: integer
+  module:
+    type: object
+    required:
+      - id
+      - moduleId
+      - name
+      - summary
+      - priority
+      - files
+      - entryPoints
+      - trustBoundaries
+      - attackSurfaces
+      - vulnerabilityThemes
+      - runtimeComponents
+      - notes
+    additionalProperties: false
+    properties:
+      id:
+        type: string
+      moduleId:
+        type: string
+      name:
+        type: string
+      summary:
+        type: string
+      priority:
+        type: integer
+      files:
+        type: array
+        items:
+          type: string
+      entryPoints:
+        type: array
+        items:
+          type: string
+      trustBoundaries:
+        type: array
+        items:
+          type: string
+      attackSurfaces:
+        type: array
+        items:
+          type: string
+      vulnerabilityThemes:
+        type: array
+        items:
+          type: string
+      runtimeComponents:
+        type: array
+        items:
+          type: string
+      notes:
+        type: array
+        items:
+          type: string
+  function:
+    type: object
+    required:
+      - id
+      - moduleId
+      - moduleName
+      - functionId
+      - functionName
+      - filePath
+      - line
+      - priority
+      - summary
+      - vulnerabilityType
+      - score
+      - role
+      - reachability
+      - sourceToSinkHint
+      - excludeReason
+      - priorityReason
+      - securityModelRelation
+      - attackSurface
+      - trustBoundary
+      - likelyVulnerabilityTypes
+    properties:
+      id:
+        type: string
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      functionId:
+        type: string
+      functionName:
+        type: string
+      filePath:
+        type:
+          - string
+          - "null"
+      line:
+        type:
+          - integer
+          - "null"
+      priority:
+        type: integer
+      summary:
+        type:
+          - string
+          - "null"
+      vulnerabilityType:
+        type:
+          - string
+          - "null"
+      score:
+        type:
+          - number
+          - "null"
+      role:
+        type: string
+      reachability:
+        type: string
+      sourceToSinkHint:
+        type:
+          - string
+          - "null"
+      excludeReason:
+        type:
+          - string
+          - "null"
+      priorityReason:
+        type: string
+      securityModelRelation:
+        type: string
+      attackSurface:
+        type:
+          - string
+          - "null"
+      trustBoundary:
+        type:
+          - string
+          - "null"
+      likelyVulnerabilityTypes:
+        type: array
+        items:
+          type: string
+  target-kind:
+    enum:
+      - function
+      - route-handler
+      - middleware
+      - api-route
+      - server-action
+      - page-loader
+      - controller-action
+      - view-function
+      - resolver
+      - job-handler
+      - cli-command
+      - security-config
+      - template-render
+      - parser-deserializer
+      - data-access
+      - unknown
+  target:
+    type: object
+    required:
+      - id
+      - moduleId
+      - moduleName
+      - targetId
+      - targetName
+      - targetKind
+      - language
+      - framework
+      - sourceFiles
+      - filePath
+      - line
+      - routePath
+      - httpMethods
+      - priority
+      - summary
+      - attackerInputs
+      - sinks
+      - trustBoundary
+      - likelyVulnerabilityTypes
+      - evidence
+      - score
+      - excludeReason
+      - priorityReason
+    additionalProperties: false
+    properties:
+      id:
+        type: string
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      targetId:
+        type: string
+      targetName:
+        type: string
+      targetKind:
+        $ref: "#/schemas/target-kind"
+      language:
+        type:
+          - string
+          - "null"
+      framework:
+        type:
+          - string
+          - "null"
+      sourceFiles:
+        type: array
+        minItems: 1
+        items:
+          type: string
+      filePath:
+        type:
+          - string
+          - "null"
+      line:
+        type:
+          - integer
+          - "null"
+      routePath:
+        type:
+          - string
+          - "null"
+      httpMethods:
+        type: array
+        items:
+          type: string
+      priority:
+        type: integer
+      summary:
+        type:
+          - string
+          - "null"
+      attackerInputs:
+        type: array
+        items:
+          type: string
+      sinks:
+        type: array
+        items:
+          type: string
+      trustBoundary:
+        type:
+          - string
+          - "null"
+      likelyVulnerabilityTypes:
+        type: array
+        items:
+          type: string
+      evidence:
+        type: array
+        items:
+          type: string
+      score:
+        type:
+          - number
+          - "null"
+      excludeReason:
+        type:
+          - string
+          - "null"
+      priorityReason:
+        type: string
+  module-threat-model:
+    type: object
+    required:
+      - moduleId
+      - moduleName
+      - modulePath
+      - assets
+      - entrypoints
+      - trustBoundaries
+      - attackerInputs
+      - sinkClasses
+      - likelyVulnerabilityClasses
+      - rulePriorities
+      - securityAssumptions
+      - assumptions
+      - limitations
+      - summary
+    additionalProperties: false
+    properties:
+      moduleId:
+        type: string
+      moduleName:
+        type: string
+      modulePath:
+        type: string
+      assets:
+        type: array
+        items:
+          type: string
+      entrypoints:
+        type: array
+        items:
+          type: string
+      trustBoundaries:
+        type: array
+        items:
+          type: string
+      attackerInputs:
+        type: array
+        items:
+          type: string
+      sinkClasses:
+        type: array
+        items:
+          type: string
+      likelyVulnerabilityClasses:
+        type: array
+        items:
+          type: string
+        $normalize:
+          - trim
+          - remove-empty
+          - unique
+      rulePriorities:
+        type: array
+        items:
+          type: string
+      securityAssumptions:
+        type: array
+        items:
+          type: string
+      assumptions:
+        type: array
+        items:
+          type: string
+      limitations:
+        type: array
+        items:
+          type: string
+      summary:
+        type: string
+  candidate:
+    type: object
+    required:
+      - id
+      - functionId
+      - title
+      - description
+      - filePath
+      - line
+      - vulnerabilityType
+      - confidence
+      - score
+      - claim
+      - rootCauseKey
+      - evidence
+      - attackerControl
+      - affectedSink
+      - preconditions
+      - quickDisproofAttempt
+      - needsFuzzing
+      - needsManualAnalysis
+    properties:
+      id:
+        type: string
+        $generate:
+          function: uuid
+          length: 6
+          prefix: candidate-
+      functionId:
+        type:
+          - string
+          - "null"
+      title:
+        type: string
+      description:
+        type: string
+      filePath:
+        type:
+          - string
+          - "null"
+      line:
+        type:
+          - integer
+          - "null"
+      vulnerabilityType:
+        type:
+          - string
+          - "null"
+      confidence:
+        type:
+          - number
+          - "null"
+      score:
+        type:
+          - number
+          - "null"
+      claim:
+        type: string
+      rootCauseKey:
+        type:
+          - string
+          - "null"
+      targetId:
+        type:
+          - string
+          - "null"
+      targetKind:
+        anyOf:
+          - $ref: "#/schemas/target-kind"
+          - type: "null"
+      evidence:
+        type: array
+        items:
+          $ref: "#/schemas/evidence"
+      attackerControl:
+        type:
+          - string
+          - "null"
+      affectedSink:
+        type:
+          - string
+          - "null"
+      preconditions:
+        type: array
+        items:
+          type: string
+      quickDisproofAttempt:
+        type:
+          - string
+          - "null"
+      needsFuzzing:
+        type: boolean
+      needsManualAnalysis:
+        type: boolean
+  analysis-feedback-item:
+    type: object
+    required:
+      - kind
+      - summary
+      - evidence
+    properties:
+      kind:
+        enum:
+          - candidate
+          - critic
+          - manual
+      summary:
+        type: string
+      evidence:
+        type: array
+        items:
+          $ref: "#/schemas/evidence"
+  analysis:
+    type: object
+    required:
+      - id
+      - result
+      - summary
+      - confidence
+      - score
+      - reportPath
+      - runtimeSeconds
+      - hypothesis
+      - evidenceTable
+      - attackPath
+      - blockers
+      - rulingRationale
+      - missingEvidenceRequest
+      - feedbackHistory
+    properties:
+      id:
+        type: string
+      result:
+        enum:
+          - real_vulnerability
+          - likely_vulnerability
+          - plausible_but_unproven
+          - false_positive
+      summary:
+        type: string
+      confidence:
+        type:
+          - number
+          - "null"
+      score:
+        type:
+          - number
+          - "null"
+      reportPath:
+        type:
+          - string
+          - "null"
+      runtimeSeconds:
+        type:
+          - number
+          - "null"
+      analysisFingerprint:
+        type: string
+      hypothesis:
+        type: string
+      evidenceTable:
+        type: array
+        items:
+          $ref: "#/schemas/evidence"
+      attackPath:
+        type: array
+        items:
+          type: string
+      blockers:
+        type: array
+        items:
+          type: string
+      rulingRationale:
+        type: string
+      missingEvidenceRequest:
+        type: array
+        items:
+          type: string
+      feedbackHistory:
+        type: array
+        items:
+          $ref: "#/schemas/analysis-feedback-item"
+  critic-response:
+    type: object
+    required:
+      - id
+      - stance
+      - reviewedAnalysisFingerprint
+      - summary
+      - objections
+      - requiredAdditionalEvidence
+      - codeExistenceChecks
+      - citationValidityChecks
+      - reachabilityAssessment
+      - preconditionAssessment
+      - falsePositiveAlternatives
+      - severityExploitabilityAssessment
+      - refutedClaims
+      - missingEvidenceFields
+      - suggestedNextAction
+    properties:
+      id:
+        type: string
+      stance:
+        enum:
+          - object
+          - convinced
+      reviewedAnalysisFingerprint:
+        type: string
+      summary:
+        type: string
+      objections:
+        type: array
+        items:
+          type: string
+      requiredAdditionalEvidence:
+        type: array
+        items:
+          type: string
+      codeExistenceChecks:
+        type: array
+        items:
+          type: string
+      citationValidityChecks:
+        type: array
+        items:
+          type: string
+      reachabilityAssessment:
+        type: string
+      preconditionAssessment:
+        type: string
+      falsePositiveAlternatives:
+        type: array
+        items:
+          type: string
+      severityExploitabilityAssessment:
+        type: string
+      refutedClaims:
+        type: array
+        items:
+          type: string
+      missingEvidenceFields:
+        type: array
+        items:
+          type: string
+      suggestedNextAction:
+        type:
+          - string
+          - "null"
+  final-analysis:
+    allOf:
+      - $ref: "#/schemas/analysis"
+      - type: object
+        required:
+          - analysisFingerprint
+          - criticApproval
+          - evidenceBundle
+          - fuzzEvidence
+        properties:
+          analysisFingerprint:
+            type: string
+          criticApproval:
+            type: object
+            required:
+              - criticTaskId
+              - reviewedAnalysisFingerprint
+              - stance
+              - summary
+            properties:
+              criticTaskId:
+                type: string
+              reviewedAnalysisFingerprint:
+                type: string
+              stance:
+                const: convinced
+              summary:
+                type: string
+          evidenceBundle:
+            type: array
+            items:
+              $ref: "#/schemas/evidence"
+          fuzzEvidence:
+            type: array
+            items:
+              $ref: "#/schemas/evidence"
+  verification:
+    type: object
+    required:
+      - id
+      - result
+      - summary
+      - confidence
+      - score
+      - reportPath
+      - runtimeSeconds
+      - evidenceBundle
+      - residualUncertainty
+    properties:
+      id:
+        type: string
+      result:
+        enum:
+          - "true"
+          - likely
+          - "false"
+      summary:
+        type: string
+      confidence:
+        type:
+          - number
+          - "null"
+      score:
+        type:
+          - number
+          - "null"
+      reportPath:
+        type:
+          - string
+          - "null"
+      runtimeSeconds:
+        type:
+          - number
+          - "null"
+      evidenceBundle:
+        type: array
+        items:
+          $ref: "#/schemas/evidence"
+      residualUncertainty:
+        type: array
+        items:
+          type: string
+  triage:
+    type: object
+    required:
+      - id
+      - result
+      - disqualifier
+      - disqualifierReason
+      - securityClassification
+      - isSecurityIssue
+      - impactType
+      - cvssVector
+      - cvssScore
+      - cvssSeverity
+      - exploitability
+      - isExploitable
+      - commonTriggerConditions
+      - hardeningOrRobustness
+      - epssProbability30d
+      - epssSource
+      - summary
+      - reportPath
+      - runtimeSeconds
+      - evidenceBundle
+      - residualUncertainty
+    properties:
+      id:
+        type: string
+      result:
+        enum:
+          - security_issue
+          - non_security
+          - hardening
+          - needs_review
+      disqualifier:
+        enum:
+          - D-0
+          - D-1
+          - D-1.5
+          - D-2
+          - D-3
+          - D-4
+          - D-5
+          - null
+      disqualifierReason:
+        type:
+          - string
+          - "null"
+      securityClassification:
+        enum:
+          - vulnerability
+          - security_hardening
+          - robustness
+          - non_security
+          - unknown
+      isSecurityIssue:
+        type: boolean
+      impactType:
+        type: string
+      cvssVector:
+        type:
+          - string
+          - "null"
+      cvssScore:
+        type:
+          - number
+          - "null"
+        minimum: 0
+        maximum: 10
+      cvssSeverity:
+        enum:
+          - none
+          - low
+          - medium
+          - high
+          - critical
+          - unknown
+      exploitability:
+        enum:
+          - none
+          - theoretical
+          - proof_of_concept
+          - practical
+          - unknown
+      isExploitable:
+        type:
+          - boolean
+          - "null"
+      commonTriggerConditions:
+        type: array
+        items:
+          type: string
+      hardeningOrRobustness:
+        type: boolean
+      epssProbability30d:
+        type:
+          - number
+          - "null"
+        minimum: 0
+        maximum: 1
+      epssSource:
+        type: string
+      summary:
+        type: string
+      reportPath:
+        type:
+          - string
+          - "null"
+      runtimeSeconds:
+        type:
+          - number
+          - "null"
+      evidenceBundle:
+        type: array
+        items:
+          $ref: "#/schemas/evidence"
+      residualUncertainty:
+        type: array
+        items:
+          type: string
+  goal-threat-direction:
+    type: object
+    additionalProperties: false
+    properties:
+      focus:
+        type: string
+        minLength: 1
+      attackerModel:
+        type: string
+        minLength: 1
+      nonGoals:
+        type: array
+        items:
+          type: string
+      notes:
+        type: string
+    required:
+      - focus
+      - attackerModel
+  goal-spec:
+    type: object
+    additionalProperties: false
+    properties:
+      goalId:
+        type: string
+        minLength: 1
+      title:
+        type: string
+        minLength: 1
+      successCriteria:
+        type: string
+        minLength: 1
+      nonGoals:
+        type: array
+        items:
+          type: string
+      attackerModel:
+        type: string
+        minLength: 1
+      stopCondition:
+        type: string
+        minLength: 1
+      persistenceLanguage:
+        type: string
+        minLength: 1
+      redTeamClosedLoopholes:
+        type: array
+        items:
+          type: string
+      goalPrompt:
+        type: string
+        minLength: 1
+    required:
+      - goalId
+      - title
+      - successCriteria
+      - nonGoals
+      - attackerModel
+      - stopCondition
+      - persistenceLanguage
+      - redTeamClosedLoopholes
+      - goalPrompt
+  goal-craft-output:
+    type: object
+    additionalProperties: false
+    properties:
+      goalSpecPath:
+        type: string
+        minLength: 1
+      goalSpec:
+        $ref: "#/schemas/goal-spec"
+    required:
+      - goalSpecPath
+      - goalSpec
+  hunt-goal:
+    type: object
+    additionalProperties: false
+    properties:
+      huntGoalId:
+        type: string
+        minLength: 1
+      title:
+        type: string
+        minLength: 1
+      objective:
+        type: string
+        minLength: 1
+      focusPaths:
+        type: array
+        items:
+          type: string
+      riskPathways:
+        type: array
+        items:
+          type: string
+      rationale:
+        type: string
+      partitionDimension:
+        type: string
+    required:
+      - huntGoalId
+      - title
+      - objective
+  surface-dispatch:
+    type: object
+    additionalProperties: false
+    properties:
+      globalExhausted:
+        type: boolean
+      exhaustionReason:
+        type: string
+      partitionDimension:
+        type: string
+      huntGoals:
+        type: array
+        items:
+          $ref: "#/schemas/hunt-goal"
+    required:
+      - globalExhausted
+      - huntGoals
+  goal-candidate-finding:
+    type: object
+    additionalProperties: false
+    properties:
+      candidateId:
+        type: string
+        minLength: 1
+      huntGoalId:
+        type: string
+        minLength: 1
+      title:
+        type: string
+        minLength: 1
+      description:
+        type: string
+        minLength: 1
+      vulnerabilityClass:
+        type: string
+      location:
+        type: object
+        additionalProperties: false
+        properties:
+          filePath:
+            type: string
+            minLength: 1
+          line:
+            type:
+              - integer
+              - "null"
+          symbol:
+            type:
+              - string
+              - "null"
+        required:
+          - filePath
+      claim:
+        type: string
+        minLength: 1
+      rootCauseKey:
+        type: string
+        minLength: 1
+      evidence:
+        type: array
+        items:
+          type: object
+      attackerControl:
+        type: string
+      preconditions:
+        type: array
+        items:
+          type: string
+      quickDisproofAttempt:
+        type: string
+      confidence:
+        type: number
+    required:
+      - candidateId
+      - huntGoalId
+      - title
+      - description
+      - location
+      - claim
+      - rootCauseKey
+  goal-exhaustion-declaration:
+    type: object
+    additionalProperties: false
+    properties:
+      huntGoalId:
+        type: string
+        minLength: 1
+      exhausted:
+        type: boolean
+        const: true
+      methodsTried:
+        type: array
+        items:
+          type: string
+      coveredPaths:
+        type: array
+        items:
+          type: string
+      reason:
+        type: string
+        minLength: 1
+    required:
+      - huntGoalId
+      - exhausted
+      - methodsTried
+      - coveredPaths
+      - reason
+  goal-hunt-output:
+    type: object
+    additionalProperties: false
+    properties:
+      outcome:
+        type: string
+        enum:
+          - candidate
+          - exhausted
+      candidate:
+        anyOf:
+          - $ref: "#/schemas/goal-candidate-finding"
+          - type: "null"
+      exhaustion:
+        anyOf:
+          - $ref: "#/schemas/goal-exhaustion-declaration"
+          - type: "null"
+    required:
+      - outcome
+  goal-judge-verdict:
+    type: object
+    additionalProperties: false
+    properties:
+      candidateId:
+        type: string
+        minLength: 1
+      decision:
+        type: string
+        enum:
+          - confirmed
+          - rejected
+          - needs-more-evidence
+      summary:
+        type: string
+        minLength: 1
+      attackPathValid:
+        type: boolean
+      pocFeasible:
+        type: boolean
+      reasons:
+        type: array
+        items:
+          type: string
+    required:
+      - candidateId
+      - decision
+      - summary
+      - attackPathValid
+      - pocFeasible
+      - reasons
+  goal-dedup-result:
+    type: object
+    additionalProperties: false
+    properties:
+      candidateId:
+        type: string
+        minLength: 1
+      novelty:
+        type: string
+        enum:
+          - novel
+          - duplicate
+          - known-fixed
+          - unknown
+      summary:
+        type: string
+        minLength: 1
+      references:
+        type: array
+        items:
+          type: string
+    required:
+      - candidateId
+      - novelty
+      - summary
+      - references
+  surface-feedback:
+    type: object
+    additionalProperties: false
+    properties:
+      kind:
+        type: string
+        enum:
+          - hunt-candidate
+          - hunt-exhausted
+          - judge-reject
+          - dedup-reject
+          - dedup-novel
+      huntGoalId:
+        type: string
+      candidateId:
+        type:
+          - string
+          - "null"
+      summary:
+        type: string
+      payload:
+        type: object
+    required:
+      - kind
+      - summary
+  triage-finding-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - functionPath
+      - candidatePath
+      - analysisResultPath
+      - verifyResultPath
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      functionPath:
+        $pathOf: "#/schemas/target"
+      candidatePath:
+        $pathOf: "#/schemas/candidate"
+      analysisResultPath:
+        $pathOf: "#/schemas/final-analysis"
+      verifyResultPath:
+        $pathOf: "#/schemas/verification"
+  verify-finding-stage-input:
+    type: object
+    required:
+      - scanJob
+      - repositoryPath
+      - modulePath
+      - functionPath
+      - candidatePath
+      - analysisResultPath
+    properties:
+      scanJob:
+        $ref: "#/schemas/scan-job-snapshot"
+      repositoryPath:
+        $pathOf: "#/schemas/repository"
+      modulePath:
+        $pathOf: "#/schemas/module"
+      functionPath:
+        $pathOf: "#/schemas/target"
+      candidatePath:
+        $pathOf: "#/schemas/candidate"
+      analysisResultPath:
+        $pathOf: "#/schemas/final-analysis"
+stages:
+  goal-craft:
+    name: Goal Craft
+    description: Draft and self-red-team a precise GoalSpec from the human threat direction.
+    role: scan
+    group: tob-goal
+    mode: serial
+    concurrency: 1
+    maxConcurrency: 1
+    disableable: false
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - goal-craft
+      prompt: |
+        You are the Goal Craft stage for a tob-goal security scan.
+
+        **Mandatory:** Read `threatDirection` from task input (`focus`, `attackerModel`, `nonGoals`, `notes`). The human focus is the primary outcome — do not broaden it into a generic "untrusted input" hunt, and do not invent a weaker or different impact class than the human asked for. If notes are present, fold them into constraints.
+
+        Use the repository only as needed to phrase a concrete goal.
+
+        Produce a GoalSpec that:
+        1. Centers on threatDirection.focus (and attackerModel) as the durable outcome.
+        2. Defines precise, testable success criteria (what counts as done).
+        3. Lists non-goals and invalid attacker preconditions (merge human nonGoals when present).
+        4. Includes stopCondition for a single hunt task (one candidate or justified exhaustion).
+        5. Injects persistence language: "no bugs found is intermediate, not success; change method before giving up."
+        6. Self-red-teams the goal: list loopholes where a lazy agent could satisfy the letter without real work, then close them in successCriteria / nonGoals.
+        7. Writes the full native-goal objective text into goalPrompt (outcome-heavy, path-light — do not mandate a single tool or method). This string is activated later as Codex `/goal` for each hunt, so keep it self-contained and under ~1800 characters.
+
+        Write the GoalSpec JSON to /task/goal-spec.json and return goalSpecPath plus the goalSpec object.
+
+        Write `/task/output.json` as:
+        `{"route":null,"exit":false,"output":{"goalSpecPath":"/task/goal-spec.json","goalSpec":{...}}}`.
+      prepareRepository: target
+      includePolicy: true
+      plugins: []
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/goal-craft-output"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    taskName: Craft goal specification
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+  goal-surface:
+    name: Goal Surface
+    description: Goal-as-lens attack-surface planning and continuous hunt-goal dispatch.
+    role: scan
+    group: tob-goal
+    mode: serial
+    concurrency: 1
+    maxConcurrency: 1
+    disableable: false
+    runtime:
+      kind: agent
+      persistent: true
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - goal-surface
+      prompt: |
+        You are the Goal Surface stage for a tob-goal security scan. You are the continuous dispatcher.
+
+        Read the GoalSpec and any feedback payload (hunt-candidate, hunt-exhausted, judge-reject, dedup-reject, dedup-novel). Use the goal as a lens over the codebase.
+
+        On first entry: emit 2–8 diverse huntGoals (modules, data flows, or boundaries ranked by relevance to the GoalSpec). Each huntGoal needs huntGoalId, title, objective, optional focusPaths / riskPathways / partitionDimension.
+
+        On feedback re-entry:
+        - Do not repeat dead zones or already-novel root causes when avoidable.
+        - Prefer emitting one or more new huntGoals to keep exploration moving.
+        - When no useful unexplored goal remains, set globalExhausted=true and huntGoals=[].
+
+        You do not perform deep vulnerability hunting yourself. You only plan and dispatch hunt goals.
+        Return SurfaceDispatch JSON.
+
+        Write `/task/output.json` as:
+        `{"route":null,"exit":false,"output":{...SurfaceDispatch...}}`
+        This stage has a single outbound edge — set `route` to null (do not invent a route key). When globalExhausted=true, set huntGoals to [].
+      prepareRepository: none
+      includePolicy: true
+      plugins: []
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/surface-dispatch"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects: []
+    taskName: Plan hunt goals ($input.feedback.kind)
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+  goal-hunt:
+    name: Goal Hunt
+    description: One hunt goal, one candidate or exhaustion declaration.
+    role: scan
+    group: tob-goal
+    mode: fanout
+    concurrency: 8
+    maxConcurrency: 8
+    disableable: false
+    runtime:
+      kind: agent
+      persistent: true
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - goal-hunt
+        - codeql
+        - semgrep
+        - tree-sitter
+      prompt: |
+        You are the Goal Hunt stage for one assigned hunt goal in a tob-goal scan.
+
+        This stage is launched as a **Codex native `/goal`**. The runtime activates thread-level goal state (`thread_goals`) with the crafted GoalSpec plus the assigned hunt surface. Work under that native objective — it survives multi-turn continuation and context compaction.
+
+        Stay inside the assigned hunt surface. Choose any reasonable methods (manual tracing, CodeQL, Semgrep, etc.) — the goal defines the outcome, not the path.
+
+        Stop when you have either:
+        - exactly one candidate that meets the GoalSpec success criteria, or
+        - a justified exhaustion with `output.exhaustion` fields (`huntGoalId`, `exhausted: true`, `methodsTried`, `coveredPaths`, `reason`).
+
+        Never emit more than one candidate. Never claim success without evidence. "No bugs found" is not success unless you have exhausted reasonable methods for this goal.
+
+        ## Structured JSON output requirement (mandatory)
+
+        - Write the final result only to `/task/output.json` as a pure JSON object (no markdown fences, comments, or prose).
+        - Top-level envelope must be exactly `{route, exit, output}`. Set `exit` to false.
+        - `route` must be `"candidate"` or `"exhausted"` and must match the chosen path.
+        - `output` must match GoalHuntOutput:
+          - candidate path: `outcome: "candidate"`, populate `output.candidate` (required fields), set `output.exhaustion` to `null`
+          - exhausted path: `outcome: "exhausted"`, populate `output.exhaustion` with `{huntGoalId, exhausted: true, methodsTried: string[], coveredPaths: string[], reason}`, set `output.candidate` to `null`
+        - `/task/output.schema.json` is the source of truth for the complete envelope. Do not invent alternate field names. Do not add extra fields outside the schema. Use `null` for nullable fields instead of omitting them unless the schema allows omission.
+        - Before ending the turn, validate with Python and the `jsonschema` package: load `/task/output.json` and `/task/output.schema.json`, validate, print only a short success/failure line. If validation fails, fix and re-validate until it passes.
+        - FINAL CHECK: (1) write the complete envelope to `/task/output.json`; (2) re-open and validate against `/task/output.schema.json`; (3) only then end the turn.
+      prepareRepository: none
+      includePolicy: false
+      plugins:
+        - tob-goal-native
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/goal-hunt-output"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects:
+      - type: tob-goal-registry
+        operation: persist-candidate
+    taskName: "Hunt: $input.huntGoal.title"
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+  goal-judge:
+    name: Goal Judge
+    description: Single independent judge for safety path and PoC feasibility.
+    role: verification
+    group: tob-goal
+    mode: fanout
+    concurrency: 4
+    maxConcurrency: 4
+    disableable: false
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - goal-judge
+      prompt: |
+        You are the single Goal Judge for one candidate in a tob-goal scan.
+
+        Independently verify:
+        1. Attack path validity under the GoalSpec attacker model.
+        2. PoC feasibility at least as a clear contour (not necessarily a full exploit).
+
+        Decide confirmed, rejected, or needs-more-evidence. Reject theoretical paths that require disallowed preconditions. Do not invent fixes. Do not communicate with other judges.
+
+        Return GoalJudgeVerdict JSON.
+
+        Write `/task/output.json` as:
+        `{"route":"confirmed"|"rejected","exit":false,"output":{...GoalJudgeVerdict...}}`
+        Use `confirmed` only for decision=confirmed; otherwise use `rejected` (including needs-more-evidence for v1).
+      prepareRepository: none
+      includePolicy: true
+      plugins:
+        - tob-goal-native
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/goal-judge-verdict"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects:
+      - type: tob-goal-registry
+        operation: apply-judge
+    taskName: "Judge candidate: $input.candidate.title"
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+  goal-dedup:
+    name: Goal Dedup
+    description: Novelty check against known issues and prior scan findings.
+    role: verification
+    group: tob-goal
+    mode: fanout
+    concurrency: 4
+    maxConcurrency: 4
+    disableable: false
+    runtime:
+      kind: agent
+      persistent: false
+      reuseContainer: true
+      cwd: /workspace/repo
+      skills:
+        - goal-dedup
+        - search-registries
+      prompt: |
+        You are the Goal Dedup stage for one confirmed candidate in a tob-goal scan.
+
+        Check novelty against GitHub issues/PRs/advisories when reachable, and against prior findings for this scan job when available. Decide novel, duplicate, known-fixed, or unknown.
+
+        Do not re-judge whether the issue is a vulnerability. Only novelty.
+
+        Return GoalDedupResult JSON with references when applicable.
+
+        Write `/task/output.json` as:
+        `{"route":"novel"|"reject","exit":false,"output":{...GoalDedupResult...}}`
+        Use `novel` only for novelty=novel; otherwise `reject`.
+      prepareRepository: none
+      includePolicy: false
+      plugins:
+        - tob-goal-native
+    inputSchema:
+      type: object
+    outputSchema:
+      $ref: "#/schemas/goal-dedup-result"
+    inputArtifacts: []
+    outputArtifacts: []
+    effects:
+      - type: tob-goal-registry
+        operation: apply-dedup
+    taskName: "Dedup candidate: $input.candidate.title"
+    containerNameParts: []
+    allowAgentExit: false
+    promptValues: {}
+edges:
+  - id: goal-craft-to-goal-surface
+    name: goal-craft-to-goal-surface
+    from: goal-craft
+    to: goal-surface
+    fork: false
+    mode: map
+    input:
+      goalSpecPath: $output.goalSpecPath
+      goalSpec: $output.goalSpec
+    artifacts:
+      - from: $output.goalSpecPath
+        to: inputs/goal-spec.json
+        inputField: goalSpecPath
+        required: true
+  - id: goal-surface-to-goal-hunt
+    name: goal-surface-to-goal-hunt
+    from: goal-surface
+    to: goal-hunt
+    fork: false
+    mode: fanOut
+    foreach: $.huntGoals[*]
+    input:
+      goalSpecPath: $input.goalSpecPath
+      goalSpec: $input.goalSpec
+      huntGoal: $item
+    artifacts:
+      - from: $input.goalSpecPath
+        to: inputs/goal-spec.json
+        inputField: goalSpecPath
+        required: true
+  - id: goal-hunt-to-goal-judge
+    name: goal-hunt-to-goal-judge
+    from: goal-hunt
+    to: goal-judge
+    fork: false
+    mode: map
+    input:
+      goalSpecPath: $input.goalSpecPath
+      goalSpec: $input.goalSpec
+      huntGoal: $input.huntGoal
+      candidate: $output.candidate
+    artifacts:
+      - from: $input.goalSpecPath
+        to: inputs/goal-spec.json
+        inputField: goalSpecPath
+        required: true
+    route:
+      key: candidate
+      default: true
+  - id: goal-hunt-candidate-to-goal-surface
+    name: goal-hunt-candidate-to-goal-surface
+    from: goal-hunt
+    to: goal-surface
+    fork: false
+    mode: map
+    input:
+      goalSpecPath: $input.goalSpecPath
+      goalSpec: $input.goalSpec
+      feedback:
+        kind: hunt-candidate
+        huntGoalId: $input.huntGoal.huntGoalId
+        candidateId: $output.candidate.candidateId
+        summary: $output.candidate.title
+        payload: $output.candidate
+    artifacts:
+      - from: $input.goalSpecPath
+        to: inputs/goal-spec.json
+        inputField: goalSpecPath
+        required: true
+    route:
+      key: candidate
+  - id: goal-hunt-exhausted-to-goal-surface
+    name: goal-hunt-exhausted-to-goal-surface
+    from: goal-hunt
+    to: goal-surface
+    fork: false
+    mode: map
+    input:
+      goalSpecPath: $input.goalSpecPath
+      goalSpec: $input.goalSpec
+      feedback:
+        kind: hunt-exhausted
+        huntGoalId: $input.huntGoal.huntGoalId
+        candidateId: null
+        summary: $output.exhaustion.reason
+        payload: $output.exhaustion
+    artifacts:
+      - from: $input.goalSpecPath
+        to: inputs/goal-spec.json
+        inputField: goalSpecPath
+        required: true
+    route:
+      key: exhausted
+  - id: goal-judge-to-goal-dedup
+    name: goal-judge-to-goal-dedup
+    from: goal-judge
+    to: goal-dedup
+    fork: false
+    mode: map
+    input:
+      goalSpecPath: $input.goalSpecPath
+      goalSpec: $input.goalSpec
+      huntGoal: $input.huntGoal
+      candidate: $input.candidate
+      judge: $output
+    artifacts:
+      - from: $input.goalSpecPath
+        to: inputs/goal-spec.json
+        inputField: goalSpecPath
+        required: true
+    route:
+      key: confirmed
+  - id: goal-judge-reject-to-goal-surface
+    name: goal-judge-reject-to-goal-surface
+    from: goal-judge
+    to: goal-surface
+    fork: false
+    mode: map
+    input:
+      goalSpecPath: $input.goalSpecPath
+      goalSpec: $input.goalSpec
+      feedback:
+        kind: judge-reject
+        huntGoalId: $input.huntGoal.huntGoalId
+        candidateId: $input.candidate.candidateId
+        summary: $output.summary
+        payload: $output
+    artifacts:
+      - from: $input.goalSpecPath
+        to: inputs/goal-spec.json
+        inputField: goalSpecPath
+        required: true
+    route:
+      key: rejected
+      default: true
+  - id: goal-dedup-novel-to-goal-surface
+    name: goal-dedup-novel-to-goal-surface
+    from: goal-dedup
+    to: goal-surface
+    fork: false
+    mode: map
+    input:
+      goalSpecPath: $input.goalSpecPath
+      goalSpec: $input.goalSpec
+      feedback:
+        kind: dedup-novel
+        huntGoalId: $input.huntGoal.huntGoalId
+        candidateId: $input.candidate.candidateId
+        summary: $output.summary
+        payload: $output
+    artifacts:
+      - from: $input.goalSpecPath
+        to: inputs/goal-spec.json
+        inputField: goalSpecPath
+        required: true
+    route:
+      key: novel
+  - id: goal-dedup-reject-to-goal-surface
+    name: goal-dedup-reject-to-goal-surface
+    from: goal-dedup
+    to: goal-surface
+    fork: false
+    mode: map
+    input:
+      goalSpecPath: $input.goalSpecPath
+      goalSpec: $input.goalSpec
+      feedback:
+        kind: dedup-reject
+        huntGoalId: $input.huntGoal.huntGoalId
+        candidateId: $input.candidate.candidateId
+        summary: $output.summary
+        payload: $output
+    artifacts:
+      - from: $input.goalSpecPath
+        to: inputs/goal-spec.json
+        inputField: goalSpecPath
+        required: true
+    route:
+      key: reject
+      default: true
+groups: []
