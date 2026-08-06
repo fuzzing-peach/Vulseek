@@ -30,6 +30,7 @@ import {
 	Trash2,
 	User,
 	Users,
+	Workflow,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -154,6 +155,12 @@ const MENU: Menu = {
 			title: "Datasets",
 			url: "/dashboard/datasets",
 			icon: Database,
+		},
+		{
+			isSingle: true,
+			title: "Pipelines",
+			url: "/dashboard/pipelines",
+			icon: Workflow,
 		},
 		{
 			isSingle: true,

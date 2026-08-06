@@ -114,6 +114,18 @@ export const pipelineRouter = createTRPCRouter({
 			return validatePipelineYaml(input.yaml);
 		}),
 
+	/** Built-in templates (systemKey → serialized V3 YAML) for copying. */
+	templates: protectedProcedure.query(async () => {
+		const { loadBuiltinPipelineTemplates } = await import(
+			"@vulseek/server/services/scan/pipeline/document-v3"
+		);
+		return loadBuiltinPipelineTemplates().map((template) => ({
+			systemKey: template.systemKey,
+			name: template.name,
+			yaml: template.yaml,
+		}));
+	}),
+
 	/**
 	 * Agent profiles, skills, plugins and effects the editor can reference.
 	 * The full skill registry is wired in the editor phase; plugins/effects
