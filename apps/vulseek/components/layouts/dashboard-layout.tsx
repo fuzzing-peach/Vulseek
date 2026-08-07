@@ -6,9 +6,11 @@ import Page from "./side";
 interface Props {
 	children: React.ReactNode;
 	metaName?: string;
+	/** Full-height workspace option for the pipeline editor canvas. */
+	fullHeight?: boolean;
 }
 
-export const DashboardLayout = ({ children }: Props) => {
+export const DashboardLayout = ({ children, fullHeight }: Props) => {
 	const { data: haveRootAccess } = api.user.haveRootAccess.useQuery();
 	const { data: isCloud } = api.settings.isCloud.useQuery();
 	const { data: isUserSubscribed } = api.settings.isUserSubscribed.useQuery(
@@ -23,7 +25,7 @@ export const DashboardLayout = ({ children }: Props) => {
 
 	return (
 		<>
-			<Page>{children}</Page>
+			<Page fullHeight={fullHeight}>{children}</Page>
 			{isCloud === true && isUserSubscribed === true && (
 				<ChatwootWidget websiteToken="USCpQRKzHvFMssf3p6Eacae5" />
 			)}

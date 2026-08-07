@@ -497,6 +497,9 @@ function findActiveNavItem(
 
 interface Props {
 	children: React.ReactNode;
+	/** Full-height workspace: the children container stretches to the
+	 *  viewport (used by the pipeline editor canvas). */
+	fullHeight?: boolean;
 }
 
 function LogoWrapper() {
@@ -824,7 +827,7 @@ function SidebarLogo() {
 	);
 }
 
-export default function Page({ children }: Props) {
+export default function Page({ children, fullHeight }: Props) {
 	const [defaultOpen, setDefaultOpen] = useState<boolean | undefined>(
 		undefined,
 	);
@@ -1152,7 +1155,14 @@ export default function Page({ children }: Props) {
 					</header>
 				)}
 
-				<div className="flex flex-col w-full p-4 pt-0">{children}</div>
+				<div
+					className={cn(
+						"flex flex-col w-full p-4 pt-0",
+						fullHeight && "min-h-0 flex-1",
+					)}
+				>
+					{children}
+				</div>
 			</SidebarInset>
 		</SidebarProvider>
 	);
