@@ -13,6 +13,7 @@ import {
 	type Node as FlowNode,
 	type NodeProps,
 	useReactFlow,
+	ReactFlowProvider,
 	applyNodeChanges,
 	type NodeChange,
 } from "@xyflow/react";
@@ -177,7 +178,7 @@ export type CanvasEditorProps = {
 type EditorFlowNode = FlowNode<StageNodeData>;
 type EditorFlowEdge = FlowEdge & { data?: { bendPoints?: Array<{ x: number; y: number }> } };
 
-export const CanvasEditor = ({
+const CanvasEditorInner = ({
 	document,
 	readOnly,
 	onChange,
@@ -483,6 +484,12 @@ export const CanvasEditor = ({
 		</div>
 	);
 };
+
+export const CanvasEditor = (props: CanvasEditorProps) => (
+	<ReactFlowProvider>
+		<CanvasEditorInner {...props} />
+	</ReactFlowProvider>
+);
 
 const ToolbarButton = ({
 	label,
