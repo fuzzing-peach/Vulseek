@@ -96,15 +96,20 @@ const EditorPage = ({
 		({ yaml, revision }) => initialEditorState(yaml, revision),
 	);
 
-	// When the server draft arrives (or changes), adopt it if the local
-	// buffer is untouched.
+	// When the server draft arrives (or changes): adopt it wholesale when the
+	// local buffer has no unsaved edits (e.g. after copy-version-to-draft);
+	// otherwise only refresh the saved-YAML baseline so the dirty state
+	// compares against the server draft.
+	const stateRef = React.useRef(state);
+	stateRef.current = state;
 	React.useEffect(() => {
 		if (!draftYaml) return;
-		dispatch({
-			type: "setSavedYaml",
-			yaml: draftYaml,
-			draftRevision: pipeline.data?.draftRevision ?? 0,
-		});
+		const revision = pipeline.data?.draftRevision ?? 0;
+		if (stateRef.current.rawYamlBuffer === stateRef.current.savedYaml) {
+			dispatch({ type: "reset", yaml: draftYaml, draftRevision: revision });
+		} else {
+			dispatch({ type: "setSavedYaml", yaml: draftYaml, draftRevision: revision });
+		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [draftYaml, pipeline.data?.draftRevision]);
 
