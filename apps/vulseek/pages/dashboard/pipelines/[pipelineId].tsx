@@ -451,6 +451,16 @@ const EditorPage = ({
 							</>
 						) : (
 							<>
+								{selectedVersion ? (
+									<Button
+										variant="outline"
+										size="sm"
+										onClick={() => void handleCopyVersion(selectedVersion.pipelineVersionId)}
+									>
+										<Copy className="size-3.5" />
+										Copy to draft
+									</Button>
+								) : null}
 								{data.currentVersion ? (
 									<Button
 										variant="outline"
