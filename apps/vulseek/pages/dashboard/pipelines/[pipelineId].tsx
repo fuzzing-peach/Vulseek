@@ -360,16 +360,14 @@ const EditorPage = ({
 										Run
 									</Button>
 								) : null}
-								{canManage && data.draftYaml !== null && (
+								{canManage && (
 									<Button
 										variant="outline"
 										size="sm"
-										onClick={() => {
-											setViewingVersion(false);
-										}}
+										onClick={() => setViewingVersion(false)}
 									>
 										<FilePenLine className="size-3.5" />
-										Edit draft
+										{data.draftYaml !== null ? "Edit draft" : "Edit pipeline"}
 									</Button>
 								)}
 							</>
