@@ -86,10 +86,25 @@ const EditorPage = ({
 	const [viewingVersion, setViewingVersion] = React.useState(false);
 
 	const draftYaml = pipeline.data?.draftYaml ?? null;
-	const initialYaml = React.useMemo(
-		() => draftYaml ?? "",
-		[draftYaml],
-	);
+	// No draft yet → seed the editor with the current published version's YAML
+	// as a local starting point. Saving writes the draft; publishing still
+	// produces a new immutable version.
+	const currentVersionYaml = api.pipeline.getVersion.useQuery(
+		{
+			pipelineId,
+			pipelineVersionId: pipeline.data?.currentVersion
+				? (pipeline.data.currentPublishedVersionId ?? "")
+				: "__none__",
+		},
+		{
+			enabled: Boolean(
+				pipeline.data &&
+					!pipeline.data.draftYaml &&
+					pipeline.data.currentVersion,
+			),
+		},
+	).data?.yaml;
+	const initialYaml = draftYaml ?? currentVersionYaml ?? "";
 	const [state, dispatch] = React.useReducer(
 		pipelineEditorReducer,
 		{ yaml: initialYaml, revision: pipeline.data?.draftRevision ?? 0 },
@@ -103,15 +118,19 @@ const EditorPage = ({
 	const stateRef = React.useRef(state);
 	stateRef.current = state;
 	React.useEffect(() => {
-		if (!draftYaml) return;
-		const revision = pipeline.data?.draftRevision ?? 0;
-		if (stateRef.current.rawYamlBuffer === stateRef.current.savedYaml) {
-			dispatch({ type: "reset", yaml: draftYaml, draftRevision: revision });
+		const serverYaml = draftYaml ?? currentVersionYaml;
+		if (!serverYaml) return;
+		const revision = draftYaml ? (pipeline.data?.draftRevision ?? 0) : 0;
+		const untouched = stateRef.current.rawYamlBuffer === stateRef.current.savedYaml;
+		if (untouched || !draftYaml) {
+			// Adopt wholesale: fresh draft, or the current version as the
+			// starting point when no draft exists yet.
+			dispatch({ type: "reset", yaml: serverYaml, draftRevision: revision });
 		} else {
-			dispatch({ type: "setSavedYaml", yaml: draftYaml, draftRevision: revision });
+			dispatch({ type: "setSavedYaml", yaml: serverYaml, draftRevision: revision });
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [draftYaml, pipeline.data?.draftRevision]);
+	}, [draftYaml, currentVersionYaml, pipeline.data?.draftRevision]);
 
 	const document = validDocument(state);
 	const dirty = isDirty(state);
