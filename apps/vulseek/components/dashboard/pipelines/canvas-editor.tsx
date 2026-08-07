@@ -205,7 +205,7 @@ const CanvasEditorInner = ({
 	>({});
 	const layoutToken = React.useRef(0);
 
-	// Async ELK layout with a generation token — stale results are dropped.
+
 	React.useEffect(() => {
 		const missing = Object.keys(document.stages).some((id) => !savedPositions[id]);
 		if (!missing) {
@@ -262,6 +262,18 @@ const CanvasEditorInner = ({
 
 	const [localNodes, setLocalNodes] = React.useState<EditorFlowNode[]>(nodes);
 	React.useEffect(() => setLocalNodes(nodes), [nodes]);
+
+	// Keep every stage in view: re-fit after the (possibly transient) layout
+	// settles and whenever the canvas resizes (inspector toggle, window).
+	React.useEffect(() => {
+		const timer = setTimeout(() => void fitView({ padding: 0.2, duration: 0 }), 120);
+		const onResize = () => void fitView({ padding: 0.2, duration: 0 });
+		window.addEventListener("resize", onResize);
+		return () => {
+			clearTimeout(timer);
+			window.removeEventListener("resize", onResize);
+		};
+	}, [positions, localNodes.length, fitView]);
 
 	const persistUi = React.useCallback(
 		(
