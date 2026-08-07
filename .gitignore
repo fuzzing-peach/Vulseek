@@ -76,3 +76,4 @@ agents/schemas/codex-app-server/
 /third_party/*
 !/third_party/deepsec
 /vendor/claude-replay/
+tmp/ppl-visual-full.png
