@@ -90,7 +90,7 @@ import {
 	seedSystemPipelinesForOrganization,
 	syncSystemPipelineTemplatesForOrganization,
 } from "@vulseek/server/services/pipeline-system";
-import { loadBuiltinPipelineTemplates } from "@vulseek/server/services/scan/pipeline/document-v3";
+import { loadBuiltinPipelineTemplates } from "@vulseek/server/services/scan/pipeline/document-v3/builtin-pipelines";
 
 const seed = (
 	operation: "select" | "insert" | "update",

@@ -11,11 +11,11 @@ import {
 	scanPipelineVersions,
 } from "@vulseek/server/db/schema";
 import { nanoid } from "nanoid";
+import { loadBuiltinPipelineTemplates } from "../services/scan/pipeline/document-v3/builtin-pipelines";
+import type { BuiltinPipelineTemplate } from "../services/scan/pipeline/document-v3/builtin-pipelines";
 import {
 	compilePipelineDocumentV3,
-	loadBuiltinPipelineTemplates,
 	parsePipelineDocumentV3,
-	type BuiltinPipelineTemplate,
 } from "../services/scan/pipeline/document-v3";
 
 /**

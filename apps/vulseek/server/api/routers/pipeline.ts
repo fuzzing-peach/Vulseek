@@ -117,7 +117,7 @@ export const pipelineRouter = createTRPCRouter({
 	/** Built-in templates (systemKey → serialized V3 YAML) for copying. */
 	templates: protectedProcedure.query(async () => {
 		const { loadBuiltinPipelineTemplates } = await import(
-			"@vulseek/server/services/scan/pipeline/document-v3"
+			"@vulseek/server/services/scan/pipeline/document-v3/builtin-pipelines"
 		);
 		return loadBuiltinPipelineTemplates().map((template) => ({
 			systemKey: template.systemKey,

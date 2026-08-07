@@ -31,7 +31,6 @@ export {
 	parsePipelineDocumentV3,
 	serializePipelineDocumentV3,
 } from "./pipeline-document-v3-io";
-export { computePipelineContentHash, computeRawYamlHash } from "./pipeline-document-v3-hash";
 export {
 	collectPipelineDiagnostics,
 	hasBlockingDiagnostics,
@@ -45,14 +44,10 @@ export {
 	type CompiledPipelineDefinition,
 	type CompiledStageV3,
 } from "./pipeline-v3-compiler";
-export {
-	convertV2DefinitionsToV3,
-	PIPELINE_KINDS,
-	type PipelineKind,
-	type V2ConversionResult,
-} from "./pipeline-v2-converter";
-export {
-	loadBuiltinPipelineTemplate,
-	loadBuiltinPipelineTemplates,
-	type BuiltinPipelineTemplate,
-} from "./builtin-pipelines";
+
+// Server-only modules (node:fs / node:crypto) are intentionally NOT exported
+// here — the browser editor imports this index and must stay free of Node
+// builtins. Server code imports them by direct path:
+//   - ./pipeline-document-v3-hash      (content hashes)
+//   - ./pipeline-v2-converter          (legacy definitions conversion)
+//   - ./builtin-pipelines              (system templates, fs-backed)

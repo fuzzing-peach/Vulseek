@@ -6,9 +6,9 @@ import {
 	scanPipelineVersions,
 } from "@vulseek/server/db/schema";
 import { nanoid } from "nanoid";
+import { computePipelineContentHash } from "../services/scan/pipeline/document-v3/pipeline-document-v3-hash";
 import {
 	compilePipelineDocumentV3,
-	computePipelineContentHash,
 	normalizePipelineDocumentV3,
 	parsePipelineDocumentV3,
 	validatePipelineDocumentV3,

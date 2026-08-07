@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { computePipelineContentHash } from "./pipeline-document-v3-hash";
 import {
 	normalizePipelineDocumentV3,
@@ -42,21 +43,21 @@ export const BUILTIN_DOCUMENT_NAME: Record<PipelineKind, string> = {
 };
 
 const resolvePipelinesV3Dir = (): string | null => {
-	// Dev: packages/server/src/services/scan/pipeline/definitions/pipelines-v3
-	const srcDir = join(
-		__dirname,
-		"..",
-		"..",
-		"..",
-		"..",
-		"..",
-		"definitions",
-		"pipelines-v3",
-	);
-	if (existsSync(srcDir)) return srcDir;
-	// Prod: packages/server/dist/services/scan/pipeline/document-v3/…
-	const distDir = join(__dirname, "definitions", "pipelines-v3");
-	if (existsSync(distDir)) return distDir;
+	// The generated templates sit next to the legacy definitions:
+	//   src:  …/scan/pipeline/definitions/pipelines-v3
+	//   dist: …/scan/pipeline/definitions/pipelines-v3
+	// (dev/prod share the layout because `server:script` keeps @vulseek/server
+	// resolved to src; import.meta.url works in both ESM and tsx.)
+	const moduleDir = dirname(fileURLToPath(import.meta.url));
+	for (const depth of [1, 2, 3]) {
+		const candidate = join(
+			moduleDir,
+			...Array.from({ length: depth }, () => ".."),
+			"definitions",
+			"pipelines-v3",
+		);
+		if (existsSync(candidate)) return candidate;
+	}
 	return null;
 };
 

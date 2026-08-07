@@ -2,16 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
 	assertStableRoundTrip,
 	collectPipelineDiagnostics,
-	computePipelineContentHash,
-	convertV2DefinitionsToV3,
 	hasBlockingDiagnostics,
-	loadBuiltinPipelineTemplates,
 	parsePipelineDocumentV3,
 	serializePipelineDocumentV3,
 	type PipelineDocumentV3,
 	type PipelineEdgeV3,
 	type PipelineStageV3,
 } from "@vulseek/server/services/scan/pipeline/document-v3";
+import { computePipelineContentHash } from "@vulseek/server/services/scan/pipeline/document-v3/pipeline-document-v3-hash";
+import { convertV2DefinitionsToV3 } from "@vulseek/server/services/scan/pipeline/document-v3/pipeline-v2-converter";
+import { loadBuiltinPipelineTemplates } from "@vulseek/server/services/scan/pipeline/document-v3/builtin-pipelines";
 
 const stage = (overrides: Partial<PipelineStageV3> = {}): PipelineStageV3 => ({
 	name: "Start",

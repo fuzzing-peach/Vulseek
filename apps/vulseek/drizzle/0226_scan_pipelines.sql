@@ -57,17 +57,33 @@ ALTER TABLE "scan_jobs"
 	ADD COLUMN IF NOT EXISTS "terminationReason" text;
 
 -- dataset_evaluations: legacy key rename + real pipeline linkage.
+-- The legacy `pipelineId` column holds a scanType-like key ("full"/"research"/
+-- "tob-goal"). It must be drained into legacyPipelineKey and dropped before
+-- the real FK to scan_pipelines is installed — the whole migration runs in one
+-- transaction, so any state (fresh / re-run / partially-failed) converges.
 ALTER TABLE "dataset_evaluations"
 	ADD COLUMN IF NOT EXISTS "legacyPipelineKey" text,
-	ADD COLUMN IF NOT EXISTS "pipelineId" text,
 	ADD COLUMN IF NOT EXISTS "pipelineVersionId" text,
 	ADD COLUMN IF NOT EXISTS "pipelineYamlSnapshot" text,
 	ADD COLUMN IF NOT EXISTS "pipelineCompiledSnapshot" jsonb;
 
-UPDATE "dataset_evaluations" SET "legacyPipelineKey" = "pipelineId"
-	WHERE "legacyPipelineKey" IS NULL AND "pipelineId" IS NOT NULL;
+DO $$
+BEGIN
+	IF EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_name = 'dataset_evaluations' AND column_name = 'pipelineId'
+	) THEN
+		-- The old column still exists: move its legacy values over, then drop
+		-- it so the fresh pipelineId column below can be created cleanly.
+		UPDATE "dataset_evaluations" SET "legacyPipelineKey" = "pipelineId"
+			WHERE "legacyPipelineKey" IS NULL AND "pipelineId" IS NOT NULL;
+		ALTER TABLE "dataset_evaluations" DROP COLUMN IF EXISTS "pipelineId";
+	END IF;
+END $$;
 
-ALTER TABLE "dataset_evaluations" DROP COLUMN IF EXISTS "pipelineId";
+-- Fresh pipelineId column (real FK target). Added after the drop so re-runs
+-- converge; IF NOT EXISTS keeps it idempotent.
+ALTER TABLE "dataset_evaluations" ADD COLUMN IF NOT EXISTS "pipelineId" text;
 
 -- Profiles default pipeline pointer.
 ALTER TABLE "application" ADD COLUMN IF NOT EXISTS "defaultPipelineId" text;
@@ -98,10 +114,10 @@ BEGIN
 			FOREIGN KEY ("pipelineId") REFERENCES "scan_pipelines"("pipelineId") ON DELETE set null;
 	END IF;
 	IF NOT EXISTS (
-		SELECT 1 FROM pg_constraint WHERE conname = 'scan_jobs_pipelineVersionId_scan_pipeline_versions_pipelineVersionId_fk'
+		SELECT 1 FROM pg_constraint WHERE conname = 'scan_jobs_pipeline_version_fk'
 	) THEN
 		ALTER TABLE "scan_jobs"
-			ADD CONSTRAINT "scan_jobs_pipelineVersionId_scan_pipeline_versions_pipelineVersionId_fk"
+			ADD CONSTRAINT "scan_jobs_pipeline_version_fk"
 			FOREIGN KEY ("pipelineVersionId") REFERENCES "scan_pipeline_versions"("pipelineVersionId") ON DELETE set null;
 	END IF;
 	IF NOT EXISTS (
@@ -112,10 +128,10 @@ BEGIN
 			FOREIGN KEY ("pipelineId") REFERENCES "scan_pipelines"("pipelineId") ON DELETE set null;
 	END IF;
 	IF NOT EXISTS (
-		SELECT 1 FROM pg_constraint WHERE conname = 'dataset_evaluations_pipelineVersionId_scan_pipeline_versions_pipelineVersionId_fk'
+		SELECT 1 FROM pg_constraint WHERE conname = 'dataset_evaluations_pipeline_version_fk'
 	) THEN
 		ALTER TABLE "dataset_evaluations"
-			ADD CONSTRAINT "dataset_evaluations_pipelineVersionId_scan_pipeline_versions_pipelineVersionId_fk"
+			ADD CONSTRAINT "dataset_evaluations_pipeline_version_fk"
 			FOREIGN KEY ("pipelineVersionId") REFERENCES "scan_pipeline_versions"("pipelineVersionId") ON DELETE set null;
 	END IF;
 END $$;
