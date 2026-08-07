@@ -384,13 +384,21 @@ const CanvasEditorInner = ({
 	const switchDirection = React.useCallback(
 		(next: PipelineLayoutDirection) => {
 			if (readOnly || !onChange) return;
-			onChange({
-				...document,
-				ui: { direction: next, nodes: savedPositions },
+			// Compute with the *new* direction immediately — applyLayout would
+			// still see the previous document/direction in its closure.
+			void computePipelineLayout(document, next).then((result) => {
+				onChange({
+					...document,
+					ui: {
+						direction: next,
+						nodes: result.nodes,
+						edges: result.edges,
+					},
+				});
+				requestAnimationFrame(() => void fitView({ padding: 0.2, duration: 300 }));
 			});
-			void applyLayout();
 		},
-		[document, readOnly, onChange, savedPositions, applyLayout],
+		[document, readOnly, onChange, fitView],
 	);
 
 	const { setCenter } = useReactFlow();
