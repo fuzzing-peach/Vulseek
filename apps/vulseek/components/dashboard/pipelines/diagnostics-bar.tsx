@@ -2,12 +2,12 @@ import { AlertCircle, AlertTriangle } from "lucide-react";
 import type { PipelineDiagnostic } from "@vulseek/server/services/scan/pipeline/document-v3";
 
 /**
- * Bottom diagnostics bar. Clicking an item selects the entity on the canvas
- * (or, in YAML mode, is a no-op that still shows the message).
+ * Bottom diagnostics bar. Clicking an item passes the full diagnostic so the
+ * workbench can focus the referenced entity or reveal the source location.
  */
 export type DiagnosticsBarProps = {
 	diagnostics: PipelineDiagnostic[];
-	onSelect?: (entity: NonNullable<PipelineDiagnostic["entity"]>) => void;
+	onSelect?: (diagnostic: PipelineDiagnostic) => void;
 };
 
 export const DiagnosticsBar = ({ diagnostics, onSelect }: DiagnosticsBarProps) => {
@@ -24,14 +24,14 @@ export const DiagnosticsBar = ({ diagnostics, onSelect }: DiagnosticsBarProps) =
 				<button
 					key={`${diagnostic.code}-${index}`}
 					type="button"
-					disabled={!onSelect || !diagnostic.entity}
-					onClick={() => diagnostic.entity && onSelect?.(diagnostic.entity)}
+					disabled={!onSelect}
+					onClick={() => onSelect?.(diagnostic)}
 					className={
 						"inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-0.5 text-xs " +
 						(diagnostic.severity === "error"
 							? "bg-red-500/10 text-red-600"
 							: "bg-amber-500/10 text-amber-600") +
-						(onSelect && diagnostic.entity
+						(onSelect
 							? " cursor-pointer hover:opacity-80"
 							: " cursor-default")
 					}

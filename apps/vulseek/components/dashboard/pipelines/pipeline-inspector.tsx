@@ -24,6 +24,7 @@ export type PipelineInspectorProps = {
 	document: PipelineDocumentV3;
 	selection: { type: "stage" | "edge" | "schema" | "group"; id: string } | null;
 	onChange: (document: PipelineDocumentV3) => void;
+	onSelect: (entity: { type: "stage" | "edge" | "schema" | "group"; id: string }) => void;
 };
 
 const roleOptions: Array<PipelineStageV3["role"]> = ["scan", "analysis", "verification"];
@@ -401,14 +402,57 @@ const StageInspector = ({
 // Edge inspector
 // ---------------------------------------------------------------------------
 
+/**
+ * Sibling routes for a selected edge: every persisted V3 edge that shares
+ * the same `(from, to)` pair. Lets the user switch between parallel routes
+ * that the canvas renders as one grouped path.
+ */
+const SiblingRouteSwitcher = ({
+	edge,
+	document,
+	onSelect,
+}: {
+	edge: PipelineEdgeV3;
+	document: PipelineDocumentV3;
+	onSelect: (edgeId: string) => void;
+}) => {
+	const siblings = document.edges.filter(
+		(item) => item.from === edge.from && item.to === edge.to,
+	);
+	if (siblings.length <= 1) return null;
+	return (
+		<Section title="Routes (same source/target)">
+			<div className="flex flex-wrap gap-1.5">
+				{siblings.map((sibling) => (
+					<button
+						key={sibling.id}
+						type="button"
+						onClick={() => onSelect(sibling.id)}
+						className={cn(
+							"rounded-full border px-2 py-0.5 text-[11px]",
+							sibling.id === edge.id
+								? "border-primary bg-primary/10 text-primary"
+								: "text-muted-foreground hover:text-foreground",
+						)}
+					>
+						{sibling.route?.key ?? sibling.name} — {sibling.id}
+					</button>
+				))}
+			</div>
+		</Section>
+	);
+};
+
 const EdgeInspector = ({
 	edge,
 	document,
 	onChange,
+	onSelectEdge,
 }: {
 	edge: PipelineEdgeV3;
 	document: PipelineDocumentV3;
 	onChange: (document: PipelineDocumentV3) => void;
+	onSelectEdge: (edgeId: string) => void;
 }) => {
 	const update = (patch: Partial<PipelineEdgeV3>) =>
 		onChange({
@@ -420,6 +464,11 @@ const EdgeInspector = ({
 
 	return (
 		<div className="space-y-5">
+			<SiblingRouteSwitcher
+				edge={edge}
+				document={document}
+				onSelect={(edgeId) => onSelectEdge(edgeId)}
+			/>
 			<Section title="Edge">
 				<Field label="ID (immutable)">
 					<Input value={edge.id} readOnly className="bg-muted/40" />
@@ -725,6 +774,7 @@ export const PipelineInspector = ({
 	document,
 	selection,
 	onChange,
+	onSelect,
 }: PipelineInspectorProps) => {
 	const deleteEntity = React.useCallback(() => {
 		if (!selection) return;
@@ -836,7 +886,12 @@ export const PipelineInspector = ({
 					</Button>
 				</div>
 				<div className="min-h-0 flex-1 overflow-y-auto p-4">
-					<EdgeInspector edge={edge} document={document} onChange={onChange} />
+					<EdgeInspector
+						edge={edge}
+						document={document}
+						onChange={onChange}
+						onSelectEdge={(edgeId) => onSelect({ type: "edge", id: edgeId })}
+					/>
 				</div>
 			</div>
 		);

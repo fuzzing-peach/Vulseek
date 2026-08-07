@@ -46,6 +46,75 @@ describe("initialEditorState", () => {
 		expect(validDocument(state)).toBeNull();
 		expect(canPublish(state)).toBe(false);
 	});
+
+	it("runs semantic validation from initial load (unused schemas visible)", () => {
+		// A document with an unreferenced schema must surface the warning on
+		// initial load — never hidden until the first canvas action.
+		const yaml = `version: 3
+name: test
+supportedTargets:
+  - project
+root: start
+limits:
+  maxTasks: 100
+  maxDurationSeconds: 3600
+schemas:
+  unused-schema:
+    type: object
+stages:
+  start:
+    name: Start
+    role: scan
+    group: g
+    mode: serial
+    concurrency: 1
+    runtime:
+      prompt: Do the thing.
+edges: []
+groups: []
+`;
+		const state = initialEditorState(yaml);
+		expect(state.status.kind).toBe("valid");
+		expect(
+			state.diagnostics.some(
+				(d) => d.severity === "warning" && d.code === "schema.unused",
+			),
+		).toBe(true);
+	});
+
+	it("keeps diagnostics stable across a no-op canvas action", () => {
+		const yaml = `version: 3
+name: test
+supportedTargets:
+  - project
+root: start
+limits:
+  maxTasks: 100
+  maxDurationSeconds: 3600
+schemas:
+  unused-schema:
+    type: object
+stages:
+  start:
+    name: Start
+    role: scan
+    group: g
+    mode: serial
+    concurrency: 1
+    runtime:
+      prompt: Do the thing.
+edges: []
+groups: []
+`;
+		let state = initialEditorState(yaml);
+		const before = state.diagnostics.length;
+		const document = validDocument(state)!;
+		state = pipelineEditorReducer(state, {
+			type: "canvasModified",
+			document: { ...document, name: document.name },
+		});
+		expect(state.diagnostics.length).toBe(before);
+	});
 });
 
 describe("pipelineEditorReducer", () => {
@@ -142,5 +211,39 @@ describe("pipelineEditorReducer", () => {
 			draftRevision: 1,
 		});
 		expect(isDirty(state)).toBe(false);
+	});
+
+	it("ignores an identical canvas change (no history, no dirty)", () => {
+		let state = initialEditorState(VALID_YAML);
+		const document = validDocument(state)!;
+		const before = state.history.length;
+		// Serializing the *same* document must not dirty the draft or grow
+		// history — this is what an identical Apply Layout dispatches.
+		state = pipelineEditorReducer(state, {
+			type: "canvasModified",
+			document: { ...document, name: document.name },
+		});
+		expect(state.rawYamlBuffer).toBe(VALID_YAML);
+		expect(state.history.length).toBe(before);
+		expect(isDirty(state)).toBe(false);
+		expect(state.canvasTouched).toBe(false);
+	});
+
+	it("records history once for a changed canvas edit", () => {
+		let state = initialEditorState(VALID_YAML);
+		const document = validDocument(state)!;
+		const before = state.history.length;
+		state = pipelineEditorReducer(state, {
+			type: "canvasModified",
+			document: {
+				...document,
+				stages: {
+					...document.stages,
+					start: { ...document.stages.start!, name: "Renamed" },
+				},
+			},
+		});
+		expect(state.history.length).toBe(before + 1);
+		expect(isDirty(state)).toBe(true);
 	});
 });

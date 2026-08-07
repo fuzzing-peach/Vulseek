@@ -8,12 +8,8 @@ import { createServerSideHelpers } from "@trpc/react-query/server";
 import {
 	Archive,
 	ArrowLeft,
-	ChevronLeft,
-	ChevronRight,
 	Copy,
 	FilePenLine,
-	PanelRightClose,
-	PanelRightOpen,
 	Redo2,
 	Save,
 	Undo2,
@@ -24,11 +20,8 @@ import { toast } from "sonner";
 import superjson from "superjson";
 import { validateRequest } from "@vulseek/server/lib/auth";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
-import { CanvasEditor } from "@/components/dashboard/pipelines/canvas-editor";
-import { DiagnosticsBar } from "@/components/dashboard/pipelines/diagnostics-bar";
-import { PipelineInspector } from "@/components/dashboard/pipelines/pipeline-inspector";
-import { StageCreateDialog } from "@/components/dashboard/pipelines/stage-create-dialog";
-import { YamlEditor } from "@/components/dashboard/pipelines/yaml-editor";
+import { PipelineWorkbench } from "@/components/dashboard/pipelines/workbench/pipeline-workbench";
+import type { YamlEditorHandle } from "@/components/dashboard/pipelines/yaml-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -71,12 +64,17 @@ export const getServerSideProps = async (context: GetServerSidePropsContext) => 
 	};
 };
 
-type Mode = "yaml" | "canvas";
-
 const EditorPage = ({
 	pipelineId,
 }: InferGetServerSidePropsType<typeof getServerSideProps>) => {
 	const router = useRouter();
+
+	// Warm the list route while the editor is open. Returning to the list then
+	// reuses Next's route payload instead of waiting for a cold SSR navigation.
+	React.useEffect(() => {
+		void router.prefetch("/dashboard/pipelines");
+	}, [router]);
+
 	const pipeline = api.pipeline.get.useQuery({ pipelineId });
 	const versions = api.pipeline.listVersions.useQuery({ pipelineId });
 	const saveDraft = api.pipeline.saveDraft.useMutation();
@@ -86,11 +84,8 @@ const EditorPage = ({
 	const archive = api.pipeline.archive.useMutation();
 
 	const canManage = pipeline.data?.draftYaml !== undefined; // manager-only field presence
-	const [mode, setMode] = React.useState<Mode>("yaml");
 	const [selectedVersionId, setSelectedVersionId] = React.useState<string | null>(null);
 	const [viewingVersion, setViewingVersion] = React.useState(false);
-	const [inspectorOpen, setInspectorOpen] = React.useState(true);
-	const [diagnosticsOpen, setDiagnosticsOpen] = React.useState(false);
 
 	const draftYaml = pipeline.data?.draftYaml ?? null;
 	// No draft yet → seed the editor with the current published version's YAML
@@ -122,11 +117,20 @@ const EditorPage = ({
 		{ enabled: Boolean(selectedVersionId && viewingVersion) },
 	).data?.yaml;
 
-	const yamlEditorRef = React.useRef<import("@/components/dashboard/pipelines/yaml-editor").YamlEditorHandle>(null);
 	const [state, dispatch] = React.useReducer(
 		pipelineEditorReducer,
 		{ yaml: initialYaml, revision: pipeline.data?.draftRevision ?? 0 },
 		({ yaml, revision }) => initialEditorState(yaml, revision),
+	);
+
+	// The Raw YAML editor lives inside the workbench; keep its handle here so
+	// Save can flush the parse debounce before persisting.
+	const yamlEditorRef = React.useRef<YamlEditorHandle | null>(null);
+	const onYamlReady = React.useCallback(
+		(handle: YamlEditorHandle | null) => {
+			yamlEditorRef.current = handle;
+		},
+		[],
 	);
 
 	// When the server draft arrives (or changes): adopt it wholesale when the
@@ -172,9 +176,12 @@ const EditorPage = ({
 				expectedRevision: state.draftRevision,
 				yaml: yamlToSave,
 			});
+			// Save the baseline from the *requested* YAML (post-flush), not the
+			// pre-flush reducer buffer, so a just-flushed CodeMirror buffer
+			// cannot leave the dirty state stuck.
 			dispatch({
 				type: "setSavedYaml",
-				yaml: state.rawYamlBuffer,
+				yaml: yamlToSave,
 				draftRevision: state.draftRevision + 1,
 			});
 			toast.success("Draft saved");
@@ -273,7 +280,7 @@ const EditorPage = ({
 
 	if (pipeline.isLoading || !pipeline.data) {
 		return (
-			<DashboardLayout>
+			<DashboardLayout collapseSidebarBelow={1100}>
 				<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
 					Loading pipeline…
 				</div>
@@ -283,16 +290,19 @@ const EditorPage = ({
 
 	const data = pipeline.data;
 	const isManagerView = canManage && !viewingVersion;
-	const editorYaml = isManagerView
-		? state.rawYamlBuffer
-		: (selectedVersionYaml ?? state.rawYamlBuffer);
-	const editorDocument = isManagerView ? document : undefined;
 	const selectedVersion = versions.data?.find(
 		(version) => version.pipelineVersionId === selectedVersionId,
 	);
+	// Version view: the read-only workbench renders the *version's* YAML
+	// (see PipelineWorkbench.readOnlyYaml), never the draft buffer.
+	const versionLabel = selectedVersion
+		? `v${selectedVersion.versionNumber} · ${selectedVersion.source}`
+		: data.currentVersion
+			? `v${data.currentVersion.versionNumber} · ${data.currentVersion.source}`
+			: null;
 
 	return (
-		<DashboardLayout fullHeight>
+		<DashboardLayout fullHeight collapseSidebarBelow={1100}>
 			<div className="flex min-h-0 flex-1 flex-col">
 				{/* Header */}
 				<header className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
@@ -496,158 +506,22 @@ const EditorPage = ({
 					</div>
 				</header>
 
-				{/* Mode tabs + body */}
-				<div className="flex min-h-0 flex-1 flex-col">
-					<div className="flex shrink-0 items-center gap-1 border-b px-4 pt-2">
-						{(["yaml", "canvas"] as const).map((item) => (
-							<button
-								key={item}
-								type="button"
-								onClick={() => setMode(item)}
-								className={
-									"rounded-t-md px-3 py-1.5 text-sm font-medium transition-colors " +
-									(mode === item
-										? "border-b-2 border-primary text-foreground"
-										: "text-muted-foreground hover:text-foreground")
-								}
-							>
-								{item === "yaml" ? "YAML" : "Visual"}
-							</button>
-						))}
-						{state.canvasTouched && mode === "yaml" ? (
-							<span className="ml-2 text-xs text-muted-foreground">
-								Canvas edits use stable serialization — original comments may be rewritten.
-							</span>
-						) : null}
-						{isManagerView && (
-							<div className="ml-auto flex items-center gap-2 pb-1.5">
-								<StageCreateDialog
-									existingIds={Object.keys(document?.stages ?? {})}
-									onCreate={(id, stage) => {
-										if (!document) return;
-										dispatch({
-											type: "canvasModified",
-											document: {
-												...document,
-												stages: { ...document.stages, [id]: stage },
-											},
-										});
-										dispatch({
-											type: "select",
-											entity: { type: "stage", id },
-										});
-									}}
-								/>
-								<button
-									type="button"
-									onClick={() => setInspectorOpen((open) => !open)}
-									className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
-									aria-label={inspectorOpen ? "Hide inspector" : "Show inspector"}
-								>
-									{inspectorOpen ? (
-										<PanelRightClose className="size-4" />
-									) : (
-										<PanelRightOpen className="size-4" />
-									)}
-								</button>
-							</div>
-						)}
-					</div>
-
-					<div className="flex min-h-0 flex-1">
-						<div className="min-w-0 flex-1">
-							{mode === "yaml" ? (
-								<YamlEditor
-									ref={yamlEditorRef}
-									value={editorYaml}
-									onChange={(yaml) => dispatch({ type: "setBuffer", yaml })}
-									diagnostics={state.diagnostics}
-									readOnly={!isManagerView}
-								/>
-							) : editorDocument ? (
-								<CanvasEditor
-									document={editorDocument}
-									readOnly={!isManagerView}
-									onChange={(next) =>
-										dispatch({ type: "canvasModified", document: next })
-									}
-									onSelect={(entity) =>
-										dispatch({ type: "select", entity: entity as never })
-									}
-								/>
-							) : (
-								<div className="flex h-full items-center justify-center p-8 text-center text-sm text-muted-foreground">
-									{state.status.kind === "invalid" || state.status.kind === "empty"
-										? "The YAML does not parse yet — the canvas shows the last valid document in YAML mode only."
-										: "Nothing to render yet."}
-								</div>
-							)}
-						</div>
-
-						{isManagerView && document && inspectorOpen ? (
-							<aside className="w-[380px] shrink-0 border-l bg-background">
-								<div className="flex h-9 items-center justify-between border-b px-3">
-									<span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-										Inspector
-									</span>
-									<button
-										type="button"
-										onClick={() => setInspectorOpen(false)}
-										className="text-muted-foreground hover:text-foreground"
-										aria-label="Collapse inspector"
-									>
-										<ChevronRight className="size-4" />
-									</button>
-								</div>
-								<div className="h-[calc(100%-2.25rem)]">
-									<PipelineInspector
-										document={document}
-										selection={state.selectedEntity as never}
-										onChange={(next) =>
-											dispatch({ type: "canvasModified", document: next })
-										}
-									/>
-								</div>
-							</aside>
-						) : null}
-					</div>
-
-					{isManagerView ? (
-						<div className="shrink-0 border-t">
-							<button
-								type="button"
-								onClick={() => setDiagnosticsOpen((open) => !open)}
-								className="flex h-8 w-full items-center justify-between px-3 text-xs text-muted-foreground hover:bg-muted/40"
-							>
-								<span>
-									{state.diagnostics.filter((d) => d.severity === "error").length} errors ·{" "}
-									{state.diagnostics.filter((d) => d.severity === "warning").length} warnings
-								</span>
-								{diagnosticsOpen ? (
-									<ChevronLeft className="size-3.5" />
-								) : (
-									<ChevronRight className="size-3.5" />
-								)}
-							</button>
-							{diagnosticsOpen ? (
-								<div className="max-h-40 overflow-y-auto border-t">
-									<DiagnosticsBar
-										diagnostics={state.diagnostics}
-										onSelect={(entity) =>
-											dispatch({ type: "select", entity: entity as never })
-										}
-									/>
-								</div>
-							) : null}
-						</div>
-					) : (
-						<div className="flex h-8 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
-							Read-only view of{" "}
-							{selectedVersion ? `v${selectedVersion.versionNumber}` : "the published version"}
-							{selectedVersionYaml ? " — select Copy to draft to edit." : ""}
-						</div>
-					)}
-				</div>
+				{/* Workbench: Definition | Visual | Raw YAML */}
+				<PipelineWorkbench
+					state={state}
+					dispatch={dispatch}
+					readOnly={!isManagerView}
+					readOnlyYaml={!isManagerView ? (selectedVersionYaml ?? undefined) : undefined}
+					versionLabel={versionLabel}
+					draftState={{
+						dirty,
+						draftRevision: state.draftRevision,
+						publishedVersion: data.currentVersion
+							? String(data.currentVersion.versionNumber)
+							: null,
+					}}
+					onYamlReady={onYamlReady}
+				/>
 			</div>
 		</DashboardLayout>
 	);

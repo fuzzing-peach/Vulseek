@@ -171,6 +171,10 @@ const groupSchema = z.object({
 
 const uiSchema = z
 	.object({
+		// Layout version marker: layouts without it (or older) are treated
+		// as legacy and their stale positions are ignored for the initial
+		// transient preview. Runtime compilation ignores all `ui` fields.
+		layoutVersion: z.number().int().min(1).optional(),
 		// Saved layout orientation; the editor defaults to DOWN.
 		direction: z.enum(["DOWN", "RIGHT"]).optional(),
 		nodes: z.record(
@@ -180,6 +184,24 @@ const uiSchema = z
 			.record(
 				z.object({
 					bendPoints: z.array(z.object({ x: z.number(), y: z.number() })),
+					// Persist ELK's selected ports with its bend points. Re-deriving a
+					// port after reload changes the endpoints and invalidates the route.
+					sourceHandle: z
+						.enum([
+							"top-source",
+							"bottom-source",
+							"left-source",
+							"right-source",
+						])
+						.optional(),
+					targetHandle: z
+						.enum([
+							"top-target",
+							"bottom-target",
+							"left-target",
+							"right-target",
+						])
+						.optional(),
 				}),
 			)
 			.optional(),

@@ -28,3 +28,16 @@ if (typeof window !== "undefined" && !window.matchMedia) {
 			dispatchEvent: () => false,
 		}) as MediaQueryList;
 }
+
+// cmdk and other Radix-based components observe DOM size changes; jsdom
+// does not implement ResizeObserver. Guard through globalThis so the file
+// typechecks in both node and jsdom environments without DOM lib types.
+const globalWindow = globalThis as unknown as { ResizeObserver?: unknown };
+if (typeof globalWindow.ResizeObserver === "undefined") {
+	class ResizeObserverStub {
+		observe() {}
+		unobserve() {}
+		disconnect() {}
+	}
+	globalWindow.ResizeObserver = ResizeObserverStub;
+}

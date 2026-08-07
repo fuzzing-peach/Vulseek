@@ -23,6 +23,10 @@ This plan addresses the browser findings from Full Scan and Research PPL. It is 
 - Feedback edges influence ELK ranking, placing root and Review stages on the same top layer instead of showing local review loops.
 - Inspector open/close changes the canvas width without a container resize refit.
 - Apply Layout can appear to do nothing, reveal 45 previously hidden warnings, and leave the Save button showing `Saved`.
+- Stage cards use `rounded-xl`, which makes compact workflow nodes look overly soft and reduces the distinction between the node body and pill-shaped route labels.
+- All four React Flow handles are permanently visible as white hollow circles. They interrupt the stage border, resemble punched holes, and compete with the stage title and role.
+- The transient preview currently keeps computed node positions but can discard computed edge bend points. Feedback edges then fall back to center-line elbows and cross intermediate stage rectangles.
+- Feedback bend points include source/target-side coordinates while `buildEdgePath()` also adds the actual React Flow endpoints. Combined with top/bottom handles being used for side-routed feedback edges, this can create extra segments through the source or target card.
 - dev HMR history contains React Flow provider and initialization failures. Current source already wraps `CanvasEditorInner` in `ReactFlowProvider`, so a clean restart must distinguish stale HMR failures from reproducible source failures.
 
 ## Display Graph Model
@@ -100,9 +104,48 @@ Add optional `ui.layoutVersion` to the V3 UI schema and set `CURRENT_PIPELINE_LA
 - legacy or incomplete saved positions are ignored for the initial transient preview;
 - previewed ELK positions do not dirty the draft;
 - Apply Layout or node drag persists `layoutVersion`, direction, node positions, and edge bend points;
+- node drag preserves unaffected `ui.edges` entries and recomputes only routes affected by the moved node;
 - runtime compilation continues to ignore all `ui` fields.
 
 This prevents stale horizontal positions from overriding the new top-to-bottom layout.
+
+The transient preview must retain both parts of the layout result:
+
+```ts
+type TransientPipelineLayout = {
+	nodes: Record<string, { x: number; y: number }>;
+	edges: Record<string, { bendPoints: Array<{ x: number; y: number }> }>;
+};
+```
+
+Render transient edge bend points immediately on first open. Applying or previewing ELK must not be required before feedback routes avoid node interiors. Bend points contain intermediate orthogonal points only; source and target endpoints are added exactly once by the edge renderer.
+
+## Stage Node and Handle Styling
+
+Make stage nodes feel like compact engineering objects rather than rounded cards:
+
+- change the stage body from `rounded-xl` to `rounded-lg` (target computed radius: `8px`);
+- keep the background opaque and the node above edge layers, but do not use node fill as a substitute for correct edge routing;
+- retain pill geometry only for route labels and small status badges;
+- reduce the node shadow one level so the border, role color, and graph structure carry the hierarchy.
+
+Keep four directional handles for authoring, but make them contextual:
+
+- default: visually hidden, with edges appearing to terminate directly at the node border;
+- node hover or selection: reveal a `6px` solid handle using the stage role color, without a white center;
+- active connection: enlarge to `8px` with a restrained focus ring;
+- valid target: use a solid success color; invalid target: use a low-contrast neutral state;
+- preserve an approximately `18px` transparent hit target so visual reduction does not make connections difficult to drag;
+- read-only and published views do not render handles.
+
+Assign handles by route geometry instead of exposing four interchangeable anchors:
+
+- forward edge: bottom source to top target in `DOWN`, right source to left target in `RIGHT`;
+- left feedback lane: left source to left target;
+- right feedback lane: right source to right target;
+- self-loop: a dedicated side pair selected deterministically.
+
+Handle centers must sit exactly on the stage border. The renderer must not leave a white gap between an edge and the card.
 
 ## Edge Rendering and Selection
 
@@ -112,6 +155,8 @@ Update `canvas-editor.tsx`:
 - Render labels with `EdgeLabelRenderer`; place the label on the longest safe orthogonal segment and keep it above edge hit areas.
 - Give selected and hovered edges distinct strokes while retaining role-neutral colors.
 - Set source and target handles according to forward/feedback routing.
+- Feed transient and persisted bend points through the same display-edge path so first-open routing matches saved routing.
+- Keep edges below nodes and route labels above edge hit areas; hiding an intersection behind an opaque card does not count as avoiding it.
 - Pass the current editor selection into `CanvasEditor` so external label selection and Inspector selection remain synchronized.
 - Use semantic buttons for grouped route labels with visible focus rings and pointer-safe `nodrag nopan` classes.
 - Keep `nodeTypes` and `edgeTypes` at module scope and keep all `useReactFlow()` calls below `ReactFlowProvider`.
@@ -162,7 +207,7 @@ The 45 unused-schema warnings are a real semantic result in the current generate
 
 - `apps/vulseek/lib/pipeline-editor/pipeline-display-graph.ts`: ranks, forward/feedback classification, parallel grouping, label derivation, and selection mapping.
 - `apps/vulseek/lib/pipeline-editor/pipeline-layout.ts`: forward-only ELK placement, feedback lane routing, safe bounds, deterministic expansion to persisted edge UI.
-- `apps/vulseek/components/dashboard/pipelines/canvas-editor.tsx`: grouped edge rendering, arrows, labels, selection, ResizeObserver, readable viewport policy, Minimap behavior, and canvas error boundary.
+- `apps/vulseek/components/dashboard/pipelines/canvas-editor.tsx`: grouped edge rendering, arrows, labels, selection, compact `8px` stage corners, contextual solid handles, route-specific handle IDs, preservation of unaffected edge UI during node drag, ResizeObserver, readable viewport policy, Minimap behavior, and canvas error boundary.
 - `apps/vulseek/components/dashboard/pipelines/pipeline-inspector.tsx`: sibling route switcher and compact edge-group context.
 - `apps/vulseek/pages/dashboard/pipelines/[pipelineId].tsx`: responsive/resizeable Inspector, header overflow, selection plumbing, stale mode, and save baseline fix.
 - `apps/vulseek/lib/pipeline-editor/pipeline-editor-state.ts`: unified diagnostics and no-op layout/history handling.
@@ -189,6 +234,9 @@ The 45 unused-schema warnings are a real semantic result in the current generate
 - Three same-endpoint routes produce one display edge and three member labels.
 - Every original edge maps to exactly one display group and recovers persisted bend points.
 - Node rectangles and route-label bounds do not intersect routed edge interiors outside their endpoints.
+- Transient first-open layout and persisted Apply Layout produce equivalent edge geometry.
+- Feedback bend points exclude source and target endpoints and use the handle pair selected for that route.
+- Moving one node preserves unrelated persisted edge bend points and reroutes affected edges only.
 - Repeated layout of the same document is byte-for-byte deterministic.
 - Legacy, partial, and current-version UI metadata resolve correctly.
 
@@ -198,6 +246,8 @@ The 45 unused-schema warnings are a real semantic result in the current generate
 - Preview layout is clean; changed Apply Layout is dirty; identical Apply Layout is a no-op.
 - Invalid Raw YAML cannot be overwritten through Visual.
 - Every display edge has an arrow.
+- Stage nodes use an `8px` computed border radius; route badges remain pills.
+- Handles are hidden by default, become solid role-colored points on hover/selection, retain a large hit target, and are absent in read-only mode.
 - Grouped path click, route-label click, Tab, Enter, and Space select the expected original edge.
 - Inspector sibling route switching does not edit the wrong route.
 - Inspector toggle and resize trigger one settled refit rather than overlapping fits.
@@ -219,9 +269,15 @@ Verify:
 - initial visible node size is at least approximately `132x52`;
 - root and primary progression are readable on first open;
 - Research loops are local and arrows make direction unambiguous;
+- sample every rendered SVG path with `getPointAtLength()` and verify that no interior point intersects a non-endpoint stage bounding rectangle;
+- verify first-open feedback paths already use side lanes before Apply Layout is clicked;
+- verify stage `border-radius` computes to `8px` and no white hollow handles are visible at rest;
+- hover, select, and start a connection from each side of a stage; verify the solid handle state and practical hit area;
+- verify published/read-only Visual renders no connection handles;
 - `continue / exhausted / blocked` share one path but remain individually selectable;
 - no initially fitted node or label is under the Minimap or Inspector;
 - Apply Layout updates the draft exactly once and survives save/reload;
+- dragging a stage and saving does not remove bend points for unrelated edges;
 - diagnostics do not change merely because Visual was opened;
 - no React Flow provider, initialization, hydration, console, or failed-request errors occur.
 
@@ -242,6 +298,8 @@ git diff --check
 - All persisted edges remain represented; every visual path has direction and meaningful labels.
 - Same-endpoint conditions are visually merged without losing individual editing or accessibility.
 - Feedback routes communicate local loops and do not reorder the main pipeline progression.
+- No edge crosses a non-endpoint stage rectangle, including on first open before any layout action.
+- Stage nodes use compact `8px` corners; connection handles are unobtrusive at rest, solid during interaction, and absent in read-only mode.
 - Responsive layouts cannot collapse, cover, or horizontally overflow the canvas.
 - Layout, dirty state, history, diagnostics, save, and reload remain consistent.
 - Runtime compilation and Scan Job execution are unchanged.

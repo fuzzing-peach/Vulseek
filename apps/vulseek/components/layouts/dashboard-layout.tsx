@@ -8,9 +8,15 @@ interface Props {
 	metaName?: string;
 	/** Full-height workspace option for the pipeline editor canvas. */
 	fullHeight?: boolean;
+	/** Collapse the global sidebar below this viewport width (px). */
+	collapseSidebarBelow?: number;
 }
 
-export const DashboardLayout = ({ children, fullHeight }: Props) => {
+export const DashboardLayout = ({
+	children,
+	fullHeight,
+	collapseSidebarBelow,
+}: Props) => {
 	const { data: haveRootAccess } = api.user.haveRootAccess.useQuery();
 	const { data: isCloud } = api.settings.isCloud.useQuery();
 	const { data: isUserSubscribed } = api.settings.isUserSubscribed.useQuery(
@@ -25,7 +31,9 @@ export const DashboardLayout = ({ children, fullHeight }: Props) => {
 
 	return (
 		<>
-			<Page fullHeight={fullHeight}>{children}</Page>
+			<Page fullHeight={fullHeight} collapseSidebarBelow={collapseSidebarBelow}>
+				{children}
+			</Page>
 			{isCloud === true && isUserSubscribed === true && (
 				<ChatwootWidget websiteToken="USCpQRKzHvFMssf3p6Eacae5" />
 			)}

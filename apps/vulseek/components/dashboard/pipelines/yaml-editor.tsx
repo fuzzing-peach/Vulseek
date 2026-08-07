@@ -1,4 +1,5 @@
 import { yaml as yamlLanguage } from "@codemirror/lang-yaml";
+import { EditorView } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
 import * as React from "react";
 import type { PipelineDiagnostic } from "@vulseek/server/services/scan/pipeline/document-v3";
@@ -19,6 +20,8 @@ export type YamlEditorProps = {
 export type YamlEditorHandle = {
 	/** Current editor text, bypassing the parse debounce (used by Save). */
 	getValue: () => string;
+	/** Scroll a source location into view (diagnostics focus). */
+	reveal: (line: number, column?: number) => void;
 };
 
 export const YamlEditor = React.forwardRef<YamlEditorHandle, YamlEditorProps>(
@@ -27,10 +30,25 @@ export const YamlEditor = React.forwardRef<YamlEditorHandle, YamlEditorProps>(
 		ref,
 	) {
 	const [localValue, setLocalValue] = React.useState(value);
+	const viewRef = React.useRef<import("@codemirror/view").EditorView | null>(null);
 	React.useEffect(() => setLocalValue(value), [value]);
 
 	React.useImperativeHandle(ref, () => ({
 		getValue: () => localValue,
+		reveal: (line, column = 1) => {
+			const view = viewRef.current;
+			if (!view) return;
+			const lineInfo = view.state.doc.line(Math.max(1, Math.min(line, view.state.doc.lines)));
+			const offset = lineInfo.from + Math.max(0, column - 1);
+			view.dispatch({
+				selection: { anchor: offset },
+				effects: EditorView.scrollIntoView(offset, {
+					y: "center",
+				}),
+				scrollIntoView: true,
+			});
+			view.focus();
+		},
 	}));
 
 	// Debounce the buffer update so parse + canvas refresh happen off-keystroke.
@@ -71,6 +89,9 @@ export const YamlEditor = React.forwardRef<YamlEditorHandle, YamlEditorProps>(
 						lineNumbers: true,
 						foldGutter: true,
 						highlightActiveLine: true,
+					}}
+					onCreateEditor={(view) => {
+						viewRef.current = view;
 					}}
 				/>
 			</div>

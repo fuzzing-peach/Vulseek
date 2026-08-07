@@ -169,6 +169,8 @@ describe("ui metadata", () => {
 				nodes: { start: { x: 10, y: 20 } },
 				edges: {
 					"start-to-finish": {
+						sourceHandle: "right-source",
+						targetHandle: "left-target",
 						bendPoints: [
 							{ x: 10, y: 50 },
 							{ x: 100, y: 50 },
@@ -186,6 +188,12 @@ describe("ui metadata", () => {
 			{ x: 10, y: 50 },
 			{ x: 100, y: 50 },
 		]);
+		expect(reparsed?.ui?.edges?.["start-to-finish"]?.sourceHandle).toBe(
+			"right-source",
+		);
+		expect(reparsed?.ui?.edges?.["start-to-finish"]?.targetHandle).toBe(
+			"left-target",
+		);
 	});
 
 	it("treats ui as optional and runtime-irrelevant", () => {

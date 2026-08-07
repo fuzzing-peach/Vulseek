@@ -500,6 +500,8 @@ interface Props {
 	/** Full-height workspace: the children container stretches to the
 	 *  viewport (used by the pipeline editor canvas). */
 	fullHeight?: boolean;
+	/** Collapse the sidebar below this viewport width (px). */
+	collapseSidebarBelow?: number;
 }
 
 function LogoWrapper() {
@@ -827,11 +829,18 @@ function SidebarLogo() {
 	);
 }
 
-export default function Page({ children, fullHeight }: Props) {
+export default function Page({
+	children,
+	fullHeight,
+	collapseSidebarBelow,
+}: Props) {
 	const [defaultOpen, setDefaultOpen] = useState<boolean | undefined>(
 		undefined,
 	);
 	const [isLoaded, setIsLoaded] = useState(false);
+	// Force-collapse below the given width (narrow screens). Never touches the
+	// user's cookie preference; wide screens restore the saved default.
+	const [forceCollapsed, setForceCollapsed] = useState(false);
 
 	useEffect(() => {
 		const cookieValue = document.cookie
@@ -842,6 +851,15 @@ export default function Page({ children, fullHeight }: Props) {
 		setDefaultOpen(cookieValue === undefined ? true : cookieValue === "true");
 		setIsLoaded(true);
 	}, []);
+
+	useEffect(() => {
+		if (collapseSidebarBelow === undefined) return;
+		const mql = window.matchMedia(`(max-width: ${collapseSidebarBelow - 1}px)`);
+		const update = () => setForceCollapsed(mql.matches);
+		update();
+		mql.addEventListener("change", update);
+		return () => mql.removeEventListener("change", update);
+	}, [collapseSidebarBelow]);
 
 	const pathname = usePathname();
 	const { data: auth } = api.user.get.useQuery();
@@ -869,8 +887,11 @@ export default function Page({ children, fullHeight }: Props) {
 	return (
 		<SidebarProvider
 			defaultOpen={defaultOpen}
-			open={defaultOpen}
+			open={forceCollapsed ? false : defaultOpen}
 			onOpenChange={(open) => {
+				// While force-collapsed (narrow viewport), ignore user toggles and
+				// keep the collapsed state; on wide screens persist the preference.
+				if (forceCollapsed) return;
 				setDefaultOpen(open);
 
 				document.cookie = `${SIDEBAR_COOKIE_NAME}=${open}`;

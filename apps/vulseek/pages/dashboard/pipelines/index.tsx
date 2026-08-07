@@ -83,7 +83,10 @@ const PipelinesPage = ({
 }: InferGetServerSidePropsType<typeof getServerSideProps>) => {
 	void trpcState;
 	const router = useRouter();
-	const list = api.pipeline.list.useQuery();
+	const list = api.pipeline.list.useQuery(undefined, {
+		staleTime: 30_000,
+		refetchOnWindowFocus: false,
+	});
 	const [tab, setTab] = React.useState<string>("all");
 
 	const rows = list.data ?? [];
