@@ -190,7 +190,13 @@ const CanvasEditorInner = ({
 	const [interactionLock, setInteractionLock] = React.useState(false);
 
 	const direction: PipelineLayoutDirection = document.ui?.direction ?? "DOWN";
-	const savedPositions = document.ui?.nodes ?? {};
+	// Stable references: document.ui?.nodes is a fresh object identity per
+	// render when undefined, which would re-trigger the transient layout
+	// effect on every render and drop every async result.
+	const savedPositions = React.useMemo(
+		() => document.ui?.nodes ?? {},
+		[document.ui?.nodes],
+	);
 
 	// Transient layout: computed when positions are missing; never persisted
 	// unless Apply Layout or a drag stop writes it.
@@ -215,7 +221,10 @@ const CanvasEditorInner = ({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [document, direction, savedPositions]);
 
-	const positions = resolveStagePositions(document, transientLayout);
+	const positions = React.useMemo(
+		() => resolveStagePositions(document, transientLayout),
+		[document, transientLayout],
+	);
 
 	const nodes: EditorFlowNode[] = React.useMemo(
 		() =>
