@@ -8,10 +8,15 @@ import { createServerSideHelpers } from "@trpc/react-query/server";
 import {
 	Archive,
 	ArrowLeft,
+	ChevronLeft,
+	ChevronRight,
 	Copy,
-	Eye,
 	FilePenLine,
+	PanelRightClose,
+	PanelRightOpen,
+	Redo2,
 	Save,
+	Undo2,
 	Upload,
 	Workflow,
 } from "lucide-react";
@@ -22,6 +27,7 @@ import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { CanvasEditor } from "@/components/dashboard/pipelines/canvas-editor";
 import { DiagnosticsBar } from "@/components/dashboard/pipelines/diagnostics-bar";
 import { PipelineInspector } from "@/components/dashboard/pipelines/pipeline-inspector";
+import { StageCreateDialog } from "@/components/dashboard/pipelines/stage-create-dialog";
 import { YamlEditor } from "@/components/dashboard/pipelines/yaml-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,7 +43,6 @@ import {
 	isDirty,
 	pipelineEditorReducer,
 	validDocument,
-	type PipelineEditorState,
 } from "@/lib/pipeline-editor/pipeline-editor-state";
 import { api } from "@/utils/api";
 import { appRouter } from "@/server/api/root";
@@ -84,6 +89,8 @@ const EditorPage = ({
 	const [mode, setMode] = React.useState<Mode>("yaml");
 	const [selectedVersionId, setSelectedVersionId] = React.useState<string | null>(null);
 	const [viewingVersion, setViewingVersion] = React.useState(false);
+	const [inspectorOpen, setInspectorOpen] = React.useState(true);
+	const [diagnosticsOpen, setDiagnosticsOpen] = React.useState(false);
 
 	const draftYaml = pipeline.data?.draftYaml ?? null;
 	// No draft yet → seed the editor with the current published version's YAML
@@ -105,6 +112,16 @@ const EditorPage = ({
 		},
 	).data?.yaml;
 	const initialYaml = draftYaml ?? currentVersionYaml ?? "";
+
+	// Selecting a version loads its YAML into the read-only Published View.
+	const selectedVersionYaml = api.pipeline.getVersion.useQuery(
+		{
+			pipelineId,
+			pipelineVersionId: selectedVersionId ?? "__none__",
+		},
+		{ enabled: Boolean(selectedVersionId && viewingVersion) },
+	).data?.yaml;
+
 	const [state, dispatch] = React.useReducer(
 		pipelineEditorReducer,
 		{ yaml: initialYaml, revision: pipeline.data?.draftRevision ?? 0 },
@@ -160,9 +177,7 @@ const EditorPage = ({
 					`Draft changed on the server (revision ${cause.draftRevision}). Reload to see the latest, or copy your local YAML before retrying.`,
 				);
 			} else {
-				toast.error(
-					error instanceof Error ? error.message : "Unable to save draft",
-				);
+				toast.error(error instanceof Error ? error.message : "Unable to save draft");
 			}
 		}
 	};
@@ -175,7 +190,11 @@ const EditorPage = ({
 				expectedRevision: state.draftRevision,
 				yaml: state.rawYamlBuffer,
 			});
-			dispatch({ type: "setSavedYaml", yaml: state.rawYamlBuffer, draftRevision: state.draftRevision + 1 });
+			dispatch({
+				type: "setSavedYaml",
+				yaml: state.rawYamlBuffer,
+				draftRevision: state.draftRevision + 1,
+			});
 			toast.success(`Published as v${result.versionNumber}`);
 			setViewingVersion(true);
 			await pipeline.refetch();
@@ -197,12 +216,34 @@ const EditorPage = ({
 		}
 	};
 
-	// Ctrl/Cmd+S saves the draft.
+	const isManagerViewRef = React.useRef(false);
+	isManagerViewRef.current = canManage && !viewingVersion;
+
+	// Ctrl/Cmd+S saves the draft; Ctrl/Cmd+Z / Shift undo/redo.
 	React.useEffect(() => {
 		const handler = (event: KeyboardEvent) => {
-			if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+			const modifier = event.metaKey || event.ctrlKey;
+			if (!modifier) return;
+			const key = event.key.toLowerCase();
+			if (key === "s") {
 				event.preventDefault();
 				if (dirty && canManage) void handleSave();
+				return;
+			}
+			if (!isManagerViewRef.current) return;
+			if (key === "z" && !event.shiftKey) {
+				event.preventDefault();
+				dispatch({ type: "undo" });
+				return;
+			}
+			if (key === "z" && event.shiftKey) {
+				event.preventDefault();
+				dispatch({ type: "redo" });
+				return;
+			}
+			if (key === "y") {
+				event.preventDefault();
+				dispatch({ type: "redo" });
 			}
 		};
 		window.addEventListener("keydown", handler);
@@ -233,12 +274,14 @@ const EditorPage = ({
 	}
 
 	const data = pipeline.data;
+	const isManagerView = canManage && !viewingVersion;
+	const editorYaml = isManagerView
+		? state.rawYamlBuffer
+		: (selectedVersionYaml ?? state.rawYamlBuffer);
+	const editorDocument = isManagerView ? document : undefined;
 	const selectedVersion = versions.data?.find(
 		(version) => version.pipelineVersionId === selectedVersionId,
 	);
-	const isManagerView = canManage && !viewingVersion;
-	const editorYaml = state.rawYamlBuffer;
-	const editorDocument = isManagerView ? document : undefined;
 
 	return (
 		<DashboardLayout>
@@ -262,9 +305,7 @@ const EditorPage = ({
 									System
 								</Badge>
 							) : null}
-							{data.archivedAt ? (
-								<Badge variant="secondary">Archived</Badge>
-							) : null}
+							{data.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}
 							{isManagerView ? (
 								<Badge
 									variant="outline"
@@ -278,13 +319,15 @@ const EditorPage = ({
 								</Badge>
 							) : (
 								<Badge variant="outline" className="border-emerald-500/40 text-emerald-600">
-									Published
+									Published{selectedVersion ? ` v${selectedVersion.versionNumber}` : ""}
 								</Badge>
 							)}
 						</div>
 						<p className="truncate text-xs text-muted-foreground">
 							{data.slug}
-							{data.currentVersion ? ` · v${data.currentVersion.versionNumber} current` : " · no published version"}
+							{data.currentVersion
+								? ` · v${data.currentVersion.versionNumber} current`
+								: " · no published version"}
 						</p>
 					</div>
 
@@ -293,7 +336,12 @@ const EditorPage = ({
 							<>
 								<Select
 									value={selectedVersionId ?? ""}
-									onValueChange={(value) => setSelectedVersionId(value || null)}
+									onValueChange={(value) => {
+										setSelectedVersionId(value || null);
+										if (value) {
+											setViewingVersion(true);
+										}
+									}}
 								>
 									<SelectTrigger className="h-8 w-40">
 										<SelectValue placeholder="View a version…" />
@@ -344,11 +392,38 @@ const EditorPage = ({
 										</Button>
 									</>
 								) : null}
-								<Button variant="outline" size="sm" onClick={() => void handleSave()} disabled={!dirty || saveDraft.isLoading}>
+								<Button
+									variant="ghost"
+									size="icon"
+									className="size-8 text-muted-foreground"
+									onClick={() => dispatch({ type: "undo" })}
+									aria-label="Undo"
+								>
+									<Undo2 className="size-4" />
+								</Button>
+								<Button
+									variant="ghost"
+									size="icon"
+									className="size-8 text-muted-foreground"
+									onClick={() => dispatch({ type: "redo" })}
+									aria-label="Redo"
+								>
+									<Redo2 className="size-4" />
+								</Button>
+								<Button
+									variant="outline"
+									size="sm"
+									onClick={() => void handleSave()}
+									disabled={!dirty || saveDraft.isLoading}
+								>
 									<Save className="size-3.5" />
 									{dirty ? "Save draft" : "Saved"}
 								</Button>
-								<Button size="sm" onClick={() => void handlePublish()} disabled={!canPublish || publish.isLoading}>
+								<Button
+									size="sm"
+									onClick={() => void handlePublish()}
+									disabled={!canPublish || publish.isLoading}
+								>
 									Publish
 								</Button>
 								{!data.systemKey && !data.archivedAt ? (
@@ -357,7 +432,11 @@ const EditorPage = ({
 										size="icon"
 										className="size-8 text-muted-foreground hover:text-red-600"
 										onClick={() => {
-											if (window.confirm("Archive this pipeline? Runs keep their frozen snapshots.")) {
+											if (
+												window.confirm(
+													"Archive this pipeline? Runs keep their frozen snapshots.",
+												)
+											) {
 												void archive
 													.mutateAsync({ pipelineId })
 													.then(() => toast.success("Pipeline archived"))
@@ -396,17 +475,6 @@ const EditorPage = ({
 								)}
 							</>
 						)}
-						{!canManage && (
-							<Button
-								variant="ghost"
-								size="icon"
-								className="size-8 text-muted-foreground"
-								onClick={() => setViewingVersion(false)}
-								aria-label="View published version"
-							>
-								<Eye className="size-4" />
-							</Button>
-						)}
 					</div>
 				</header>
 
@@ -433,6 +501,39 @@ const EditorPage = ({
 								Canvas edits use stable serialization — original comments may be rewritten.
 							</span>
 						) : null}
+						{isManagerView && (
+							<div className="ml-auto flex items-center gap-2 pb-1.5">
+								<StageCreateDialog
+									existingIds={Object.keys(document?.stages ?? {})}
+									onCreate={(id, stage) => {
+										if (!document) return;
+										dispatch({
+											type: "canvasModified",
+											document: {
+												...document,
+												stages: { ...document.stages, [id]: stage },
+											},
+										});
+										dispatch({
+											type: "select",
+											entity: { type: "stage", id },
+										});
+									}}
+								/>
+								<button
+									type="button"
+									onClick={() => setInspectorOpen((open) => !open)}
+									className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
+									aria-label={inspectorOpen ? "Hide inspector" : "Show inspector"}
+								>
+									{inspectorOpen ? (
+										<PanelRightClose className="size-4" />
+									) : (
+										<PanelRightOpen className="size-4" />
+									)}
+								</button>
+							</div>
+						)}
 					</div>
 
 					<div className="flex min-h-0 flex-1">
@@ -448,49 +549,12 @@ const EditorPage = ({
 								<CanvasEditor
 									document={editorDocument}
 									readOnly={!isManagerView}
-									onChange={(next) => dispatch({ type: "canvasModified", document: next })}
+									onChange={(next) =>
+										dispatch({ type: "canvasModified", document: next })
+									}
 									onSelect={(entity) =>
 										dispatch({ type: "select", entity: entity as never })
 									}
-									onAddStage={() => {
-										const base = "stage";
-										let id = base;
-										let index = 1;
-										while (editorDocument.stages[id]) {
-											id = `${base}-${index}`;
-											index += 1;
-										}
-										dispatch({
-											type: "canvasModified",
-											document: {
-												...editorDocument,
-												stages: {
-													...editorDocument.stages,
-													[id]: {
-														name: "New Stage",
-														role: "scan",
-														group: "custom",
-														mode: "serial",
-														concurrency: 1,
-														disableable: true,
-														inputArtifacts: [],
-														outputArtifacts: [],
-														effects: [],
-														containerNameParts: [],
-														allowAgentExit: false,
-														promptValues: {},
-														runtime: {
-															kind: "agent",
-															prompt: "Analyze this target.",
-															prepareRepository: "none",
-															includePolicy: false,
-															plugins: [],
-														},
-													},
-												},
-											},
-										});
-									}}
 								/>
 							) : (
 								<div className="flex h-full items-center justify-center p-8 text-center text-sm text-muted-foreground">
@@ -501,28 +565,67 @@ const EditorPage = ({
 							)}
 						</div>
 
-						{isManagerView && document ? (
-							<aside className="w-[360px] shrink-0 border-l bg-background">
-								<PipelineInspector
-									document={document}
-									selection={state.selectedEntity as never}
-									onChange={(next) => dispatch({ type: "canvasModified", document: next })}
-								/>
+						{isManagerView && document && inspectorOpen ? (
+							<aside className="w-[380px] shrink-0 border-l bg-background">
+								<div className="flex h-9 items-center justify-between border-b px-3">
+									<span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+										Inspector
+									</span>
+									<button
+										type="button"
+										onClick={() => setInspectorOpen(false)}
+										className="text-muted-foreground hover:text-foreground"
+										aria-label="Collapse inspector"
+									>
+										<ChevronRight className="size-4" />
+									</button>
+								</div>
+								<div className="h-[calc(100%-2.25rem)]">
+									<PipelineInspector
+										document={document}
+										selection={state.selectedEntity as never}
+										onChange={(next) =>
+											dispatch({ type: "canvasModified", document: next })
+										}
+									/>
+								</div>
 							</aside>
 						) : null}
 					</div>
 
 					{isManagerView ? (
-						<DiagnosticsBar
-							diagnostics={state.diagnostics}
-							onSelect={(entity) =>
-								dispatch({ type: "select", entity: entity as never })
-							}
-						/>
+						<div className="shrink-0 border-t">
+							<button
+								type="button"
+								onClick={() => setDiagnosticsOpen((open) => !open)}
+								className="flex h-8 w-full items-center justify-between px-3 text-xs text-muted-foreground hover:bg-muted/40"
+							>
+								<span>
+									{state.diagnostics.filter((d) => d.severity === "error").length} errors ·{" "}
+									{state.diagnostics.filter((d) => d.severity === "warning").length} warnings
+								</span>
+								{diagnosticsOpen ? (
+									<ChevronLeft className="size-3.5" />
+								) : (
+									<ChevronRight className="size-3.5" />
+								)}
+							</button>
+							{diagnosticsOpen ? (
+								<div className="max-h-40 overflow-y-auto border-t">
+									<DiagnosticsBar
+										diagnostics={state.diagnostics}
+										onSelect={(entity) =>
+											dispatch({ type: "select", entity: entity as never })
+										}
+									/>
+								</div>
+							) : null}
+						</div>
 					) : (
 						<div className="flex h-8 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
-							Read-only view of the published version
-							{selectedVersion ? ` v${selectedVersion.versionNumber}` : ""}.
+							Read-only view of{" "}
+							{selectedVersion ? `v${selectedVersion.versionNumber}` : "the published version"}
+							{selectedVersionYaml ? " — select Copy to draft to edit." : ""}
 						</div>
 					)}
 				</div>

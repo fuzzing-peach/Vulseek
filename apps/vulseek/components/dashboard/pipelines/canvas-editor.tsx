@@ -4,37 +4,60 @@ import {
 	Controls,
 	Handle,
 	MarkerType,
+	MiniMap,
 	Position,
 	ReactFlow,
+	type Connection,
 	type Edge as FlowEdge,
 	type EdgeProps,
 	type Node as FlowNode,
 	type NodeProps,
+	useReactFlow,
 	applyNodeChanges,
+	type NodeChange,
 } from "@xyflow/react";
-import { Plus } from "lucide-react";
+import type { OnNodeDrag } from "@xyflow/react";
+import {
+	AlignStartHorizontal,
+	AlignStartVertical,
+	Focus,
+	LayoutGrid,
+	Lock,
+	MousePointer2,
+	Plus,
+	Unlock,
+} from "lucide-react";
 import * as React from "react";
 import type {
 	PipelineDocumentV3,
 	PipelineEdgeV3,
 	PipelineStageV3,
 } from "@vulseek/server/services/scan/pipeline/document-v3";
+import {
+	NODE_HEIGHT,
+	NODE_WIDTH,
+	buildEdgePath,
+	computePipelineLayout,
+	defaultEdgeFactory,
+	nextUniqueId,
+	resolveStagePositions,
+	type PipelineLayoutDirection,
+} from "@/lib/pipeline-editor/pipeline-layout";
 import { cn } from "@/lib/utils";
 
 /**
- * Canvas editor for a PipelineDocumentV3.
+ * ELK-driven pipeline canvas.
  *
- * Read-only mode renders the graph exactly like the run monitor; editable
- * mode adds connection handles, selection, drag persistence (ui.nodes) and
- * delete. Every mutation funnels through `onChange(document)` so the editor
- * state machine can re-serialize the buffer (stable serialization kicks in
- * on the first canvas edit).
+ * - Layout: ELK Layered, direction from `ui.direction` (default DOWN),
+ *   orthogonal routing with bend points. Saved `ui.nodes` win; missing
+ *   positions get a *transient* ELK layout that never dirties the draft.
+ * - Persistence: node positions are written to `ui` only on drag stop or
+ *   Apply Layout; edge bend points on Apply Layout.
+ * - Stale async layouts are dropped via a generation token; fitView re-runs
+ *   after layout, measurement and Inspector toggles.
+ * - Cycles, self-loops, multiple same-source/same-target edges and
+ *   disconnected stages are all supported.
  */
-
-const NODE_WIDTH = 240;
-const NODE_HEIGHT = 96;
-const COLUMN_GAP = 80;
-const ROW_GAP = 56;
 
 const ROLE_COLORS: Record<PipelineStageV3["role"], string> = {
 	scan: "border-sky-500/60 bg-sky-500/10",
@@ -49,115 +72,55 @@ const roleLabel: Record<PipelineStageV3["role"], string> = {
 };
 
 // ---------------------------------------------------------------------------
-// Layout
-// ---------------------------------------------------------------------------
-
-const resolvePositions = (
-	document: PipelineDocumentV3,
-): Record<string, { x: number; y: number }> => {
-	if (document.ui?.nodes) {
-		const positions: Record<string, { x: number; y: number }> = {};
-		for (const [id, position] of Object.entries(document.ui.nodes)) {
-			if (document.stages[id]) positions[id] = position;
-		}
-		return positions;
-	}
-	// Deterministic auto-layout: BFS levels by longest-path depth, columns by
-	// in-degree order.
-	const stageIds = Object.keys(document.stages);
-	const depth = new Map<string, number>();
-	for (const id of stageIds) depth.set(id, 0);
-	const outgoing = new Map<string, string[]>();
-	for (const edge of document.edges) {
-		const list = outgoing.get(edge.from) ?? [];
-		list.push(edge.to);
-		outgoing.set(edge.from, list);
-	}
-	// Repeated relaxation until stable (handles loops by bounding depth).
-	for (let pass = 0; pass < stageIds.length; pass += 1) {
-		let changed = false;
-		for (const edge of document.edges) {
-			const from = depth.get(edge.from) ?? 0;
-			const to = depth.get(edge.to) ?? 0;
-			if (from + 1 > to) {
-				depth.set(edge.to, from + 1);
-				changed = true;
-			}
-		}
-		if (!changed) break;
-	}
-	const byLevel = new Map<number, string[]>();
-	for (const id of stageIds) {
-		const level = depth.get(id) ?? 0;
-		const list = byLevel.get(level) ?? [];
-		list.push(id);
-		byLevel.set(level, list);
-	}
-	const positions: Record<string, { x: number; y: number }> = {};
-	for (const [level, ids] of byLevel) {
-		ids.forEach((id, index) => {
-			positions[id] = {
-				x: level * (NODE_WIDTH + COLUMN_GAP),
-				y: index * (NODE_HEIGHT + ROW_GAP),
-			};
-		});
-	}
-	return positions;
-};
-
-const toFlowNode = (
-	id: string,
-	stage: PipelineStageV3,
-	position: { x: number; y: number },
-	isRoot: boolean,
-	readOnly: boolean,
-): FlowNode<{ stage: PipelineStageV3; isRoot: boolean; readOnly: boolean }> => ({
-	id,
-	type: "pipelineStage",
-	position,
-	data: { stage, isRoot, readOnly },
-});
-
-const toFlowEdge = (edge: PipelineEdgeV3): FlowEdge => ({
-	id: edge.id,
-	source: edge.from,
-	target: edge.to,
-	type: "pipelineEdge",
-	...(edge.route ? { label: edge.route.key } : {}),
-	...(edge.mode === "fanOut"
-		? { markerEnd: { type: MarkerType.ArrowClosed } }
-		: {}),
-});
-
-// ---------------------------------------------------------------------------
 // Node / edge renderers
 // ---------------------------------------------------------------------------
+
+type StageNodeData = {
+	stage: PipelineStageV3;
+	isRoot: boolean;
+	readOnly: boolean;
+};
 
 const PipelineStageNode = ({
 	data,
 	selected,
-}: NodeProps<FlowNode<{ stage: PipelineStageV3; isRoot: boolean; readOnly: boolean }>>) => {
+}: NodeProps<FlowNode<StageNodeData>>) => {
 	const { stage, isRoot, readOnly } = data;
-	const color = ROLE_COLORS[stage.role];
 	return (
 		<div
 			className={cn(
 				"w-60 rounded-xl border bg-background p-3 shadow-sm transition-colors",
-				color,
+				ROLE_COLORS[stage.role],
 				selected && "ring-2 ring-ring",
 			)}
 		>
 			{!readOnly && (
 				<>
 					<Handle
+						id="target"
 						type="target"
-						position={Position.Left}
+						position={Position.Top}
 						className="!size-2.5 !border !bg-background"
 					/>
 					<Handle
+						id="source"
+						type="source"
+						position={Position.Bottom}
+						className="!size-2.5 !border !bg-background"
+					/>
+					{/* Extra handles let self-loops and multi-edges pick distinct
+					    anchor points. */}
+					<Handle
+						id="target-left"
+						type="target"
+						position={Position.Left}
+						className="!size-2 !border !bg-background"
+					/>
+					<Handle
+						id="source-right"
 						type="source"
 						position={Position.Right}
-						className="!size-2.5 !border !bg-background"
+						className="!size-2 !border !bg-background"
 					/>
 				</>
 			)}
@@ -188,10 +151,11 @@ const PipelineStageNode = ({
 	);
 };
 
-const PipelineEdge = ({ id, sourceX, sourceY, targetX, targetY }: EdgeProps) => {
-	const midY = (sourceY + targetY) / 2;
-	const path = `M ${sourceX} ${sourceY} L ${sourceX} ${midY} L ${targetX} ${midY} L ${targetX} ${targetY}`;
-	return <BaseEdge id={id} path={path} />;
+const PipelineEdge = ({ id, sourceX, sourceY, targetX, targetY, data, markerEnd }: EdgeProps) => {
+	const bendPoints = (data as { bendPoints?: Array<{ x: number; y: number }> } | undefined)
+		?.bendPoints;
+	const path = buildEdgePath(sourceX, sourceY, targetX, targetY, bendPoints);
+	return <BaseEdge id={id} path={path} markerEnd={markerEnd} />;
 };
 
 const nodeTypes = { pipelineStage: PipelineStageNode };
@@ -210,6 +174,9 @@ export type CanvasEditorProps = {
 	className?: string;
 };
 
+type EditorFlowNode = FlowNode<StageNodeData>;
+type EditorFlowEdge = FlowEdge & { data?: { bendPoints?: Array<{ x: number; y: number }> } };
+
 export const CanvasEditor = ({
 	document,
 	readOnly,
@@ -218,81 +185,129 @@ export const CanvasEditor = ({
 	onAddStage,
 	className,
 }: CanvasEditorProps) => {
-	const positions = resolvePositions(document);
-	const initialNodes = React.useMemo(
-		() =>
-			Object.entries(document.stages).map(([id, stage]) =>
-				toFlowNode(
-					id,
-					stage,
-					positions[id] ?? { x: 0, y: 0 },
-					id === document.root,
-					readOnly,
-				),
-			),
+	const { fitView } = useReactFlow();
+	const [interactionLock, setInteractionLock] = React.useState(false);
+
+	const direction: PipelineLayoutDirection = document.ui?.direction ?? "DOWN";
+	const savedPositions = document.ui?.nodes ?? {};
+
+	// Transient layout: computed when positions are missing; never persisted
+	// unless Apply Layout or a drag stop writes it.
+	const [transientLayout, setTransientLayout] = React.useState<
+		Record<string, { x: number; y: number }>
+	>({});
+	const layoutToken = React.useRef(0);
+
+	// Async ELK layout with a generation token — stale results are dropped.
+	React.useEffect(() => {
+		const missing = Object.keys(document.stages).some((id) => !savedPositions[id]);
+		if (!missing) {
+			setTransientLayout({});
+			return;
+		}
+		const token = ++layoutToken.current;
+		void computePipelineLayout(document, direction).then((result) => {
+			if (token !== layoutToken.current) return; // stale
+			setTransientLayout(result.nodes);
+			requestAnimationFrame(() => void fitView({ padding: 0.2, duration: 0 }));
+		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[document],
-	);
-	const edges = React.useMemo(
-		() => document.edges.map(toFlowEdge),
-		[document.edges],
+	}, [document, direction, savedPositions]);
+
+	const positions = resolveStagePositions(document, transientLayout);
+
+	const nodes: EditorFlowNode[] = React.useMemo(
+		() =>
+			Object.entries(document.stages).map(([id, stage]) => ({
+				id,
+				type: "pipelineStage",
+				position: positions[id] ?? { x: 0, y: 0 },
+				data: {
+					stage,
+					isRoot: id === document.root,
+					readOnly,
+				},
+			})),
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[document, readOnly, positions],
 	);
 
-	const [nodes, setNodes] = React.useState(initialNodes);
-	React.useEffect(() => setNodes(initialNodes), [initialNodes]);
+	const edges: EditorFlowEdge[] = React.useMemo(
+		() =>
+			document.edges.map((edge) => ({
+				id: edge.id,
+				source: edge.from,
+				target: edge.to,
+				type: "pipelineEdge",
+				data: {
+					bendPoints: document.ui?.edges?.[edge.id]?.bendPoints ?? [],
+				},
+				...(edge.mode === "fanOut"
+					? { markerEnd: { type: MarkerType.ArrowClosed } }
+					: {}),
+				label: edge.route?.key,
+			})),
+		[document.edges, document.ui?.edges],
+	);
 
-	const persistPositions = React.useCallback(
-		(next: Array<FlowNode<{ stage: PipelineStageV3; isRoot: boolean; readOnly: boolean }>>) => {
+	const [localNodes, setLocalNodes] = React.useState<EditorFlowNode[]>(nodes);
+	React.useEffect(() => setLocalNodes(nodes), [nodes]);
+
+	const persistUi = React.useCallback(
+		(
+			nextNodes: Record<string, { x: number; y: number }>,
+			nextEdges?: Record<string, { bendPoints: Array<{ x: number; y: number }> }>,
+		) => {
 			if (readOnly || !onChange) return;
-			const uiNodes: Record<string, { x: number; y: number }> = {};
-			for (const node of next) {
-				uiNodes[node.id] = { x: node.position.x, y: node.position.y };
-			}
-			onChange({ ...document, ui: { ...(document.ui ?? {}), nodes: uiNodes } });
+			onChange({
+				...document,
+				ui: {
+					direction,
+					nodes: nextNodes,
+					...(nextEdges ? { edges: nextEdges } : {}),
+				},
+			});
 		},
-		[document, readOnly, onChange],
+		[document, readOnly, onChange, direction],
 	);
 
 	const onNodesChange = React.useCallback(
-		(changes: Parameters<typeof applyNodeChanges>[0]) => {
-			const next = applyNodeChanges(changes, nodes) as Array<
-				FlowNode<{ stage: PipelineStageV3; isRoot: boolean; readOnly: boolean }>
-			>;
-			setNodes(next);
-			if (changes.some((change) => change.type === "position")) {
-				persistPositions(next);
-			}
+		(changes: NodeChange<EditorFlowNode>[]) => {
+			const next = applyNodeChanges(changes, localNodes) as EditorFlowNode[];
+			setLocalNodes(next);
 		},
-		[nodes, persistPositions],
+		[localNodes],
+	);
+
+	// Positions persist only when the drag stops.
+	const onNodeDragStop: OnNodeDrag<EditorFlowNode> = React.useCallback(
+		(_event, node) => {
+			const nextNodes = { ...positions };
+			for (const current of localNodes) {
+				nextNodes[current.id] = {
+					x: Math.round(current.position.x),
+					y: Math.round(current.position.y),
+				};
+			}
+			nextNodes[node.id] = { x: Math.round(node.position.x), y: Math.round(node.position.y) };
+			persistUi(nextNodes);
+		},
+		[localNodes, positions, persistUi],
 	);
 
 	const onConnect = React.useCallback(
-		(connection: { source: string; target: string }) => {
+		(connection: Connection) => {
 			if (readOnly || !onChange) return;
 			const { source, target } = connection;
-			const id = `${source}-to-${target}`;
-			if (
-				document.edges.some(
-					(edge) =>
-						edge.from === source && edge.to === target,
-				)
-			) {
-				return;
-			}
+			if (!source || !target) return;
+			const id = nextUniqueId(
+				`${source}-to-${target}`,
+				new Set(document.edges.map((edge) => edge.id)),
+			);
+			const nextEdge = defaultEdgeFactory(id, source, target);
 			onChange({
 				...document,
-				edges: [
-					...document.edges,
-					{
-						id,
-						name: id,
-						from: source,
-						to: target,
-						fork: false,
-						mode: "map",
-						artifacts: [],
-					},
-				],
+				edges: [...document.edges, nextEdge],
 			});
 		},
 		[document, readOnly, onChange],
@@ -311,7 +326,7 @@ export const CanvasEditor = ({
 					? document.root
 					: (Object.keys(nextStages)[0] ?? document.root);
 			const nextUiNodes: Record<string, { x: number; y: number }> = {};
-			for (const [id, position] of Object.entries(document.ui?.nodes ?? {})) {
+			for (const [id, position] of Object.entries(savedPositions)) {
 				if (!deletedIds.has(id)) nextUiNodes[id] = position;
 			}
 			onChange({
@@ -321,38 +336,114 @@ export const CanvasEditor = ({
 				edges: document.edges.filter(
 					(edge) => !deletedIds.has(edge.from) && !deletedIds.has(edge.to),
 				),
-				ui: { nodes: nextUiNodes },
+				ui: { direction, nodes: nextUiNodes },
 			});
 		},
-		[document, readOnly, onChange],
+		[document, readOnly, onChange, direction, savedPositions],
 	);
 
 	const onEdgesDelete = React.useCallback(
 		(deleted: Array<{ id: string }>) => {
 			if (readOnly || !onChange) return;
 			const deletedIds = new Set(deleted.map((edge) => edge.id));
+			const nextEdges = document.edges.filter((edge) => !deletedIds.has(edge.id));
+			const nextBendPoints: Record<string, { bendPoints: Array<{ x: number; y: number }> }> = {};
+			for (const [id, bend] of Object.entries(document.ui?.edges ?? {})) {
+				if (!deletedIds.has(id)) nextBendPoints[id] = bend;
+			}
 			onChange({
 				...document,
-				edges: document.edges.filter((edge) => !deletedIds.has(edge.id)),
+				edges: nextEdges,
+				ui: {
+					direction,
+					nodes: savedPositions,
+					...(Object.keys(nextBendPoints).length ? { edges: nextBendPoints } : {}),
+				},
 			});
 		},
-		[document, readOnly, onChange],
+		[document, readOnly, onChange, direction, savedPositions],
 	);
+
+	const applyLayout = React.useCallback(async () => {
+		if (readOnly || !onChange) return;
+		const result = await computePipelineLayout(document, direction);
+		persistUi(result.nodes, result.edges);
+		requestAnimationFrame(() => void fitView({ padding: 0.2, duration: 300 }));
+	}, [document, readOnly, onChange, persistUi, direction, fitView]);
+
+	const switchDirection = React.useCallback(
+		(next: PipelineLayoutDirection) => {
+			if (readOnly || !onChange) return;
+			onChange({
+				...document,
+				ui: { direction: next, nodes: savedPositions },
+			});
+			void applyLayout();
+		},
+		[document, readOnly, onChange, savedPositions, applyLayout],
+	);
+
+	const { setCenter } = useReactFlow();
+	const centerRoot = React.useCallback(() => {
+		const rootPosition = positions[document.root];
+		if (!rootPosition) return;
+		void setCenter(rootPosition.x + NODE_WIDTH / 2, rootPosition.y + NODE_HEIGHT / 2, {
+			zoom: 1,
+			duration: 300,
+		});
+	}, [positions, document.root, setCenter]);
 
 	return (
 		<div className={cn("relative h-full w-full", className)}>
-			{!readOnly && onAddStage ? (
-				<button
-					type="button"
-					onClick={onAddStage}
-					className="absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-md border bg-background px-2.5 py-1.5 text-xs font-medium shadow-sm hover:bg-muted"
-				>
-					<Plus className="size-3.5" />
-					Add stage
-				</button>
-			) : null}
+			{!readOnly && (
+				<div className="absolute left-3 top-3 z-10 flex flex-col gap-1.5 rounded-lg border bg-background/95 p-1.5 shadow-sm">
+					{onAddStage ? (
+						<ToolbarButton label="Add stage" onClick={onAddStage}>
+							<Plus className="size-4" />
+						</ToolbarButton>
+					) : null}
+					<ToolbarButton
+						label="Apply ELK layout"
+						onClick={() => void applyLayout()}
+					>
+						<LayoutGrid className="size-4" />
+					</ToolbarButton>
+					<ToolbarButton
+						label="Direction: DOWN"
+						active={direction === "DOWN"}
+						onClick={() => void switchDirection("DOWN")}
+					>
+						<AlignStartVertical className="size-4" />
+					</ToolbarButton>
+					<ToolbarButton
+						label="Direction: RIGHT"
+						active={direction === "RIGHT"}
+						onClick={() => void switchDirection("RIGHT")}
+					>
+						<AlignStartHorizontal className="size-4" />
+					</ToolbarButton>
+					<ToolbarButton
+						label="Center root stage"
+						onClick={() => void centerRoot()}
+					>
+						<Focus className="size-4" />
+					</ToolbarButton>
+					<ToolbarButton
+						label={interactionLock ? "Unlock canvas" : "Lock canvas"}
+						active={interactionLock}
+						onClick={() => setInteractionLock((locked) => !locked)}
+					>
+						{interactionLock ? (
+							<Lock className="size-4" />
+						) : (
+							<MousePointer2 className="size-4" />
+						)}
+					</ToolbarButton>
+				</div>
+			)}
+
 			<ReactFlow
-				nodes={nodes}
+				nodes={localNodes}
 				edges={edges}
 				nodeTypes={nodeTypes}
 				edgeTypes={edgeTypes}
@@ -360,6 +451,10 @@ export const CanvasEditor = ({
 				onNodesDelete={onNodesDelete}
 				onEdgesDelete={onEdgesDelete}
 				onConnect={onConnect}
+				onNodeDragStop={onNodeDragStop}
+				nodesDraggable={!readOnly && !interactionLock}
+				nodesConnectable={!readOnly && !interactionLock}
+				elementsSelectable={!interactionLock}
 				onSelectionChange={({ nodes: selectedNodes, edges: selectedEdges }) => {
 					const stageNode = selectedNodes[0];
 					const edge = selectedEdges[0];
@@ -372,12 +467,46 @@ export const CanvasEditor = ({
 					);
 				}}
 				fitView
-				minZoom={0.2}
+				minZoom={0.1}
 				proOptions={{ hideAttribution: true }}
 			>
 				<Background gap={24} />
-				{!readOnly && <Controls />}
+				<MiniMap
+					pannable
+					zoomable
+					nodeColor="#94a3b8"
+					maskColor="rgba(0,0,0,0.1)"
+					className="!bottom-3 !right-3"
+				/>
+				<Controls />
 			</ReactFlow>
 		</div>
 	);
 };
+
+const ToolbarButton = ({
+	label,
+	onClick,
+	active = false,
+	children,
+}: {
+	label: string;
+	onClick: () => void;
+	active?: boolean;
+	children: React.ReactNode;
+}) => (
+	<button
+		type="button"
+		title={label}
+		aria-label={label}
+		onClick={onClick}
+		className={cn(
+			"inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground",
+			active && "bg-primary/10 text-primary",
+		)}
+	>
+		{children}
+	</button>
+);
+
+

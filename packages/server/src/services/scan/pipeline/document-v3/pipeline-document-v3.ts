@@ -171,6 +171,8 @@ const groupSchema = z.object({
 
 const uiSchema = z
 	.object({
+		// Saved layout orientation; the editor defaults to DOWN.
+		direction: z.enum(["DOWN", "RIGHT"]).optional(),
 		nodes: z.record(
 			z.object({ x: z.number(), y: z.number() }),
 		),

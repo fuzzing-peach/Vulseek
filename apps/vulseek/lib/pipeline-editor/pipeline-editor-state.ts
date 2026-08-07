@@ -24,6 +24,8 @@ export type PipelineEditorStatus =
 	| { kind: "valid"; document: PipelineDocumentV3; stale: boolean }
 	| { kind: "invalid"; diagnostics: PipelineDiagnostic[] };
 
+export const EDITOR_HISTORY_LIMIT = 50;
+
 export type PipelineEditorState = {
 	rawYamlBuffer: string;
 	/** YAML persisted on the server (draft or version), for dirty comparison. */
@@ -35,6 +37,10 @@ export type PipelineEditorState = {
 	/** True once the user edits on the canvas — from then on we serialize
 	 *  stably and no longer promise comment/whitespace preservation. */
 	canvasTouched: boolean;
+	/** Undo/redo buffer snapshots (raw YAML). `historyIndex` points at the
+	 *  current buffer; undo moves back, redo moves forward. */
+	history: string[];
+	historyIndex: number;
 };
 
 export type PipelineEditorAction =
@@ -42,7 +48,9 @@ export type PipelineEditorAction =
 	| { type: "setSavedYaml"; yaml: string; draftRevision: number }
 	| { type: "select"; entity: PipelineEditorState["selectedEntity"] }
 	| { type: "canvasModified"; document: PipelineDocumentV3 }
-	| { type: "reset"; yaml: string; draftRevision: number };
+	| { type: "reset"; yaml: string; draftRevision: number }
+	| { type: "undo" }
+	| { type: "redo" };
 
 export const initialEditorState = (yaml: string, draftRevision = 0): PipelineEditorState => {
 	const { document, diagnostics } = parsePipelineDocumentV3(yaml);
@@ -58,7 +66,23 @@ export const initialEditorState = (yaml: string, draftRevision = 0): PipelineEdi
 		draftRevision,
 		selectedEntity: null,
 		canvasTouched: false,
+		history: [yaml],
+		historyIndex: 0,
 	};
+};
+
+/** Push a buffer snapshot onto the undo history (dedupe consecutive same). */
+const pushHistory = (
+	state: PipelineEditorState,
+	yaml: string,
+): Pick<PipelineEditorState, "history" | "historyIndex"> => {
+	if (state.history[state.historyIndex] === yaml) {
+		return { history: state.history, historyIndex: state.historyIndex };
+	}
+	// Drop any redo tail, then append.
+	const trimmed = state.history.slice(0, state.historyIndex + 1);
+	const next = [...trimmed, yaml].slice(-EDITOR_HISTORY_LIMIT);
+	return { history: next, historyIndex: next.length - 1 };
 };
 
 const analyze = (
@@ -91,6 +115,7 @@ export const pipelineEditorReducer = (
 			return {
 				...state,
 				rawYamlBuffer: action.yaml,
+				...pushHistory(state, action.yaml),
 				...analyzed,
 				// A document that no longer parses marks the canvas stale; the
 				// canvas keeps rendering the last valid document until the
@@ -120,6 +145,7 @@ export const pipelineEditorReducer = (
 			return {
 				...state,
 				rawYamlBuffer: serialized,
+				...pushHistory(state, serialized),
 				canvasTouched: true,
 				...analyzed,
 				status: { kind: "valid", document: action.document, stale: false },
@@ -128,6 +154,42 @@ export const pipelineEditorReducer = (
 		case "reset": {
 			const fresh = initialEditorState(action.yaml, action.draftRevision);
 			return { ...fresh, canvasTouched: false };
+		}
+		case "undo": {
+			if (state.historyIndex <= 0) return state;
+			const index = state.historyIndex - 1;
+			const yaml = state.history[index] ?? state.rawYamlBuffer;
+			const analyzed = analyze(yaml);
+			return {
+				...state,
+				rawYamlBuffer: yaml,
+				historyIndex: index,
+				...analyzed,
+				status:
+					analyzed.status.kind === "valid"
+						? { kind: "valid", document: analyzed.status.document, stale: false }
+						: state.status.kind === "valid"
+							? { kind: "valid", document: state.status.document, stale: true }
+							: analyzed.status,
+			};
+		}
+		case "redo": {
+			if (state.historyIndex >= state.history.length - 1) return state;
+			const index = state.historyIndex + 1;
+			const yaml = state.history[index] ?? state.rawYamlBuffer;
+			const analyzed = analyze(yaml);
+			return {
+				...state,
+				rawYamlBuffer: yaml,
+				historyIndex: index,
+				...analyzed,
+				status:
+					analyzed.status.kind === "valid"
+						? { kind: "valid", document: analyzed.status.document, stale: false }
+						: state.status.kind === "valid"
+							? { kind: "valid", document: state.status.document, stale: true }
+							: analyzed.status,
+			};
 		}
 	}
 };

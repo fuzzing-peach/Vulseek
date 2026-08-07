@@ -99,6 +99,36 @@ describe("pipelineEditorReducer", () => {
 		expect(isDirty(state)).toBe(true);
 	});
 
+	it("undoes and redoes buffer edits", () => {
+		let state = initialEditorState(VALID_YAML);
+		state = pipelineEditorReducer(state, {
+			type: "setBuffer",
+			yaml: `${VALID_YAML.trim()}\n# first edit\n`,
+		});
+		state = pipelineEditorReducer(state, {
+			type: "setBuffer",
+			yaml: `${VALID_YAML.trim()}\n# second edit\n`,
+		});
+		expect(state.rawYamlBuffer).toContain("# second edit");
+
+		state = pipelineEditorReducer(state, { type: "undo" });
+		expect(state.rawYamlBuffer).toContain("# first edit");
+		expect(state.rawYamlBuffer).not.toContain("# second edit");
+
+		state = pipelineEditorReducer(state, { type: "redo" });
+		expect(state.rawYamlBuffer).toContain("# second edit");
+
+		// Undo at the beginning is a no-op.
+		state = pipelineEditorReducer(state, { type: "undo" });
+		state = pipelineEditorReducer(state, { type: "undo" });
+		state = pipelineEditorReducer(state, { type: "undo" });
+		expect(state.rawYamlBuffer).toContain("version: 3");
+		state = pipelineEditorReducer(state, { type: "redo" });
+		state = pipelineEditorReducer(state, { type: "redo" });
+		state = pipelineEditorReducer(state, { type: "redo" });
+		expect(state.rawYamlBuffer).toContain("# second edit");
+	});
+
 	it("tracks dirty state against the saved YAML", () => {
 		let state = initialEditorState(VALID_YAML);
 		state = pipelineEditorReducer(state, {
