@@ -122,6 +122,7 @@ const EditorPage = ({
 		{ enabled: Boolean(selectedVersionId && viewingVersion) },
 	).data?.yaml;
 
+	const yamlEditorRef = React.useRef<import("@/components/dashboard/pipelines/yaml-editor").YamlEditorHandle>(null);
 	const [state, dispatch] = React.useReducer(
 		pipelineEditorReducer,
 		{ yaml: initialYaml, revision: pipeline.data?.draftRevision ?? 0 },
@@ -158,11 +159,18 @@ const EditorPage = ({
 
 	const handleSave = async () => {
 		if (!canManage) return;
+		// Flush the YAML editor's parse debounce so the saved buffer matches
+		// what the user actually sees.
+		const editorText = yamlEditorRef.current?.getValue();
+		const yamlToSave = editorText !== undefined ? editorText : state.rawYamlBuffer;
+		if (editorText !== undefined && editorText !== state.rawYamlBuffer) {
+			dispatch({ type: "setBuffer", yaml: editorText });
+		}
 		try {
 			await saveDraft.mutateAsync({
 				pipelineId,
 				expectedRevision: state.draftRevision,
-				yaml: state.rawYamlBuffer,
+				yaml: yamlToSave,
 			});
 			dispatch({
 				type: "setSavedYaml",
@@ -550,6 +558,7 @@ const EditorPage = ({
 						<div className="min-w-0 flex-1">
 							{mode === "yaml" ? (
 								<YamlEditor
+									ref={yamlEditorRef}
 									value={editorYaml}
 									onChange={(yaml) => dispatch({ type: "setBuffer", yaml })}
 									diagnostics={state.diagnostics}

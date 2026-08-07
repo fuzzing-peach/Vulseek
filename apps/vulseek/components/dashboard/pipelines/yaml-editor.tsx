@@ -16,14 +16,22 @@ export type YamlEditorProps = {
 	readOnly?: boolean;
 };
 
-export const YamlEditor = ({
-	value,
-	onChange,
-	diagnostics,
-	readOnly = false,
-}: YamlEditorProps) => {
+export type YamlEditorHandle = {
+	/** Current editor text, bypassing the parse debounce (used by Save). */
+	getValue: () => string;
+};
+
+export const YamlEditor = React.forwardRef<YamlEditorHandle, YamlEditorProps>(
+	function YamlEditor(
+		{ value, onChange, diagnostics, readOnly = false },
+		ref,
+	) {
 	const [localValue, setLocalValue] = React.useState(value);
 	React.useEffect(() => setLocalValue(value), [value]);
+
+	React.useImperativeHandle(ref, () => ({
+		getValue: () => localValue,
+	}));
 
 	// Debounce the buffer update so parse + canvas refresh happen off-keystroke.
 	const debouncedChange = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -68,4 +76,6 @@ export const YamlEditor = ({
 			</div>
 		</div>
 	);
-};
+	},
+);
+YamlEditor.displayName = "YamlEditor";
