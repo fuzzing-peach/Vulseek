@@ -160,6 +160,42 @@ describe("parsePipelineDocumentV3", () => {
 	});
 });
 
+describe("ui metadata", () => {
+	it("round-trips ui.direction and edge bend points", () => {
+		const document: PipelineDocumentV3 = {
+			...structuredClone(minimalDocument),
+			ui: {
+				direction: "RIGHT",
+				nodes: { start: { x: 10, y: 20 } },
+				edges: {
+					"start-to-finish": {
+						bendPoints: [
+							{ x: 10, y: 50 },
+							{ x: 100, y: 50 },
+						],
+					},
+				},
+			},
+		};
+		assertStableRoundTrip(document);
+		const { document: reparsed } = parsePipelineDocumentV3(
+			serializePipelineDocumentV3(document),
+		);
+		expect(reparsed?.ui?.direction).toBe("RIGHT");
+		expect(reparsed?.ui?.edges?.["start-to-finish"]?.bendPoints).toEqual([
+			{ x: 10, y: 50 },
+			{ x: 100, y: 50 },
+		]);
+	});
+
+	it("treats ui as optional and runtime-irrelevant", () => {
+		const { document } = parsePipelineDocumentV3(
+			serializePipelineDocumentV3(minimalDocument),
+		);
+		expect(document?.ui).toBeUndefined();
+	});
+});
+
 describe("stable serialization", () => {
 	it("round-trips through parse", () => {
 		assertStableRoundTrip(minimalDocument);

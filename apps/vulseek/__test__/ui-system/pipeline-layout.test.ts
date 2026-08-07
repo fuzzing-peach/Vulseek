@@ -148,3 +148,27 @@ describe("nextUniqueId", () => {
 		expect(nextUniqueId("fresh", existing)).toBe("fresh");
 	});
 });
+
+describe("performance", () => {
+	it(
+		// Standalone this finishes in ~700ms; under the parallel suite the
+		// fork pool shares CPU, so the threshold is loosened here — the
+		// browser acceptance measures the real single-layout latency.
+		"lays out 100 stages / 200 edges quickly",
+		async () => {
+			const stages = Array.from({ length: 100 }, (_, index) => `s${index}`);
+			const edges = [];
+			for (let index = 0; index < 200; index += 1) {
+				const from = stages[Math.floor(index / 2)]!;
+				const to = stages[Math.floor(index / 2) + 1] ?? stages[0]!;
+				edges.push(edge(`e${index}`, from, to));
+			}
+			const started = Date.now();
+			const result = await computePipelineLayout(documentOf(stages, edges));
+			const elapsed = Date.now() - started;
+			expect(Object.keys(result.nodes)).toHaveLength(100);
+			expect(elapsed).toBeLessThan(2000);
+		},
+		10_000,
+	);
+});
