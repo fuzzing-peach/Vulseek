@@ -502,6 +502,8 @@ interface Props {
 	fullHeight?: boolean;
 	/** Collapse the sidebar below this viewport width (px). */
 	collapseSidebarBelow?: number;
+	/** Skip the global breadcrumb when the page renders its own context trail. */
+	hideBreadcrumb?: boolean;
 }
 
 function LogoWrapper() {
@@ -833,6 +835,7 @@ export default function Page({
 	children,
 	fullHeight,
 	collapseSidebarBelow,
+	hideBreadcrumb,
 }: Props) {
 	const [defaultOpen, setDefaultOpen] = useState<boolean | undefined>(
 		undefined,
@@ -867,6 +870,7 @@ export default function Page({
 
 	const includesProjects = pathname?.includes("/dashboard/project");
 	const includesDatasets = pathname?.includes("/dashboard/datasets");
+	const includesPipelines = pathname?.includes("/dashboard/pipelines");
 	const { data: isCloud } = api.settings.isCloud.useQuery();
 
 	const {
@@ -1151,7 +1155,10 @@ export default function Page({
 				<SidebarRail />
 			</Sidebar>
 			<SidebarInset>
-				{!includesProjects && !includesDatasets && (
+				{!hideBreadcrumb &&
+					!includesProjects &&
+					!includesDatasets &&
+					!includesPipelines && (
 					<header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12">
 						<div className="flex items-center justify-between w-full px-4">
 							<div className="flex items-center gap-2">

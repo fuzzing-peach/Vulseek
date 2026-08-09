@@ -3,6 +3,7 @@ import { ChevronLeft, Plus, Trash2 } from "lucide-react";
 import type {
 	PipelineDiagnostic,
 	PipelineDocumentV3,
+	PipelineStageV3,
 } from "@vulseek/server/services/scan/pipeline/document-v3";
 import {
 	createEdgeDraft,
@@ -184,16 +185,19 @@ export const DefinitionView = ({
 				);
 			})}
 			{!readOnly ? (
-				<div className="mt-auto border-t p-2">
-					<Button
-						variant="outline"
-						size="sm"
-						className="w-full"
-						onClick={() => setCreateDialog("stage")}
-					>
-						<Plus className="size-3.5" />
-						New stage
-					</Button>
+				<div className="mt-auto grid gap-1 border-t p-2">
+					{(["stage", "edge", "schema", "group"] as const).map((kind) => (
+						<Button
+							key={kind}
+							variant="outline"
+							size="sm"
+							className="w-full justify-start"
+							onClick={() => setCreateDialog(kind)}
+						>
+							<Plus className="size-3.5" />
+							New {kind}
+						</Button>
+					))}
 				</div>
 			) : null}
 		</nav>
@@ -381,31 +385,44 @@ export const DefinitionView = ({
 		const backLabel =
 			drill === "editor" && hasList(section) ? sectionLabel[section] : "Sections";
 		return (
-			<div className="flex h-full min-h-0 flex-1 flex-col">
-				{drill !== "rail" ? (
-					<div className="flex h-9 shrink-0 items-center gap-1 border-b px-2">
-						<button
-							type="button"
-							onClick={() =>
-								setDrill(drill === "editor" ? (hasList(section) ? "list" : "rail") : "rail")
-							}
-							className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-						>
-							<ChevronLeft className="size-3.5" />
-							{backLabel}
-						</button>
-						<span className="ml-1 truncate text-xs font-medium">
-							{sectionLabel[section]}
-							{selectedId ? ` · ${selectedId}` : ""}
-						</span>
+			<>
+				<div className="flex h-full min-h-0 flex-1 flex-col">
+					{drill !== "rail" ? (
+						<div className="flex h-9 shrink-0 items-center gap-1 border-b px-2">
+							<button
+								type="button"
+								onClick={() =>
+									setDrill(drill === "editor" ? (hasList(section) ? "list" : "rail") : "rail")
+								}
+								className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+							>
+								<ChevronLeft className="size-3.5" />
+								{backLabel}
+							</button>
+							<span className="ml-1 truncate text-xs font-medium">
+								{sectionLabel[section]}
+								{selectedId ? ` · ${selectedId}` : ""}
+							</span>
+						</div>
+					) : null}
+					<div className="flex min-h-0 flex-1">
+						{drill === "rail" ? rail : null}
+						{drill === "list" ? entityList : null}
+						{drill === "editor" ? editor : null}
 					</div>
-				) : null}
-				<div className="flex min-h-0 flex-1">
-					{drill === "rail" ? rail : null}
-					{drill === "list" ? entityList : null}
-					{drill === "editor" ? editor : null}
 				</div>
-			</div>
+				<CreateEntityDialog
+					kind={createDialog}
+					onClose={() => setCreateDialog(null)}
+					document={document}
+					dispatch={dispatch}
+					readOnly={readOnly}
+					onCreated={(entity) => {
+						handleSelect(entity);
+						setCreateDialog(null);
+					}}
+				/>
+			</>
 		);
 	}
 
@@ -537,6 +554,16 @@ const CreateEntityDialog = ({
 	const [group, setGroup] = React.useState("default");
 	const [leader, setLeader] = React.useState(document.root);
 
+	React.useEffect(() => {
+		setName("");
+		setDisplayName("");
+		setRole("scan");
+		setFrom(document.root);
+		setTo(document.root);
+		setGroup("default");
+		setLeader(document.root);
+	}, [kind, document.root]);
+
 	if (!kind) return null;
 
 	const validation = duplicateDiagnostics(document, kind, id.trim());
@@ -547,7 +574,11 @@ const CreateEntityDialog = ({
 	const submit = () => {
 		if (!canCreate) return;
 		if (kind === "stage") {
-			const stage = { ...createStageDraft(id.trim(), group), name: name.trim() || id.trim() };
+			const stage = {
+				...createStageDraft(id.trim(), group),
+				name: name.trim() || id.trim(),
+				role: role as PipelineStageV3["role"],
+			};
 			dispatch({ type: "patch", ops: [{ op: "addStage", stageId: id.trim(), stage }] });
 			onCreated({ type: "stage", id: id.trim() });
 		} else if (kind === "edge") {
@@ -586,7 +617,9 @@ const CreateEntityDialog = ({
 							autoFocus
 							onChange={(event) => setName(event.target.value)}
 							className="h-9"
-							placeholder={kind === "edge" ? "edge-id" : "stage-id"}
+							placeholder={
+								kind === "edge" ? "edge-id" : kind === "group" ? "group-id" : "stage-id"
+							}
 						/>
 						{validation.length > 0 ? (
 							<p className="text-xs text-red-600" role="alert">

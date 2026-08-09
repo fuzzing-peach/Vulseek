@@ -19,9 +19,11 @@ import {
 import { toast } from "sonner";
 import superjson from "superjson";
 import { validateRequest } from "@vulseek/server/lib/auth";
+import { DashboardPage } from "@/components/dashboard/ui-system";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { PipelineWorkbench } from "@/components/dashboard/pipelines/workbench/pipeline-workbench";
 import type { YamlEditorHandle } from "@/components/dashboard/pipelines/yaml-editor";
+import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -280,7 +282,10 @@ const EditorPage = ({
 
 	if (pipeline.isLoading || !pipeline.data) {
 		return (
-			<DashboardLayout collapseSidebarBelow={1100}>
+			<DashboardLayout hideBreadcrumb collapseSidebarBelow={1100}>
+				<BreadcrumbSidebar
+					list={[{ name: "Pipelines", href: "/dashboard/pipelines" }]}
+				/>
 				<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
 					Loading pipeline…
 				</div>
@@ -302,8 +307,17 @@ const EditorPage = ({
 			: null;
 
 	return (
-		<DashboardLayout fullHeight collapseSidebarBelow={1100}>
-			<div className="flex min-h-0 flex-1 flex-col">
+		<DashboardLayout hideBreadcrumb fullHeight collapseSidebarBelow={1100}>
+			<BreadcrumbSidebar
+				list={[
+					{ name: "Pipelines", href: "/dashboard/pipelines" },
+					{ name: data.name },
+				]}
+			/>
+			<DashboardPage
+					className="min-h-0 flex-1"
+					contentClassName="overflow-hidden"
+				>
 				{/* Header */}
 				<header className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
 					<button
@@ -522,7 +536,7 @@ const EditorPage = ({
 					}}
 					onYamlReady={onYamlReady}
 				/>
-			</div>
+			</DashboardPage>
 		</DashboardLayout>
 	);
 };

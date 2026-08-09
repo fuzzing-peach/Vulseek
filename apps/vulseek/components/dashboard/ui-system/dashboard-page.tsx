@@ -123,6 +123,8 @@ export type DashboardPageTab = {
 type DashboardPageTabsProps = {
 	tabs: readonly DashboardPageTab[];
 	fallback: string;
+	/** Controlled active value for local workspaces that do not use a URL tab. */
+	activeValue?: string;
 	/**
 	 * Tab values the URL parser accepts but that are not rendered as
 	 * triggers — keyboard-shortcut destinations (e.g. `g l` → logs,
@@ -136,13 +138,14 @@ type DashboardPageTabsProps = {
 };
 
 /**
- * URL-backed page tabs — the only tab state lives in `?tab=<value>`.
- * Switching tabs drops unrelated list params? No: it keeps the query and
- * only rewrites the tab key, so list state survives browser history.
+ * Dashboard page tabs. Uncontrolled tabs are URL-backed — the only tab state
+ * lives in `?tab=<value>` and unrelated list params survive tab changes.
+ * Workspaces can provide `activeValue` and `onTabChange` for local state.
  */
 const DashboardPageTabs = ({
 	tabs,
 	fallback,
+	activeValue,
 	hiddenValues,
 	queryKey = "tab",
 	className,
@@ -150,7 +153,8 @@ const DashboardPageTabs = ({
 }: DashboardPageTabsProps) => {
 	const router = useRouter();
 	const values = [...tabs.map((tab) => tab.value), ...(hiddenValues ?? [])];
-	const active = parseTabParam(router.query, values, fallback, queryKey);
+	const active =
+		activeValue ?? parseTabParam(router.query, values, fallback, queryKey);
 
 	const handleValueChange = (value: string) => {
 		if (value === active) return;

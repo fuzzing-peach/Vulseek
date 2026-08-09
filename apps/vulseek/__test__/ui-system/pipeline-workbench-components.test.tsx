@@ -1,6 +1,6 @@
 import * as React from "react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parsePipelineDocumentV3 } from "@vulseek/server/services/scan/pipeline/document-v3";
 import { PipelineWorkbench } from "@/components/dashboard/pipelines/workbench/pipeline-workbench";
 import {
@@ -8,6 +8,15 @@ import {
 	pipelineEditorReducer,
 	type PipelineEditorState,
 } from "@/lib/pipeline-editor/pipeline-editor-state";
+
+const router = vi.hoisted(() => ({
+	query: {},
+	replace: vi.fn(),
+}));
+
+vi.mock("next/router", () => ({
+	useRouter: () => router,
+}));
 
 const VALID_YAML = `version: 3
 name: Test pipeline
@@ -89,9 +98,9 @@ const Harness = ({
 describe("PipelineWorkbench — three views", () => {
 	it("renders Definition | Visual | Raw YAML tabs and the Definition rail", () => {
 		render(<Harness initial={initialEditorState(VALID_YAML)} />);
-		expect(screen.getByRole("button", { name: "Definition" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Visual" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Raw YAML" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Definition" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Visual" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Raw YAML" })).toBeInTheDocument();
 		// Default view is Definition: the rail is visible with counts.
 		expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Stages 2" })).toBeInTheDocument();
@@ -167,7 +176,7 @@ describe("PipelineWorkbench — read-only / version view", () => {
 				versionLabel="v3 · published"
 			/>,
 		);
-		fireEvent.click(screen.getByRole("button", { name: "Raw YAML" }));
+		fireEvent.click(screen.getByRole("tab", { name: "Raw YAML" }));
 		// The version banner stays; the editor area renders without crashing
 		// (CodeMirror content is not asserted in jsdom).
 		expect(screen.getAllByText(/Read-only view of v3 · published/).length).toBeGreaterThan(0);
@@ -198,6 +207,25 @@ describe("PipelineWorkbench — diagnostics focus", () => {
 		// The edge editor opens with the diagnostic visible.
 		expect(screen.getAllByText(/discover-to-review/).length).toBeGreaterThan(0);
 		expect(screen.getAllByText(/map edges do not expand items/).length).toBeGreaterThan(0);
+	});
+});
+
+describe("PipelineWorkbench — entity creation", () => {
+	it("exposes all entity creation actions and resets dialog fields", () => {
+		render(<Harness initial={initialEditorState(VALID_YAML)} />);
+		for (const kind of ["stage", "edge", "schema", "group"]) {
+			expect(screen.getByRole("button", { name: `New ${kind}` })).toBeInTheDocument();
+		}
+
+		fireEvent.click(screen.getByRole("button", { name: "New group" }));
+		const groupId = screen.getByPlaceholderText("group-id") as HTMLInputElement;
+		fireEvent.change(groupId, { target: { value: "temporary-group" } });
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+		fireEvent.click(screen.getByRole("button", { name: "New stage" }));
+		const stageId = screen.getByPlaceholderText("stage-id") as HTMLInputElement;
+		expect(stageId.value).toBe("");
+		expect(screen.getByDisplayValue("default")).toBeInTheDocument();
 	});
 });
 
@@ -244,6 +272,15 @@ describe("PipelineWorkbench — responsive drill-down", () => {
 		expect(screen.getByDisplayValue("Discovery")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: /Stages/ }));
 		expect(screen.getByPlaceholderText("Search stages…")).toBeInTheDocument();
+		setNarrow(false);
+	});
+
+	it("mounts the creation dialog from the narrow rail", () => {
+		setNarrow(true);
+		render(<Harness initial={initialEditorState(VALID_YAML)} />);
+		fireEvent.click(screen.getByRole("button", { name: "New stage" }));
+		expect(screen.getByRole("heading", { name: "New stage" })).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		setNarrow(false);
 	});
 });

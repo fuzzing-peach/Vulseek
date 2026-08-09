@@ -19,6 +19,7 @@ import { CanvasEditor } from "@/components/dashboard/pipelines/canvas-editor";
 import { DiagnosticsBar } from "@/components/dashboard/pipelines/diagnostics-bar";
 import { PipelineInspector } from "@/components/dashboard/pipelines/pipeline-inspector";
 import { YamlEditor, type YamlEditorHandle } from "@/components/dashboard/pipelines/yaml-editor";
+import { DashboardPageTabs } from "@/components/dashboard/ui-system";
 import type {
 	PipelineEditorAction,
 	PipelineEditorState,
@@ -198,49 +199,39 @@ export const PipelineWorkbench = ({
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
-			{/* View tabs */}
-			<div className="flex shrink-0 items-center gap-1 border-b px-4 pt-2">
-				{(
-					[
-						["definition", "Definition"],
-						["visual", "Visual"],
-						["raw", "Raw YAML"],
-					] as const
-				).map(([id, label]) => (
-					<button
-						key={id}
-						type="button"
-						onClick={() => setView(id)}
-						className={cn(
-							"rounded-t-md px-3 py-1.5 text-sm font-medium transition-colors",
-							view === id
-								? "border-b-2 border-primary text-foreground"
-								: "text-muted-foreground hover:text-foreground",
-						)}
-					>
-						{label}
-					</button>
-				))}
-				{readOnly && versionLabel ? (
-					<span className="ml-3 text-xs text-muted-foreground">
-						Read-only view of {versionLabel}
-					</span>
-				) : null}
-				{state.canvasTouched && view !== "visual" ? (
-					<span className="ml-2 text-xs text-muted-foreground">
-						Canvas edits use stable serialization — original comments may be rewritten.
-					</span>
-				) : null}
-				{state.patchError ? (
-					<span
-						className="ml-2 rounded bg-red-500/10 px-2 py-0.5 text-xs text-red-600"
-						title={state.patchError}
-					>
-						Patch failed: {state.patchError}
-					</span>
-				) : null}
-				{view !== "visual" ? (
-					<div className="ml-auto pb-1.5">
+			{/* View tabs: use the same sub-navigation treatment as project pages. */}
+			<div className="flex shrink-0 items-end border-b">
+				<DashboardPageTabs
+					tabs={[
+						{ value: "definition", label: "Definition" },
+						{ value: "visual", label: "Visual" },
+						{ value: "raw", label: "Raw YAML" },
+					]}
+					fallback="definition"
+					activeValue={view}
+					onTabChange={(value) => setView(value as WorkbenchView)}
+					className="min-w-0 flex-1 px-4 pt-8 sm:px-6"
+				/>
+				<div className="mr-4 mb-1 flex shrink-0 items-center gap-2">
+					{readOnly && versionLabel ? (
+						<span className="text-xs text-muted-foreground">
+							Read-only view of {versionLabel}
+						</span>
+					) : null}
+					{state.canvasTouched && view !== "visual" ? (
+						<span className="text-xs text-muted-foreground">
+							Canvas edits use stable serialization — original comments may be rewritten.
+						</span>
+					) : null}
+					{state.patchError ? (
+						<span
+							className="rounded bg-red-500/10 px-2 py-0.5 text-xs text-red-600"
+							title={state.patchError}
+						>
+							Patch failed: {state.patchError}
+						</span>
+					) : null}
+					{view !== "visual" ? (
 						<button
 							type="button"
 							onClick={() => setInspectorOpen((open) => !open)}
@@ -253,13 +244,14 @@ export const PipelineWorkbench = ({
 								<PanelRightOpen className="size-4" />
 							)}
 						</button>
-					</div>
-				) : null}
+					) : null}
+				</div>
 			</div>
 
 			{/* View body */}
-			<div className="flex min-h-0 flex-1">
-				<div className="relative min-w-0 flex-1">
+			<div className="flex min-h-0 flex-1 p-4 pt-5 sm:px-6">
+				<div className="flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-xl border bg-background shadow-sm">
+					<div className="relative min-w-0 flex-1">
 					{view === "definition" && viewDocument ? (
 						<DefinitionView
 							document={viewDocument}
@@ -379,6 +371,7 @@ export const PipelineWorkbench = ({
 							readOnly={readOnly}
 						/>
 					) : null}
+					</div>
 				</div>
 			</div>
 

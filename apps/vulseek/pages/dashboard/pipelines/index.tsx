@@ -14,6 +14,7 @@ import {
 	ResourceCard,
 } from "@/components/dashboard/ui-system";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
+import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { api } from "@/utils/api";
@@ -97,7 +98,8 @@ const PipelinesPage = ({
 	});
 
 	return (
-		<DashboardLayout>
+		<DashboardLayout hideBreadcrumb>
+			<BreadcrumbSidebar list={[{ name: "Pipelines", href: "/dashboard/pipelines" }]} />
 			<DashboardPage>
 				<DashboardPageHeader
 					icon={<Workflow />}

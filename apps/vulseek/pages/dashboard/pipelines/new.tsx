@@ -15,6 +15,7 @@ import {
 	DashboardPageHeader,
 } from "@/components/dashboard/ui-system";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
+import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -89,7 +90,13 @@ const NewPipelinePage = (_: InferGetServerSidePropsType<typeof getServerSideProp
 	};
 
 	return (
-		<DashboardLayout>
+		<DashboardLayout hideBreadcrumb>
+			<BreadcrumbSidebar
+				list={[
+					{ name: "Pipelines", href: "/dashboard/pipelines" },
+					{ name: "New pipeline" },
+				]}
+			/>
 			<DashboardPage>
 				<DashboardPageHeader
 					icon={<Workflow />}

@@ -10,12 +10,15 @@ interface Props {
 	fullHeight?: boolean;
 	/** Collapse the global sidebar below this viewport width (px). */
 	collapseSidebarBelow?: number;
+	/** Render a page-owned contextual breadcrumb instead of the global one. */
+	hideBreadcrumb?: boolean;
 }
 
 export const DashboardLayout = ({
 	children,
 	fullHeight,
 	collapseSidebarBelow,
+	hideBreadcrumb,
 }: Props) => {
 	const { data: haveRootAccess } = api.user.haveRootAccess.useQuery();
 	const { data: isCloud } = api.settings.isCloud.useQuery();
@@ -31,7 +34,11 @@ export const DashboardLayout = ({
 
 	return (
 		<>
-			<Page fullHeight={fullHeight} collapseSidebarBelow={collapseSidebarBelow}>
+			<Page
+				fullHeight={fullHeight}
+				collapseSidebarBelow={collapseSidebarBelow}
+				hideBreadcrumb={hideBreadcrumb}
+			>
 				{children}
 			</Page>
 			{isCloud === true && isUserSubscribed === true && (
