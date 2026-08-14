@@ -36,7 +36,7 @@ export const OverviewEditor = ({
 	}));
 
 	return (
-		<div className="flex h-full min-h-0 flex-col overflow-y-auto">
+		<div className="flex h-full min-h-0 flex-col overflow-y-auto pb-12">
 			<SectionHeading
 				title="Overview"
 				subtitle={`${counts.stages} stages · ${counts.edges} edges · ${counts.schemas} schemas · ${counts.groups} groups`}

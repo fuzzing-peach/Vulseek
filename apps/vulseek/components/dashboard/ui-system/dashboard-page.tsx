@@ -52,6 +52,8 @@ const DashboardPage = ({
 );
 
 type DashboardPageHeaderProps = {
+	/** Optional leading control, such as a detail-page back button. */
+	leading?: React.ReactNode;
 	icon?: React.ReactNode;
 	title: React.ReactNode;
 	description?: React.ReactNode;
@@ -62,6 +64,7 @@ type DashboardPageHeaderProps = {
 };
 
 const DashboardPageHeader = ({
+	leading,
 	icon,
 	title,
 	description,
@@ -78,6 +81,7 @@ const DashboardPageHeader = ({
 		)}
 	>
 		<div className="flex min-w-0 flex-1 items-center gap-3">
+			{leading ? <div className="shrink-0">{leading}</div> : null}
 			{icon ? (
 				<div className="flex size-10 shrink-0 items-center justify-center rounded-xl border bg-muted/40 text-muted-foreground [&>svg]:size-5">
 					{icon}
@@ -90,20 +94,22 @@ const DashboardPageHeader = ({
 				*/}
 				<div className="flex h-7 min-w-0 items-center gap-2">
 					{/* no truncate on h1 — complex titles (project + env selector) manage their own */}
-					<h1 className="min-w-0 flex-1 text-xl font-semibold leading-7 tracking-tight">
+					<h1 className="min-w-0 truncate text-xl font-semibold leading-7 tracking-tight">
 						{title}
 					</h1>
 					{status}
 				</div>
-				{/* Always reserve description line so height never depends on copy */}
-				<p
+				{/* Reserve enough height for compact controls rendered beside the copy. */}
+				<div
 					className={cn(
-						"h-5 truncate text-sm leading-5 text-muted-foreground",
+						"flex h-7 min-w-0 items-center text-sm leading-5 text-muted-foreground",
 						!description && "invisible",
 					)}
 				>
-					{description || "\u00A0"}
-				</p>
+					<div className="min-w-0 flex-1 truncate">
+						{description || "\u00A0"}
+					</div>
+				</div>
 			</div>
 		</div>
 		{actions ? (
@@ -135,6 +141,8 @@ type DashboardPageTabsProps = {
 	queryKey?: string;
 	className?: string;
 	onTabChange?: (value: string) => void;
+	/** Optional controls rendered on the same navigation row. */
+	trailing?: React.ReactNode;
 };
 
 /**
@@ -150,6 +158,7 @@ const DashboardPageTabs = ({
 	queryKey = "tab",
 	className,
 	onTabChange,
+	trailing,
 }: DashboardPageTabsProps) => {
 	const router = useRouter();
 	const values = [...tabs.map((tab) => tab.value), ...(hiddenValues ?? [])];
@@ -174,28 +183,37 @@ const DashboardPageTabs = ({
 		// pt-8: space under header divider (dokploy ~32px). No extra bottom pad —
 		// TabContent / Body owns the gap to the first content block.
 		<div className={cn("min-w-0 px-4 pt-8 sm:px-6", className)}>
-			<Tabs value={active} onValueChange={handleValueChange}>
-				<div className="relative w-full overflow-hidden">
-					<div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-4 bg-gradient-to-r from-muted to-transparent sm:hidden" />
-					<div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-4 bg-gradient-to-l from-muted to-transparent sm:hidden" />
-					<TabsList className="h-10 w-full justify-start gap-4 overflow-x-auto md:gap-8 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-						{tabs.map((tab) => (
-							<TabsTrigger
-								key={tab.value}
-								value={tab.value}
-								className="min-w-max flex-none px-3 py-1.5"
-							>
-								{tab.icon && (
-									<span className="mr-1.5 inline-flex [&>svg]:size-4">
-										{tab.icon}
-									</span>
-								)}
-								{tab.label}
-							</TabsTrigger>
-						))}
-					</TabsList>
-				</div>
-			</Tabs>
+			<div className="flex min-w-0 items-end gap-2">
+				<Tabs
+					value={active}
+					onValueChange={handleValueChange}
+					className="min-w-0 flex-1"
+				>
+					<div className="relative w-full overflow-hidden">
+						<div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-4 bg-gradient-to-r from-muted to-transparent sm:hidden" />
+						<div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-4 bg-gradient-to-l from-muted to-transparent sm:hidden" />
+						<TabsList className="h-10 w-full justify-start gap-4 overflow-x-auto md:gap-8 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+							{tabs.map((tab) => (
+								<TabsTrigger
+									key={tab.value}
+									value={tab.value}
+									className="min-w-max flex-none px-3 py-1.5"
+								>
+									{tab.icon && (
+										<span className="mr-1.5 inline-flex [&>svg]:size-4">
+											{tab.icon}
+										</span>
+									)}
+									{tab.label}
+								</TabsTrigger>
+							))}
+						</TabsList>
+					</div>
+				</Tabs>
+				{trailing ? (
+					<div className="mb-1 flex shrink-0 items-center gap-2">{trailing}</div>
+				) : null}
+			</div>
 		</div>
 	);
 };

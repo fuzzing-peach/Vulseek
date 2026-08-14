@@ -5,6 +5,9 @@ import {
 	apiCreatePipeline,
 	apiCreatePipelineRun,
 	apiDeletePipelineDraft,
+	apiCreatePipelineProfile,
+	apiUpdatePipelineProfile,
+	apiPipelineProfileId,
 	apiDuplicatePipeline,
 	apiPipelineId,
 	apiPipelineVersionId,
@@ -34,7 +37,15 @@ import {
 	unarchivePipelineForOrganization,
 	validatePipelineYaml,
 } from "@vulseek/server/services/pipeline";
+import {
+	createPipelineProfileForOrganization,
+	findPipelineProfileForOrganization,
+	getPipelineProfileGraphForOrganization,
+	listPipelineProfilesForOrganization,
+	updatePipelineProfileForOrganization,
+} from "@vulseek/server/services/pipeline-profiles";
 import { createPipelineRun } from "@vulseek/server/services/scan/api/pipeline-runs";
+import { listAvailableAgentSkills } from "@vulseek/server/services/scan/runtime/available-skills";
 
 /**
  * Organization-level pipeline router.
@@ -88,6 +99,28 @@ export const pipelineRouter = createTRPCRouter({
 			),
 		),
 
+	profilesList: protectedProcedure
+			.input(apiPipelineId)
+			.query(({ ctx, input }) => listPipelineProfilesForOrganization(ctx.session.activeOrganizationId, input.pipelineId)),
+	profilesGet: protectedProcedure
+			.input(apiPipelineProfileId)
+			.query(({ ctx, input }) => findPipelineProfileForOrganization(ctx.session.activeOrganizationId, input.pipelineProfileId)),
+	profilesStageGraph: protectedProcedure
+			.input(apiPipelineId.merge(apiPipelineVersionId))
+			.query(({ ctx, input }) => getPipelineProfileGraphForOrganization(ctx.session.activeOrganizationId, input.pipelineId, input.pipelineVersionId)),
+	profilesCreate: protectedProcedure
+			.input(apiCreatePipelineProfile)
+			.mutation(async ({ ctx, input }) => {
+				requireManager(ctx.user.role);
+				return createPipelineProfileForOrganization({ organizationId: ctx.session.activeOrganizationId, ...input });
+			}),
+	profilesUpdate: protectedProcedure
+			.input(apiUpdatePipelineProfile)
+			.mutation(async ({ ctx, input }) => {
+				requireManager(ctx.user.role);
+				return updatePipelineProfileForOrganization({ organizationId: ctx.session.activeOrganizationId, ...input });
+			}),
+
 	listVersions: protectedProcedure
 		.input(apiPipelineId)
 		.query(async ({ ctx, input }) =>
@@ -128,20 +161,22 @@ export const pipelineRouter = createTRPCRouter({
 
 	/**
 	 * Agent profiles, skills, plugins and effects the editor can reference.
-	 * The full skill registry is wired in the editor phase; plugins/effects
-	 * are the server-registered safe lists from the V3 contract.
+	 * Skills come from agents/skills/<name>/SKILL.md.
+	 * Plugins and effects are the server-registered safe lists from the V3 contract.
 	 */
-	runtimeCatalog: protectedProcedure.query(async () => ({
-		agentProfiles: [],
-		skills: [],
-		plugins: ["research-track", "research-deadline", "tob-goal-native"],
-		effects: [
-			"sync-candidates",
-			"project-candidate-result",
-			"research-registry",
-			"tob-goal-registry",
-		],
-	})),
+	runtimeCatalog: protectedProcedure.query(async () => {
+		return {
+			agentProfiles: [],
+			skills: await listAvailableAgentSkills(),
+			plugins: ["research-track", "research-deadline"],
+			effects: [
+				"sync-candidates",
+				"project-candidate-result",
+				"research-registry",
+				"tob-goal-registry",
+			],
+		};
+	}),
 
 	/**
 	 * Start a run of a published pipeline version. Members may run; only

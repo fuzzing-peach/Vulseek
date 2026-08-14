@@ -2274,7 +2274,6 @@ stages:
     description: Repository-wide runtime and security surface profiling.
     role: scan
     group: full-scan
-    mode: serial
     concurrency: 1
     disableable: false
     runtime:
@@ -2289,7 +2288,7 @@ stages:
         You are the Repository Profile stage for a full scan vulnerability-mining job.
         {{taskIsolation}}
         Use the installed skill named repository-profile as your working method.
-        The repository-profile skill file is /workspace/repo/.agents/skills/repository-profile/SKILL.md.
+        The repository-profile skill file is $VULSEEK_AGENT_HOME/skills/repository-profile/SKILL.md.
         Do not emit candidate or candidate_batch events.
         Build a repository manifest for the full checked-out repository, not a recent commit window.
         Preserve distinct runtime and security-relevant module boundaries after removing obvious repository noise.
@@ -2343,7 +2342,6 @@ stages:
     description: Module-level threat and attack-surface modeling.
     role: scan
     group: full-scan
-    mode: fanout
     concurrency: 4
     disableable: true
     runtime:
@@ -2358,7 +2356,7 @@ stages:
         You are the Attack Surface Model stage for one full-scan module task.
         {{taskIsolation}}
         Use the installed skill named attack-surface-model as your working method.
-        The attack-surface-model skill file is /workspace/repo/.agents/skills/attack-surface-model/SKILL.md.
+        The attack-surface-model skill file is $VULSEEK_AGENT_HOME/skills/attack-surface-model/SKILL.md.
         Do not emit candidate or candidate_batch events.
         scan_job_id: {{scanJobId}}
         module_id: {{moduleId}}
@@ -2400,7 +2398,6 @@ stages:
     description: Identify route, handler, parser, function, and other scan targets.
     role: scan
     group: full-scan
-    mode: fanout
     concurrency: 4
     disableable: true
     runtime:
@@ -2415,7 +2412,7 @@ stages:
         You are the Identify Target stage for one full-scan module task focused on a single vulnerability class.
         {{taskIsolation}}
         Use the installed skill named identify-target as your working method.
-        The identify-target skill file is /workspace/repo/.agents/skills/identify-target/SKILL.md.
+        The identify-target skill file is $VULSEEK_AGENT_HOME/skills/identify-target/SKILL.md.
         Do not emit candidate or candidate_batch events.
         scan_job_id: {{scanJobId}}
         module_id: {{moduleId}}
@@ -2465,7 +2462,6 @@ stages:
     description: Target-level candidate discovery.
     role: scan
     group: full-scan
-    mode: fanout
     concurrency: 4
     disableable: true
     runtime:
@@ -2480,7 +2476,7 @@ stages:
         You are the Scan Target stage for one full-scan target task.
         {{taskIsolation}}
         Use the installed skill named scan-target as your working method.
-        The scan-target skill file is /workspace/repo/.agents/skills/scan-target/SKILL.md.
+        The scan-target skill file is $VULSEEK_AGENT_HOME/skills/scan-target/SKILL.md.
         scan_job_id: {{scanJobId}}
         module_id: {{moduleId}}
         module_name: {{moduleName}}
@@ -2540,7 +2536,6 @@ stages:
     description: Candidate analysis and critic routing.
     role: analysis
     group: review
-    mode: fanout
     concurrency: 2
     disableable: true
     runtime:
@@ -2571,7 +2566,7 @@ stages:
         feedback_json_path: {{feedbackJsonPath}}
 
         Use the installed skill named analyze-finding as your working method.
-        The analyze-finding skill file is /workspace/repo/.agents/skills/analyze-finding/SKILL.md.
+        The analyze-finding skill file is $VULSEEK_AGENT_HOME/skills/analyze-finding/SKILL.md.
         Follow the coordinator workflow and evidence rules defined in the skill.
         Read the JSON files referenced above before analysis. If feedback_json_path is not "none", read that JSON file too. If analysis_report_template_path is not "none", read that file and format the markdown report to match it.
         Write every task artifact only under task_dir.
@@ -2634,7 +2629,6 @@ stages:
     description: Challenge analysis results before verification.
     role: analysis
     group: review
-    mode: fanout
     concurrency: 2
     disableable: true
     runtime:
@@ -2649,7 +2643,7 @@ stages:
         You are the critic agent for one vulnerability analysis.
         {{taskIsolation}}
         Use the installed skill named critique-finding as your working method.
-        The critique-finding skill file is /workspace/repo/.agents/skills/critique-finding/SKILL.md.
+        The critique-finding skill file is $VULSEEK_AGENT_HOME/skills/critique-finding/SKILL.md.
         candidate_id: {{candidateId}}
         candidate_title: {{candidateTitle}}
         candidate_json_path: {{candidateJsonPath}}
@@ -2690,7 +2684,6 @@ stages:
     description: Fact-check target, paths, and evidence.
     role: verification
     group: review
-    mode: fanout
     concurrency: 1
     disableable: true
     runtime:
@@ -2726,7 +2719,7 @@ stages:
         write_verify_report_to: {{reportPath}}
 
         Use the installed skill named verify-finding as your working method.
-        The verify-finding skill file is /workspace/repo/.agents/skills/verify-finding/SKILL.md.
+        The verify-finding skill file is $VULSEEK_AGENT_HOME/skills/verify-finding/SKILL.md.
         Read the JSON files referenced above before verification.
         Do not repeat broad exploration. This stage is a sanity check only.
         Check whether the analysis report's factual claims, code paths, target descriptions, symbols, data-flow descriptions, and trigger/precondition descriptions really exist or basically hold in the repository.
@@ -2788,7 +2781,6 @@ stages:
     description: Final security classification and severity.
     role: verification
     group: review
-    mode: fanout
     concurrency: 1
     disableable: true
     runtime:
@@ -2804,7 +2796,7 @@ stages:
         {{taskIsolation}}
         Work only on this candidate and classify security impact after verify passed.
         Use the installed skill named triage-finding as your working method.
-        The triage-finding skill file is /workspace/repo/.agents/skills/triage-finding/SKILL.md.
+        The triage-finding skill file is $VULSEEK_AGENT_HOME/skills/triage-finding/SKILL.md.
         scan_job_id: {{scanJobId}}
         candidate_id: {{candidateId}}
         candidate_title: {{candidateTitle}}

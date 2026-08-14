@@ -9,6 +9,7 @@ import {
 	createWSClient,
 	experimental_formDataLink,
 	httpBatchLink,
+	httpLink,
 	splitLink,
 	wsLink,
 } from "@trpc/client";
@@ -94,8 +95,14 @@ export const api = createTRPCNext<AppRouter>({
 						true: experimental_formDataLink({
 							url: `${getBaseUrl()}/api/trpc`,
 						}),
-						false: httpBatchLink({
-							url: `${getBaseUrl()}/api/trpc`,
+						false: splitLink({
+							condition: (op) => op.context.skipBatch === true,
+							true: httpLink({
+								url: `${getBaseUrl()}/api/trpc`,
+							}),
+							false: httpBatchLink({
+								url: `${getBaseUrl()}/api/trpc`,
+							}),
 						}),
 					}),
 				}),

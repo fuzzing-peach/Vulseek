@@ -1,23 +1,23 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { db } from "@vulseek/server/db";
+import type {
+	ScanRuntimeSettings,
+	ScanStageSettings,
+} from "@vulseek/server/db/schema";
 import { applications, compose, scanJobs } from "@vulseek/server/db/schema";
 import { eq } from "drizzle-orm";
 import { getAgentProfileById } from "../../ai";
 import { findApplicationById } from "../../application";
 import { findComposeById } from "../../compose";
-import type { AgentProfileLike, ScanJob } from "../types";
-import type {
-	ScanRuntimeSettings,
-	ScanStageSettings,
-} from "@vulseek/server/db/schema";
+import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
+import { createStageRuntimeConfig } from "../pipeline/scan-stage-runtime-config";
 import {
 	getRuntimeStageSetting,
 	normalizeScanRuntimeSettings,
 } from "../runtime-settings";
 import { SCAN_STAGE_IDS } from "../stage-metadata";
-import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
-import { createStageRuntimeConfig } from "../pipeline/scan-stage-runtime-config";
+import type { AgentProfileLike, ScanJob } from "../types";
 
 const CONTAINER_SCAN_CONTEXT_ROOT = "/scan-context";
 const CONTAINER_TASK_RUNTIME_ROOT = "/task";
@@ -247,15 +247,17 @@ export const resolveScanProfileConcurrencySettingsFromTarget = async (
 
 export const resolveScanProfileConcurrencySettings = async (
 	scanJobId: string,
-): Promise<ScanProfileConcurrencySettings & {
-	scanRuntimeSettings: ScanRuntimeSettings;
-	scanType: "delta" | "full" | "research" | "tob-goal";
-}> => {
+): Promise<
+	ScanProfileConcurrencySettings & {
+		scanRuntimeSettings: ScanRuntimeSettings;
+		pipelineId: string;
+	}
+> => {
 	const [scanJob] = await db
 		.select({
 			applicationId: scanJobs.applicationId,
 			composeId: scanJobs.composeId,
-			scanType: scanJobs.scanType,
+			pipelineId: scanJobs.pipelineId,
 			scanRuntimeSettings: scanJobs.scanRuntimeSettings,
 		})
 		.from(scanJobs)
@@ -268,7 +270,7 @@ export const resolveScanProfileConcurrencySettings = async (
 		scanRuntimeSettings: normalizeScanRuntimeSettings(
 			scanJob?.scanRuntimeSettings ?? {},
 		),
-		scanType: scanJob?.scanType ?? "full",
+		pipelineId: scanJob?.pipelineId ?? "",
 	};
 };
 
@@ -278,8 +280,10 @@ export const resolveStageConcurrencySetting = async (
 	fallback: (settings: ScanProfileConcurrencySettings) => number | null,
 ) => {
 	const settings = await resolveScanProfileConcurrencySettings(scanJobId);
-	const snapshotConcurrency = await createStageRuntimeConfig(scanJobId, stageName)
-		.getConcurrency();
+	const snapshotConcurrency = await createStageRuntimeConfig(
+		scanJobId,
+		stageName,
+	).getConcurrency();
 	const concurrency = Math.max(
 		1,
 		getRuntimeStageSetting(settings.scanRuntimeSettings, stageName)

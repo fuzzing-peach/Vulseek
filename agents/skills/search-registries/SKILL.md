@@ -17,7 +17,7 @@ Search and cross-reference CVE databases (NVD, MITRE, OSV) for known vulnerabili
 
 ## Project-Scoped Cache
 
-See also: `/root/.codex/skills/cache-schema/project-intel.md` for the normalized file layout and merge rules.
+See also: `$VULSEEK_AGENT_HOME/skills/cache-schema/project-intel.md` for the normalized file layout and merge rules.
 
 
 Before querying external registries, use the shared project/profile cache directory. The Python tools resolve it from `VULSEEK_PROJECT_CACHE_DIR`.

@@ -12,14 +12,11 @@ export const SCAN_PIPELINE_IDS = {
 } as const;
 
 const stageRoleSchema = z.enum(["scan", "analysis", "verification"]);
-const stageRunModeSchema = z.enum(["serial", "fanout"]);
-
 const stageRuntimeConfigSchema = z
 	.object({
 		agentProfile: z.string().min(1).nullable().optional(),
 		persistent: z.boolean().nullable().optional(),
 		reuseContainer: z.boolean().nullable().optional(),
-		mode: stageRunModeSchema.nullable().optional(),
 		nullableOutput: z.boolean().nullable().optional(),
 		cwd: z.string().min(1).nullable().optional(),
 		skills: z.array(z.string().min(1)).nullable().optional(),
@@ -41,6 +38,7 @@ const stageConfigSchema = z.object({
 	concurrency: z.number().int().min(1),
 	maxConcurrency: z.number().int().min(1).optional(),
 	disableable: z.boolean().default(true),
+	goal: z.boolean().default(false),
 	description: z.string().optional(),
 	inputSchema: z.record(z.unknown()).optional(),
 	outputSchema: z.record(z.unknown()).optional(),
@@ -65,6 +63,7 @@ const stageConfigSchema = z.object({
 			}),
 		)
 		.default([]),
+	jobOutput: z.boolean().default(false),
 	effects: z
 		.array(
 			z.discriminatedUnion("type", [
@@ -181,12 +180,14 @@ export type ScanPipelineStageConfig = {
 	concurrency: number;
 	maxConcurrency: number | null;
 	disableable: boolean;
+	goal: boolean;
 	description: string | null;
 	inputSchema: Record<string, unknown> | null;
 	outputSchema: Record<string, unknown> | null;
 	runtimeConfig: ScanStageRuntimeConfig | null;
 	inputArtifacts: Array<{ from: string; to: string; inputField?: string; required: boolean }>;
 	outputArtifacts: Array<{ from: string; to: string; inputField?: string; required: boolean }>;
+	jobOutput: boolean;
 	effects: Array<
 		| { type: "sync-candidates" }
 		| {
@@ -224,7 +225,6 @@ export type ScanStageRuntimeConfig = {
 	agentProfile: string | null;
 	persistent: boolean | null;
 	reuseContainer: boolean | null;
-	mode: "serial" | "fanout" | null;
 	nullableOutput: boolean | null;
 	cwd: string | null;
 	skills: string[] | null;
@@ -336,6 +336,8 @@ export const normalizePipelineDefinitionSnapshot = (
 		...stage,
 		inputArtifacts: stage.inputArtifacts ?? [],
 		outputArtifacts: stage.outputArtifacts ?? [],
+		jobOutput: stage.jobOutput ?? false,
+		goal: stage.goal ?? false,
 		effects: stage.effects ?? [],
 		report: stage.report ?? null,
 		promptValues: stage.promptValues ?? {},
@@ -428,6 +430,8 @@ export const normalizePipelineDefinitionSnapshot = (
 				runtimeConfig: stage.runtimeConfig ?? {},
 				inputArtifacts: stage.inputArtifacts,
 				outputArtifacts: stage.outputArtifacts,
+				jobOutput: stage.jobOutput,
+				goal: stage.goal,
 				effects: stage.effects,
 				report: stage.report ?? undefined,
 				taskName: stage.taskName ?? undefined,
@@ -614,7 +618,6 @@ const normalizeStageRuntimeConfig = (
 	agentProfile: config.agentProfile ?? null,
 	persistent: config.persistent ?? null,
 	reuseContainer: config.reuseContainer ?? null,
-	mode: config.mode ?? null,
 	nullableOutput: config.nullableOutput ?? null,
 	cwd: config.cwd ?? null,
 	skills: config.skills ?? null,
@@ -1018,6 +1021,8 @@ export const parseScanPipelineDefinitionsSource = (
 				runtimeConfig: normalizeStageRuntimeConfig(stage.runtimeConfig),
 				inputArtifacts: stage.inputArtifacts,
 				outputArtifacts: stage.outputArtifacts,
+				jobOutput: stage.jobOutput,
+				goal: stage.goal,
 				effects: stage.effects,
 				report: stage.report ?? null,
 				taskName: stage.taskName ?? null,
@@ -1221,7 +1226,6 @@ export const createStageRuntimeConfigWithDeps = (input: {
 		getPersistent: async () => (await loadRuntimeConfig())?.persistent ?? null,
 		getReuseContainer: async () =>
 			(await loadRuntimeConfig())?.reuseContainer ?? null,
-		getMode: async () => (await loadRuntimeConfig())?.mode ?? null,
 		getNullableOutput: async () =>
 			(await loadRuntimeConfig())?.nullableOutput ?? null,
 		getCwd: async () => (await loadRuntimeConfig())?.cwd ?? null,

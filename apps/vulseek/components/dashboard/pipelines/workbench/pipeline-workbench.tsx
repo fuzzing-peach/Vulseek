@@ -44,7 +44,7 @@ import { QuickSwitcher } from "./quick-switcher";
  * and the Inspector becomes an overlay sheet.
  */
 
-export type WorkbenchView = "definition" | "visual" | "raw";
+export type WorkbenchView = "definition" | "visual" | "raw" | "profiles";
 
 export type PipelineWorkbenchProps = {
 	state: PipelineEditorState;
@@ -59,6 +59,9 @@ export type PipelineWorkbenchProps = {
 	draftState: { dirty: boolean; draftRevision: number; publishedVersion: string | null };
 	/** Raw YAML editor handle, for the page to flush before saving. */
 	onYamlReady?: (handle: YamlEditorHandle | null) => void;
+	initialView?: WorkbenchView;
+	profilesContent?: React.ReactNode;
+	onViewChange?: (view: WorkbenchView) => void;
 };
 
 const useMediaQuery = (query: string): boolean => {
@@ -81,8 +84,14 @@ export const PipelineWorkbench = ({
 	versionLabel,
 	draftState,
 	onYamlReady,
+	initialView,
+	profilesContent,
+	onViewChange,
 }: PipelineWorkbenchProps) => {
-	const [view, setView] = React.useState<WorkbenchView>("definition");
+	const [view, setView] = React.useState<WorkbenchView>(initialView ?? "definition");
+	React.useEffect(() => {
+		if (initialView) setView(initialView);
+	}, [initialView]);
 	const [diagnosticsOpen, setDiagnosticsOpen] = React.useState(false);
 	const [switcherOpen, setSwitcherOpen] = React.useState(false);
 	const [drill, setDrill] = React.useState<DrillLevel>("rail");
@@ -200,30 +209,33 @@ export const PipelineWorkbench = ({
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
 			{/* View tabs: use the same sub-navigation treatment as project pages. */}
-			<div className="flex shrink-0 items-end border-b">
-				<DashboardPageTabs
-					tabs={[
-						{ value: "definition", label: "Definition" },
-						{ value: "visual", label: "Visual" },
-						{ value: "raw", label: "Raw YAML" },
-					]}
-					fallback="definition"
-					activeValue={view}
-					onTabChange={(value) => setView(value as WorkbenchView)}
-					className="min-w-0 flex-1 px-4 pt-8 sm:px-6"
-				/>
-				<div className="mr-4 mb-1 flex shrink-0 items-center gap-2">
-					{readOnly && versionLabel ? (
+			<DashboardPageTabs
+				tabs={[
+					{ value: "definition", label: "Definition" },
+					{ value: "visual", label: "Visual" },
+					{ value: "raw", label: "Raw YAML" },
+					{ value: "profiles", label: "Profiles" },
+				]}
+				fallback="definition"
+				activeValue={view}
+				onTabChange={(value) => {
+					const nextView = value as WorkbenchView;
+					setView(nextView);
+					onViewChange?.(nextView);
+				}}
+				trailing={
+					<>
+					{view !== "profiles" && readOnly && versionLabel ? (
 						<span className="text-xs text-muted-foreground">
 							Read-only view of {versionLabel}
 						</span>
 					) : null}
-					{state.canvasTouched && view !== "visual" ? (
+					{state.canvasTouched && view !== "visual" && view !== "profiles" ? (
 						<span className="text-xs text-muted-foreground">
 							Canvas edits use stable serialization — original comments may be rewritten.
 						</span>
 					) : null}
-					{state.patchError ? (
+					{view !== "profiles" && state.patchError ? (
 						<span
 							className="rounded bg-red-500/10 px-2 py-0.5 text-xs text-red-600"
 							title={state.patchError}
@@ -231,7 +243,7 @@ export const PipelineWorkbench = ({
 							Patch failed: {state.patchError}
 						</span>
 					) : null}
-					{view !== "visual" ? (
+					{view !== "visual" && view !== "profiles" ? (
 						<button
 							type="button"
 							onClick={() => setInspectorOpen((open) => !open)}
@@ -245,13 +257,31 @@ export const PipelineWorkbench = ({
 							)}
 						</button>
 					) : null}
-				</div>
-			</div>
+					</>
+				}
+			/>
 
 			{/* View body */}
-			<div className="flex min-h-0 flex-1 p-4 pt-5 sm:px-6">
-				<div className="flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-xl border bg-background shadow-sm">
-					<div className="relative min-w-0 flex-1">
+			<div
+				className={cn(
+					"flex w-full min-w-0 p-4 pt-5 sm:px-6",
+					view === "profiles" ? "flex-none" : "min-h-0 flex-1",
+				)}
+			>
+				<div
+					className={cn(
+						"w-full min-w-0 rounded-xl border bg-background shadow-sm",
+						view === "profiles"
+							? "overflow-visible"
+							: "flex min-h-0 flex-1 overflow-hidden",
+					)}
+				>
+					<div
+						className={cn(
+							"relative flex w-full min-w-0 flex-col",
+							view === "profiles" ? "" : "h-full min-h-0 flex-1",
+						)}
+					>
 					{view === "definition" && viewDocument ? (
 						<DefinitionView
 							document={viewDocument}
@@ -285,8 +315,11 @@ export const PipelineWorkbench = ({
 									</span>
 								</div>
 							) : null}
-							<div className="flex h-full min-h-0">
-								<div className="min-w-0 flex-1">
+							<div className="flex h-full min-h-0 overflow-hidden">
+								<div
+									data-testid="pipeline-visual-canvas"
+									className="relative min-h-0 min-w-0 flex-1 overflow-hidden isolate"
+								>
 									<CanvasEditor
 										document={viewDocument}
 										readOnly={readOnly || staleDocument}
@@ -341,9 +374,13 @@ export const PipelineWorkbench = ({
 												onChange={(next) =>
 													dispatch({ type: "canvasModified", document: next })
 												}
-												onSelect={(entity) =>
-													dispatch({ type: "select", entity: entity as never })
-												}
+												onSelect={(entity) => {
+													dispatch({
+														type: "select",
+														entity: entity as never,
+													});
+													if (entity.type === "schema") navigateToDefinition();
+												}}
 											/>
 										</div>
 									</aside>
@@ -371,12 +408,13 @@ export const PipelineWorkbench = ({
 							readOnly={readOnly}
 						/>
 					) : null}
+					{view === "profiles" ? profilesContent : null}
 					</div>
 				</div>
 			</div>
 
 			{/* Diagnostics panel */}
-			{readOnly ? (
+			{view === "profiles" ? null : readOnly ? (
 				<div className="flex h-8 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
 					Read-only view{versionLabel ? ` of ${versionLabel}` : ""}
 					<span className="ml-auto">Use "Copy to draft" in the header to edit.</span>

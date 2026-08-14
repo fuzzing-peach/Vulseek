@@ -82,12 +82,6 @@ export const retryFailedScanJobTasksWithDeps = async (
 	deps: RetryFailedTasksDeps,
 ): Promise<RetryFailedTasksResult> => {
 	const scanJob = await deps.loadScanJob(scanJobId);
-	if (scanJob.scanType !== "full") {
-		throw new TRPCError({
-			code: "BAD_REQUEST",
-			message: "Retry failed tasks is only supported for full scan jobs",
-		});
-	}
 	if (
 		scanJob.status !== "finished" &&
 		scanJob.status !== "partially_finished"
@@ -121,6 +115,9 @@ export const retryFailedScanJobTasksWithDeps = async (
 	}
 
 	const retriedTasksByStage = createEmptyRetryCounts();
+	await deps.resetScanJobForRetry({
+		scanJobId,
+	});
 
 	for (const task of failedTasks) {
 		const stageName = task.stageName as RetryableTaskStageName;
@@ -130,10 +127,6 @@ export const retryFailedScanJobTasksWithDeps = async (
 		await deps.enqueueTask(scanJobId, task);
 		retriedTasksByStage[stageName] += 1;
 	}
-
-	await deps.resetScanJobForRetry({
-		scanJobId,
-	});
 
 	return {
 		scanJobId,

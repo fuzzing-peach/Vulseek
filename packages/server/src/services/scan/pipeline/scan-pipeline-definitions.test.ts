@@ -54,6 +54,7 @@ test("materializes missing legacy stage and edge fields from the YAML baseline",
 		(stage) => stage.id === "scan-target",
 	);
 	assert.deepEqual(scanTarget?.effects, [{ type: "sync-candidates" }]);
+	assert.ok(normalized.stages.every((stage) => stage.jobOutput === false));
 	assert.ok(normalized.stages.every((stage) => stage.promptValues));
 	assert.ok(
 		normalized.pipelines.full.edges.every((edge) =>
@@ -222,7 +223,6 @@ stages:
       agentProfile: repository-agent
       persistent: false
       reuseContainer: true
-      mode: serial
       nullableOutput: false
       cwd: /workspace/repo
       skills: [repo-profiler]
@@ -349,7 +349,6 @@ pipelines:
 		agentProfile: "repository-agent",
 		persistent: false,
 		reuseContainer: true,
-		mode: "serial",
 		nullableOutput: false,
 		cwd: "/workspace/repo",
 		skills: ["repo-profiler"],

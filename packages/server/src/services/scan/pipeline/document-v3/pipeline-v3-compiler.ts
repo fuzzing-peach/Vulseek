@@ -72,9 +72,6 @@ export const derivePipelineCapabilities = (
 			if (plugin === "research-track" || plugin === "research-deadline") {
 				research = true;
 			}
-			if (plugin === "tob-goal-native") {
-				tobGoal = true;
-			}
 		}
 	}
 	return { candidates, research, tobGoal };

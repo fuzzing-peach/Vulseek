@@ -326,6 +326,8 @@
 	"scan.tasks.finished": "Finished Tasks",
 	"scan.tasks.finishedDescription": "Completed, failed, and canceled tasks for this job.",
 	"scan.tasks.search": "Search tasks",
+	"scan.tasks.selectAll": "Select all rerunnable tasks on this page",
+	"scan.tasks.selectPage": "Rerunnable tasks on this page",
 	"scan.tasks.noRunning": "No running tasks",
 	"scan.tasks.noMatching": "No matching tasks",
 	"scan.tasks.currentActivity": "Current Activity",

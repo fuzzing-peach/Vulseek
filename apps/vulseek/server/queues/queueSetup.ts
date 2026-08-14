@@ -7,9 +7,6 @@ const myQueue = new Queue("deployments", {
 const scansQueue = new Queue("scans", {
 	connection: redisConfig,
 });
-const scanEvaluationsQueue = new Queue("scan-evaluations", {
-	connection: redisConfig,
-});
 const datasetEvaluationQueue = new Queue("dataset-evaluations", {
 	connection: redisConfig,
 });
@@ -17,7 +14,6 @@ const datasetEvaluationQueue = new Queue("dataset-evaluations", {
 process.on("SIGTERM", () => {
 	myQueue.close();
 	scansQueue.close();
-	scanEvaluationsQueue.close();
 	datasetEvaluationQueue.close();
 	process.exit(0);
 });
@@ -31,14 +27,6 @@ myQueue.on("error", (error) => {
 	}
 });
 scansQueue.on("error", (error) => {
-	if ((error as any).code === "ECONNREFUSED") {
-		console.error(
-			"Make sure you have installed Redis and it is running.",
-			error,
-		);
-	}
-});
-scanEvaluationsQueue.on("error", (error) => {
 	if ((error as any).code === "ECONNREFUSED") {
 		console.error(
 			"Make sure you have installed Redis and it is running.",
@@ -77,4 +65,4 @@ export const cleanQueuesByCompose = async (composeId: string) => {
 	}
 };
 
-export { myQueue, scansQueue, scanEvaluationsQueue, datasetEvaluationQueue };
+export { myQueue, scansQueue, datasetEvaluationQueue };

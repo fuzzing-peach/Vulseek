@@ -23,6 +23,7 @@
 		"db:push": "drizzle-kit push --config ./server/db/drizzle.config.ts",
 		"db:truncate": "tsx -r dotenv/config ./server/db/reset.ts",
 		"candidate:backfill": "tsx -r dotenv/config ./server/db/backfill-candidates.ts",
+		"scan:repair-consistency": "tsx -r dotenv/config ./server/db/repair-scan-job-consistency.ts",
 		"db:studio": "drizzle-kit studio --config ./server/db/drizzle.config.ts",
 		"check": "biome check --write --no-errors-on-unmatched --files-ignore-unknown=true",
 		"format": "biome format --write",

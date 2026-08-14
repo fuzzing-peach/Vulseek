@@ -17,11 +17,12 @@ const stage = (overrides: Partial<PipelineStageV3> = {}): PipelineStageV3 => ({
 	name: "Start",
 	role: "scan",
 	group: "g",
-	mode: "serial",
 	concurrency: 1,
 	disableable: true,
+	goal: false,
 	inputArtifacts: [],
 	outputArtifacts: [],
+	jobOutput: false,
 	effects: [],
 	containerNameParts: [],
 	allowAgentExit: false,
@@ -80,6 +81,8 @@ describe("parsePipelineDocumentV3", () => {
 		expect(diagnostics).toEqual([]);
 		expect(document?.name).toBe("test-pipeline");
 		expect(document?.stages["start"]!.runtime.prompt).toBe("Do the thing.");
+		expect(document?.stages["start"]!.jobOutput).toBe(false);
+		expect(document?.stages["start"]!.goal).toBe(false);
 	});
 
 	it("reports syntax errors as diagnostics instead of throwing", () => {
@@ -109,6 +112,18 @@ describe("parsePipelineDocumentV3", () => {
 		);
 	});
 
+	it("rejects the removed stage mode field", () => {
+		const yaml = serializePipelineDocumentV3(minimalDocument).replace(
+			"    concurrency: 1",
+			"    mode: serial\n    concurrency: 1",
+		);
+		const { document, diagnostics } = parsePipelineDocumentV3(yaml);
+		expect(document).toBeNull();
+		expect(diagnostics.some((diagnostic) => diagnostic.message.includes("mode"))).toBe(
+			true,
+		);
+	});
+
 	it("rejects promptFile in V3 documents", () => {
 		const yaml = serializePipelineDocumentV3(minimalDocument).replace(
 			"prompt: Do the thing.",
@@ -124,7 +139,7 @@ describe("parsePipelineDocumentV3", () => {
 	it("rejects oversized documents", () => {
 		const bigPrompt = "x".repeat(1 * 1024 * 1024 + 1024);
 		const { diagnostics } = parsePipelineDocumentV3(
-			`version: 3\nname: big\nsupportedTargets: [project]\nroot: start\nstages:\n  start:\n    name: s\n    role: scan\n    group: g\n    mode: serial\n    concurrency: 1\n    runtime:\n      prompt: ${JSON.stringify(bigPrompt)}\n`,
+			`version: 3\nname: big\nsupportedTargets: [project]\nroot: start\nstages:\n  start:\n    name: s\n    role: scan\n    group: g\n    concurrency: 1\n    runtime:\n      prompt: ${JSON.stringify(bigPrompt)}\n`,
 		);
 		expect(diagnostics.some((d) => d.code === "yaml.size_exceeded")).toBe(
 			true,
@@ -141,7 +156,6 @@ describe("parsePipelineDocumentV3", () => {
 			"  name: s",
 			"  role: scan",
 			"  group: g",
-			"  mode: serial",
 			"  concurrency: 1",
 			"  runtime:",
 			"    prompt: p",

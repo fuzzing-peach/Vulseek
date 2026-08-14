@@ -1,7 +1,7 @@
 import { Database, Loader2, Pause, Play, Square } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import type { ReactElement } from "react";
+import { type ReactElement, useState } from "react";
 import {
 	CollectionSection,
 	CollectionView,
@@ -15,8 +15,16 @@ import {
 } from "@/components/dashboard/ui-system";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
+import { CopyValueButton } from "@/components/shared/copy-value-button";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import type { ListQueryConfig } from "@/lib/ui-system/list-query";
 import { api } from "@/utils/api";
 
@@ -36,6 +44,7 @@ const TRIAL_STATUS_OPTIONS = [
 	{ value: "running", label: "Running" },
 	{ value: "completed", label: "Completed" },
 	{ value: "scan_failed", label: "Scan failed" },
+	{ value: "scoring_failed", label: "Scoring failed" },
 	{ value: "timed_out", label: "Timed out" },
 	{ value: "canceled", label: "Canceled" },
 ];
@@ -47,13 +56,47 @@ const moneyFormat = new Intl.NumberFormat(undefined, {
 	maximumFractionDigits: 4,
 });
 
+const formatDateTime = (value?: string | null) =>
+	value ? new Date(value).toLocaleString() : "-";
+
 const STATUS_LABEL = (status: string) =>
 	status
 		.replace(/[_-]/g, " ")
 		.replace(/\b\w/g, (letter) => letter.toUpperCase());
 
+type TrialScoringResult = {
+	groundTruthArtifacts: string[];
+	jobOutputs: Array<{
+		taskId: string;
+		stageName: string;
+		artifacts: string[];
+		hit: boolean;
+		matchedGroundTruthArtifacts: string[];
+		reason: string;
+	}>;
+	unmatchedGroundTruthArtifacts: string[];
+	summary: string;
+};
+
+const readTrialScoringResult = (
+	result: Record<string, unknown> | null,
+): TrialScoringResult | null => {
+	if (!result || typeof result.scoring !== "object" || !result.scoring) {
+		return null;
+	}
+	const scoring = result.scoring as Partial<TrialScoringResult>;
+	return Array.isArray(scoring.groundTruthArtifacts) &&
+		Array.isArray(scoring.jobOutputs) &&
+		Array.isArray(scoring.unmatchedGroundTruthArtifacts) &&
+		typeof scoring.summary === "string"
+		? (scoring as TrialScoringResult)
+		: null;
+};
+
 const EvaluationDetailPage = () => {
 	const router = useRouter();
+	const [selectedScoring, setSelectedScoring] =
+		useState<TrialScoringResult | null>(null);
 	const evaluationId =
 		typeof router.query.evaluationId === "string"
 			? router.query.evaluationId
@@ -89,6 +132,7 @@ const EvaluationDetailPage = () => {
 				| "completed"
 				| "canceled"
 				| "scan_failed"
+				| "scoring_failed"
 				| "timed_out"
 				| undefined,
 		},
@@ -128,6 +172,76 @@ const EvaluationDetailPage = () => {
 
 	return (
 		<>
+			<Dialog
+				open={selectedScoring !== null}
+				onOpenChange={(open) => !open && setSelectedScoring(null)}
+			>
+				<DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
+					<DialogHeader>
+						<DialogTitle>Ground-truth comparison</DialogTitle>
+						<DialogDescription>
+							{selectedScoring?.summary ||
+								"Per-output comparison against the sample ground truth."}
+						</DialogDescription>
+					</DialogHeader>
+					<div className="space-y-3">
+						{selectedScoring?.jobOutputs.map((output) => (
+							<div
+								key={output.taskId}
+								className="rounded-lg border bg-muted/20 p-4"
+							>
+								<div className="flex flex-wrap items-start justify-between gap-2">
+									<div className="min-w-0">
+										<div className="font-medium">{output.stageName}</div>
+										<div className="break-all font-mono text-xs text-muted-foreground">
+											{output.taskId}
+										</div>
+									</div>
+									<StatusBadge
+										value={output.hit ? "completed" : "failed"}
+										label={output.hit ? "Hit" : "Miss"}
+									/>
+								</div>
+								<p className="mt-3 text-sm text-muted-foreground">
+									{output.reason}
+								</p>
+								<div className="mt-3 grid gap-3 text-xs sm:grid-cols-2">
+									<div>
+										<div className="font-medium">Output artifacts</div>
+										{output.artifacts.length > 0 ? (
+											output.artifacts.map((artifact) => (
+												<div
+													key={artifact}
+													className="mt-1 break-all font-mono text-muted-foreground"
+												>
+													{artifact}
+												</div>
+											))
+										) : (
+											<div className="mt-1 text-muted-foreground">None</div>
+										)}
+									</div>
+									<div>
+										<div className="font-medium">Matched ground truth</div>
+										{output.matchedGroundTruthArtifacts.length > 0 ? (
+											output.matchedGroundTruthArtifacts.map((artifact) => (
+												<div
+													key={artifact}
+													className="mt-1 break-all font-mono text-muted-foreground"
+												>
+													{artifact}
+												</div>
+											))
+										) : (
+											<div className="mt-1 text-muted-foreground">None</div>
+										)}
+									</div>
+								</div>
+							</div>
+						))}
+					</div>
+				</DialogContent>
+			</Dialog>
 			<BreadcrumbSidebar
 				list={[
 					{ name: "Datasets", href: "/dashboard/datasets" },
@@ -146,7 +260,21 @@ const EvaluationDetailPage = () => {
 				<DashboardPageHeader
 					icon={<Database />}
 					title={data.name}
-					description={`${data.pipelineId} · ${data.profileKey} · ${data.trialCount} trials`}
+					description={
+						<span className="flex min-w-0 items-center gap-2 break-all">
+							<span className="shrink-0 font-mono text-xs">
+								{data.evaluationId}
+							</span>
+							<CopyValueButton
+								value={data.evaluationId}
+								label="Evaluation ID"
+								className="size-7 shrink-0"
+							/>
+							<span className="truncate">
+								{data.pipelineId} · {data.profileKey} · {data.trialCount} trials
+							</span>
+						</span>
+					}
 					status={
 						<StatusBadge
 							value={data.status}
@@ -221,6 +349,12 @@ const EvaluationDetailPage = () => {
 									getRowLabel={(trial) =>
 										trial.sample?.title || trial.sample?.id || trial.sampleId
 									}
+									onRowClick={(trial) => {
+										if (!trial.scanJobId) return;
+										void router.push(
+											`/dashboard/datasets/jobs/${encodeURIComponent(trial.scanJobId)}`,
+										);
+									}}
 									searchValue={searchInput}
 									onSearchValueChange={setSearchInput}
 									searchPlaceholder="Filter trials..."
@@ -286,6 +420,29 @@ const EvaluationDetailPage = () => {
 												moneyFormat.format(row.original.estimatedCost),
 										},
 										{
+											id: "scoring",
+											header: "Ground truth",
+											cell: ({ row }) => {
+												const scoring = readTrialScoringResult(
+													row.original.result,
+												);
+												if (!scoring) return "-";
+												const hits = scoring.jobOutputs.filter(
+													(output) => output.hit,
+												).length;
+												return (
+													<Button
+														variant="ghost"
+														size="sm"
+														className="h-8 px-2"
+														onClick={() => setSelectedScoring(scoring)}
+													>
+														{hits}/{scoring.jobOutputs.length} outputs hit
+													</Button>
+												);
+											},
+										},
+										{
 											id: "scanJob",
 											header: "Scan Job",
 											cell: ({ row }) => {
@@ -318,6 +475,45 @@ const EvaluationDetailPage = () => {
 							</CollectionSection>
 						) : (
 							<div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+								<Card className="sm:col-span-2 xl:col-span-4">
+									<CardHeader>
+										<CardTitle>Evaluation source</CardTitle>
+									</CardHeader>
+									<CardContent className="grid gap-4 sm:grid-cols-2">
+										<div>
+											<div className="text-xs text-muted-foreground">Dataset</div>
+											<Link
+												className="mt-1 inline-flex text-sm font-medium text-primary hover:underline"
+												href={`/dashboard/datasets/${encodeURIComponent(data.datasetId)}`}
+											>
+												{data.datasetName}
+											</Link>
+										</div>
+										<div>
+											<div className="text-xs text-muted-foreground">
+												Dataset profile
+											</div>
+											<Link
+												className="mt-1 inline-flex text-sm font-medium text-primary hover:underline"
+												href={`/dashboard/datasets/${encodeURIComponent(data.datasetId)}/profiles/${encodeURIComponent(data.profileId)}`}
+											>
+												{data.profileKey}
+											</Link>
+										</div>
+										<div>
+											<div className="text-xs text-muted-foreground">Started</div>
+											<div className="mt-1 text-sm font-medium">
+												{formatDateTime(data.startedAt)}
+											</div>
+										</div>
+										<div>
+											<div className="text-xs text-muted-foreground">Finished</div>
+											<div className="mt-1 text-sm font-medium">
+												{formatDateTime(data.finishedAt)}
+											</div>
+										</div>
+									</CardContent>
+								</Card>
 								<Card>
 									<CardContent className="p-5">
 										<div className="text-xs text-muted-foreground">Trials</div>

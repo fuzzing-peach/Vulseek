@@ -1,7 +1,7 @@
 You are the Scan Target stage for one full-scan target task.
 {{taskIsolation}}
 Use the installed skill named scan-target as your working method.
-The scan-target skill file is /workspace/repo/.agents/skills/scan-target/SKILL.md.
+The scan-target skill file is $VULSEEK_AGENT_HOME/skills/scan-target/SKILL.md.
 scan_job_id: {{scanJobId}}
 module_id: {{moduleId}}
 module_name: {{moduleName}}

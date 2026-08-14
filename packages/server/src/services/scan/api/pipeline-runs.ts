@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@vulseek/server/db";
 import { scanPipelines, scanPipelineVersions } from "@vulseek/server/db/schema";
+import type { ScanRuntimeSettings } from "@vulseek/server/db/schema/shared";
 import { findApplicationById } from "../../application";
 import { findComposeById } from "../../compose";
 import {
@@ -42,6 +43,7 @@ export type CreatePipelineRunInput = {
 	};
 	title?: string;
 	description?: string;
+	scanRuntimeSettings?: ScanRuntimeSettings;
 	stageOverrides?: Record<
 		string,
 		{
@@ -212,9 +214,6 @@ export const createPipelineRun = async (
 		composeId: input.target.type === "compose" ? input.target.composeId : null,
 		datasetEvaluationTrialId:
 			input.target.type === "datasetTrial" ? input.target.trialId : null,
-		// Legacy placeholder — the V3 path never reads scanType; the column is
-		// made nullable during the cleanup phase.
-		scanType: "full",
 		title:
 			input.title ||
 			`${document.name}: ${input.target.type === "application" ? "application" : input.target.type === "compose" ? "compose" : "evaluation trial"}`,
@@ -225,6 +224,7 @@ export const createPipelineRun = async (
 		targetRef: input.repository?.targetRef ?? null,
 		targetTag: input.repository?.targetTag ?? null,
 		commitWindow: input.repository?.commitWindow ?? 3,
+		scanRuntimeSettings: input.scanRuntimeSettings ?? {},
 		pipelineId: pipeline.pipelineId,
 		pipelineVersionId: version.pipelineVersionId,
 		pipelineYamlSnapshot: version.yaml,

@@ -28,7 +28,6 @@ stages:
     name: &stage-name Discovery
     role: scan
     group: core
-    mode: serial
     concurrency: 1
     runtime:
       prompt: |
@@ -38,7 +37,6 @@ stages:
     name: *stage-name
     role: verification
     group: core
-    mode: serial
     concurrency: 1
     runtime:
       prompt: Review findings.
@@ -84,9 +82,8 @@ describe("patchPipelineYaml — preservation", () => {
 					name: "Review renamed",
 					role: "verification",
 					group: "core",
-					mode: "serial",
 					concurrency: 2,
-					runtime: { kind: "agent", prompt: "Review findings.", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {},
+					runtime: { kind: "agent", prompt: "Review findings.", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], jobOutput: false, effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {},
 				},
 			},
 		]);
@@ -116,7 +113,7 @@ describe("patchPipelineYaml — preservation", () => {
 
 	it("does not disturb the alias target when an unrelated stage is patched", () => {
 		const result = patchPipelineYaml(FIXTURE, [
-			{ op: "updateStage", stageId: "review", stage: { name: "R", role: "verification", group: "core", mode: "serial", concurrency: 1, runtime: { kind: "agent", prompt: "p", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {} } },
+			{ op: "updateStage", stageId: "review", stage: { name: "R", role: "verification", group: "core", concurrency: 1, runtime: { kind: "agent", prompt: "p", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], jobOutput: false, effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {} } },
 		]);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
@@ -167,7 +164,7 @@ describe("patchPipelineYaml — typed ops", () => {
 
 	it("adds and deletes stages, edges, groups, and schemas", () => {
 		const added = patchPipelineYaml(FIXTURE, [
-			{ op: "addStage", stageId: "triage", stage: { name: "Triage", role: "analysis", group: "core", mode: "serial", concurrency: 1, runtime: { kind: "agent", prompt: "Triage.", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {} } },
+			{ op: "addStage", stageId: "triage", stage: { name: "Triage", role: "analysis", group: "core", concurrency: 1, runtime: { kind: "agent", prompt: "Triage.", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], jobOutput: false, effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {} } },
 			{ op: "addEdge", edge: { id: "review-to-triage", name: "Hand off", from: "review", to: "triage", mode: "map", fork: false, artifacts: [] } },
 			{ op: "addGroup", group: { id: "extra", name: "Extra", leader: "discovery", members: ["discovery"] } },
 			{ op: "setSchema", schemaId: "triage-schema", schema: { type: "object", properties: { ok: { type: "boolean" } } } },
@@ -197,7 +194,7 @@ describe("patchPipelineYaml — typed ops", () => {
 
 	it("rejects duplicate ids on add and missing entities on update", () => {
 		const duplicateStage = patchPipelineYaml(FIXTURE, [
-			{ op: "addStage", stageId: "discovery", stage: { name: "Dup", role: "scan", group: "core", mode: "serial", concurrency: 1, runtime: { kind: "agent", prompt: "p", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {} } },
+			{ op: "addStage", stageId: "discovery", stage: { name: "Dup", role: "scan", group: "core", concurrency: 1, runtime: { kind: "agent", prompt: "p", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], jobOutput: false, effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {} } },
 		]);
 		expect(duplicateStage.ok).toBe(false);
 		if (duplicateStage.ok) return;
@@ -246,7 +243,6 @@ stages:
     name: A
     role: scan
     group: g
-    mode: serial
     concurrency: 1
     runtime:
       prompt: p
@@ -267,7 +263,7 @@ describe("patchPipelineYaml — invalid intermediate input", () => {
 	it("fails cleanly on syntax errors without corrupting the buffer", () => {
 		const broken = "version: 3\nstages:\n  a: [broken";
 		const result = patchPipelineYaml(broken, [
-			{ op: "updateStage", stageId: "a", stage: { name: "A", role: "scan", group: "g", mode: "serial", concurrency: 1, runtime: { kind: "agent", prompt: "p", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {} } },
+			{ op: "updateStage", stageId: "a", stage: { name: "A", role: "scan", group: "g", concurrency: 1, runtime: { kind: "agent", prompt: "p", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], jobOutput: false, effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {} } },
 		]);
 		expect(result.ok).toBe(false);
 		if (result.ok) return;

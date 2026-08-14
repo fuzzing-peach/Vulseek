@@ -16,6 +16,7 @@ export type ResourceCardProps = {
 	href?: string;
 	icon?: ReactNode;
 	metadata?: ReactNode;
+	metadataPlacement?: "inline" | "top-right";
 	footer?: ReactNode;
 	actions?: ReactNode;
 	className?: string;
@@ -27,6 +28,7 @@ const ResourceCard = ({
 	href,
 	icon,
 	metadata,
+	metadataPlacement = "inline",
 	footer,
 	actions,
 	className,
@@ -49,8 +51,8 @@ const ResourceCard = ({
 			) : null}
 			{/* Override CardHeader p-6 → p-5 for a denser list-card rhythm */}
 			<CardHeader className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-1 p-5 pb-0">
-				{/* z-20: paint above absolute href overlay */}
-				<div className="relative z-20 min-w-0 space-y-1">
+				{/* Let the full-card link receive pointer events; actions stay interactive below. */}
+				<div className="pointer-events-none relative z-20 min-w-0 space-y-1">
 					<CardTitle className="block min-w-0 text-base font-medium leading-6">
 						<span className="flex min-w-0 items-center gap-2">
 							{icon ? (
@@ -73,14 +75,25 @@ const ResourceCard = ({
 						{description || "\u00A0"}
 					</CardDescription>
 					{/* Compact inline meta (status tags) — avoid a second CardContent block */}
-					{metadata ? (
+					{metadata && metadataPlacement === "inline" ? (
 						<div className="flex min-w-0 flex-wrap items-center gap-1.5 [&>*]:max-w-full">
 							{metadata}
 						</div>
 					) : null}
 				</div>
-				{actions ? (
-					<CardAction className="relative z-20 self-start">{actions}</CardAction>
+				{metadataPlacement === "top-right" || actions ? (
+					<div className="flex items-start gap-2">
+						{metadata && metadataPlacement === "top-right" ? (
+							<div className="pointer-events-none relative z-20 flex shrink-0 items-center gap-1.5">
+								{metadata}
+							</div>
+						) : null}
+						{actions ? (
+							<CardAction className="pointer-events-auto relative z-20 self-start">
+								{actions}
+							</CardAction>
+						) : null}
+					</div>
 				) : null}
 			</CardHeader>
 			{footer ? (

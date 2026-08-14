@@ -54,10 +54,23 @@ export const projectScanNavigation = (
 
 	const breadcrumbs: { label: string; href?: string }[] = [
 		{ label: "Projects", href: "/dashboard/projects" },
-		...(names?.projectName
-			? [{ label: names.projectName, href: "/dashboard/projects" }]
+		...(names?.projectName ? [{ label: names.projectName }] : []),
+		...(names?.environmentName
+			? [
+					{
+						label: names.environmentName,
+						href: `/dashboard/project/${encodeSegment(scope.projectId)}/environment/${encodeSegment(scope.environmentId)}`,
+					},
+				]
 			: []),
-		{ label: "Scan Jobs", href: base },
+		...(names?.profileName
+			? [
+					{
+						label: names.profileName,
+						href: `/dashboard/project/${encodeSegment(scope.projectId)}/environment/${encodeSegment(scope.environmentId)}/${scope.kind}/${scope.profileType}/${encodeSegment(scope.profileId)}`,
+					},
+				]
+			: []),
 	];
 
 	return {
@@ -105,5 +118,38 @@ export const datasetScanNavigation = (
 		candidateHref: (scanJobId, candidateId) =>
 			`${base}/${encodeSegment(scanJobId)}/candidates/${encodeSegment(candidateId)}`,
 		breadcrumbs,
+	};
+};
+
+export type DatasetTrialScanScope = {
+	datasetId: string;
+	datasetName: string;
+	profileId: string;
+	profileName: string;
+	evaluationId: string;
+	evaluationName: string;
+};
+
+export const datasetTrialScanNavigation = (
+	scope: DatasetTrialScanScope,
+): ScanNavigationContext => {
+	const context = datasetScanNavigation(scope.datasetId, {
+		datasetName: scope.datasetName,
+	});
+	const profileHref = `/dashboard/datasets/${encodeSegment(scope.datasetId)}/profiles/${encodeSegment(scope.profileId)}`;
+	const evaluationHref = `/dashboard/datasets/evaluations/${encodeSegment(scope.evaluationId)}?tab=trials`;
+
+	return {
+		...context,
+		returnHref: evaluationHref,
+		breadcrumbs: [
+			{ label: "Datasets", href: "/dashboard/datasets" },
+			{
+				label: scope.datasetName,
+				href: `/dashboard/datasets/${encodeSegment(scope.datasetId)}`,
+			},
+			{ label: scope.profileName, href: profileHref },
+			{ label: scope.evaluationName, href: evaluationHref },
+		],
 	};
 };

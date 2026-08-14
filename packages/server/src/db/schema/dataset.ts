@@ -12,7 +12,12 @@ import {
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { organization } from "./account";
-import { scanPipelines, scanPipelineVersions } from "./scan";
+import type { ScanRuntimeSettings } from "./shared";
+import {
+	scanPipelineProfiles,
+	scanPipelines,
+	scanPipelineVersions,
+} from "./scan";
 
 const timestamp = () => new Date().toISOString();
 
@@ -24,6 +29,7 @@ export type DatasetManifest = {
 		id: string;
 		title?: string;
 		repositoryPath: string;
+		groundTruthArtifacts: string[];
 		metadata?: Record<string, unknown>;
 	}>;
 };
@@ -121,6 +127,10 @@ export const datasetSamples = pgTable(
 		id: text("id").notNull(),
 		title: text("title").notNull().default(""),
 		repositoryPath: text("repositoryPath").notNull(),
+		groundTruthArtifacts: jsonb("groundTruthArtifacts")
+			.$type<string[]>()
+			.notNull()
+			.default([]),
 		metadata: jsonb("metadata")
 			.$type<Record<string, unknown>>()
 			.notNull()
@@ -154,13 +164,13 @@ export const datasetEvaluations = pgTable(
 			.notNull()
 			.references(() => datasetProfiles.profileId, { onDelete: "restrict" }),
 		name: text("name").notNull(),
-		// Legacy pipeline selector ("full" | "research" | "tob-goal") used by
-		// pre-V3 evaluations; new evaluations use pipelineId + the frozen
-		// version snapshot below.
-		legacyPipelineKey: text("legacyPipelineKey"),
-		pipelineId: text("pipelineId").references(() => scanPipelines.pipelineId, {
-			onDelete: "set null",
-		}),
+		pipelineId: text("pipelineId")
+			.notNull()
+			.references(() => scanPipelines.pipelineId, { onDelete: "restrict" }),
+		pipelineProfileId: text("pipelineProfileId").references(
+			() => scanPipelineProfiles.pipelineProfileId,
+			{ onDelete: "set null" },
+		),
 		pipelineVersionId: text("pipelineVersionId").references(
 			() => scanPipelineVersions.pipelineVersionId,
 			{ onDelete: "set null" },
@@ -171,7 +181,7 @@ export const datasetEvaluations = pgTable(
 		repetitions: integer("repetitions").notNull().default(1),
 		timeBudgetSeconds: integer("timeBudgetSeconds"),
 		scanRuntimeSettings: jsonb("scanRuntimeSettings")
-			.$type<Record<string, unknown>>()
+			.$type<ScanRuntimeSettings>()
 			.notNull()
 			.default({}),
 		scanPipelineDefinitionSnapshot: jsonb("scanPipelineDefinitionSnapshot")
@@ -229,12 +239,18 @@ export const datasetEvaluationTrials = pgTable(
 				| "running"
 				| "completed"
 				| "scan_failed"
+				| "scoring_failed"
 				| "timed_out"
 				| "canceled"
 			>()
 			.notNull()
 			.default("pending"),
 		scanJobId: text("scanJobId"),
+		postScanStatus: text("postScanStatus")
+			.$type<"pending" | "running" | "completed" | "failed">()
+			.notNull()
+			.default("pending"),
+		postScanResult: jsonb("postScanResult").$type<Record<string, unknown> | null>(),
 		durationMs: integer("durationMs"),
 		inputTokens: bigint("inputTokens", { mode: "number" }).notNull().default(0),
 		outputTokens: bigint("outputTokens", { mode: "number" })
@@ -272,6 +288,9 @@ export const datasetEvaluationTrials = pgTable(
 
 export const apiDatasetId = z.object({ datasetId: z.string().min(1) });
 export const apiDatasetProfileId = z.object({ profileId: z.string().min(1) });
+export const apiDatasetProfileCheckoutId = z.object({
+	checkoutId: z.string().min(1),
+});
 export const apiUpdateDatasetProfileSamples = apiDatasetProfileId.extend({
 	sampleIds: z.array(z.string().min(1)).max(100_000),
 });
@@ -353,6 +372,7 @@ export const apiListDatasetTrials = apiDatasetEvaluationId.extend({
 			"running",
 			"completed",
 			"scan_failed",
+			"scoring_failed",
 			"timed_out",
 			"canceled",
 		])
@@ -364,12 +384,8 @@ export const apiListDatasetTrials = apiDatasetEvaluationId.extend({
 export const apiCreateDatasetEvaluation = apiDatasetId.extend({
 	profileId: z.string().min(1),
 	name: z.string().trim().min(1).max(160),
-	// Legacy pre-V3 selector. `pipelineId` keeps its historical meaning here
-	// (full/research/tob-goal) so existing clients keep working; new
-	// evaluations pass `pipelineId` as an org pipeline id — resolved in the
-	// V3 run path (Phase 3+).
-	legacyPipelineKey: z.enum(["full", "research", "tob-goal"]).optional(),
-	pipelineId: z.enum(["full", "research", "tob-goal"]).optional(),
+	pipelineId: z.string().min(1),
+	pipelineProfileId: z.string().min(1).nullable().optional(),
 	sampleIds: z.array(z.string().min(1)).min(1),
 	repetitions: z.number().int().min(1).max(100),
 	timeBudgetSeconds: z.number().int().min(1).max(86_400).nullable().optional(),

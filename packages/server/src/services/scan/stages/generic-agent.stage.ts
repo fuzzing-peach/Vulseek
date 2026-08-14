@@ -26,7 +26,6 @@ import {
 } from "../pipeline/scan-pipeline-schema-contracts";
 import { applySchemaTransforms } from "../pipeline/scan-pipeline-schema-transforms";
 import { DEFAULT_DELTA_COMMIT_WINDOW } from "../constants";
-import { getResearchMinimumDurationMs } from "../scan-type";
 import { updateScanJobTargetContextRepo } from "../persistence/scan-job.repo";
 import { findResearchTrackIdentityRepo } from "../persistence/research-track.repo";
 import { prepareRepositoryForScanInContainer } from "../repository/prepare-repository";
@@ -38,7 +37,7 @@ import {
 	resolveStageRuntimePrompt,
 	resolveStageRuntimePromptTemplate,
 } from "./agent-stage-runtime";
-import { tryBuildTobGoalHuntNativePrompt } from "./tob-goal-native-prompt";
+import { buildGoalPrompt } from "./goal-prompt";
 import {
 	type PipelineContext,
 	resolveStageConcurrencySetting,
@@ -52,18 +51,37 @@ import {
 
 type GenericStageContext = StageContext & { scanJob?: ScanJob };
 
+const RESEARCH_STAGES = new Set([
+	"research-scope", "surface-map", "track-plan", "vulnerability-discovery",
+	"track-review", "finding-validation", "finding-review", "chain-synthesis",
+	"chain-review", "exploit-validation", "exploit-review", "research-report",
+]);
+const isResearchStage = (stageName: string) =>
+	stageName === "research" || RESEARCH_STAGES.has(stageName);
+const getResearchMinimumDurationMs = () => {
+	const configured = Number.parseInt(
+		process.env.VULSEEK_RESEARCH_MIN_DURATION_MS || "10800000",
+		10,
+	);
+	return Number.isFinite(configured) && configured > 0
+		? configured
+		: 3 * 60 * 60 * 1000;
+};
+
 export const resolveStageReuseContainer = (
-	scanType: ScanJob["scanType"] | "full_scan" | "delta_scan",
+	stageName: string,
 	configured: boolean,
+	goal = false,
 ) =>
-	scanType === "research" || scanType === "tob-goal" ? false : configured;
+	isResearchStage(stageName) || goal ? false : configured;
 
 export const resolveStageContainerNameParts = (
-	scanType: ScanJob["scanType"] | "full_scan" | "delta_scan",
+	stageName: string,
 	taskId: string,
 	configured: Array<string | null | undefined> | undefined,
+	goal = false,
 ) =>
-	scanType === "research" || scanType === "tob-goal"
+	isResearchStage(stageName) || goal
 		? [...(configured || []), taskId]
 		: configured;
 
@@ -137,20 +155,21 @@ const resolvePromptValues = async (
 	return toPromptValues(rendered);
 };
 
-export const createGenericAgentStageDefinition = <
+export function createGenericAgentStageDefinition<
 	TPipelineContext extends PipelineContext & { scanJob?: ScanJob },
 >(input: {
 	config: YamlPipelineStage;
 	outputSchema?: StructuredOutputSchemaSource;
 	queue?: StageQueueBinding<TPipelineContext, unknown>;
-}): StageDefinition<TPipelineContext, unknown, unknown, StageContext> =>
-	createStageDefinition({
+}): StageDefinition<TPipelineContext, unknown, unknown, StageContext> {
+	return createStageDefinition({
 		id: input.config.id,
 		name: input.config.name,
-		mode: input.config.mode,
 		persistent: input.config.runtime.persistent ?? undefined,
 		reuseContainer: input.config.runtime.reuseContainer ?? undefined,
 		nullableOutput: input.config.runtime.nullableOutput ?? undefined,
+		jobOutput: input.config.jobOutput,
+		goal: input.config.goal ?? false,
 		allowAgentExit: input.config.allowAgentExit,
 		outputSchema: input.outputSchema,
 		queue: input.queue,
@@ -165,13 +184,15 @@ export const createGenericAgentStageDefinition = <
 			const scanJob = stageCtx.scanJob;
 			if (!scanJob) throw new Error("Generic stage requires scanJob context");
 			const reuseContainer = resolveStageReuseContainer(
-				scanJob.scanType,
+				stageCtx.stageName,
 				stageCtx.reuseContainer,
+				input.config.goal,
 			);
 			const containerNameParts = resolveStageContainerNameParts(
-				scanJob.scanType,
+				stageCtx.stageName,
 				stageCtx.taskId,
 				input.config.containerNameParts,
+				input.config.goal,
 			);
 			const runtime = await launchAgentStageRuntime({
 				ctx: stageCtx,
@@ -182,7 +203,7 @@ export const createGenericAgentStageDefinition = <
 			if (input.config.runtime.prepareRepository) {
 				const repositoryState = await prepareRepositoryForScanInContainer({
 					containerName: runtime.containerName,
-						scanType: scanJob.scanType,
+					pipelineId: scanJob.pipelineId,
 					targetRef: scanJob.targetRef,
 					targetTag: scanJob.targetTag,
 					commitSha: scanJob.commitSha,
@@ -190,8 +211,10 @@ export const createGenericAgentStageDefinition = <
 					commitWindow:
 						scanJob.commitWindow || DEFAULT_DELTA_COMMIT_WINDOW,
 					scanRootDir: runtime.taskStageRootInContainer,
+					datasetRepository: Boolean(scanJob.datasetEvaluationTrialId),
 				});
-				await updateScanJobTargetContextRepo(scanJob.scanJobId, {
+				if (!scanJob.datasetEvaluationTrialId) {
+					await updateScanJobTargetContextRepo(scanJob.scanJobId, {
 					targetRef: repositoryState.currentBranch || repositoryState.targetRef,
 					targetTag:
 						repositoryState.currentExactTag || repositoryState.targetTag,
@@ -200,13 +223,14 @@ export const createGenericAgentStageDefinition = <
 					commitWindow: repositoryState.commitWindow,
 				});
 			}
+			}
 		},
 	run: async (ctx, stageInput) => {
 			const stageCtx = ctx as GenericStageContext;
 			const scanJob = stageCtx.scanJob;
 			if (!scanJob) throw new Error("Generic stage requires scanJob context");
 			let effectiveStageInput =
-				scanJob.scanType === "research"
+				isResearchStage(stageCtx.stageName)
 					? await enrichResearchTrackInput({
 							stageName: stageCtx.stageName,
 							stageInput,
@@ -218,32 +242,11 @@ export const createGenericAgentStageDefinition = <
 								}),
 						})
 					: stageInput;
-			if (
-				scanJob.scanType === "tob-goal" &&
-				(stageCtx.stageName === "goal-craft" ||
-					stageCtx.stageName === "goal-surface")
-			) {
-				const inputRecord =
-					effectiveStageInput &&
-					typeof effectiveStageInput === "object" &&
-					!Array.isArray(effectiveStageInput)
-						? (effectiveStageInput as Record<string, unknown>)
-						: {};
-				const threatDirection =
-					inputRecord.threatDirection ??
-					(scanJob.scanRuntimeSettings as { threatDirection?: unknown } | null)
-						?.threatDirection;
-				if (threatDirection && !inputRecord.threatDirection) {
-					effectiveStageInput = {
-						...inputRecord,
-						threatDirection,
-					};
-				}
-			}
 			const containerNameParts = resolveStageContainerNameParts(
-				scanJob.scanType,
+				stageCtx.stageName,
 				stageCtx.taskId,
 				input.config.containerNameParts,
+				input.config.goal,
 			);
 			const runtime = await resolveAgentStageRuntime({
 				ctx: stageCtx,
@@ -254,7 +257,7 @@ export const createGenericAgentStageDefinition = <
 				relativePath: "inputs/task-input.json",
 				value: effectiveStageInput,
 			});
-			if (scanJob.scanType === "research") {
+			if (isResearchStage(stageCtx.stageName)) {
 				await replaceTaskJsonArtifact({
 					taskDir: await stageCtx.taskDir(),
 					containerPath: "/task/task-context.json",
@@ -272,11 +275,9 @@ export const createGenericAgentStageDefinition = <
 				promptTemplate,
 				promptValues,
 			);
-			// tob-goal hunt must activate Codex native /goal (thread_goals), not a plain prompt.
-			const nativeHuntPrompt =
-				scanJob.scanType === "tob-goal" && stageCtx.stageName === "goal-hunt"
-					? tryBuildTobGoalHuntNativePrompt(effectiveStageInput)
-					: null;
+			const stagePrompt = input.config.goal
+				? buildGoalPrompt({ prompt: renderedPrompt, input: effectiveStageInput })
+				: renderedPrompt;
 			const result = await runSingleTurnAgentInContainer({
 				scanJob,
 				agentProfile: runtime.agentProfile,
@@ -290,8 +291,9 @@ export const createGenericAgentStageDefinition = <
 				taskRealRootInContainer: runtime.taskRealRootInContainer,
 				persistent: stageCtx.persistent,
 				reuseContainer: resolveStageReuseContainer(
-					scanJob.scanType,
+					stageCtx.stageName,
 					stageCtx.reuseContainer,
+					input.config.goal,
 				),
 				groupedPersistent: stageCtx.groupedPersistent,
 				allowAgentExit: input.config.allowAgentExit,
@@ -302,7 +304,7 @@ export const createGenericAgentStageDefinition = <
 				sessionMode: stageCtx.sessionMode,
 				parentSessionId: stageCtx.parentSessionId,
 				parentTaskId: stageCtx.parentTaskId,
-				prompt: nativeHuntPrompt ?? renderedPrompt,
+				prompt: stagePrompt,
 				outputSchema: input.outputSchema,
 				routeOutputSchemas: stageCtx.routeOutputSchemas,
 				onThreadId: async (threadId) => {
@@ -316,7 +318,7 @@ export const createGenericAgentStageDefinition = <
 				const taskDir = await _ctx.taskDir();
 				let output = JSON.parse(rawOutput) as unknown;
 				const scanJob = (_ctx as GenericStageContext).scanJob;
-				if (scanJob?.scanType === "research") {
+				if (isResearchStage(_ctx.stageName)) {
 					await assertResearchTrackIdentity({
 						stageName: _ctx.stageName,
 						stageInput: _stageInput,
@@ -388,3 +390,4 @@ export const createGenericAgentStageDefinition = <
 			}
 		},
 	});
+}

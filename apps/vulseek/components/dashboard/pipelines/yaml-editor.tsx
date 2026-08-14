@@ -85,6 +85,7 @@ export const YamlEditor = React.forwardRef<YamlEditorHandle, YamlEditorProps>(
 					extensions={[yamlLanguage()]}
 					readOnly={readOnly}
 					height="100%"
+					className="h-full min-h-0"
 					basicSetup={{
 						lineNumbers: true,
 						foldGutter: true,

@@ -48,8 +48,6 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 	const { mutateAsync: update } = api.application.update.useMutation();
 	const { mutateAsync: stop, isLoading: isStopping } =
 		api.application.stop.useMutation();
-	const { mutateAsync: createScanJob, isLoading: isCreatingScanJob } =
-		api.scan.create.useMutation();
 	return (
 		<>
 			<Card className="bg-background">

@@ -73,7 +73,7 @@ export const LayoutEditor = ({ document, dispatch, readOnly }: LayoutEditorProps
 	return (
 		<div className="flex h-full min-h-0 flex-col">
 			<SectionHeading title="Layout" subtitle="Canvas geometry is presentation-only metadata" />
-			<div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+			<div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 pb-12">
 				<SelectField
 					label="Direction"
 					value={direction}

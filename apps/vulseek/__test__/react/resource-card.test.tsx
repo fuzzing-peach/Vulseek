@@ -38,6 +38,7 @@ describe("ResourceCard", () => {
       "gap-1",
       "p-5",
     );
+    expect(title.parentElement).toHaveClass("pointer-events-none");
     expect(screen.getByText("Created today").parentElement).toHaveClass(
       "h-5",
       "w-full",

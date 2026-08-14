@@ -46,7 +46,7 @@ test("runtime settings operations load pipeline definitions once per call", () =
 	assert.equal(loadCount, 1);
 
 	loadCount = 0;
-	runtimeSettings.buildComplete({ scanType: "research" });
+	runtimeSettings.buildComplete({ pipelineId: "research" });
 	assert.equal(loadCount, 1);
 });
 
@@ -178,7 +178,7 @@ test("buildEffectiveDisabledStageSet uses YAML root and disableable settings", (
 
 test("buildCompleteScanRuntimeSettings snapshots target settings and YAML defaults", () => {
 	const settings = buildCompleteScanRuntimeSettings({
-		scanType: "full",
+		pipelineId: "full",
 		targetStageSettings: {
 			"scan-target": {
 				agentProfileId: "target-scan-profile",
@@ -231,7 +231,7 @@ test("buildCompleteScanRuntimeSettings snapshots target settings and YAML defaul
 
 test("buildCompleteScanRuntimeSettings uses only the selected pipeline stages", () => {
 	const settings = buildCompleteScanRuntimeSettings({
-		scanType: "delta",
+		pipelineId: "delta",
 		targetStageSettings: {
 			"repository-profile": {
 				agentProfileId: "repo-profile",

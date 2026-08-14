@@ -11,7 +11,7 @@ import {
 } from "@vulseek/server/db/schema";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { execAsync } from "../utils/process/execAsync";
+import { execAsync, execAsyncStream } from "../utils/process/execAsync";
 import {
 	assertDatasetPathInside,
 	datasetManifestRelativePath,
@@ -31,9 +31,47 @@ const sanitizeSegment = (value: string) =>
 export const validateDatasetManifest = validateDatasetManifestContract;
 const manifestRelativePath = datasetManifestRelativePath;
 
+type DatasetCheckoutPhase =
+	| "validating_source"
+	| "reading_manifest"
+	| "building_image"
+	| "saving_profile"
+	| "completed"
+	| "failed";
+
+type DatasetManifestProgress = {
+	current: number;
+	total: number;
+};
+
+type DatasetCheckoutTask = {
+	checkoutId: string;
+	profileId: string;
+	status: "running" | "completed" | "failed";
+	phase: DatasetCheckoutPhase;
+	message: string;
+	manifestProgress: DatasetManifestProgress | null;
+	startedAt: string;
+	finishedAt?: string;
+	errorMessage?: string;
+	sampleCount?: number;
+	checkoutImage?: string;
+};
+
+const datasetCheckoutTasks = new Map<string, DatasetCheckoutTask>();
+
+type DatasetCheckoutProgressHandlers = {
+	onPhase?: (
+		phase: Exclude<DatasetCheckoutPhase, "completed" | "failed">,
+		message: string,
+	) => void;
+	onManifestProgress?: (progress: DatasetManifestProgress) => void;
+};
+
 const readDatasetManifestInCheckoutContainer = async (
 	hostRoot: string,
 	toolsImage: string,
+	onManifestProgress?: (progress: DatasetManifestProgress) => void,
 ) => {
 	const configuredScanContextHostRoot =
 		process.env.VULSEEK_SCAN_CONTEXT_HOST_PATH?.trim();
@@ -56,13 +94,22 @@ const readDatasetManifestInCheckoutContainer = async (
 	const validationScript = [
 		"import json, os",
 		"root = os.path.realpath('/dataset')",
-		"with open('/dataset/.vulseek/samples.json', encoding='utf-8') as handle: manifest = json.load(handle)",
-		"for sample in manifest.get('samples', []):",
+		`with open('/dataset/${manifestRelativePath}', encoding='utf-8') as handle: manifest = json.load(handle)`,
+		"samples = manifest.get('samples', [])",
+		"for index, sample in enumerate(samples, start=1):",
 		"    relative = sample.get('repositoryPath')",
 		"    if not isinstance(relative, str) or os.path.isabs(relative): raise RuntimeError(f'Invalid dataset repositoryPath: {relative!r}')",
 		"    candidate = os.path.realpath(os.path.join('/dataset', relative))",
 		"    if candidate != root and not candidate.startswith(root + os.sep): raise RuntimeError(f'Dataset repositoryPath escapes the profile root: {relative}')",
 		"    if not os.path.isdir(candidate): raise RuntimeError(f'Dataset sample directory does not exist: {relative}')",
+		"    artifacts = sample.get('groundTruthArtifacts', [])",
+		"    if not isinstance(artifacts, list): raise RuntimeError(f'Invalid dataset groundTruthArtifacts: {artifacts!r}')",
+		"    for artifact in artifacts:",
+		"        if not isinstance(artifact, str) or not artifact.strip() or os.path.isabs(artifact): raise RuntimeError(f'Invalid dataset groundTruthArtifacts entry: {artifact!r}')",
+		"        artifact_path = os.path.realpath(os.path.join('/dataset', artifact.strip()))",
+		"        if artifact_path != root and not artifact_path.startswith(root + os.sep): raise RuntimeError(f'Dataset groundTruthArtifacts entry escapes the profile root: {artifact}')",
+		"        if not os.path.isfile(artifact_path): raise RuntimeError(f'Dataset groundTruth artifact must be a file: {artifact}')",
+		"    print(f'progress current={index} total={len(samples)}', flush=True)",
 		"temporary_output = '/result/manifest.json.tmp'",
 		"with open(temporary_output, 'w', encoding='utf-8') as handle: json.dump(manifest, handle, ensure_ascii=False, separators=(',', ':'))",
 		"os.replace(temporary_output, '/result/manifest.json')",
@@ -76,12 +123,27 @@ const readDatasetManifestInCheckoutContainer = async (
 		"--mount type=bind,source=" +
 			shellQuote(outputHostRoot) +
 			",target=/result",
+		"--entrypoint bash",
 		shellQuote(toolsImage),
-		"bash -lc",
+		"-lc",
 		shellQuote(["python3 - <<'PY'", validationScript, "PY"].join("\n")),
 	].join(" ");
 	try {
-		await execAsync(command);
+		let outputBuffer = "";
+		const handleOutput = (chunk: string) => {
+			outputBuffer += chunk;
+			const lines = outputBuffer.split(/\r?\n/);
+			outputBuffer = lines.pop() ?? "";
+			for (const line of lines) {
+				const match = line.match(/^progress current=(\d+) total=(\d+)$/);
+				if (!match) continue;
+				onManifestProgress?.({
+					current: Number(match[1]),
+					total: Number(match[2]),
+				});
+			}
+		};
+		await execAsyncStream(command, handleOutput);
 		return await fs.readFile(path.join(outputAppRoot, "manifest.json"), "utf8");
 	} finally {
 		await fs.rm(outputAppRoot, { recursive: true, force: true });
@@ -108,7 +170,7 @@ const buildCheckoutImage = async (profileId: string, toolsImage: string) => {
 	}
 };
 
-const resolveDatasetToolsImage = async () => {
+export const resolveDatasetToolsImage = async () => {
 	const configured =
 		process.env.VULSEEK_SCAN_TOOLS_IMAGE?.trim() ||
 		process.env.VULSEEK_TOOLS_IMAGE?.trim();
@@ -126,7 +188,10 @@ const resolveDatasetToolsImage = async () => {
 	return image;
 };
 
-export const prepareDatasetProfile = async (profileId: string) => {
+export const prepareDatasetProfile = async (
+	profileId: string,
+	progress: DatasetCheckoutProgressHandlers = {},
+) => {
 	const row = await db
 		.select({ profile: datasetProfiles, dataset: datasets })
 		.from(datasetProfiles)
@@ -146,6 +211,10 @@ export const prepareDatasetProfile = async (profileId: string) => {
 		.where(eq(datasetProfiles.profileId, profileId));
 
 	try {
+		progress.onPhase?.(
+			"validating_source",
+			"Validating the local dataset path and scanner tools",
+		);
 		if (
 			!row.profile.hostRoot.trim() ||
 			!path.isAbsolute(row.profile.hostRoot)
@@ -157,8 +226,16 @@ export const prepareDatasetProfile = async (profileId: string) => {
 		const hostRoot = path.resolve(row.profile.hostRoot);
 		const source = { type: "local" as const, path: hostRoot };
 		const toolsImage = await resolveDatasetToolsImage();
+		progress.onPhase?.(
+			"reading_manifest",
+			"Reading and validating dataset samples",
+		);
 		const manifest = parseDatasetManifest(
-			await readDatasetManifestInCheckoutContainer(hostRoot, toolsImage),
+			await readDatasetManifestInCheckoutContainer(
+				hostRoot,
+				toolsImage,
+				progress.onManifestProgress,
+			),
 		);
 		const manifestSampleIds = new Set(
 			manifest.samples.map((sample) => sample.id),
@@ -166,7 +243,15 @@ export const prepareDatasetProfile = async (profileId: string) => {
 		const selectedSampleIds = row.profile.selectedSampleIds.filter((sampleId) =>
 			manifestSampleIds.has(sampleId),
 		);
+		progress.onPhase?.(
+			"building_image",
+			"Building the immutable checkout image",
+		);
 		const checkoutImage = await buildCheckoutImage(profileId, toolsImage);
+		progress.onPhase?.(
+			"saving_profile",
+			"Saving the sample index and checkout image",
+		);
 		await db.transaction(async (tx) => {
 			await tx
 				.delete(datasetSamples)
@@ -178,6 +263,7 @@ export const prepareDatasetProfile = async (profileId: string) => {
 						id: sample.id,
 						title: sample.title ?? "",
 						repositoryPath: sample.repositoryPath,
+						groundTruthArtifacts: sample.groundTruthArtifacts,
 						metadata: sample.metadata ?? {},
 						ordinal: sample.ordinal,
 					})),
@@ -220,6 +306,76 @@ export const prepareDatasetProfile = async (profileId: string) => {
 			.where(eq(datasetProfiles.profileId, profileId));
 		throw error;
 	}
+};
+
+export const findDatasetProfileCheckoutStatus = (checkoutId: string) => {
+	const task = datasetCheckoutTasks.get(checkoutId);
+	return task ? { ...task } : null;
+};
+
+export const findRunningDatasetProfileCheckout = (profileId: string) => {
+	for (const task of datasetCheckoutTasks.values()) {
+		if (task.profileId === profileId && task.status === "running") {
+			return { ...task };
+		}
+	}
+	return null;
+};
+
+export const startDatasetProfileCheckout = (profileId: string) => {
+	const existing = findRunningDatasetProfileCheckout(profileId);
+	if (existing) return existing;
+
+	const checkoutId = nanoid();
+	const task: DatasetCheckoutTask = {
+		checkoutId,
+		profileId,
+		status: "running",
+		phase: "validating_source",
+		message: "Starting dataset checkout",
+		manifestProgress: null,
+		startedAt: new Date().toISOString(),
+	};
+	datasetCheckoutTasks.set(checkoutId, task);
+
+	const updateTask = (patch: Partial<DatasetCheckoutTask>) => {
+		const current = datasetCheckoutTasks.get(checkoutId);
+		if (current) Object.assign(current, patch);
+	};
+
+	void prepareDatasetProfile(profileId, {
+		onPhase: (phase, message) =>
+			updateTask({
+				phase,
+				message,
+				manifestProgress:
+					phase === "reading_manifest" ? task.manifestProgress : null,
+			}),
+		onManifestProgress: (manifestProgress) =>
+			updateTask({ phase: "reading_manifest", manifestProgress }),
+	})
+		.then((result) => {
+			updateTask({
+				status: "completed",
+				phase: "completed",
+				message: "Dataset checkout completed",
+				finishedAt: new Date().toISOString(),
+				sampleCount: result.sampleCount,
+				checkoutImage: result.checkoutImage,
+			});
+		})
+		.catch((error: unknown) => {
+			const message = error instanceof Error ? error.message : String(error);
+			updateTask({
+				status: "failed",
+				phase: "failed",
+				message: "Dataset checkout failed",
+				finishedAt: new Date().toISOString(),
+				errorMessage: message.slice(0, 4000),
+			});
+		});
+
+	return { ...task };
 };
 
 export const pruneDatasetProfile = async (profileId: string) => {
@@ -279,16 +435,11 @@ export const resolveDatasetTrialRuntime = async (scanJobId: string) => {
 		row.profile.hostRoot,
 		row.sample.repositoryPath,
 	);
-	if (!row.profile.checkoutImage) {
-		throw new Error(
-			`Dataset profile ${row.profile.profileId} has no checkout image`,
-		);
-	}
 	return {
 		...row,
 		sampleHostPath,
 		profileHostRoot: row.profile.hostRoot,
-		checkoutImage: row.profile.checkoutImage,
+		checkoutImage: row.profile.checkoutImage ?? null,
 	};
 };
 

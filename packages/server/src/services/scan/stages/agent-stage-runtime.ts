@@ -1,6 +1,7 @@
 import { buildTaskAgentProfileSnapshot } from "../agent-profile-snapshot";
 import { bindTaskRuntimeRepo } from "../persistence/task.repo";
 import { createStageRuntimeConfig } from "../pipeline/scan-stage-runtime-config";
+import { injectSkillListIntoPrompt } from "../prompts/inject-skill-list";
 import {
 	type PromptTemplateValues,
 	renderPromptTemplateString,
@@ -105,4 +106,11 @@ export const resolveStageRuntimePrompt = async (
 	ctx: StageContext,
 	promptTemplate: string,
 	values: PromptTemplateValues,
-) => renderPromptTemplateString(promptTemplate, values);
+) => {
+	const rendered = renderPromptTemplateString(promptTemplate, values);
+	const skills = await createStageRuntimeConfig(
+		ctx.scanJobId,
+		ctx.stageName,
+	).getSkills();
+	return injectSkillListIntoPrompt(rendered, skills);
+};

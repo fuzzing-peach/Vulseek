@@ -95,6 +95,18 @@ const hasExplosiveAliasExpansion = (document: Document.Parsed): boolean => {
 	return [...counts.values()].some((count) => count > 16);
 };
 
+const materializeStageDefaults = (
+	document: PipelineDocumentV3,
+): PipelineDocumentV3 => ({
+	...document,
+	stages: Object.fromEntries(
+		Object.entries(document.stages).map(([id, stage]) => [
+			id,
+			{ ...stage, goal: stage.goal ?? false },
+		]),
+	),
+});
+
 /**
  * Parse raw YAML text into a validated PipelineDocumentV3.
  * Returns `document: null` when the text cannot be interpreted as a valid
@@ -190,7 +202,7 @@ export const parsePipelineDocumentV3 = (
 		return { document: null, diagnostics };
 	}
 
-	return { document: parsed.data, diagnostics };
+	return { document: materializeStageDefaults(parsed.data), diagnostics };
 };
 
 /**

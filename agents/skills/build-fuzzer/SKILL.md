@@ -15,7 +15,7 @@ installed `address-sanitizer` skill for memory-safety instrumentation choices.
 1. Read the build request, candidate context, entry-to-candidate path, harness requirements, and expected trigger condition.
 2. Create a Rust crate under the task directory. Keep all generated source files, build logs, and artifacts under the task directory.
 3. Implement a complete LibAFL fuzzer that drives the requested entry path toward the candidate site. Prefer a small deterministic harness over broad scaffolding, but it must still use LibAFL `StdFuzzer`, `StdState`, an `Executor`, an `EventManager`, and a `Monitor`.
-4. Copy or inline `/workspace/repo/.agents/skills/run-fuzzer/JSONLPrintingMonitor.rs` into the generated crate and wire it into the LibAFL event manager.
+4. Copy or inline `$VULSEEK_AGENT_HOME/skills/run-fuzzer/JSONLPrintingMonitor.rs` into the generated crate and wire it into the LibAFL event manager.
 5. Configure the generated fuzzer so LibAFL monitor events are appended to exactly `/task/fuzz-progress.jsonl` at runtime.
 6. Enable sanitizers and debug symbols when they fit the target language and build system.
 7. Build the executable fuzzer. Capture stdout/stderr into log files under the task directory.

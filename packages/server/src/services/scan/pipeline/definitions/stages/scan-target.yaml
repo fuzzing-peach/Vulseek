@@ -10,7 +10,6 @@ scan-target:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: fanout
     nullableOutput: true
     cwd: /workspace/repo
     skills: [scan-target]

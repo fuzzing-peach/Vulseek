@@ -16,7 +16,7 @@ import {
 import { getAgentProfileById } from "./ai";
 import { findApplicationById } from "./application";
 import { findComposeById } from "./compose";
-import { resolveDatasetTrialRuntime } from "./dataset";
+import { resolveDatasetToolsImage, resolveDatasetTrialRuntime } from "./dataset";
 import { buildTaskAgentProfileSnapshot } from "./scan/agent-profile-snapshot";
 import { findCandidateTaskLineage } from "./scan/api/candidate-records";
 import {
@@ -61,10 +61,11 @@ import {
 import { findCandidateProjectionByIdRepo } from "./scan/persistence/candidate-projection-list.repo";
 import { settleScanJobRepo } from "./scan/persistence/job-settlement.repo";
 import {
+	cancelScanJobRepo,
 	findScanJobByIdRepo,
 	listUnfinishedScanJobsRepo,
 	resetScanJobForRetryRepo,
-	updateScanJobStatusRepo,
+	transitionScanJobStatusRepo,
 } from "./scan/persistence/scan-job.repo";
 import {
 	findStageGroupInstanceByIdRepo,
@@ -153,7 +154,6 @@ import {
 	getRuntimeStageConcurrency,
 	getRuntimeStageSetting,
 } from "./scan/runtime-settings";
-import { getPipelineIdForScanType, type ScanType } from "./scan/scan-type";
 import { SCAN_STAGE_IDS, SCAN_STAGE_METADATA } from "./scan/stage-metadata";
 import { resolveStageTaskName } from "./scan/stage-task-name";
 import type { PipelineContext } from "./scan/stages/full-scan-stage.runtime";
@@ -185,23 +185,6 @@ import type {
 } from "./scan/types";
 
 const PREINSTALLED_TOOL_SKILLS = [] as const;
-const RUNTIME_CUSTOM_SKILLS = [
-	"codeql",
-	"semgrep",
-	"delta-scope",
-	"full-scan",
-	"full-scan-subagent",
-	"repository-profile",
-	"attack-surface-model",
-	"identify-target",
-	"scan-target",
-	"analyze-finding",
-	"libafl",
-	"critique-finding",
-	"verify-finding",
-	"search-registries",
-	"tree-sitter",
-] as const;
 
 type UnifiedModuleTaskView = {
 	taskId: string;
@@ -1033,6 +1016,7 @@ const listQueuePendingCountsByScanJobId = async (
 	}>,
 	concurrencyLimitByStageName = new Map<Task["stageName"], number>(),
 	stageNames?: Array<string>,
+	stageTitles = new Map<string, string>(),
 ): Promise<QueuePendingCountView[]> => {
 	const stageNamesToRead = stageNames ?? Object.values(SCAN_STAGE_IDS);
 	const queueEntries: Array<{
@@ -1046,7 +1030,7 @@ const listQueuePendingCountsByScanJobId = async (
 		);
 		return {
 			id: stageName,
-			title: metadata?.name ?? stageName,
+			title: metadata?.name ?? stageTitles.get(stageName) ?? stageName,
 			stageName,
 			queue: getScanStageQueue(scanJobId, stageName),
 		};
@@ -1230,12 +1214,6 @@ const copyTaskInputsForRerun = async (input: {
 export const rerunScanTask = async (taskId: string) => {
 	const originalTask = await findTaskByIdRepo(taskId);
 	const scanJob = await findScanJobByIdRepo(originalTask.scanJobId);
-	if (scanJob.scanType !== "full") {
-		throw new TRPCError({
-			code: "BAD_REQUEST",
-			message: "Task rerun is only supported for full scan jobs",
-		});
-	}
 	if (scanJob.status === "finalizing") {
 		throw new TRPCError({
 			code: "CONFLICT",
@@ -1254,6 +1232,17 @@ export const rerunScanTask = async (taskId: string) => {
 			message: `Task stage is not rerunnable: ${originalTask.stageName}`,
 		});
 	}
+	if (
+		scanJob.status === "finished" ||
+		scanJob.status === "partially_finished" ||
+		scanJob.status === "failed" ||
+		scanJob.status === "canceled"
+	) {
+		await resetScanJobForRetryRepo(scanJob.scanJobId, {
+			status: "pending",
+			errorMessage: null,
+		});
+	}
 
 	const task = await createTaskRepo({
 		taskId: createShortTaskId(),
@@ -1267,17 +1256,11 @@ export const rerunScanTask = async (taskId: string) => {
 		runtimeMode: originalTask.runtimeMode,
 		forkedFromTaskId: originalTask.forkedFromTaskId,
 		forkedFromThreadId: originalTask.forkedFromThreadId,
+		allowedJobStatuses: ["pending", "running"],
 	});
 
 	await copyTaskInputsForRerun({ scanJob, originalTask, rerunTask: task });
 	await enqueueRetriedTask(task.scanJobId, task);
-	if (scanJob.status === "finished" || scanJob.status === "canceled") {
-		await resetScanJobForRetryRepo(scanJob.scanJobId, {
-			status: "pending",
-			errorMessage: null,
-		}).catch(() => {});
-	}
-
 	return {
 		originalTaskId: originalTask.taskId,
 		task,
@@ -2398,7 +2381,10 @@ const writeContainerFile = async (
 	);
 };
 
-const resolveScanExecutionContext = async (scanJob: ScanJob) => {
+const resolveScanExecutionContext = async (
+	scanJob: ScanJob,
+	options?: { validateDatasetToolsImage?: boolean },
+) => {
 	if (scanJob.datasetEvaluationTrialId) {
 		const datasetRuntime = await resolveDatasetTrialRuntime(scanJob.scanJobId);
 		if (!datasetRuntime) {
@@ -2408,12 +2394,19 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 		}
 		const projectName = `dataset-${datasetRuntime.dataset.datasetId}`;
 		const serviceName = `${datasetRuntime.profile.profileId}-${datasetRuntime.sample.id}`;
-		const imageTag = datasetRuntime.checkoutImage;
-		await execAsync(
-			`docker image inspect ${escapeSingleQuotes(imageTag)}`,
-		).catch(() => {
-			throw new Error(`Dataset checkout image not found: ${imageTag}`);
-		});
+		const shouldValidateToolsImage = options?.validateDatasetToolsImage !== false;
+		const imageTag = shouldValidateToolsImage
+			? await resolveDatasetToolsImage()
+			: process.env.VULSEEK_SCAN_TOOLS_IMAGE?.trim() ||
+				process.env.VULSEEK_TOOLS_IMAGE?.trim() ||
+				"dataset-tools-image-not-required";
+		if (shouldValidateToolsImage) {
+			await execAsync(
+				`docker image inspect ${escapeSingleQuotes(imageTag)}`,
+			).catch(() => {
+				throw new Error(`Dataset scan tools image not found: ${imageTag}`);
+			});
+		}
 		const configuredHostRoot = resolveConfiguredScanContextHostPath();
 		if (!configuredHostRoot) {
 			throw new Error(
@@ -2485,7 +2478,7 @@ const resolveScanExecutionContext = async (scanJob: ScanJob) => {
 		await execAsync(`docker image inspect ${imageTag}`);
 	} catch {
 		throw new Error(
-			`Checkout image not found: ${imageTag}. Run Checkout before ${scanJob.scanType} scan.`,
+			`Checkout image not found: ${imageTag}. Run Checkout before pipeline ${scanJob.pipelineId}.`,
 		);
 	}
 
@@ -3091,76 +3084,6 @@ const assertWithinDirectory = (rootPath: string, targetPath: string) => {
 	}
 };
 
-const installRuntimeSkillsInContainer = async (
-	containerName: string,
-	agentsDir: string | null,
-) => {
-	if (!agentsDir) {
-		return [] as string[];
-	}
-
-	const hostTempDir = await fs.mkdtemp(
-		path.join(os.tmpdir(), "vulseek-runtime-skills-"),
-	);
-	const hostRepoRoot = path.join(hostTempDir, "repo");
-	const hostSkillsRoot = path.join(hostRepoRoot, "skills");
-	const copiedSkills: string[] = [];
-
-	try {
-		await fs.mkdir(hostSkillsRoot, { recursive: true });
-
-		for (const skillName of RUNTIME_CUSTOM_SKILLS) {
-			const sourceDir = path.join(agentsDir, "skills", skillName);
-			try {
-				await fs.stat(sourceDir);
-			} catch {
-				continue;
-			}
-
-			await fs.cp(sourceDir, path.join(hostSkillsRoot, skillName), {
-				recursive: true,
-			});
-			copiedSkills.push(skillName);
-		}
-
-		const cacheSchemaSourceDir = path.join(agentsDir, "cache-schema");
-		try {
-			await fs.stat(cacheSchemaSourceDir);
-			await fs.cp(
-				cacheSchemaSourceDir,
-				path.join(hostRepoRoot, "cache-schema"),
-				{
-					recursive: true,
-				},
-			);
-		} catch {}
-
-		if (copiedSkills.length === 0) {
-			return [];
-		}
-
-		const containerRepoRoot = "/tmp/vulseek-runtime-skills";
-		await execAsync(
-			`docker exec ${containerName} bash -lc "rm -rf '${containerRepoRoot}' && mkdir -p '${containerRepoRoot}'"`,
-		);
-		await execAsync(
-			`docker cp "${hostRepoRoot}/." ${containerName}:"${containerRepoRoot}/"`,
-		);
-
-		const skillFlags = copiedSkills
-			.map((skillName) => `--skill '${escapeSingleQuotes(skillName)}'`)
-			.join(" ");
-
-		await execAsync(
-			`docker exec ${containerName} bash -lc "mkdir -p /workspace/repo/.agents && cd /workspace/repo && skills add '${containerRepoRoot}' ${skillFlags} -a claude-code -a codex --copy -y"`,
-		);
-
-		return copiedSkills;
-	} finally {
-		await fs.rm(hostTempDir, { recursive: true, force: true }).catch(() => {});
-	}
-};
-
 const resolveBrowsableFilePath = (input: {
 	rootPath: string;
 	filePath: string;
@@ -3647,18 +3570,30 @@ export const findScanJobRunningTasks = async (scanJobId: string) =>
 
 export const findScanJobQueueCounts = async (scanJobId: string) => {
 	const scanJob = await findScanJobByIdRepo(scanJobId);
-	const pipelineDefinitions = resolveScanJobPipelineDefinitions(scanJob);
-	const pipeline =
-		pipelineDefinitions.pipelines[
-			getPipelineIdForScanType(scanJob.scanType as ScanType)
-		];
-	if (!pipeline) throw new Error(`Unknown scan pipeline: ${scanJob.scanType}`);
 	const taskStatusCounts = await listTaskStatusCountsByScanJobIdRepo(scanJobId);
+	const snapshot =
+		scanJob.pipelineVersionId && scanJob.pipelineCompiledSnapshot
+			? loadCompiledPipelineSnapshot(scanJob)
+			: null;
+	const snapshotStages = snapshot?.stages;
+	if (snapshotStages?.length) {
+		return await listQueuePendingCountsByScanJobId(
+			scanJobId,
+			taskStatusCounts,
+			new Map(),
+			snapshotStages.map((stage) => stage.id),
+			new Map(snapshotStages.map((stage) => [stage.id, stage.name] as const)),
+		);
+	}
+	const pipelineDefinitions = resolveScanJobPipelineDefinitions(scanJob);
+	const pipeline = pipelineDefinitions.pipelines[scanJob.pipelineId];
+	if (!pipeline) throw new Error(`Unknown scan pipeline: ${scanJob.pipelineId}`);
 	return await listQueuePendingCountsByScanJobId(
 		scanJobId,
 		taskStatusCounts,
 		new Map(),
 		pipeline.stageIds,
+		new Map(),
 	);
 };
 export const findScanJobTerminalTasksPage = async (input: {
@@ -3787,7 +3722,7 @@ const deriveStageGraphStatus = (
 type ScanStageGraphTargetInput = {
 	applicationId?: string | null;
 	composeId?: string | null;
-	scanType?: ScanType | null;
+	pipelineId: string;
 };
 
 export const getScanPipelineDefinitions = () => loadScanPipelineDefinitions();
@@ -3813,10 +3748,9 @@ export const findFullScanStageGraph = async (
 	const settings =
 		await resolveScanProfileConcurrencySettingsFromTarget(target);
 	const definitions = loadScanPipelineDefinitions();
-	const scanType: ScanType = target.scanType ?? "full";
-	const pipeline = definitions.pipelines[getPipelineIdForScanType(scanType)];
+	const pipeline = definitions.pipelines[target.pipelineId];
 	if (!pipeline) {
-		throw new Error(`Unknown scan pipeline for type ${scanType}`);
+		throw new Error(`Unknown scan pipeline ${target.pipelineId}`);
 	}
 	const stages = pipeline.stageIds.map((stageId) => {
 		const stage = definitions.stageMetadataById[stageId];
@@ -3879,11 +3813,19 @@ export const findScanJobStageGraph = async (
 	options?: { includeQueue?: boolean },
 ) => {
 	const includeQueue = options?.includeQueue ?? true;
-	const context = await buildFullScanPipelineContext(scanJobId);
-	const pipeline = buildYamlPipeline(
-		context,
-		getPipelineIdForScanType(context.scanJob.scanType as ScanType),
-	);
+	const context = await buildFullScanPipelineContext(scanJobId, {
+		validateDatasetToolsImage: false,
+	});
+	const pipeline =
+		context.scanJob.pipelineVersionId && context.scanJob.pipelineCompiledSnapshot
+			? buildPipelineFromCompiled(
+					context,
+					loadCompiledPipelineSnapshot(context.scanJob),
+				)
+			: buildYamlPipeline(
+					context,
+				context.scanJob.pipelineId,
+				);
 	const disabledStages = buildEffectiveDisabledStageSet({
 		settings: context.scanJob.scanRuntimeSettings,
 		stageNames: pipeline.stages.map((stage) => stage.id),
@@ -4028,18 +3970,21 @@ const prepareRepositoryForScanInContainer = async (input: {
 	scanJob: ScanJob;
 	scanRootDir: string;
 }): Promise<PreparedRepositoryState> => {
-	const forceLatestRef = input.scanJob.scanType === "delta";
-	const preferLatestTag =
-		input.scanJob.scanType === "full" ||
-		input.scanJob.scanType === "research" ||
-		input.scanJob.scanType === "tob-goal";
+	const compiledSnapshot = input.scanJob.pipelineCompiledSnapshot as {
+		stages?: Array<{ id: string }>;
+	} | null;
+	const stageIds = Array.isArray(compiledSnapshot?.stages)
+		? compiledSnapshot.stages.map((stage) => stage.id)
+		: [];
+	const forceLatestRef = stageIds.includes("delta-scope");
+	const preferLatestTag = !forceLatestRef;
 	const targetRef = input.scanJob.targetRef?.trim() || "";
 	const targetTag = input.scanJob.targetTag?.trim() || "";
 	const requestedCommit = input.scanJob.commitSha?.trim() || "";
 	const requestedBase = input.scanJob.baseSha?.trim() || "";
 	const commitWindow =
 		input.scanJob.commitWindow || DEFAULT_DELTA_COMMIT_WINDOW;
-	const isDeltaScan = input.scanJob.scanType === "delta";
+	const isDeltaScan = forceLatestRef;
 
 	const shellScript = [
 		`SCAN_ROOT='${escapeSingleQuotes(input.scanRootDir)}'`,
@@ -4341,12 +4286,13 @@ const toGenericStageConfig = (stage: ScanPipelineStageConfig) =>
 		id: stage.id,
 		name: stage.name,
 		role: stage.role,
-		mode: stage.runtimeConfig?.mode || "serial",
 		concurrency: stage.concurrency,
 		maxConcurrency: stage.maxConcurrency ?? undefined,
+		goal: stage.goal,
 		runtime: stage.runtimeConfig || {},
 		inputArtifacts: stage.inputArtifacts,
 		outputArtifacts: stage.outputArtifacts,
+		jobOutput: stage.jobOutput,
 		effects: stage.effects,
 		report: stage.report ?? undefined,
 		disableable: stage.disableable,
@@ -4655,9 +4601,7 @@ const buildGenericYamlPipeline = (
 		groups: pipelineConfig.groups,
 		stageConfigs,
 		schemas: definitions.schemas,
-		useTaskNameResolvers:
-			context.scanJob.scanType === "research" ||
-			context.scanJob.scanType === "tob-goal",
+		useTaskNameResolvers: pipelineId.includes("research") || pipelineId.includes("tob-goal"),
 		runtimeConfigBuilder: (stageId) =>
 			createStageRuntimeConfig(context.scanJob.scanJobId, stageId),
 	});
@@ -4680,6 +4624,7 @@ const toStageConfigFromCompiled = (
 	concurrency: stage.concurrency,
 	maxConcurrency: stage.maxConcurrency ?? null,
 	disableable: stage.disableable,
+	goal: stage.goal ?? false,
 	description: stage.description ?? null,
 	inputSchema: stage.inputSchema ?? null,
 	outputSchema: stage.outputSchema ?? null,
@@ -4687,7 +4632,6 @@ const toStageConfigFromCompiled = (
 		agentProfile: stage.runtime.agentProfileId ?? null,
 		persistent: stage.runtime.persistent ?? null,
 		reuseContainer: stage.runtime.reuseContainer ?? null,
-		mode: stage.mode,
 		nullableOutput: stage.runtime.nullableOutput ?? null,
 		cwd: stage.runtime.cwd ?? null,
 		skills: stage.runtime.skills ?? null,
@@ -4702,6 +4646,7 @@ const toStageConfigFromCompiled = (
 	},
 	inputArtifacts: stage.inputArtifacts ?? [],
 	outputArtifacts: stage.outputArtifacts ?? [],
+	jobOutput: stage.jobOutput ?? false,
 	effects: stage.effects ?? [],
 	report: stage.report ?? null,
 	taskName: stage.taskName ?? null,
@@ -4746,7 +4691,6 @@ const createCompiledStageRuntimeConfig = (
 		getAgentProfile: async () => runtime.agentProfileId ?? null,
 		getPersistent: async () => runtime.persistent ?? null,
 		getReuseContainer: async () => runtime.reuseContainer ?? null,
-		getMode: async () => stage.mode,
 		getNullableOutput: async () => runtime.nullableOutput ?? null,
 		getCwd: async () => runtime.cwd ?? null,
 		getSkills: async () => runtime.skills ?? [],
@@ -4849,9 +4793,10 @@ const buildCandidateObject = (candidate: {
 
 const buildFullScanPipelineContext = async (
 	scanJobId: string,
+	options?: { validateDatasetToolsImage?: boolean },
 ): Promise<FullScanPipelineContext> => {
 	const scanJob = await findScanJobByIdRepo(scanJobId);
-	const executionContext = await resolveScanExecutionContext(scanJob);
+	const executionContext = await resolveScanExecutionContext(scanJob, options);
 	return {
 		scanJob,
 		executionContext,
@@ -5001,7 +4946,7 @@ const runFullScan = async (
 		}),
 	);
 	const context = await buildFullScanPipelineContext(scanJobId);
-	const pipeline = buildYamlPipeline(context, getPipelineIdForScanType("full"));
+	const pipeline = buildYamlPipeline(context, context.scanJob.pipelineId);
 
 	try {
 		await assertScanJobNotCancelled(scanJobId);
@@ -5011,7 +4956,7 @@ const runFullScan = async (
 		if (enqueueInitialRepositoryTask) {
 			await enqueuePipelineRootTask(
 				scanJobId,
-				getPipelineIdForScanType("full"),
+				context.scanJob.pipelineId,
 			);
 			console.log(
 				"[full-scan]",
@@ -5070,7 +5015,7 @@ const runDeltaScan = async (
 	const context = await buildFullScanPipelineContext(scanJobId);
 	const pipeline = buildYamlPipeline(
 		context,
-		getPipelineIdForScanType("delta"),
+		context.scanJob.pipelineId,
 	);
 
 	try {
@@ -5081,7 +5026,7 @@ const runDeltaScan = async (
 		if (enqueueInitialDeltaScopeTask) {
 			await enqueuePipelineRootTask(
 				scanJobId,
-				getPipelineIdForScanType("delta"),
+				context.scanJob.pipelineId,
 			);
 			console.log(
 				"[delta-scan]",
@@ -5133,12 +5078,12 @@ const runResearchScan = async (
 	const context = await buildFullScanPipelineContext(scanJobId);
 	const pipeline = buildYamlPipeline(
 		context,
-		getPipelineIdForScanType("research"),
+		context.scanJob.pipelineId,
 	);
 	if (enqueueInitialResearchTask) {
 		await enqueuePipelineRootTask(
 			scanJobId,
-			getPipelineIdForScanType("research"),
+			context.scanJob.pipelineId,
 		);
 	}
 	await assertScanJobNotCancelled(scanJobId);
@@ -5161,14 +5106,11 @@ const runTobGoalScan = async (
 	const awaitCompletion = options?.awaitCompletion ?? true;
 	await assertScanJobNotCancelled(scanJobId);
 	const context = await buildFullScanPipelineContext(scanJobId);
-	const pipeline = buildYamlPipeline(
-		context,
-		getPipelineIdForScanType("tob-goal"),
-	);
+	const pipeline = buildYamlPipeline(context, context.scanJob.pipelineId);
 	if (enqueueInitialGoalCraftTask) {
 		await enqueuePipelineRootTask(
 			scanJobId,
-			getPipelineIdForScanType("tob-goal"),
+			context.scanJob.pipelineId,
 		);
 	}
 	await assertScanJobNotCancelled(scanJobId);
@@ -5180,32 +5122,7 @@ const runTobGoalScan = async (
 };
 
 const startScanPipelineRuntimeForExistingQueues = async (scanJobId: string) => {
-	const scanJob = await findScanJobByIdRepo(scanJobId);
-	if (scanJob.scanType === "delta") {
-		await runDeltaScan(scanJobId, {
-			enqueueInitialDeltaScopeTask: false,
-			awaitCompletion: false,
-		});
-		return;
-	}
-	if (scanJob.scanType === "research") {
-		await runResearchScan(scanJobId, {
-			enqueueInitialResearchTask: false,
-			awaitCompletion: false,
-		});
-		return;
-	}
-	if (scanJob.scanType === "tob-goal") {
-		await runTobGoalScan(scanJobId, {
-			enqueueInitialGoalCraftTask: false,
-			awaitCompletion: false,
-		});
-		return;
-	}
-	await runFullScan(scanJobId, {
-		enqueueInitialRepositoryTask: false,
-		awaitCompletion: false,
-	});
+	await runPipelineFromSnapshot(scanJobId, { enqueueInitialRootTask: false });
 };
 
 export const pauseScanJob = async (scanJobId: string) => {
@@ -5224,7 +5141,20 @@ export const pauseScanJob = async (scanJobId: string) => {
 		};
 	}
 
-	await updateScanJobStatusRepo(scanJobId, "paused");
+	const paused = await transitionScanJobStatusRepo({
+		scanJobId,
+		from: ["pending", "running"],
+		to: "paused",
+	});
+	if (!paused.updated) {
+		if (paused.job?.status === "paused") {
+			return { paused: true, scanJobId, stoppedRuntimes: 0 };
+		}
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: `Scan job cannot be paused from ${paused.job?.status ?? "missing"}`,
+		});
+	}
 	const stoppedRuntimes = stopPipelineRuntimesForScanJob(scanJobId);
 	return {
 		paused: true,
@@ -5242,7 +5172,17 @@ export const resumeScanJob = async (scanJobId: string) => {
 		});
 	}
 
-	await updateScanJobStatusRepo(scanJobId, "running");
+	const resumed = await transitionScanJobStatusRepo({
+		scanJobId,
+		from: ["paused"],
+		to: "running",
+	});
+	if (!resumed.updated) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: `Scan job cannot be resumed from ${resumed.job?.status ?? "missing"}`,
+		});
+	}
 	await startScanPipelineRuntimeForExistingQueues(scanJobId);
 	return {
 		resumed: true,
@@ -5322,38 +5262,12 @@ export const runScanJobInContainer = async (
 ) => {
 	await assertScanJobNotCancelled(scanJobId);
 	const scanJob = await findScanJobByIdRepo(scanJobId);
-	// V3 snapshot-driven run: the frozen compiled definition drives every
-	// stage/edge decision; scanType is never read on this path.
-	if (scanJob.pipelineVersionId && scanJob.pipelineCompiledSnapshot) {
-		await runPipelineFromSnapshot(scanJobId, {
-			enqueueInitialRootTask: options?.enqueueInitialRepositoryTask ?? true,
-		});
-		return;
+	if (!scanJob.pipelineVersionId || !scanJob.pipelineCompiledSnapshot) {
+		throw new Error("Scan job has no compiled pipeline snapshot");
 	}
-	if (scanJob.scanType === "full") {
-		await runFullScan(scanJobId, {
-			enqueueInitialRepositoryTask:
-				options?.enqueueInitialRepositoryTask ?? true,
-		});
-		return;
-	}
-	if (scanJob.scanType === "research") {
-		await runResearchScan(scanJobId, {
-			enqueueInitialResearchTask: options?.enqueueInitialRepositoryTask ?? true,
-		});
-		return;
-	}
-	if (scanJob.scanType === "tob-goal") {
-		await runTobGoalScan(scanJobId, {
-			enqueueInitialGoalCraftTask:
-				options?.enqueueInitialRepositoryTask ?? true,
-		});
-		return;
-	}
-	await runDeltaScan(scanJobId, {
-		enqueueInitialDeltaScopeTask: options?.enqueueInitialRepositoryTask ?? true,
+	await runPipelineFromSnapshot(scanJobId, {
+		enqueueInitialRootTask: options?.enqueueInitialRepositoryTask ?? true,
 	});
-	return;
 };
 
 const resolveHostPathToScanContextContainerPath = async (
@@ -5462,6 +5376,7 @@ const createV3RootTask = async (
 		name: rootStage?.name ?? compiled.root,
 		stageName: compiled.root,
 		status: "pending",
+		allowedJobStatuses: ["pending", "running"],
 		input,
 	});
 	await enqueueStageTask(scanJob.scanJobId, compiled.root, taskId);
@@ -5469,7 +5384,7 @@ const createV3RootTask = async (
 
 const enqueuePipelineRootTask = async (
 	scanJobId: string,
-	pipelineId: ScanType,
+	pipelineId: string,
 ) => {
 	const scanJob = await findScanJobByIdRepo(scanJobId);
 	const definitions = resolveScanJobPipelineDefinitions(scanJob);
@@ -5718,51 +5633,45 @@ export const cancelScanTask = async (taskId: string) => {
 	return canceledTask;
 };
 
-export const cancelScanJob = async (scanJobId: string) => {
-	const stopMessage = MANUAL_STOP_MESSAGE;
+export const cancelScanJob = async (
+	scanJobId: string,
+	options?: { reason?: string; message?: string },
+) => {
+	const stopMessage = options?.message ?? MANUAL_STOP_MESSAGE;
+	const terminationReason = options?.reason ?? "manual_cancel";
 	const scanJob = await findScanJobByIdRepo(scanJobId);
-
-	await updateScanJobStatusRepo(scanJobId, "canceled", stopMessage).catch(
-		() => {},
-	);
+	const cancellation = await cancelScanJobRepo({
+		scanJobId,
+		errorMessage: stopMessage,
+		terminationReason,
+	});
+	if (cancellation.outcome === "not_found") {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Scan job not found" });
+	}
 	const stoppedRuntimes = stopPipelineRuntimesForScanJob(scanJobId);
 
-	const [
-		repositoryTask,
-		allTasks,
-		stageGroups,
-		laneRuntimes,
-		dockerScanContainers,
-	] = await Promise.all([
-		scanJob.repositoryTaskId
-			? findTaskByIdRepo(scanJob.repositoryTaskId).catch(() => null)
-			: null,
-		listTasksByScanJobIdRepo(scanJobId),
-		listStageGroupInstancesByScanJobIdRepo(scanJobId),
-		listStageLaneRuntimesByScanJobIdRepo(scanJobId).catch(() => []),
-		listDockerContainersForScanJob(scanJobId),
-	]);
-	const openTasks = allTasks.filter((task) =>
-		isOpenScanTaskStatus(task.status),
-	);
-	const tasksToCancelById = new Map<string, Task>();
-	for (const task of openTasks) {
-		tasksToCancelById.set(task.taskId, task);
+	const [allTasks, stageGroups, laneRuntimes, dockerScanContainers] =
+		await Promise.all([
+			listTasksByScanJobIdRepo(scanJobId),
+			listStageGroupInstancesByScanJobIdRepo(scanJobId),
+			listStageLaneRuntimesByScanJobIdRepo(scanJobId).catch(() => []),
+			listDockerContainersForScanJob(scanJobId),
+		]);
+	const tasksToCancel = cancellation.tasksToStop;
+	let pipeline: { rootStageId: string; stageIds: readonly string[] } | null = null;
+	try {
+		const pipelineDefinitions = resolveScanJobPipelineDefinitions(scanJob);
+		pipeline = pipelineDefinitions.pipelines[scanJob.pipelineId] ?? null;
+	} catch (error) {
+		console.warn(
+			"[scan-cancel] pipeline snapshot unavailable; continuing resource cleanup",
+			JSON.stringify({ scanJobId, error: String(error) }),
+		);
 	}
-	if (repositoryTask && isOpenScanTaskStatus(repositoryTask.status)) {
-		tasksToCancelById.set(repositoryTask.taskId, repositoryTask);
-	}
-	const tasksToCancel = [...tasksToCancelById.values()];
-	const pipelineDefinitions = resolveScanJobPipelineDefinitions(scanJob);
-	const pipeline =
-		pipelineDefinitions.pipelines[
-			getPipelineIdForScanType(scanJob.scanType as ScanType)
-		];
-	if (!pipeline) {
-		throw new Error(`Unknown scan pipeline for type ${scanJob.scanType}`);
-	}
-	const rootStageName = pipeline.rootStageId;
-	const rootQueue = getScanStageQueue(scanJobId, rootStageName);
+	const rootStageName = pipeline?.rootStageId ?? null;
+	const rootQueue = rootStageName
+		? getScanStageQueue(scanJobId, rootStageName)
+		: null;
 
 	const containerNames = new Set<string>();
 
@@ -5786,15 +5695,27 @@ export const cancelScanJob = async (scanJobId: string) => {
 	}
 
 	await Promise.all([
-		...buildKnownQueueJobIdsForTask(rootQueue, {
-			stageName: rootStageName,
-			taskId: scanJob.repositoryTaskId || scanJobId,
-			scanJobId,
-		} as Task).map((jobId) =>
-			forceRemoveStageQueueJob(rootQueue, jobId).catch(() => {}),
-		),
+		...(rootQueue && rootStageName
+			? buildKnownQueueJobIdsForTask(rootQueue, {
+					stageName: rootStageName,
+					taskId: scanJob.repositoryTaskId || scanJobId,
+					scanJobId,
+				} as Task).map((jobId) =>
+					forceRemoveStageQueueJob(rootQueue, jobId).catch((error) => {
+						console.warn(
+							"[scan-cancel] queue cleanup failed",
+							JSON.stringify({ scanJobId, jobId, error: String(error) }),
+						);
+					}),
+				)
+			: []),
 		...allTasks.map((task) =>
-			removeQueuedTaskForRetry(scanJobId, task).catch(() => {}),
+			removeQueuedTaskForRetry(scanJobId, task).catch((error) => {
+				console.warn(
+					"[scan-cancel] task queue cleanup failed",
+					JSON.stringify({ scanJobId, taskId: task.taskId, error: String(error) }),
+				);
+			}),
 		),
 		...stageGroups
 			.filter((group) => group.status === "active")
@@ -5802,8 +5723,13 @@ export const cancelScanJob = async (scanJobId: string) => {
 				obliterateScanStageGroupQueues(
 					scanJobId,
 					group.groupInstanceId,
-					pipeline.stageIds,
-				).catch(() => {}),
+					pipeline ? [...pipeline.stageIds] : [],
+				).catch((error) => {
+					console.warn(
+						"[scan-cancel] stage group cleanup failed",
+						JSON.stringify({ scanJobId, groupInstanceId: group.groupInstanceId, error: String(error) }),
+					);
+				}),
 			),
 	]);
 	// The scan container may disappear before cancellation reaches this point.
@@ -5829,25 +5755,23 @@ export const cancelScanJob = async (scanJobId: string) => {
 			[...containerNames].map((name) => stopScanContainer(name)),
 		)
 	).filter(Boolean).length;
-	await cleanupScanJobCredentialFiles(scanJob, scanContainerImage).catch(
-		() => false,
-	);
+	await cleanupScanJobCredentialFiles(scanJob, scanContainerImage).catch((error) => {
+		console.warn(
+			"[scan-cancel] credential cleanup failed",
+			JSON.stringify({ scanJobId, error: String(error) }),
+		);
+	});
 
-	await Promise.all([
-		...tasksToCancel.map((task) =>
-			updateTaskStatusRepo({
-				taskId: task.taskId,
-				status: "canceled",
-				errorMessage: stopMessage,
-			}).catch(() => null),
-		),
-	]);
-
-	await resetStageLaneRuntimesByScanJobIdRepo(scanJobId).catch(() => []);
-	await updateScanJobStatusRepo(scanJobId, "canceled", stopMessage);
+	await resetStageLaneRuntimesByScanJobIdRepo(scanJobId).catch((error) => {
+		console.warn(
+			"[scan-cancel] lane cleanup failed",
+			JSON.stringify({ scanJobId, error: String(error) }),
+		);
+	});
 
 	return {
-		cancelled: true,
+		cancelled: cancellation.outcome === "canceled",
+		alreadyStopped: cancellation.outcome === "already_stopped",
 		scanJobId: scanJob.scanJobId,
 		stoppedRuntimes,
 		stoppedContainers,
@@ -6051,7 +5975,12 @@ export const recoverPendingFullScanQueues = async (input?: {
 		}
 
 		if (job.status === "pending") {
-			await updateScanJobStatusRepo(job.scanJobId, "running").catch(() => {});
+			const started = await transitionScanJobStatusRepo({
+				scanJobId: job.scanJobId,
+				from: ["pending"],
+				to: "running",
+			});
+			if (!started.updated) continue;
 		}
 
 		await startScanPipelineRuntimeForExistingQueues(job.scanJobId);
@@ -6080,6 +6009,18 @@ export const startCandidateVerification = async (
 		vulnerabilityCandidateId,
 	);
 	const scanJob = await findScanJobByIdRepo(candidate.scanJobId);
+	if (scanJob.status === "canceled" || scanJob.status === "paused") {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Resume the scan job before re-running candidate verification",
+		});
+	}
+	if (scanJob.status !== "running") {
+		await resetScanJobForRetryRepo(scanJob.scanJobId, {
+			status: "running",
+			errorMessage: null,
+		});
+	}
 	const [latestAnalysisResult, existingVerificationTask] = await Promise.all([
 		findLatestAnalysisResultByCandidateIdRepo({
 			scanJobId: scanJob.scanJobId,
@@ -6218,9 +6159,6 @@ export const startCandidateVerification = async (
 		SCAN_STAGE_IDS.verifyFinding,
 		verificationTask.taskId,
 	);
-	if (scanJob.status === "finished") {
-		await updateScanJobStatusRepo(scanJob.scanJobId, "running").catch(() => {});
-	}
 	await startScanPipelineRuntimeForExistingQueues(scanJob.scanJobId);
 
 	return {
@@ -6245,6 +6183,12 @@ export const startCandidateAnalysis = async (input: {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
 			message: "Resume the scan job before re-running candidate analysis",
+		});
+	}
+	if (scanJob.status !== "running") {
+		await resetScanJobForRetryRepo(scanJob.scanJobId, {
+			status: "running",
+			errorMessage: null,
 		});
 	}
 	const candidate = await findVulnerabilityCandidateByIdAndScanJobIdRepo({
@@ -6350,13 +6294,6 @@ export const startCandidateAnalysis = async (input: {
 		input: analysisInput,
 	});
 
-	if (scanJob.status !== "running") {
-		await resetScanJobForRetryRepo(scanJob.scanJobId, {
-			status: "running",
-			errorMessage: null,
-		}).catch(() => {});
-		await updateScanJobStatusRepo(scanJob.scanJobId, "running").catch(() => {});
-	}
 	await enqueueStageTask(
 		scanJob.scanJobId,
 		SCAN_STAGE_IDS.analyzeFinding,

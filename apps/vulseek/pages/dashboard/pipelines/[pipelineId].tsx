@@ -7,7 +7,6 @@ import * as React from "react";
 import { createServerSideHelpers } from "@trpc/react-query/server";
 import {
 	Archive,
-	ArrowLeft,
 	Copy,
 	FilePenLine,
 	Redo2,
@@ -19,9 +18,13 @@ import {
 import { toast } from "sonner";
 import superjson from "superjson";
 import { validateRequest } from "@vulseek/server/lib/auth";
-import { DashboardPage } from "@/components/dashboard/ui-system";
+import {
+	DashboardPage,
+	DashboardPageHeader,
+} from "@/components/dashboard/ui-system";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { PipelineWorkbench } from "@/components/dashboard/pipelines/workbench/pipeline-workbench";
+import { PipelineProfilesView } from "@/components/dashboard/pipelines/pipeline-profiles-view";
 import type { YamlEditorHandle } from "@/components/dashboard/pipelines/yaml-editor";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
 import { Badge } from "@/components/ui/badge";
@@ -79,6 +82,19 @@ const EditorPage = ({
 
 	const pipeline = api.pipeline.get.useQuery({ pipelineId });
 	const versions = api.pipeline.listVersions.useQuery({ pipelineId });
+	const requestedProfileId =
+		typeof router.query.profileId === "string"
+			? router.query.profileId
+			: undefined;
+	const isProfilesView = router.query.view === "profiles";
+	const pipelineProfiles = api.pipeline.profilesList.useQuery(
+		{ pipelineId },
+		{
+			enabled:
+				router.query.view === "profiles" &&
+				Boolean(requestedProfileId && requestedProfileId !== "new"),
+		},
+	);
 	const saveDraft = api.pipeline.saveDraft.useMutation();
 	const publish = api.pipeline.publish.useMutation();
 	const copyVersionToDraft = api.pipeline.copyVersionToDraft.useMutation();
@@ -144,7 +160,10 @@ const EditorPage = ({
 	React.useEffect(() => {
 		const serverYaml = draftYaml ?? currentVersionYaml;
 		if (!serverYaml) return;
-		const revision = draftYaml ? (pipeline.data?.draftRevision ?? 0) : 0;
+		// A published YAML used as the initial draft still shares the pipeline's
+		// optimistic-lock counter. Resetting this to zero makes every first save
+		// of a pipeline without an existing draft conflict with the server.
+		const revision = pipeline.data?.draftRevision ?? 0;
 		const untouched = stateRef.current.rawYamlBuffer === stateRef.current.savedYaml;
 		if (untouched || !draftYaml) {
 			// Adopt wholesale: fresh draft, or the current version as the
@@ -213,6 +232,10 @@ const EditorPage = ({
 				draftRevision: state.draftRevision + 1,
 			});
 			toast.success(`Published as v${result.versionNumber}`);
+			// Publish returns the immutable version that was created or reused.
+			// Select it before switching to the read-only view; otherwise the
+			// workbench has no version YAML and renders an empty state.
+			setSelectedVersionId(result.pipelineVersionId);
 			setViewingVersion(true);
 			await pipeline.refetch();
 			await versions.refetch();
@@ -305,33 +328,73 @@ const EditorPage = ({
 		: data.currentVersion
 			? `v${data.currentVersion.versionNumber} · ${data.currentVersion.source}`
 			: null;
+	const workbenchView =
+		router.query.view === "visual" ||
+		router.query.view === "raw" ||
+		router.query.view === "profiles"
+			? router.query.view
+			: "definition";
+	const profileId = requestedProfileId;
+	const selectedProfileName =
+		profileId === "new"
+			? "New profile"
+			: pipelineProfiles.data?.find(
+					(item) => item.pipelineProfileId === profileId,
+				)?.name ??
+				(profileId ? `Profile ${profileId.slice(0, 6)}` : undefined);
+	const pipelineHref = `/dashboard/pipelines/${encodeURIComponent(pipelineId)}`;
+	const updateWorkbenchView = (view: typeof workbenchView) => {
+		const query = { ...router.query };
+		if (view === "definition") delete query.view;
+		else query.view = view;
+		if (view !== "profiles") delete query.profileId;
+		void router.replace({ pathname: router.pathname, query }, undefined, {
+			shallow: true,
+		});
+	};
+	const updateProfileId = (nextProfileId?: string) => {
+		const query: Record<string, string | string[] | undefined> = {
+			...router.query,
+			view: "profiles",
+		};
+		if (nextProfileId) query.profileId = nextProfileId;
+		else delete query.profileId;
+		void router.replace({ pathname: router.pathname, query }, undefined, {
+			shallow: true,
+		});
+	};
 
 	return (
 		<DashboardLayout hideBreadcrumb fullHeight collapseSidebarBelow={1100}>
 			<BreadcrumbSidebar
-				list={[
-					{ name: "Pipelines", href: "/dashboard/pipelines" },
-					{ name: data.name },
-				]}
+				list={
+					profileId
+						? [
+								{ name: "Pipelines", href: "/dashboard/pipelines" },
+								{ name: data.name, href: pipelineHref },
+								{ name: "Profiles", href: `${pipelineHref}?view=profiles` },
+								{ name: selectedProfileName || "Profile" },
+							]
+						: [
+								{ name: "Pipelines", href: "/dashboard/pipelines" },
+								{ name: data.name },
+							]
+				}
 			/>
 			<DashboardPage
-					className="min-h-0 flex-1"
-					contentClassName="overflow-hidden"
-				>
-				{/* Header */}
-				<header className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
-					<button
-						type="button"
-						onClick={() => void router.push("/dashboard/pipelines")}
-						className="text-muted-foreground hover:text-foreground"
-						aria-label="Back to pipelines"
-					>
-						<ArrowLeft className="size-4" />
-					</button>
-					<Workflow className="size-4 text-muted-foreground" />
-					<div className="min-w-0">
-						<div className="flex items-center gap-2">
-							<h1 className="truncate text-sm font-semibold">{data.name}</h1>
+				className={
+					isProfilesView
+						? "h-auto min-h-0 flex-none"
+						: "h-auto min-h-0 flex-1"
+				}
+				contentClassName={isProfilesView ? "h-auto overflow-visible" : "overflow-hidden"}
+			>
+				<DashboardPageHeader
+					icon={<Workflow />}
+					title={data.name}
+					description={`${data.slug}${data.currentVersion ? ` · v${data.currentVersion.versionNumber} current` : " · no published version"}`}
+					status={
+						<>
 							{data.systemKey ? (
 								<Badge variant="outline" className="border-sky-500/40 text-sky-600">
 									System
@@ -345,7 +408,7 @@ const EditorPage = ({
 										dirty
 											? "border-amber-500/40 text-amber-600"
 											: "border-emerald-500/40 text-emerald-600"
-									}
+										}
 								>
 									{dirty ? "Draft (unsaved)" : "Draft"}
 								</Badge>
@@ -354,16 +417,10 @@ const EditorPage = ({
 									Published{selectedVersion ? ` v${selectedVersion.versionNumber}` : ""}
 								</Badge>
 							)}
-						</div>
-						<p className="truncate text-xs text-muted-foreground">
-							{data.slug}
-							{data.currentVersion
-								? ` · v${data.currentVersion.versionNumber} current`
-								: " · no published version"}
-						</p>
-					</div>
-
-					<div className="ml-auto flex items-center gap-2">
+						</>
+					}
+					actions={
+						<div className="flex items-center gap-2">
 						{isManagerView ? (
 							<>
 								<Select
@@ -517,8 +574,9 @@ const EditorPage = ({
 								)}
 							</>
 						)}
-					</div>
-				</header>
+						</div>
+					}
+				/>
 
 				{/* Workbench: Definition | Visual | Raw YAML */}
 				<PipelineWorkbench
@@ -535,6 +593,16 @@ const EditorPage = ({
 							: null,
 					}}
 					onYamlReady={onYamlReady}
+					initialView={workbenchView}
+					onViewChange={updateWorkbenchView}
+					profilesContent={
+						<PipelineProfilesView
+							pipelineId={pipelineId}
+							pipelineVersionId={data.currentPublishedVersionId}
+							profileId={profileId}
+							onProfileChange={updateProfileId}
+						/>
+					}
 				/>
 			</DashboardPage>
 		</DashboardLayout>

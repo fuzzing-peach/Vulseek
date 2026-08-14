@@ -1,5 +1,4 @@
 import { cachedInputPercent } from "@/lib/scan/token-usage";
-import type { RouterOutputs } from "@/utils/api";
 import { isResearchRegistryTab } from "./research-registry-tabs";
 import {
 	formatAnalysisResultLabel,
@@ -13,7 +12,6 @@ import {
 
 export type ScanJobTab =
 	| "overview"
-	| "evaluate"
 	| "tasks"
 	| "candidates"
 	| "goal-candidates"
@@ -24,8 +22,6 @@ export type ScanJobTab =
 	| "chains"
 	| "monitoring"
 	| "files";
-
-type ScanEvaluationResult = RouterOutputs["scan"]["latestEvaluation"];
 
 export const RESULT_SHORT_LABELS: Record<string, string> = {
 	real_vulnerability: "Real",
@@ -182,16 +178,6 @@ export const formatDurationSeconds = (value: number | null | undefined) => {
 	return `${seconds}s`;
 };
 
-export const formatEvaluationMetric = (value: unknown) =>
-	typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : "-";
-
-export const getEvaluationResult = (evaluation: ScanEvaluationResult) => {
-	const result = evaluation?.result;
-	return result && typeof result === "object" && !Array.isArray(result)
-		? (result as Record<string, unknown>)
-		: null;
-};
-
 export const formatTokenUsage = (t: ScanTranslation, value?: number | null) => {
 	if (typeof value !== "number" || !Number.isFinite(value)) {
 		return "-";
@@ -254,7 +240,6 @@ export const resolveRequestedTab = (
 		typeof value === "string" ? value : Array.isArray(value) ? value[0] : "";
 	if (
 		rawTab === "overview" ||
-		rawTab === "evaluate" ||
 		rawTab === "tasks" ||
 		rawTab === "candidates" ||
 		rawTab === "goal-candidates" ||

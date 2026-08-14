@@ -41,12 +41,46 @@ import {
 } from "./candidate-result-projection.repo";
 import { readCandidateIdFromTaskInputArtifact } from "./task-artifact-resolver";
 import { buildTaskStatusTransitionPatch } from "./task-status-transition";
+import {
+	ALL_TASK_EXECUTION_STATUSES,
+	getAllowedJobStatusesForTaskTransition,
+	type ScanJobExecutionStatus,
+	type TaskExecutionStatus,
+} from "./task-status-policy";
 
 const CANDIDATE_PRODUCER_STAGE_NAMES = new Set(["scan-target"]);
 
 export type TaskStatusTransaction = Parameters<
 	Parameters<typeof db.transaction>[0]
 >[0];
+
+type ScanJobStatus = ScanJobExecutionStatus;
+type TaskStatus = (typeof taskStatusEnum.enumValues)[number];
+
+export type TaskStatusTransitionOutcome =
+	| "updated"
+	| "job_paused"
+	| "job_stopped"
+	| "stale_task"
+	| "not_found";
+
+export type TaskStatusTransitionResult = {
+	outcome: TaskStatusTransitionOutcome;
+	task: typeof tasks.$inferSelect | null;
+	jobStatus: ScanJobStatus | null;
+};
+
+export class ScanJobExecutionNotAllowedError extends Error {
+	constructor(
+		public readonly scanJobId: string,
+		public readonly jobStatus: ScanJobStatus,
+	) {
+		super(
+			`Scan job ${scanJobId} is ${jobStatus}; new tasks may only be created while running`,
+		);
+		this.name = "ScanJobExecutionNotAllowedError";
+	}
+}
 
 const resolveCandidateProjectionResultStage = async (
 	tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
@@ -382,26 +416,46 @@ export const createTaskRepo = async (input: {
 	stageGroupInstanceId?: string | null;
 	startedAt?: string | null;
 	completedAt?: string | null;
+	allowedJobStatuses?: ScanJobStatus[];
 }) => {
-	if (input.dispatchKey) {
-		const existing = await db
-			.select()
-			.from(tasks)
-			.where(eq(tasks.dispatchKey, input.dispatchKey))
-			.limit(1)
-			.then((rows) => rows[0] || null);
-		if (existing) {
-			return existing;
-		}
-	}
-	await consumeScanJobTaskBudget(input.scanJobId);
 	const hasExplicitTaskId = Boolean(input.taskId);
 	let created: Array<typeof tasks.$inferSelect> = [];
 	let lastError: unknown = null;
-	for (let attempt = 0; attempt < (hasExplicitTaskId ? 1 : 5); attempt += 1) {
-		try {
-			created = await db
-				.insert(tasks)
+	const allowedJobStatuses = input.allowedJobStatuses ?? ["running"];
+	await db.transaction(async (tx) => {
+		const job = await tx
+			.select({ status: scanJobs.status })
+			.from(scanJobs)
+			.where(eq(scanJobs.scanJobId, input.scanJobId))
+			.for("share")
+			.limit(1)
+			.then((rows) => rows[0] ?? null);
+		if (!job) {
+			throw new TRPCError({
+				code: "NOT_FOUND",
+				message: `Scan job ${input.scanJobId} not found`,
+			});
+		}
+		if (!allowedJobStatuses.includes(job.status)) {
+			throw new ScanJobExecutionNotAllowedError(input.scanJobId, job.status);
+		}
+		if (input.dispatchKey) {
+			const existing = await tx
+				.select()
+				.from(tasks)
+				.where(eq(tasks.dispatchKey, input.dispatchKey))
+				.limit(1)
+				.then((rows) => rows[0] || null);
+			if (existing) {
+				created = [existing];
+				return;
+			}
+		}
+		await consumeScanJobTaskBudgetWithExecutor(tx, input.scanJobId);
+		for (let attempt = 0; attempt < (hasExplicitTaskId ? 1 : 5); attempt += 1) {
+			try {
+				created = await tx
+					.insert(tasks)
 				.values({
 					taskId:
 						input.taskId ||
@@ -445,55 +499,55 @@ export const createTaskRepo = async (input: {
 					stageGroupInstanceId: input.stageGroupInstanceId ?? null,
 					startedAt: input.startedAt ?? null,
 					completedAt: input.completedAt ?? null,
-				})
-				.returning();
-			lastError = null;
-			break;
-		} catch (error) {
-			lastError = error;
-			if (
-				hasExplicitTaskId ||
-				!error ||
-				typeof error !== "object" ||
-				(error as { code?: string }).code !== "23505"
-			) {
-				throw error;
+					})
+					.returning();
+				lastError = null;
+				break;
+			} catch (error) {
+				lastError = error;
+				if (
+					hasExplicitTaskId ||
+					!error ||
+					typeof error !== "object" ||
+					(error as { code?: string }).code !== "23505"
+				) {
+					throw error;
+				}
 			}
 		}
-	}
+		if (!created[0]) {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message: `Error creating task${lastError ? `: ${String(lastError)}` : ""}`,
+			});
+		}
 
-	if (!created[0]) {
-		throw new TRPCError({
-			code: "BAD_REQUEST",
-			message: `Error creating task${lastError ? `: ${String(lastError)}` : ""}`,
-		});
-	}
-
-	if (hasTokenUsagePatch(input)) {
-		await applyScanJobTokenUsageDelta(
-			db,
+		if (hasTokenUsagePatch(input)) {
+			await applyScanJobTokenUsageDelta(
+				tx,
+				created[0].scanJobId,
+				tokenUsageDelta(
+					{
+						inputTokens: null,
+						outputTokens: null,
+						thoughtTokens: null,
+						totalTokens: null,
+						cachedReadTokens: null,
+						cachedWriteTokens: null,
+					},
+					created[0],
+				),
+			);
+		}
+		await applyScanJobEstimatedCostDelta(
+			tx,
 			created[0].scanJobId,
-			tokenUsageDelta(
-				{
-					inputTokens: null,
-					outputTokens: null,
-					thoughtTokens: null,
-					totalTokens: null,
-					cachedReadTokens: null,
-					cachedWriteTokens: null,
-				},
-				created[0],
-			),
+			0,
+			created[0].estimatedCost,
 		);
-	}
-	await applyScanJobEstimatedCostDelta(
-		db,
-		created[0].scanJobId,
-		0,
-		created[0].estimatedCost,
-	);
+	});
 
-	return created[0];
+	return created[0]!;
 };
 
 export const findTaskByIdRepo = async (taskId: string) => {
@@ -993,18 +1047,22 @@ export const countActiveTasksByScanJobAndStageRepo = async (input: {
 	return row?.count ?? 0;
 };
 
-export const transitionTaskStatusRepo = async (input: {
+export const transitionTaskStatusResultRepo = async (input: {
 	taskId: string;
-	from: Array<(typeof taskStatusEnum.enumValues)[number]>;
-	to: (typeof taskStatusEnum.enumValues)[number];
+	from: TaskStatus[];
+	to: TaskStatus;
 	patch?: Partial<typeof tasks.$inferSelect>;
 	terminalRouteKey?: string | null;
+	allowedJobStatuses?: ScanJobStatus[];
 	afterUpdate?: (
 		tx: TaskStatusTransaction,
 		updatedTask: typeof tasks.$inferSelect,
 	) => Promise<void>;
 }) => {
 	const now = new Date().toISOString();
+	const allowedJobStatuses =
+		input.allowedJobStatuses ??
+		getAllowedJobStatusesForTaskTransition(input.to as TaskExecutionStatus);
 	const patch = buildTaskStatusTransitionPatch({
 		to: input.to,
 		now,
@@ -1012,7 +1070,27 @@ export const transitionTaskStatusRepo = async (input: {
 		terminalRouteKey: input.terminalRouteKey,
 	});
 
-	const updated = await db.transaction(async (tx) => {
+	return await db.transaction(async (tx): Promise<TaskStatusTransitionResult> => {
+		const job = await tx
+			.select({ status: scanJobs.status })
+			.from(scanJobs)
+			.where(eq(scanJobs.scanJobId, sql`(
+				select "scanJobId" from "tasks" where "taskId" = ${input.taskId}
+			)`))
+			.for("share")
+			.limit(1)
+			.then((rows) => rows[0] ?? null);
+		if (!job) {
+			return { outcome: "not_found", task: null, jobStatus: null };
+		}
+		if (!allowedJobStatuses.includes(job.status)) {
+			return {
+				outcome:
+					job.status === "paused" ? "job_paused" : "job_stopped",
+				task: null,
+				jobStatus: job.status,
+			};
+		}
 		const previous = await tx
 			.select()
 			.from(tasks)
@@ -1022,7 +1100,17 @@ export const transitionTaskStatusRepo = async (input: {
 			.limit(1)
 			.then((rows) => rows[0] || null);
 		if (!previous) {
-			return null;
+			const current = await tx
+				.select({ status: tasks.status })
+				.from(tasks)
+				.where(eq(tasks.taskId, input.taskId))
+				.limit(1)
+				.then((rows) => rows[0] ?? null);
+			return {
+				outcome: current ? "stale_task" : "not_found",
+				task: null,
+				jobStatus: job.status,
+			};
 		}
 		const rows = await tx
 			.update(tasks)
@@ -1038,7 +1126,11 @@ export const transitionTaskStatusRepo = async (input: {
 			.returning();
 		const updatedTask = rows[0] || null;
 		if (!updatedTask) {
-			return null;
+			return {
+				outcome: "stale_task",
+				task: null,
+				jobStatus: job.status,
+			};
 		}
 		await applyScanJobTokenUsageDelta(
 			tx,
@@ -1064,16 +1156,38 @@ export const transitionTaskStatusRepo = async (input: {
 			);
 		}
 		await input.afterUpdate?.(tx, updatedTask);
-		return updatedTask;
+		return { outcome: "updated", task: updatedTask, jobStatus: job.status };
 	});
-
-	return updated;
 };
+
+export const transitionTaskStatusRepo = async (input: {
+	taskId: string;
+	from: TaskStatus[];
+	to: TaskStatus;
+	patch?: Partial<typeof tasks.$inferSelect>;
+	terminalRouteKey?: string | null;
+	allowedJobStatuses?: ScanJobStatus[];
+	afterUpdate?: (
+		tx: TaskStatusTransaction,
+		updatedTask: typeof tasks.$inferSelect,
+	) => Promise<void>;
+}) => {
+	const result = await transitionTaskStatusResultRepo(input);
+	return result.task;
+};
+
 
 export const updateTaskRepo = async (
 	taskId: string,
 	patch: Partial<typeof tasks.$inferSelect>,
 ) => {
+	if (patch.status !== undefined) {
+		return await updateTaskStatusRepo({
+			taskId,
+			status: patch.status,
+			errorMessage: patch.errorMessage,
+		});
+	}
 	const nextPatch = {
 		...patch,
 		updatedAt: new Date().toISOString(),
@@ -1162,7 +1276,16 @@ export const updateTaskStatusRepo = async (input: {
 		patch.completedAt = new Date().toISOString();
 	}
 
-	return await updateTaskRepo(input.taskId, patch);
+	const result = await transitionTaskStatusResultRepo({
+		taskId: input.taskId,
+		from: ALL_TASK_EXECUTION_STATUSES as TaskStatus[],
+		to: input.status,
+		patch,
+	});
+	if (result.outcome === "not_found") {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Task not found" });
+	}
+	return result.task;
 };
 
 export const bindTaskRuntimeRepo = async (input: {
@@ -1201,6 +1324,20 @@ export const resetFailedTaskForRetryRepo = async (taskId: string) => {
 			.then((rows) => rows[0] || null);
 		if (!previous) {
 			return null;
+		}
+		const job = await tx
+			.select({ status: scanJobs.status })
+			.from(scanJobs)
+			.where(eq(scanJobs.scanJobId, previous.scanJobId))
+			.for("share")
+			.limit(1)
+			.then((rows) => rows[0] ?? null);
+		if (!job) return null;
+		if (job.status !== "running" && job.status !== "pending") {
+			throw new ScanJobExecutionNotAllowedError(
+				previous.scanJobId,
+				job.status,
+			);
 		}
 		const rows = await tx
 			.update(tasks)
@@ -1266,6 +1403,20 @@ export const requeueTaskRepo = async (taskId: string) => {
 			.then((rows) => rows[0] || null);
 		if (!previous) {
 			return null;
+		}
+		const job = await tx
+			.select({ status: scanJobs.status })
+			.from(scanJobs)
+			.where(eq(scanJobs.scanJobId, previous.scanJobId))
+			.for("share")
+			.limit(1)
+			.then((rows) => rows[0] ?? null);
+		if (!job) return null;
+		if (job.status !== "running") {
+			throw new ScanJobExecutionNotAllowedError(
+				previous.scanJobId,
+				job.status,
+			);
 		}
 		const rows = await tx
 			.update(tasks)
@@ -1482,27 +1633,51 @@ export const cancelOpenTasksByScanJobIdRepo = async (
 	scanJobId: string,
 	errorMessage?: string | null,
 ) =>
-	await db
-		.update(tasks)
-		.set({
-			status: "canceled",
-			errorMessage: errorMessage ?? null,
-			completedAt: new Date().toISOString(),
-			updatedAt: new Date().toISOString(),
-		})
-		.where(
-			and(
-				eq(tasks.scanJobId, scanJobId),
-				inArray(tasks.status, [
-					"pending",
-					"launching",
-					"launched",
-					"starting",
-					"running",
-				]),
-			),
-		)
-		.returning();
+	await db.transaction(async (tx) => {
+		const job = await tx
+			.select({ status: scanJobs.status })
+			.from(scanJobs)
+			.where(eq(scanJobs.scanJobId, scanJobId))
+			.for("update")
+			.limit(1)
+			.then((rows) => rows[0] ?? null);
+		if (!job) return [];
+		const canceled = await tx
+			.update(tasks)
+			.set({
+				status: "canceled",
+				errorMessage: errorMessage ?? null,
+				completedAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			})
+			.where(
+				and(
+					eq(tasks.scanJobId, scanJobId),
+					inArray(tasks.status, [
+						"pending",
+						"launching",
+						"launched",
+						"starting",
+						"running",
+					]),
+				),
+			)
+			.returning();
+		await tx
+			.update(tasks)
+			.set({
+				downstreamDispatchStatus: "completed",
+				downstreamDispatchedAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			})
+			.where(
+				and(
+					eq(tasks.scanJobId, scanJobId),
+					inArray(tasks.downstreamDispatchStatus, ["pending", "dispatching"]),
+				),
+			)
+		return canceled;
+	});
 
 export const countTasksByScanJobStageAndStatusRepo = async (
 	scanJobId: string,
@@ -1542,9 +1717,12 @@ export class ScanJobBudgetExceededError extends Error {
 	}
 }
 
-export const consumeScanJobTaskBudget = async (scanJobId: string) => {
+const consumeScanJobTaskBudgetWithExecutor = async (
+	executor: TaskStatusTransaction,
+	scanJobId: string,
+) => {
 	const now = new Date().toISOString();
-	const claimed = await db
+	const claimed = await executor
 		.update(scanJobs)
 		.set({ taskCount: sql`${scanJobs.taskCount} + 1` })
 		.where(
@@ -1568,7 +1746,7 @@ export const consumeScanJobTaskBudget = async (scanJobId: string) => {
 
 	// Budget exhausted — determine why and record the termination reason so
 	// the run detail page can explain the failure.
-	const scanJob = await db
+	const scanJob = await executor
 		.select({
 			maxTasks: scanJobs.maxTasks,
 			taskCount: scanJobs.taskCount,
@@ -1584,7 +1762,7 @@ export const consumeScanJobTaskBudget = async (scanJobId: string) => {
 		scanJob.taskCount >= scanJob.maxTasks
 			? "task_limit"
 			: "duration_limit";
-	await db
+	await executor
 		.update(scanJobs)
 		.set({ terminationReason: reason })
 		.where(
@@ -1598,3 +1776,8 @@ export const consumeScanJobTaskBudget = async (scanJobId: string) => {
 		);
 	throw new ScanJobBudgetExceededError(scanJobId, reason);
 };
+
+export const consumeScanJobTaskBudget = async (scanJobId: string) =>
+	await db.transaction((tx) =>
+		consumeScanJobTaskBudgetWithExecutor(tx, scanJobId),
+	);

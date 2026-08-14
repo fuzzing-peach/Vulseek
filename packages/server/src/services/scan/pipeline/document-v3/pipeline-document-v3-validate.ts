@@ -344,9 +344,6 @@ export const validatePipelineDocumentV3 = (
 		const hasResearchRegistryEffect = (stage.effects ?? []).some(
 			(effect) => effect.type === "research-registry",
 		);
-		const hasTobGoalRegistryEffect = (stage.effects ?? []).some(
-			(effect) => effect.type === "tob-goal-registry",
-		);
 		if (
 			((stage.runtime.plugins ?? []).includes("research-track") ||
 				(stage.runtime.plugins ?? []).includes("research-deadline")) &&
@@ -356,21 +353,6 @@ export const validatePipelineDocumentV3 = (
 				error(
 					"stage.plugin_requires_research_registry",
 					`stage "${stageId}" uses a research plugin but has no research-registry effect`,
-					{
-						path: ["stages", stageId, "runtime", "plugins"],
-						entity: { type: "stage", id: stageId },
-					},
-				),
-			);
-		}
-		if (
-			(stage.runtime.plugins ?? []).includes("tob-goal-native") &&
-			!hasTobGoalRegistryEffect
-		) {
-			diagnostics.push(
-				error(
-					"stage.plugin_requires_tob_goal_registry",
-					`stage "${stageId}" uses the tob-goal-native plugin but has no tob-goal-registry effect`,
 					{
 						path: ["stages", stageId, "runtime", "plugins"],
 						entity: { type: "stage", id: stageId },

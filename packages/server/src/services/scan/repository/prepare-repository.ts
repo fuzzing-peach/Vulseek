@@ -1,5 +1,4 @@
 import { execAsync } from "../../../utils/process/execAsync";
-import type { ScanType } from "../scan-type";
 
 const escapeSingleQuotes = (value: string) => value.replace(/'/g, `'"'"'`);
 
@@ -10,37 +9,37 @@ export type PreparedRepositoryState = {
 	requestedCommitSha: string | null;
 	requestedBaseSha: string | null;
 	commitWindow: number;
-	resolvedTargetSha: string;
-	resolvedTargetShort: string;
+	resolvedTargetSha: string | null;
+	resolvedTargetShort: string | null;
 	resolvedBaseSha: string | null;
-	targetSubject: string;
+	targetSubject: string | null;
 	currentBranch: string | null;
 	currentExactTag: string | null;
 };
 
 export const prepareRepositoryForScanInContainer = async (input: {
 	containerName: string;
-	scanType: ScanType;
+	pipelineId: string;
 	targetRef?: string | null;
 	targetTag?: string | null;
 	commitSha?: string | null;
 	baseSha?: string | null;
 	commitWindow: number;
 	scanRootDir: string;
-}): Promise<PreparedRepositoryState> => {
-	const forceLatestRef = input.scanType === "delta";
+	datasetRepository?: boolean;
+	}): Promise<PreparedRepositoryState> => {
+	if (input.datasetRepository) return writeDatasetRepositoryStateInContainer(input);
+	const forceLatestRef = input.pipelineId === "delta";
 	// full / research / tob-goal: empty tag → checkout newest tag in the image
 	// (checkout images skip remote fetch; branch names like "master" may not exist)
 	const preferLatestTag =
-		input.scanType === "full" ||
-		input.scanType === "research" ||
-		input.scanType === "tob-goal";
+		!forceLatestRef;
 	const targetRef = input.targetRef?.trim() || "";
 	const targetTag = input.targetTag?.trim() || "";
 	const requestedCommit = input.commitSha?.trim() || "";
 	const requestedBase = input.baseSha?.trim() || "";
 	const commitWindow = input.commitWindow;
-	const isDeltaScan = input.scanType === "delta";
+	const isDeltaScan = forceLatestRef;
 
 	const shellScript = [
 		`SCAN_ROOT='${escapeSingleQuotes(input.scanRootDir)}'`,
@@ -201,7 +200,7 @@ export const prepareRepositoryForScanInContainer = async (input: {
 			[
 				message,
 				prepareStdout ? `prepare_stdout_tail:\n${tail(prepareStdout)}` : "",
-				prepareStderr ? `prepare_stderr_tail:\n${tail(prepareStderr)}` : "",
+			prepareStderr ? `prepare_stderr_tail:\n${tail(prepareStderr)}` : "",
 			]
 				.filter(Boolean)
 				.join("\n\n"),
@@ -213,4 +212,29 @@ export const prepareRepositoryForScanInContainer = async (input: {
 	);
 
 	return JSON.parse(repositoryStateJson.stdout) as PreparedRepositoryState;
+};
+
+export const writeDatasetRepositoryStateInContainer = async (input: {
+	containerName: string;
+	scanRootDir: string;
+}): Promise<PreparedRepositoryState> => {
+	const repositoryState: PreparedRepositoryState = {
+		effectiveTargetMode: "dataset-repository",
+		targetRef: null,
+		targetTag: null,
+		requestedCommitSha: null,
+		requestedBaseSha: null,
+		commitWindow: 0,
+		resolvedTargetSha: null,
+		resolvedTargetShort: null,
+		resolvedBaseSha: null,
+		targetSubject: null,
+		currentBranch: null,
+		currentExactTag: null,
+	};
+	const encoded = Buffer.from(JSON.stringify(repositoryState), "utf-8").toString("base64");
+	await execAsync(
+		`docker exec ${input.containerName} bash -lc "mkdir -p '${input.scanRootDir}' && echo '${encoded}' | base64 -d > '${input.scanRootDir}/00_repository_state.json'"`,
+	);
+	return repositoryState;
 };

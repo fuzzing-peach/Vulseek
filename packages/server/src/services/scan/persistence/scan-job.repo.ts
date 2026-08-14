@@ -1,25 +1,37 @@
 import { TRPCError } from "@trpc/server";
 import { db } from "@vulseek/server/db";
-import type { ScanRuntimeSettings } from "@vulseek/server/db/schema";
+import type {
+	ScanJobOutput,
+	ScanRuntimeSettings,
+} from "@vulseek/server/db/schema";
 import { scanJobs, tasks } from "@vulseek/server/db/schema";
-import { and, desc, eq, ilike, or, type SQL, sql } from "drizzle-orm";
 import {
-	loadScanPipelineDefinitions,
+	and,
+	desc,
+	eq,
+	ilike,
+	inArray,
+	or,
+	type SQL,
+	sql,
+} from "drizzle-orm";
+import {
 	normalizeLegacyVerificationSchema,
 	normalizePipelineDefinitionSnapshot,
 	type ScanPipelineDefinitions,
 } from "../pipeline/scan-pipeline-definitions";
 import { normalizeScanRuntimeSettings } from "../runtime-settings";
-import { getPipelineIdForScanType, type ScanType } from "../scan-type";
-import { resolveStageTaskName } from "../stage-task-name";
-import { createTaskRepo } from "./task.repo";
 
 const selectScanJobWithRepositoryTaskStatus = {
 	scanJobId: scanJobs.scanJobId,
 	title: scanJobs.title,
 	description: scanJobs.description,
 	note: scanJobs.note,
-	scanType: scanJobs.scanType,
+	pipelineId: scanJobs.pipelineId,
+	pipelineSystemKey: sql<string | null>`(
+		select "systemKey" from "scan_pipelines"
+		where "pipelineId" = ${scanJobs.pipelineId}
+	)`,
 	status: scanJobs.status,
 	triggerSource: scanJobs.triggerSource,
 	commitSha: scanJobs.commitSha,
@@ -28,11 +40,11 @@ const selectScanJobWithRepositoryTaskStatus = {
 	targetTag: scanJobs.targetTag,
 	scanRuntimeSettings: scanJobs.scanRuntimeSettings,
 	scanPipelineDefinitionSnapshot: scanJobs.scanPipelineDefinitionSnapshot,
+	outputs: scanJobs.outputs,
 	commitWindow: scanJobs.commitWindow,
 	applicationId: scanJobs.applicationId,
 	composeId: scanJobs.composeId,
 	datasetEvaluationTrialId: scanJobs.datasetEvaluationTrialId,
-	pipelineId: scanJobs.pipelineId,
 	pipelineVersionId: scanJobs.pipelineVersionId,
 	pipelineYamlSnapshot: scanJobs.pipelineYamlSnapshot,
 	pipelineCompiledSnapshot: scanJobs.pipelineCompiledSnapshot,
@@ -59,9 +71,12 @@ const selectScanJobWithRepositoryTaskStatus = {
 };
 
 const scanJobRootStageName = sql<string>`
-	jsonb_extract_path_text(
-		${scanJobs.scanPipelineDefinitionSnapshot},
-		VARIADIC ARRAY['pipelines', ${scanJobs.scanType}::text, 'rootStageId']::text[]
+	coalesce(
+		${scanJobs.pipelineCompiledSnapshot}->>'root',
+		jsonb_extract_path_text(
+			${scanJobs.scanPipelineDefinitionSnapshot},
+			VARIADIC ARRAY['pipelines', ${scanJobs.pipelineId}::text, 'rootStageId']::text[]
+		)
 	)
 `;
 
@@ -96,6 +111,200 @@ export const findScanJobRuntimeControlRepo = async (scanJobId: string) =>
 		.where(eq(scanJobs.scanJobId, scanJobId))
 		.limit(1)
 		.then((rows) => rows[0] ?? null);
+
+const OPEN_TASK_STATUSES = [
+	"pending",
+	"launching",
+	"launched",
+	"starting",
+	"running",
+] as const;
+
+const CANCELLABLE_JOB_STATUSES = ["pending", "running", "paused"] as const;
+
+export type ScanJobStatus = (typeof scanJobs.$inferSelect)["status"];
+
+export type ScanJobStatusTransitionResult = {
+	updated: boolean;
+	job: typeof scanJobs.$inferSelect | null;
+};
+
+export type CancelScanJobRepoResult = {
+	outcome: "canceled" | "already_stopped" | "not_found";
+	jobStatus: (typeof scanJobs.$inferSelect)["status"] | null;
+	tasksToStop: Array<typeof tasks.$inferSelect>;
+	stoppedDispatchTaskIds: string[];
+};
+
+export const cancelScanJobRepo = async (input: {
+	scanJobId: string;
+	errorMessage: string;
+	terminationReason: string;
+}): Promise<CancelScanJobRepoResult> => {
+	const now = new Date().toISOString();
+	return await db.transaction(async (tx) => {
+		const job = await tx
+			.select({ status: scanJobs.status })
+			.from(scanJobs)
+			.where(eq(scanJobs.scanJobId, input.scanJobId))
+			.for("update")
+			.limit(1)
+			.then((rows) => rows[0] ?? null);
+		if (!job) {
+			return {
+				outcome: "not_found",
+				jobStatus: null,
+				tasksToStop: [],
+				stoppedDispatchTaskIds: [],
+				};
+			}
+			if (!CANCELLABLE_JOB_STATUSES.some((status) => status === job.status)) {
+				return {
+					outcome: "already_stopped",
+					jobStatus: job.status,
+					tasksToStop: [],
+					stoppedDispatchTaskIds: [],
+				};
+			}
+
+			const tasksToStop = await tx
+			.update(tasks)
+			.set({
+				status: "canceled",
+				errorMessage: input.errorMessage,
+				completedAt: now,
+				updatedAt: now,
+			})
+			.where(
+				and(
+					eq(tasks.scanJobId, input.scanJobId),
+					inArray(tasks.status, [...OPEN_TASK_STATUSES]),
+				),
+			)
+			.returning();
+
+		const stoppedDispatches = await tx
+			.update(tasks)
+			.set({
+				downstreamDispatchStatus: "completed",
+				downstreamDispatchedAt: now,
+				updatedAt: now,
+			})
+			.where(
+				and(
+					eq(tasks.scanJobId, input.scanJobId),
+					inArray(tasks.downstreamDispatchStatus, [
+						"pending",
+						"dispatching",
+					]),
+				),
+			)
+			.returning({ taskId: tasks.taskId });
+
+			await tx
+				.update(scanJobs)
+				.set({
+					status: "canceled",
+					finishedAt: now,
+					terminationReason: input.terminationReason,
+					errorMessage: input.errorMessage,
+				})
+				.where(
+					and(
+						eq(scanJobs.scanJobId, input.scanJobId),
+						inArray(scanJobs.status, [...CANCELLABLE_JOB_STATUSES]),
+					),
+				)
+				.returning({ scanJobId: scanJobs.scanJobId });
+			return {
+				outcome: "canceled",
+				jobStatus: "canceled",
+				tasksToStop,
+				stoppedDispatchTaskIds: stoppedDispatches.map((row) => row.taskId),
+			};
+		});
+};
+
+/**
+ * Atomically changes a job state when its current state is one of `from`.
+ * Queue workers use this instead of an unconditional status write so a
+ * cancellation committed concurrently remains the execution authority.
+ */
+export const transitionScanJobStatusRepo = async (input: {
+	scanJobId: string;
+	from: ScanJobStatus[];
+	to: ScanJobStatus;
+	errorMessage?: string | null;
+	terminationReason?: string | null;
+}): Promise<ScanJobStatusTransitionResult> => {
+	const now = new Date().toISOString();
+	const patch: Partial<typeof scanJobs.$inferSelect> = {
+		status: input.to,
+	};
+	if (input.to === "running") {
+		patch.startedAt = now;
+		patch.finishedAt = null;
+	}
+	if (
+		input.to === "finished" ||
+		input.to === "partially_finished" ||
+		input.to === "failed" ||
+		input.to === "canceled"
+	) {
+		patch.finishedAt = now;
+	}
+	if (input.errorMessage !== undefined) patch.errorMessage = input.errorMessage;
+	if (input.terminationReason !== undefined) {
+		patch.terminationReason = input.terminationReason;
+	}
+
+	const updated = await db
+		.update(scanJobs)
+		.set(patch)
+		.where(
+			and(
+				eq(scanJobs.scanJobId, input.scanJobId),
+				inArray(scanJobs.status, input.from),
+			),
+		)
+		.returning();
+	if (updated[0]) return { updated: true, job: updated[0] };
+
+	const current = await db
+		.select()
+		.from(scanJobs)
+		.where(eq(scanJobs.scanJobId, input.scanJobId))
+		.limit(1)
+		.then((rows) => rows[0] ?? null);
+	return { updated: false, job: current };
+};
+
+type ScanJobOutputTransaction = Parameters<
+	Parameters<typeof db.transaction>[0]
+>[0];
+
+export const appendScanJobOutputTx = async (
+	tx: ScanJobOutputTransaction,
+	input: { scanJobId: string; output: ScanJobOutput },
+) => {
+	const currentOutputs = sql`coalesce(${scanJobs.outputs}, '[]'::jsonb)`;
+	const serializedOutput = JSON.stringify([input.output]);
+	await tx
+		.update(scanJobs)
+		.set({
+			outputs: sql<ScanJobOutput[]>`
+				case
+					when exists (
+						select 1
+						from jsonb_array_elements(${currentOutputs}) as entry
+						where entry->>'taskId' = ${input.output.taskId}
+					) then ${currentOutputs}
+					else ${currentOutputs} || ${serializedOutput}::jsonb
+				end
+			`,
+		})
+		.where(eq(scanJobs.scanJobId, input.scanJobId));
+};
 
 export const sumClaudeCodeCachedReadTokensByScanJobIdRepo = async (
 	scanJobId: string,
@@ -219,7 +428,6 @@ export const createScanJobRepo = async (input: {
 	applicationId?: string | null;
 	composeId?: string | null;
 	datasetEvaluationTrialId?: string | null;
-	scanType: ScanType;
 	title?: string | null;
 	description?: string | null;
 	triggerSource?: string | null;
@@ -239,31 +447,20 @@ export const createScanJobRepo = async (input: {
 	commitWindow?: number | null;
 	defaultDeltaCommitWindow: number;
 	// V3 snapshot linkage (frozen at run creation).
-	pipelineId?: string | null;
+	pipelineId: string;
 	pipelineVersionId?: string | null;
 	pipelineYamlSnapshot?: string | null;
 	pipelineCompiledSnapshot?: Record<string, unknown> | null;
 	maxTasks?: number | null;
 	deadlineAt?: string | null;
 }) => {
-	const pipelineDefinitions = loadScanPipelineDefinitions();
-	const pipelineId = getPipelineIdForScanType(input.scanType);
 	const created = await db
 		.insert(scanJobs)
 		.values({
 			applicationId: input.applicationId,
 			composeId: input.composeId,
 			datasetEvaluationTrialId: input.datasetEvaluationTrialId,
-			scanType: input.scanType as typeof scanJobs.$inferInsert.scanType,
-			title:
-				input.title ||
-				(input.scanType === "delta"
-					? "Delta Scan Job"
-					: input.scanType === "research"
-						? "Research Scan Job"
-						: input.scanType === "tob-goal"
-							? "Goal Scan Job"
-							: "Full Scan Job"),
+			title: input.title || "Pipeline Scan Job",
 			description: input.description || "",
 			triggerSource: input.triggerSource || "manual",
 			commitSha: input.commitSha,
@@ -274,9 +471,9 @@ export const createScanJobRepo = async (input: {
 				input.scanRuntimeSettings ?? {},
 			),
 			scanPipelineDefinitionSnapshot:
-				input.scanPipelineDefinitionSnapshot ?? pipelineDefinitions,
+				input.scanPipelineDefinitionSnapshot ?? {},
 			commitWindow: input.commitWindow || input.defaultDeltaCommitWindow,
-			pipelineId: input.pipelineId ?? null,
+			pipelineId: input.pipelineId,
 			pipelineVersionId: input.pipelineVersionId ?? null,
 			pipelineYamlSnapshot: input.pipelineYamlSnapshot ?? null,
 			pipelineCompiledSnapshot: input.pipelineCompiledSnapshot ?? null,
@@ -292,47 +489,6 @@ export const createScanJobRepo = async (input: {
 			message: "Error creating scan job",
 		});
 	}
-
-	// V3 snapshot runs create their own root task from the compiled
-	// definition (runPipelineFromSnapshot) — skip the legacy V2 root task.
-	if (input.pipelineId) {
-		return created[0]!;
-	}
-	const rootStageId = pipelineDefinitions.pipelines[pipelineId]!.rootStageId;
-	const threatDirection =
-		input.threatDirection ??
-		(input.scanRuntimeSettings &&
-		typeof input.scanRuntimeSettings === "object" &&
-		"threatDirection" in input.scanRuntimeSettings
-			? (input.scanRuntimeSettings as { threatDirection?: unknown })
-					.threatDirection
-			: undefined);
-	const rootInput =
-		input.scanType === "research"
-			? { researchScope: input.researchScope ?? {} }
-			: input.scanType === "tob-goal"
-				? {
-						threatDirection:
-							threatDirection && typeof threatDirection === "object"
-								? threatDirection
-								: {
-										focus:
-											"Find one high-impact vulnerability matching the attacker model",
-										attackerModel:
-											"Remote attacker with network access only; no local credential or admin preconditions",
-									},
-					}
-				: undefined;
-	await createTaskRepo({
-		scanJobId: created[0].scanJobId,
-		name:
-			input.scanType === "research" || input.scanType === "tob-goal"
-				? resolveStageTaskName(rootStageId, rootInput ?? {})
-				: rootStageId,
-		stageName: rootStageId,
-		status: "pending",
-		input: rootInput,
-	});
 
 	return created[0];
 };
@@ -391,6 +547,20 @@ export const loadScanJobPipelineDefinitionSnapshotRepo = async (
 		code: "INTERNAL_SERVER_ERROR",
 		message: "Scan job pipeline definition snapshot is missing or invalid",
 	});
+};
+
+export const loadScanJobPipelineCompiledSnapshotRepo = async (
+	scanJobId: string,
+) => {
+	const [row] = await db
+		.select({ pipelineCompiledSnapshot: scanJobs.pipelineCompiledSnapshot })
+		.from(scanJobs)
+		.where(eq(scanJobs.scanJobId, scanJobId))
+		.limit(1);
+	if (!row) {
+		throw new TRPCError({ code: "NOT_FOUND", message: "Scan job not found" });
+	}
+	return row.pipelineCompiledSnapshot;
 };
 
 export const updateScanJobPipelineDefinitionSnapshotRepo = async (

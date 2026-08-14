@@ -10,7 +10,6 @@ identify-target:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: fanout
     nullableOutput: false
     cwd: /workspace/repo
     skills: [identify-target]

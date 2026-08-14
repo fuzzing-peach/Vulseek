@@ -267,9 +267,9 @@ export const createStageDraft = (
 	name: id,
 	role: "scan",
 	group,
-	mode: "serial",
 	concurrency: 1,
 	disableable: true,
+	goal: false,
 	runtime: {
 		kind: "agent",
 		prompt: "Describe what this stage does.",
@@ -279,6 +279,7 @@ export const createStageDraft = (
 	},
 	inputArtifacts: [],
 	outputArtifacts: [],
+	jobOutput: false,
 	effects: [],
 	containerNameParts: [],
 	allowAgentExit: false,

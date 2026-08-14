@@ -12,6 +12,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { JsonEditor } from "./json-editor";
+import { SkillMultiSelect } from "./skill-multi-select";
+import { SchemaReferenceField } from "./workbench/workbench-fields";
 
 /**
  * Full V3 inspector: stage (runtime, artifacts, effects, schemas, prompt
@@ -28,13 +30,12 @@ export type PipelineInspectorProps = {
 };
 
 const roleOptions: Array<PipelineStageV3["role"]> = ["scan", "analysis", "verification"];
-const modeOptions: Array<PipelineStageV3["mode"]> = ["serial", "fanout"];
 const prepareOptions: Array<PipelineStageV3["runtime"]["prepareRepository"]> = [
 	"none",
 	"target",
 	"diff",
 ];
-const PLUGIN_OPTIONS = ["research-track", "research-deadline", "tob-goal-native"] as const;
+const PLUGIN_OPTIONS = ["research-track", "research-deadline"] as const;
 const EFFECT_OPTIONS = [
 	"sync-candidates",
 	"project-candidate-result",
@@ -108,11 +109,13 @@ const StageInspector = ({
 	stageId,
 	document,
 	onChange,
+	onSelect,
 }: {
 	stage: PipelineStageV3;
 	stageId: string;
 	document: PipelineDocumentV3;
 	onChange: (document: PipelineDocumentV3) => void;
+	onSelect: (entity: { type: "stage" | "edge" | "schema" | "group"; id: string }) => void;
 }) => {
 	const update = (patch: Partial<PipelineStageV3>) =>
 		onChange({
@@ -147,12 +150,6 @@ const StageInspector = ({
 				<Field label="Group">
 					<Input value={stage.group} onChange={(event) => update({ group: event.target.value })} />
 				</Field>
-				<SelectField
-					label="Mode"
-					value={stage.mode}
-					options={modeOptions}
-					onChange={(value) => update({ mode: value as PipelineStageV3["mode"] })}
-				/>
 				<Field label="Concurrency">
 					<Input
 						type="number"
@@ -198,15 +195,11 @@ const StageInspector = ({
 					/>
 				</Field>
 				<Field label="Skills">
-					<Input
-						value={stage.runtime.skills?.join(", ") ?? ""}
-						placeholder="comma separated skill names"
-						onChange={(event) =>
+					<SkillMultiSelect
+						value={stage.runtime.skills}
+						onChange={(skills) =>
 							updateRuntime({
-								skills: event.target.value
-									.split(",")
-									.map((skill) => skill.trim())
-									.filter(Boolean),
+								skills: skills.length > 0 ? skills : undefined,
 							})
 						}
 					/>
@@ -330,20 +323,20 @@ const StageInspector = ({
 			</Section>
 
 			<Section title="Schemas & values">
-				<Field label="Input schema">
-					<JsonEditor
-						value={stage.inputSchema ?? {}}
-						onChange={(value) => update({ inputSchema: value as never })}
-						rows={5}
-					/>
-				</Field>
-				<Field label="Output schema">
-					<JsonEditor
-						value={stage.outputSchema ?? {}}
-						onChange={(value) => update({ outputSchema: value as never })}
-						rows={5}
-					/>
-				</Field>
+				<SchemaReferenceField
+					label="Input schema"
+					value={stage.inputSchema}
+					schemaIds={Object.keys(document.schemas)}
+					onNavigateToSchema={(schemaId) => onSelect({ type: "schema", id: schemaId })}
+					onChange={(inputSchema) => update({ inputSchema: inputSchema as never })}
+				/>
+				<SchemaReferenceField
+					label="Output schema"
+					value={stage.outputSchema}
+					schemaIds={Object.keys(document.schemas)}
+					onNavigateToSchema={(schemaId) => onSelect({ type: "schema", id: schemaId })}
+					onChange={(outputSchema) => update({ outputSchema: outputSchema as never })}
+				/>
 				<Field label="Prompt values">
 					<JsonEditor
 						value={stage.promptValues ?? {}}
@@ -376,9 +369,19 @@ const StageInspector = ({
 					/>
 				</Field>
 				<ToggleField
+					label="Goal prompt"
+					checked={stage.goal ?? false}
+					onChange={(checked) => update({ goal: checked })}
+				/>
+				<ToggleField
 					label="Allow agent exit"
 					checked={stage.allowAgentExit ?? false}
 					onChange={(checked) => update({ allowAgentExit: checked })}
+				/>
+				<ToggleField
+					label="Publish job output"
+					checked={stage.jobOutput ?? false}
+					onChange={(checked) => update({ jobOutput: checked })}
 				/>
 				<Field label="Report path">
 					<Input
@@ -448,11 +451,13 @@ const EdgeInspector = ({
 	document,
 	onChange,
 	onSelectEdge,
+	onSelect,
 }: {
 	edge: PipelineEdgeV3;
 	document: PipelineDocumentV3;
 	onChange: (document: PipelineDocumentV3) => void;
 	onSelectEdge: (edgeId: string) => void;
+	onSelect: (entity: { type: "stage" | "edge" | "schema" | "group"; id: string }) => void;
 }) => {
 	const update = (patch: Partial<PipelineEdgeV3>) =>
 		onChange({
@@ -572,13 +577,13 @@ const EdgeInspector = ({
 						}
 					/>
 				</Field>
-				<Field label="Output schema">
-					<JsonEditor
-						value={edge.outputSchema ?? {}}
-						onChange={(value) => update({ outputSchema: value as never })}
-						rows={5}
-					/>
-				</Field>
+				<SchemaReferenceField
+					label="Output schema"
+					value={edge.outputSchema}
+					schemaIds={Object.keys(document.schemas)}
+					onNavigateToSchema={(schemaId) => onSelect({ type: "schema", id: schemaId })}
+					onChange={(outputSchema) => update({ outputSchema: outputSchema as never })}
+				/>
 			</Section>
 		</div>
 	);
@@ -849,6 +854,7 @@ export const PipelineInspector = ({
 						stageId={selection.id}
 						document={document}
 						onChange={onChange}
+						onSelect={onSelect}
 					/>
 				</div>
 				<div className="border-t p-3">
@@ -891,6 +897,7 @@ export const PipelineInspector = ({
 						document={document}
 						onChange={onChange}
 						onSelectEdge={(edgeId) => onSelect({ type: "edge", id: edgeId })}
+						onSelect={onSelect}
 					/>
 				</div>
 			</div>

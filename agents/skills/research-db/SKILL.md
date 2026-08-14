@@ -11,20 +11,20 @@ current `VULSEEK_SCAN_JOB_ID`; do not write SQL or connect with another client.
 The helper is available at:
 
 ```text
-/workspace/repo/.agents/skills/research-db/research_db.py
+$VULSEEK_AGENT_HOME/skills/research-db/research_db.py
 ```
 
 ## Reads
 
 ```bash
-python3 /workspace/repo/.agents/skills/research-db/research_db.py list-tracks
-python3 /workspace/repo/.agents/skills/research-db/research_db.py get-track --track-id <id>
-python3 /workspace/repo/.agents/skills/research-db/research_db.py list-findings --track-id <track-id>
-python3 /workspace/repo/.agents/skills/research-db/research_db.py get-finding --finding-id <id>
-python3 /workspace/repo/.agents/skills/research-db/research_db.py list-primitives --finding-id <finding-id>
-python3 /workspace/repo/.agents/skills/research-db/research_db.py get-primitive --primitive-id <id>
-python3 /workspace/repo/.agents/skills/research-db/research_db.py list-chains
-python3 /workspace/repo/.agents/skills/research-db/research_db.py get-chain --chain-id <id>
+python3 "$VULSEEK_AGENT_HOME/skills/research-db/research_db.py" list-tracks
+python3 "$VULSEEK_AGENT_HOME/skills/research-db/research_db.py" get-track --track-id <id>
+python3 "$VULSEEK_AGENT_HOME/skills/research-db/research_db.py" list-findings --track-id <track-id>
+python3 "$VULSEEK_AGENT_HOME/skills/research-db/research_db.py" get-finding --finding-id <id>
+python3 "$VULSEEK_AGENT_HOME/skills/research-db/research_db.py" list-primitives --finding-id <finding-id>
+python3 "$VULSEEK_AGENT_HOME/skills/research-db/research_db.py" get-primitive --primitive-id <id>
+python3 "$VULSEEK_AGENT_HOME/skills/research-db/research_db.py" list-chains
+python3 "$VULSEEK_AGENT_HOME/skills/research-db/research_db.py" get-chain --chain-id <id>
 ```
 
 ## Writes
@@ -32,23 +32,23 @@ python3 /workspace/repo/.agents/skills/research-db/research_db.py get-chain --ch
 Use direct entity commands. Each command is one short database transaction:
 
 ```bash
-python3 /workspace/repo/.agents/skills/research-db/research_db.py create-track \
+python3 "$VULSEEK_AGENT_HOME/skills/research-db/research_db.py" create-track \
   --track-id <id> \
   --track-key <key> \
   --approach-family <family> \
   --research-idea <idea>
 
-python3 /workspace/repo/.agents/skills/research-db/research_db.py update-track \
+python3 "$VULSEEK_AGENT_HOME/skills/research-db/research_db.py" update-track \
   --track-id <id> \
   --expected-revision <revision> \
   --status active
 
-python3 /workspace/repo/.agents/skills/research-db/research_db.py create-finding \
+python3 "$VULSEEK_AGENT_HOME/skills/research-db/research_db.py" create-finding \
   --finding-id <id> \
   --track-id <track-id> \
   --content-file /task/outputs/finding.json
 
-python3 /workspace/repo/.agents/skills/research-db/research_db.py update-finding \
+python3 "$VULSEEK_AGENT_HOME/skills/research-db/research_db.py" update-finding \
   --finding-id <id> \
   --expected-revision <revision> \
   --status validated

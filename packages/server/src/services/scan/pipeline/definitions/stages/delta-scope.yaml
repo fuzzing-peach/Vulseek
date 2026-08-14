@@ -10,7 +10,6 @@ delta-scope:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: serial
     nullableOutput: false
     cwd: /workspace/repo
     skills: [delta-scope]

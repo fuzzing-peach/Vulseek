@@ -27,6 +27,18 @@ import { JsonEditor } from "../json-editor";
 
 export type FieldDiagnostics = Pick<PipelineDiagnostic, "severity" | "message">[];
 
+/** `#/schemas/<id>` → `<id>`; anything else returns null. */
+export const schemaIdFromRef = (
+	value: Record<string, unknown> | undefined,
+): string | null => {
+	const ref = value?.["$ref"];
+	if (typeof ref !== "string") return null;
+	const prefix = "#/schemas/";
+	if (!ref.startsWith(prefix)) return null;
+	const id = ref.slice(prefix.length);
+	return id.length > 0 && !id.includes("/") ? id : null;
+};
+
 /** FieldTemplate: label, description, inline validation, and hint slot. */
 export const FieldTemplate = ({
 	label,
@@ -35,6 +47,7 @@ export const FieldTemplate = ({
 	children,
 	className,
 	required,
+	action,
 }: {
 	label: string;
 	description?: string;
@@ -42,6 +55,7 @@ export const FieldTemplate = ({
 	children: React.ReactNode;
 	className?: string;
 	required?: boolean;
+	action?: React.ReactNode;
 }) => {
 	const blocking = errors.filter((error) => error.severity === "error");
 	const hints = errors.filter((error) => error.severity === "warning");
@@ -54,6 +68,7 @@ export const FieldTemplate = ({
 						*
 					</span>
 				) : null}
+				{action ? <div className="ml-auto min-w-0">{action}</div> : null}
 			</div>
 			{description ? (
 				<p className="text-xs text-muted-foreground">{description}</p>
@@ -340,6 +355,7 @@ export const SchemaReferenceField = ({
 	value,
 	schemaIds,
 	onChange,
+	onNavigateToSchema,
 	description,
 	errors,
 	readOnly,
@@ -348,19 +364,32 @@ export const SchemaReferenceField = ({
 	value: Record<string, unknown> | undefined;
 	schemaIds: string[];
 	onChange: (value: Record<string, unknown> | undefined) => void;
+	onNavigateToSchema?: (schemaId: string) => void;
 	description?: string;
 	errors?: FieldDiagnostics;
 	readOnly?: boolean;
 }) => {
-	const refId =
-		typeof value?.["$ref"] === "string"
-			? value["$ref"].replace(/^#\/schemas\//, "")
-			: null;
+	const refId = schemaIdFromRef(value);
 	const isRef = refId !== null && schemaIds.includes(refId);
 	const mode = isRef ? refId : "inline";
 
 	return (
-		<FieldTemplate label={label} description={description} errors={errors}>
+		<FieldTemplate
+			label={label}
+			description={description}
+			errors={errors}
+			action={
+				isRef && onNavigateToSchema ? (
+					<button
+						type="button"
+						onClick={() => onNavigateToSchema(refId)}
+						className="truncate text-xs text-sky-600 hover:underline"
+					>
+						#/schemas/{refId}
+					</button>
+				) : null
+			}
+		>
 			<div className="space-y-2">
 				<select
 					value={mode}

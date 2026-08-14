@@ -1912,54 +1912,69 @@ schemas:
           type: string
   goal-threat-direction:
     type: object
+    description: Optional human threat direction used only as Craft context. Not a scan-job runtime input unless the UI supplies it. Focus and attackerModel are required; nonGoals and notes refine what must not be pursued.
     additionalProperties: false
     properties:
       focus:
+        description: What to hunt for, in one concrete sentence. Name the asset, boundary, or vulnerability class. Do not list methods or tools.
         type: string
         minLength: 1
       attackerModel:
+        description: Who the attacker is and what they may already control (network position, auth, local vs remote). Invalid capabilities belong in nonGoals, not here.
         type: string
         minLength: 1
       nonGoals:
+        description: Explicit out-of-scope attacker powers, bug classes, or outcomes. Craft must merge these into GoalSpec.nonGoals.
         type: array
         items:
           type: string
       notes:
+        description: Extra constraints, environment assumptions, or product context that is not itself a goal.
         type: string
     required:
       - focus
       - attackerModel
   goal-spec:
     type: object
+    description: Durable hunt objective after Craft self-red-team. Defines the outcome, not the method. Hunt later activates goalPrompt as Codex /goal. Every required field must be filled; empty strings are invalid.
     additionalProperties: false
     properties:
       goalId:
+        description: Stable id for this GoalSpec in the scan job. Use a short slug such as goal-1. Do not reuse ids across rewritten specs in the same job.
         type: string
         minLength: 1
       title:
+        description: Short human title of the hunt objective. One line, no method names, no file lists.
         type: string
         minLength: 1
       successCriteria:
+        description: Testable definition of done. A candidate counts only if it meets this. Close lazy outs here after red-team (for example "a real attacker-controlled path to the sink", not "mentioned a sink").
         type: string
         minLength: 1
       nonGoals:
+        description: Invalid attacker preconditions, out-of-scope classes, and outcomes that must not be counted as success. Include merged human nonGoals when present.
         type: array
         items:
           type: string
       attackerModel:
+        description: Attacker capabilities and position that Judge will enforce. Theoretical paths that need powers outside this model must be rejected.
         type: string
         minLength: 1
       stopCondition:
+        description: When a single Hunt task must stop. Always one candidate that meets successCriteria, or a justified exhaustion. Never "keep looking until time runs out".
         type: string
         minLength: 1
       persistenceLanguage:
+        description: Instruction Hunt must treat as standing policy. Must include that "no bugs found" is intermediate, not success, and that the agent must change method before giving up.
         type: string
         minLength: 1
       redTeamClosedLoopholes:
+        description: Lazy-agent loopholes Craft found (satisfy the letter without real work) and then closed in successCriteria or nonGoals. Each item names the loophole that was closed.
         type: array
         items:
           type: string
       goalPrompt:
+        description: Self-contained native-goal text later sent as Codex /goal for each Hunt. Outcome-heavy and path-light. Do not mandate a single tool. Keep under about 1800 characters. Must stand alone without the rest of this object.
         type: string
         minLength: 1
     required:
@@ -1974,40 +1989,51 @@ schemas:
       - goalPrompt
   goal-craft-output:
     type: object
+    description: Craft stage output. Write the full GoalSpec JSON to the path in goalSpecPath and also return the same object in goalSpec.
     additionalProperties: false
     properties:
       goalSpecPath:
+        description: Container path of the written GoalSpec JSON file. Use /task/goal-spec.json unless a later stage requires another path.
         type: string
         minLength: 1
       goalSpec:
+        description: The complete GoalSpec object, identical to the file at goalSpecPath. Must validate against the goal-spec schema.
         $ref: "#/schemas/goal-spec"
     required:
       - goalSpecPath
       - goalSpec
   hunt-goal:
     type: object
+    description: One dispatchable hunt surface under the GoalSpec lens. Surface emits these; Hunt receives exactly one. Do not put a vulnerability finding here.
     additionalProperties: false
     properties:
       huntGoalId:
+        description: Stable id for this hunt surface in the scan job. Unique among huntGoals emitted in this job. Example hg-auth-cookie-path.
         type: string
         minLength: 1
       title:
+        description: Short name of the surface (module, flow, or boundary). Not a vulnerability title.
         type: string
         minLength: 1
       objective:
+        description: What Hunt must try to prove or exhaust on this surface, in GoalSpec terms. One outcome, no tool list.
         type: string
         minLength: 1
       focusPaths:
+        description: Repo-relative files or directories Hunt should stay inside. Omit or leave empty only when the surface is not path-shaped.
         type: array
         items:
           type: string
       riskPathways:
+        description: Suspected source-to-sink or trust-boundary crossings to investigate. Descriptive, not confirmed findings.
         type: array
         items:
           type: string
       rationale:
+        description: Why this surface is high-value for the GoalSpec versus alternatives. Used by later Surface rounds to avoid repeating dead zones.
         type: string
       partitionDimension:
+        description: How this surface was sliced (module, data-flow, external-interface, privilege-boundary, and so on). Keep consistent within one Surface round.
         type: string
     required:
       - huntGoalId
@@ -2015,15 +2041,20 @@ schemas:
       - objective
   surface-dispatch:
     type: object
+    description: Surface planner output. First entry emits 2-8 diverse huntGoals. Later entries emit new huntGoals or declare global exhaustion. Surface does not hunt.
     additionalProperties: false
     properties:
       globalExhausted:
+        description: True only when no useful unexplored GoalSpec-relevant surface remains. Then huntGoals must be []. False whenever this output dispatches one or more huntGoals.
         type: boolean
       exhaustionReason:
+        description: Required in practice when globalExhausted is true. Summarize covered partitions, dead zones, and why another slice would not help.
         type: string
       partitionDimension:
+        description: Slice axis used for the huntGoals in this dispatch (module, data-flow, interface, ...). Helps later rounds pick a different axis.
         type: string
       huntGoals:
+        description: Hunt surfaces to fan out this round. Empty if and only if globalExhausted is true. First round should be 2-8 diverse items; later rounds may emit fewer.
         type: array
         items:
           $ref: "#/schemas/hunt-goal"
@@ -2032,58 +2063,75 @@ schemas:
       - huntGoals
   goal-candidate-finding:
     type: object
+    description: Exactly one vulnerability candidate from Hunt. Must meet GoalSpec.successCriteria. Not a theoretical note. Evidence must support claim. Never emit more than one per Hunt task.
     additionalProperties: false
     properties:
       candidateId:
+        description: Stable id for this candidate. Unique in the scan job. Do not reuse an id from a discarded attempt.
         type: string
         minLength: 1
       huntGoalId:
+        description: The huntGoalId of the assigned surface. Must match the Hunt task input.
         type: string
         minLength: 1
       title:
+        description: One-line finding title. Name the bug, not the file. Example "Unauthenticated path traversal in backup restore".
         type: string
         minLength: 1
       description:
+        description: What the bug is, how it manifests, and why it matters under the GoalSpec. Concrete. No filler.
         type: string
         minLength: 1
       vulnerabilityClass:
+        description: Bug class label such as path-traversal, sqli, idor, rce, authz-bypass. Prefer a conventional name over a novel phrase.
         type: string
       location:
+        description: Primary code location of the sink or violated check. filePath is required; line and symbol when known.
         type: object
         additionalProperties: false
         properties:
           filePath:
+            description: Repo-relative path of the primary vulnerable file.
             type: string
             minLength: 1
           line:
+            description: 1-based line of the sink or missing check. Null if the issue is file-wide and no single line is honest.
             type:
               - integer
               - "null"
           symbol:
+            description: Function, method, or handler name at the location. Null if unknown.
             type:
               - string
               - "null"
         required:
           - filePath
       claim:
+        description: Falsifiable statement Hunt is asserting. Example "attacker-controlled filename reaches fs.readFile without sanitization in restoreBackup". Judge tests this claim.
         type: string
         minLength: 1
       rootCauseKey:
+        description: Stable key for the underlying mistake, used by Dedup and Surface to avoid re-hunting the same root cause. Prefer a short slug of missing-check plus location, not the candidateId.
         type: string
         minLength: 1
       evidence:
+        description: Supporting observations (code facts, traces, commands). Each item should help prove or bound the claim. Empty only if the schema still validates and the claim is fully located in location plus description.
         type: array
         items:
           type: object
       attackerControl:
+        description: What the attacker actually controls to trigger the bug, consistent with GoalSpec.attackerModel.
         type: string
       preconditions:
+        description: Required setup that is still allowed by the attacker model. Do not list disallowed powers; those make the candidate invalid.
         type: array
         items:
           type: string
       quickDisproofAttempt:
+        description: How Hunt tried to kill the finding (wrong sink, sanitizer, auth gate). If disproof succeeded, do not emit this candidate.
         type: string
       confidence:
+        description: Hunt's confidence in the claim from 0 to 1. Not a CVSS score.
         type: number
     required:
       - candidateId
@@ -2095,23 +2143,29 @@ schemas:
       - rootCauseKey
   goal-exhaustion-declaration:
     type: object
+    description: Hunt found no candidate that meets successCriteria after reasonable methods on this surface. "No bugs found" is not enough; methodsTried and coveredPaths must show real work.
     additionalProperties: false
     properties:
       huntGoalId:
+        description: The assigned huntGoalId being declared exhausted. Must match Hunt input.
         type: string
         minLength: 1
       exhausted:
+        description: Must be true. This object is only valid as an exhaustion declaration.
         type: boolean
         const: true
       methodsTried:
+        description: Distinct methods actually used (manual tracing, CodeQL query X, Semgrep rule Y, ...). Name what was run, not "various tools".
         type: array
         items:
           type: string
       coveredPaths:
+        description: Repo-relative files or flows inspected. Used by Surface to treat these as dead zones for this GoalSpec.
         type: array
         items:
           type: string
       reason:
+        description: Why this surface is exhausted under the GoalSpec. Mention remaining uncertainty only if it cannot be reduced with another reasonable method here.
         type: string
         minLength: 1
     required:
@@ -2122,18 +2176,22 @@ schemas:
       - reason
   goal-hunt-output:
     type: object
+    description: Hunt envelope payload. Choose exactly one outcome. candidate path fills candidate and sets exhaustion to null. exhausted path fills exhaustion and sets candidate to null. Never both, never neither.
     additionalProperties: false
     properties:
       outcome:
+        description: "candidate if this Hunt emits exactly one GoalSpec-satisfying finding. exhausted if the assigned surface is done with no such finding. Must match output.json route."
         type: string
         enum:
           - candidate
           - exhausted
       candidate:
+        description: The single finding when outcome is candidate. Must be null when outcome is exhausted.
         anyOf:
           - $ref: "#/schemas/goal-candidate-finding"
           - type: "null"
       exhaustion:
+        description: Exhaustion record when outcome is exhausted. Must be null when outcome is candidate.
         anyOf:
           - $ref: "#/schemas/goal-exhaustion-declaration"
           - type: "null"
@@ -2141,25 +2199,32 @@ schemas:
       - outcome
   goal-judge-verdict:
     type: object
+    description: Independent Judge decision on one candidate. Checks attack-path validity under GoalSpec.attackerModel and PoC feasibility as a clear contour. Do not invent fixes. Do not re-hunt.
     additionalProperties: false
     properties:
       candidateId:
+        description: Candidate being judged. Must match the input candidate id.
         type: string
         minLength: 1
       decision:
+        description: "confirmed only if the attack path is valid under the attacker model and a PoC contour is feasible. rejected if the path is theoretical, needs disallowed preconditions, or the claim fails. needs-more-evidence if more work could decide; current routing treats this as rejected."
         type: string
         enum:
           - confirmed
           - rejected
           - needs-more-evidence
       summary:
+        description: One-paragraph verdict. State why the path holds or fails. Do not repeat the whole candidate.
         type: string
         minLength: 1
       attackPathValid:
+        description: True if source, sink, and missing check hold under GoalSpec.attackerModel. False if any required hop is missing or needs disallowed powers.
         type: boolean
       pocFeasible:
+        description: True if a proof-of-concept contour is clear enough to reproduce (not necessarily a full exploit). False if the bug cannot be demonstrated even as a sketch.
         type: boolean
       reasons:
+        description: Discrete supporting or rejecting reasons. Each item one fact. These are what Dedup and Surface will read.
         type: array
         items:
           type: string
@@ -2172,12 +2237,15 @@ schemas:
       - reasons
   goal-dedup-result:
     type: object
+    description: Novelty check only. Do not re-judge whether the issue is a vulnerability. Compare against public issues/advisories when reachable and against prior findings in this scan job.
     additionalProperties: false
     properties:
       candidateId:
+        description: Candidate being novelty-checked. Must match the input candidate id.
         type: string
         minLength: 1
       novelty:
+        description: "novel if not seen before in this job or known public trackers. duplicate if it matches a prior finding or known report. known-fixed if public trackers show a fix. unknown if trackers were unreachable and no local match exists."
         type: string
         enum:
           - novel
@@ -2185,22 +2253,32 @@ schemas:
           - known-fixed
           - unknown
       summary:
+        description: Why this novelty label. Cite issue/PR/advisory ids or the prior finding when relevant.
         type: string
         minLength: 1
       references:
+        description: URLs or ids of matching issues, PRs, advisories, or prior findings. Empty array when none apply.
         type: array
         items:
           type: string
+      judgePath:
+        description: When novelty is novel, write the unchanged input.judge object to /task/outputs/judge.json and set this to that path. For every other novelty value, do not write the file and set this to null.
+        type:
+          - string
+          - "null"
     required:
       - candidateId
       - novelty
       - summary
       - references
+      - judgePath
   surface-feedback:
     type: object
+    description: Downstream event fed back into Surface on re-entry. Surface uses this to avoid dead zones and already-novel root causes. Hunt and Judge do not produce this object directly; the runner maps their outputs into it.
     additionalProperties: false
     properties:
       kind:
+        description: "Which event this is. hunt-candidate a Hunt finding. hunt-exhausted a surface declared done. judge-reject Judge did not confirm. dedup-reject not novel. dedup-novel confirmed and novel."
         type: string
         enum:
           - hunt-candidate
@@ -2209,14 +2287,18 @@ schemas:
           - dedup-reject
           - dedup-novel
       huntGoalId:
+        description: Hunt surface this event belongs to, when known.
         type: string
       candidateId:
+        description: Candidate id when this event is about a finding. Null for hunt-exhausted.
         type:
           - string
           - "null"
       summary:
+        description: Short fact Surface should remember (why rejected, what was covered, which rootCauseKey is now novel).
         type: string
       payload:
+        description: Extra structured context (exhaustion fields, judge reasons, rootCauseKey). Do not invent a competing schema; pass through useful fields from the upstream output.
         type: object
     required:
       - kind
@@ -2271,10 +2353,9 @@ schemas:
 stages:
   goal-craft:
     name: Goal Craft
-    description: Draft and self-red-team a precise GoalSpec from the human threat direction.
+    description: Draft and self-red-team a precise GoalSpec for the configured goal.
     role: scan
     group: tob-goal
-    mode: serial
     concurrency: 1
     maxConcurrency: 1
     disableable: false
@@ -2288,12 +2369,10 @@ stages:
       prompt: |
         You are the Goal Craft stage for a tob-goal security scan.
 
-        **Mandatory:** Read `threatDirection` from task input (`focus`, `attackerModel`, `nonGoals`, `notes`). The human focus is the primary outcome — do not broaden it into a generic "untrusted input" hunt, and do not invent a weaker or different impact class than the human asked for. If notes are present, fold them into constraints.
-
         Use the repository only as needed to phrase a concrete goal.
 
         Produce a GoalSpec that:
-        1. Centers on threatDirection.focus (and attackerModel) as the durable outcome.
+        1. Centers on the configured goal and attacker model as the durable outcome.
         2. Defines precise, testable success criteria (what counts as done).
         3. Lists non-goals and invalid attacker preconditions (merge human nonGoals when present).
         4. Includes stopCondition for a single hunt task (one candidate or justified exhaustion).
@@ -2324,7 +2403,6 @@ stages:
     description: Goal-as-lens attack-surface planning and continuous hunt-goal dispatch.
     role: scan
     group: tob-goal
-    mode: serial
     concurrency: 1
     maxConcurrency: 1
     disableable: false
@@ -2372,10 +2450,10 @@ stages:
     description: One hunt goal, one candidate or exhaustion declaration.
     role: scan
     group: tob-goal
-    mode: fanout
     concurrency: 8
     maxConcurrency: 8
     disableable: false
+    goal: true
     runtime:
       kind: agent
       persistent: true
@@ -2412,8 +2490,6 @@ stages:
         - FINAL CHECK: (1) write the complete envelope to `/task/output.json`; (2) re-open and validate against `/task/output.schema.json`; (3) only then end the turn.
       prepareRepository: none
       includePolicy: false
-      plugins:
-        - tob-goal-native
     inputSchema:
       type: object
     outputSchema:
@@ -2432,7 +2508,6 @@ stages:
     description: Single independent judge for safety path and PoC feasibility.
     role: verification
     group: tob-goal
-    mode: fanout
     concurrency: 4
     maxConcurrency: 4
     disableable: false
@@ -2459,8 +2534,6 @@ stages:
         Use `confirmed` only for decision=confirmed; otherwise use `rejected` (including needs-more-evidence for v1).
       prepareRepository: none
       includePolicy: true
-      plugins:
-        - tob-goal-native
     inputSchema:
       type: object
     outputSchema:
@@ -2479,7 +2552,6 @@ stages:
     description: Novelty check against known issues and prior scan findings.
     role: verification
     group: tob-goal
-    mode: fanout
     concurrency: 4
     maxConcurrency: 4
     disableable: false
@@ -2498,6 +2570,13 @@ stages:
 
         Do not re-judge whether the issue is a vulnerability. Only novelty.
 
+        The input contains the complete Goal Judge result at `input.judge`. When the candidate is novel, preserve that judge result as a JSON artifact:
+
+        1. Write the `input.judge` object without changing its fields to `/task/outputs/judge.json`.
+        2. Set `judgePath` to `/task/outputs/judge.json` in the returned result.
+
+        When the candidate is not novel, do not create the artifact and set `judgePath` to `null`.
+
         Return GoalDedupResult JSON with references when applicable.
 
         Write `/task/output.json` as:
@@ -2505,14 +2584,13 @@ stages:
         Use `novel` only for novelty=novel; otherwise `reject`.
       prepareRepository: none
       includePolicy: false
-      plugins:
-        - tob-goal-native
     inputSchema:
       type: object
     outputSchema:
       $ref: "#/schemas/goal-dedup-result"
     inputArtifacts: []
     outputArtifacts: []
+    jobOutput: true
     effects:
       - type: tob-goal-registry
         operation: apply-dedup

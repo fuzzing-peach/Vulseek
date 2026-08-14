@@ -12,8 +12,8 @@ const RESEARCH_REGISTRY_TABS = [
 ] as const;
 
 export const getResearchRegistryTabs = (
-	scanType: "delta" | "full" | "research" | "tob-goal" | null | undefined,
-) => (scanType === "research" ? RESEARCH_REGISTRY_TABS : []);
+	pipelineSystemKey: string | null | undefined,
+) => (pipelineSystemKey === "research" ? RESEARCH_REGISTRY_TABS : []);
 
 export const isResearchRegistryTab = (
 	value: string | null | undefined,

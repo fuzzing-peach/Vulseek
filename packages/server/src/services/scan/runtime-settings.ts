@@ -4,7 +4,6 @@ import {
 	ScanRuntimeSettingsSchema,
 } from "../../db/schema/shared";
 import { loadScanPipelineDefinitions } from "./pipeline/scan-pipeline-definitions";
-import { getPipelineIdForScanType } from "./scan-type";
 
 export const FULL_SCAN_STAGE_IDS = [
 	"repository-profile",
@@ -126,13 +125,12 @@ export const createRuntimeSettingsPolicy = (definitions: RuntimeDefinitions) => 
 	};
 
 	const buildComplete = (input: {
-		scanType: "delta" | "full" | "research" | "tob-goal";
+		pipelineId: string;
+		stageIds?: string[];
 		targetStageSettings?: ScanStageSettings | null;
 		runtimeOverrides?: ScanRuntimeSettings | null;
 	}): ScanRuntimeSettings => {
-		const stageIds =
-			definitions.pipelines[getPipelineIdForScanType(input.scanType)]
-				?.stageIds ?? [];
+		const stageIds = input.stageIds ?? definitions.pipelines[input.pipelineId]?.stageIds ?? [];
 		const overrides = normalize(input.runtimeOverrides ?? {});
 		const stages: NonNullable<ScanRuntimeSettings["stages"]> = {};
 
@@ -226,7 +224,8 @@ export const createRuntimeSettingsFunctions = (
 ) => ({
 	normalize: (value: unknown) => createRuntimeSettingsPolicy(loadDefinitions()).normalize(value),
 	buildComplete: (input: {
-		scanType: "delta" | "full" | "research" | "tob-goal";
+		pipelineId: string;
+		stageIds?: string[];
 		targetStageSettings?: ScanStageSettings | null;
 		runtimeOverrides?: ScanRuntimeSettings | null;
 	}) => createRuntimeSettingsPolicy(loadDefinitions()).buildComplete(input),

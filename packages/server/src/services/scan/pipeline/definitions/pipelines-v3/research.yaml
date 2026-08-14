@@ -2274,7 +2274,6 @@ stages:
     description: Define the attacker model, trusted domain, protected assets, and success criteria for this research job.
     role: scan
     group: research
-    mode: serial
     concurrency: 1
     disableable: false
     runtime:
@@ -2311,7 +2310,6 @@ stages:
     description: Map attacker-facing entrypoints, trust boundaries, sources, sinks, and dependency flows.
     role: scan
     group: research
-    mode: serial
     concurrency: 1
     disableable: false
     runtime:
@@ -2343,7 +2341,6 @@ stages:
     description: Select diverse research tracks from surface coverage and Registry state.
     role: scan
     group: research
-    mode: serial
     concurrency: 1
     disableable: true
     runtime:
@@ -2380,7 +2377,6 @@ stages:
     description: Trace attacker-controlled data through one assigned research track.
     role: scan
     group: research
-    mode: fanout
     concurrency: 8
     disableable: true
     runtime:
@@ -2435,7 +2431,6 @@ stages:
     description: Review discovery results and route tracks, findings, or new surfaces.
     role: verification
     group: research
-    mode: fanout
     concurrency: 4
     disableable: true
     runtime:
@@ -2472,7 +2467,6 @@ stages:
     description: Validate one finding and characterize the supported capability.
     role: analysis
     group: research
-    mode: fanout
     concurrency: 8
     disableable: true
     runtime:
@@ -2507,7 +2501,6 @@ stages:
     description: Independently challenge one finding validation result.
     role: verification
     group: research
-    mode: fanout
     concurrency: 4
     disableable: true
     runtime:
@@ -2542,7 +2535,6 @@ stages:
     description: Combine confirmed capabilities into exploit chains and identify gaps.
     role: analysis
     group: research
-    mode: serial
     concurrency: 1
     disableable: true
     runtime:
@@ -2577,7 +2569,6 @@ stages:
     description: Audit the continuity and assumptions of one exploit chain.
     role: verification
     group: research
-    mode: fanout
     concurrency: 4
     disableable: true
     runtime:
@@ -2612,7 +2603,6 @@ stages:
     description: Perform source-only validation against the configured success criteria.
     role: verification
     group: research
-    mode: fanout
     concurrency: 4
     disableable: true
     runtime:
@@ -2647,7 +2637,6 @@ stages:
     description: Independently review the source-only chain validation.
     role: verification
     group: research
-    mode: fanout
     concurrency: 4
     disableable: true
     runtime:
@@ -2682,7 +2671,6 @@ stages:
     description: Produce the final evidence-backed report for the configured research criteria.
     role: verification
     group: research
-    mode: fanout
     concurrency: 2
     disableable: false
     runtime:

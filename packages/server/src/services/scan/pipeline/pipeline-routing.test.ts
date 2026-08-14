@@ -19,7 +19,6 @@ const makeStage = (
 	createStageDefinition<PipelineContext, unknown, unknown>({
 		id: name,
 		name,
-		mode: "serial",
 		outputSchema,
 		run: async () => ({
 			completion: "immediate",

@@ -2,7 +2,6 @@ import Head from "next/head";
 import { useTranslation } from "next-i18next";
 import { ResearchRegistryPanels } from "@/components/dashboard/scanning/research-registry-panels";
 import { ScanJobCandidatesTab } from "@/components/dashboard/scanning/scan-job-candidates-tab";
-import { ScanJobEvaluateTab } from "@/components/dashboard/scanning/scan-job-evaluate-tab";
 import { ScanJobFilesTab } from "@/components/dashboard/scanning/scan-job-files-tab";
 import { ScanJobOverviewTab } from "@/components/dashboard/scanning/scan-job-overview-tab";
 import { ScanJobTasksTab } from "@/components/dashboard/scanning/scan-job-tasks-tab";
@@ -53,9 +52,6 @@ const ScanJobDetailShell = () => {
 		resultSummary,
 		isLoadingResultSummary,
 		refreshScanJobViews,
-		canEvaluateScanJob,
-		latestEvaluation,
-		isLoadingLatestEvaluation,
 		candidates,
 		isLoadingCandidates,
 		isFetchingCandidates,
@@ -123,11 +119,7 @@ const ScanJobDetailShell = () => {
 								},
 								{
 									name: serviceData?.name || "",
-									href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}?tab=deployments`,
-								},
-								{
-									name: scanT(t, "scan.jobs.title", "Jobs"),
-									href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}?tab=deployments`,
+									href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}`,
 								},
 								{
 									name: scanT(t, "scan.job.shortTitle", "Job {{id}}", {
@@ -173,8 +165,8 @@ const ScanJobDetailShell = () => {
 							value: "tasks",
 							label: scanT(t, "scan.job.tabs.tasks", "阶段任务"),
 						},
-						...(scanJob?.scanType !== "research" &&
-						scanJob?.scanType !== "tob-goal"
+						...(scanJob?.pipelineSystemKey !== "research" &&
+						scanJob?.pipelineSystemKey !== "tob-goal"
 							? [
 									{
 										value: "candidates",
@@ -182,7 +174,7 @@ const ScanJobDetailShell = () => {
 									},
 								]
 							: []),
-						...(scanJob?.scanType === "tob-goal"
+						...(scanJob?.pipelineSystemKey === "tob-goal"
 							? [
 									{
 										value: "goal-candidates",
@@ -212,8 +204,7 @@ const ScanJobDetailShell = () => {
 						},
 						{ value: "files", label: scanT(t, "scan.files.title", "Files") },
 					]}
-					hiddenValues={["evaluate"]}
-					onTabChange={handleTabChange}
+				onTabChange={handleTabChange}
 				/>
 				<DashboardPageBody>
 					<DashboardPageTabContent>
@@ -236,32 +227,25 @@ const ScanJobDetailShell = () => {
 								/>
 							</TabsContent>
 
-							<TabsContent value="evaluate" className="mt-0 pt-0">
-								<ScanJobEvaluateTab
-									scanJobId={scanJobId}
-									serviceType={serviceType}
-									isLoadingJob={isLoadingJob}
-									scanJob={scanJob}
-									canEvaluateScanJob={canEvaluateScanJob}
-									latestEvaluation={latestEvaluation}
-									isLoadingLatestEvaluation={isLoadingLatestEvaluation}
-									serviceData={serviceData}
-								/>
-							</TabsContent>
-
-							{scanJob?.scanType === "tob-goal" ? (
+							{scanJob?.pipelineSystemKey === "tob-goal" ? (
 								<>
-									<TabsContent value="goal-candidates" className="mt-0 pt-0">
+									<TabsContent
+										value="goal-candidates"
+										className="mt-0 rounded-xl border bg-card p-4 sm:p-6"
+									>
 										<TobGoalCandidatesPanel scanJobId={scanJobId} />
 									</TabsContent>
-									<TabsContent value="goal-findings" className="mt-0 pt-0">
+									<TabsContent
+										value="goal-findings"
+										className="mt-0 rounded-xl border bg-card p-4 sm:p-6"
+									>
 										<TobGoalFindingsPanel scanJobId={scanJobId} />
 									</TabsContent>
 								</>
 							) : null}
 
-							{scanJob?.scanType !== "research" &&
-							scanJob?.scanType !== "tob-goal" ? (
+							{scanJob?.pipelineSystemKey !== "research" &&
+							 scanJob?.pipelineSystemKey !== "tob-goal" ? (
 								<TabsContent value="candidates" className="mt-0 pt-0">
 									<ScanJobCandidatesTab
 										scanJobId={scanJobId}
@@ -292,7 +276,7 @@ const ScanJobDetailShell = () => {
 								</TabsContent>
 							) : null}
 
-							{scanJob?.scanType === "research" ? (
+							{scanJob?.pipelineSystemKey === "research" ? (
 								<ResearchRegistryPanels
 									scanJobId={scanJobId}
 									activeTab={activeTab}

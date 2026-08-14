@@ -19,11 +19,11 @@ const baseDocument = (): PipelineDocumentV3 => ({
 			name: "Start",
 			role: "scan",
 			group: "g",
-			mode: "serial",
 			concurrency: 1,
 			disableable: true,
 			inputArtifacts: [],
 			outputArtifacts: [],
+			jobOutput: false,
 			effects: [],
 			containerNameParts: [],
 			allowAgentExit: false,
@@ -40,11 +40,11 @@ const baseDocument = (): PipelineDocumentV3 => ({
 			name: "Finish",
 			role: "verification",
 			group: "g",
-			mode: "serial",
 			concurrency: 1,
 			disableable: true,
 			inputArtifacts: [],
 			outputArtifacts: [],
+			jobOutput: true,
 			effects: [],
 			containerNameParts: [],
 			allowAgentExit: false,
@@ -84,6 +84,12 @@ describe("compilePipelineDocumentV3", () => {
 			"finish",
 		]);
 		expect(compiled.edges[0]?.id).toBe("start-to-finish");
+		expect(compiled.stages.find((stage) => stage.id === "start")?.jobOutput).toBe(
+			false,
+		);
+		expect(compiled.stages.find((stage) => stage.id === "finish")?.jobOutput).toBe(
+			true,
+		);
 	});
 
 	it("carries the root stage prepareRepository mode", () => {
@@ -111,7 +117,7 @@ describe("derivePipelineCapabilities", () => {
 		});
 	});
 
-	it("detects research and tob-goal behavior from effects and plugins", () => {
+	it("detects research and tob-goal behavior from effects", () => {
 		const research = baseDocument();
 		research.stages.start!.effects = [
 			{ type: "research-registry", operation: "persist-scope" },
@@ -121,7 +127,6 @@ describe("derivePipelineCapabilities", () => {
 		});
 
 		const goal = baseDocument();
-		goal.stages.start!.runtime.plugins = ["tob-goal-native"];
 		goal.stages.start!.effects = [
 			{ type: "tob-goal-registry", operation: "persist-candidate" },
 		];

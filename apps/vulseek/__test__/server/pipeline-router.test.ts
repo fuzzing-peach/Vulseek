@@ -148,7 +148,6 @@ stages:
     name: Start
     role: scan
     group: g
-    mode: serial
     concurrency: 1
     runtime:
       prompt: Do the thing.
@@ -163,7 +162,6 @@ stages:
     name: s
     role: scan
     group: g
-    mode: serial
     concurrency: 1
     runtime:
       promptFile: sneaky.prompt.md
@@ -323,6 +321,20 @@ describe("publish", () => {
 			(q) => q.operation === "insert" && q.table !== undefined,
 		);
 		expect(inserts).toHaveLength(0);
+	});
+});
+
+describe("runtimeCatalog", () => {
+	it("lists installed agent skills for the editor", async () => {
+		const catalog = await callerFor({
+			orgId: "org-1",
+			role: "member",
+		}).runtimeCatalog();
+		const names = catalog.skills.map((skill) => skill.name);
+		expect(names).toEqual(
+			expect.arrayContaining(["goal-craft", "goal-hunt", "codeql"]),
+		);
+		expect(catalog.skills.every((skill) => skill.name.length > 0)).toBe(true);
 	});
 });
 

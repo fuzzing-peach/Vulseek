@@ -1,8 +1,16 @@
-import { Database, Loader2, Play, RefreshCw } from "lucide-react";
+import {
+	CheckCircle2,
+	Circle,
+	Database,
+	Loader2,
+	Play,
+	RefreshCw,
+	XCircle,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import type { FormEvent, ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
 	CollectionSection,
@@ -20,6 +28,7 @@ import {
 import type { ListQueryStateSetter } from "@/components/dashboard/ui-system/use-collection-query";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
+import { CopyValueButton } from "@/components/shared/copy-value-button";
 import { Button } from "@/components/ui/button";
 import {
 	Card,
@@ -29,7 +38,16 @@ import {
 	CardTitle,
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import type {
 	ListQueryConfig,
 	ListQueryState,
@@ -49,6 +67,13 @@ const PROFILE_STATUS_LABEL = (status: string) =>
 	status
 		.replace(/[_-]/g, " ")
 		.replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+const CHECKOUT_STAGES = [
+	{ phase: "validating_source", label: "Validate local dataset" },
+	{ phase: "reading_manifest", label: "Read and validate samples" },
+	{ phase: "building_image", label: "Build checkout image" },
+	{ phase: "saving_profile", label: "Save profile and sample index" },
+] as const;
 
 const ProfileDetailPage = () => {
 	const router = useRouter();
@@ -93,11 +118,29 @@ const ProfileDetailPage = () => {
 		api.dataset.profiles.updateSelectedSamples.useMutation();
 	const updateHostRoot = api.dataset.profiles.updateHostRoot.useMutation();
 	const checkout = api.dataset.profiles.checkout.useMutation();
+	const [checkoutDialogOpen, setCheckoutDialogOpen] = useState(false);
+	const [checkoutId, setCheckoutId] = useState<string | null>(null);
+	const [checkoutFinalized, setCheckoutFinalized] = useState(true);
+	const [checkoutStartError, setCheckoutStartError] = useState<string | null>(null);
+	const handledCheckoutRef = useRef<string | null>(null);
+	const { data: checkoutStatus } = api.dataset.profiles.checkoutStatus.useQuery(
+		{ checkoutId: checkoutId ?? "" },
+		{
+			enabled: Boolean(checkoutId),
+			refetchInterval: checkoutId && !checkoutFinalized ? 800 : false,
+		},
+	);
 	const createEvaluation = api.dataset.evaluations.create.useMutation();
 	const [evaluationName, setEvaluationName] = useState("Evaluation");
-	const [pipelineId, setPipelineId] = useState<
-		"full" | "research" | "tob-goal"
-	>("research");
+	const [pipelineId, setPipelineId] = useState("");
+	const [pipelineProfileId, setPipelineProfileId] = useState("");
+	const pipelineOptions = api.pipeline.publishedOptions.useQuery({
+		targetType: "evaluation",
+	});
+	const pipelineProfiles = api.pipeline.profilesList.useQuery(
+		{ pipelineId },
+		{ enabled: Boolean(pipelineId) },
+	);
 	const [repetitions, setRepetitions] = useState(1);
 	const [timeBudgetSeconds, setTimeBudgetSeconds] = useState("");
 
@@ -116,6 +159,13 @@ const ProfileDetailPage = () => {
 	useEffect(() => {
 		setSamplePage(1);
 	}, [sampleSearch]);
+	useEffect(() => {
+		if (pipelineId || !pipelineOptions.data?.length) return;
+		const preferred =
+			pipelineOptions.data.find((pipeline) => pipeline.systemKey === "research") ??
+			pipelineOptions.data[0];
+		setPipelineId(preferred?.pipelineId ?? "");
+	}, [pipelineId, pipelineOptions.data]);
 
 	const toggleSample = (sampleId: string) => {
 		setSelectedSampleIds((current) =>
@@ -169,16 +219,41 @@ const ProfileDetailPage = () => {
 		}
 	};
 	const recheckout = async () => {
+		setCheckoutDialogOpen(true);
+		setCheckoutId(null);
+		setCheckoutFinalized(false);
+		setCheckoutStartError(null);
 		try {
-			await checkout.mutateAsync({ profileId });
-			const refreshed = await profile.refetch();
-			setSelectedSampleIds(refreshed.data?.selectedSampleIds ?? []);
-			await samples.refetch();
-			toast.success("Profile checkout completed");
+			const result = await checkout.mutateAsync({ profileId });
+			setCheckoutId(result.checkoutId);
 		} catch (error) {
-			toast.error(error instanceof Error ? error.message : "Checkout failed");
+			const message = error instanceof Error ? error.message : "Checkout failed";
+			setCheckoutFinalized(true);
+			setCheckoutStartError(message);
+			toast.error(message);
 		}
 	};
+
+	useEffect(() => {
+		if (
+			!checkoutStatus ||
+			checkoutStatus.status === "running" ||
+			handledCheckoutRef.current === checkoutStatus.checkoutId
+		)
+			return;
+		handledCheckoutRef.current = checkoutStatus.checkoutId;
+		setCheckoutFinalized(true);
+		if (checkoutStatus.status === "completed") {
+			void (async () => {
+				const refreshed = await profile.refetch();
+				setSelectedSampleIds(refreshed.data?.selectedSampleIds ?? []);
+				await samples.refetch();
+				toast.success("Profile checkout completed");
+			})();
+		} else {
+			toast.error(checkoutStatus.errorMessage || "Checkout failed");
+		}
+	}, [checkoutStatus, profile.refetch, samples.refetch]);
 	const submitEvaluation = async (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
 		if (!profile.data || selectedSampleIds.length === 0) return;
@@ -188,6 +263,7 @@ const ProfileDetailPage = () => {
 				profileId,
 				name: evaluationName,
 				pipelineId,
+				pipelineProfileId: pipelineProfileId || null,
 				sampleIds: selectedSampleIds,
 				repetitions,
 				timeBudgetSeconds: timeBudgetSeconds ? Number(timeBudgetSeconds) : null,
@@ -221,6 +297,26 @@ const ProfileDetailPage = () => {
 		1,
 		Math.ceil((samples.data?.total ?? 0) / samplePageSize),
 	);
+	const checkoutIsRunning =
+		!checkoutFinalized || checkout.isLoading;
+	const checkoutIsCompleted =
+		Boolean(checkoutId) && checkoutStatus?.status === "completed";
+	const checkoutIsFailed =
+		Boolean(checkoutStartError) ||
+		(Boolean(checkoutId) && checkoutStatus?.status === "failed");
+	const checkoutStageIndex = checkoutIsCompleted
+		? CHECKOUT_STAGES.length
+		: Math.max(
+				0,
+				CHECKOUT_STAGES.findIndex(
+					(stage) =>
+						stage.phase === (checkoutId ? checkoutStatus?.phase : undefined),
+				),
+			);
+	const manifestProgress = checkoutId ? checkoutStatus?.manifestProgress : null;
+	const manifestPercent = manifestProgress?.total
+		? Math.round((manifestProgress.current / manifestProgress.total) * 100)
+		: 0;
 
 	return (
 		<>
@@ -238,7 +334,22 @@ const ProfileDetailPage = () => {
 				<DashboardPageHeader
 					icon={<Database />}
 					title={data.profileKey}
-					description={`${data.datasetName} · ${data.hostRootSummary || "Local path not configured"}`}
+					description={
+						<span className="flex min-w-0 items-center gap-2 break-all">
+							<span className="shrink-0 font-mono text-xs">
+								{data.profileId}
+							</span>
+							<CopyValueButton
+								value={data.profileId}
+								label="Dataset Profile ID"
+								className="size-7 shrink-0"
+							/>
+							<span className="truncate">
+								{data.datasetName} ·{" "}
+								{data.hostRootSummary || "Local path not configured"}
+							</span>
+						</span>
+					}
 					status={
 						<StatusBadge
 							value={data.status}
@@ -250,9 +361,9 @@ const ProfileDetailPage = () => {
 							<Button
 								variant="outline"
 								onClick={recheckout}
-								disabled={checkout.isLoading || !data.hostRoot.trim()}
+								disabled={checkoutIsRunning || !data.hostRoot.trim()}
 							>
-								{checkout.isLoading ? (
+								{checkoutIsRunning ? (
 									<Loader2 className="size-4 animate-spin" />
 								) : (
 									<RefreshCw className="size-4" />
@@ -295,12 +406,13 @@ const ProfileDetailPage = () => {
 										</CardDescription>
 									</CardHeader>
 									<CardContent>
-										<form
-											onSubmit={submitEvaluation}
-											className="grid gap-4 md:grid-cols-5"
-										>
+									<form
+										onSubmit={submitEvaluation}
+										className="grid gap-4 md:grid-cols-2 lg:grid-cols-3"
+									>
+										<label className="grid gap-2 text-sm font-medium">
+											Evaluation name
 											<Input
-												className="md:col-span-2"
 												value={evaluationName}
 												onChange={(event) =>
 													setEvaluationName(event.target.value)
@@ -308,17 +420,55 @@ const ProfileDetailPage = () => {
 												placeholder="Evaluation name"
 												required
 											/>
+										</label>
+										<label className="grid gap-2 text-sm font-medium">
+											Pipeline
 											<select
 												className="h-10 rounded-md border bg-background px-3"
 												value={pipelineId}
-												onChange={(event) =>
-													setPipelineId(event.target.value as typeof pipelineId)
-												}
+												onChange={(event) => {
+													setPipelineId(event.target.value);
+													setPipelineProfileId("");
+												}}
+												disabled={pipelineOptions.isLoading}
+												required
 											>
-												<option value="full">Full Scan</option>
-												<option value="research">Research</option>
-												<option value="tob-goal">Goal</option>
+												<option value="" disabled>
+													Select pipeline
+												</option>
+												{pipelineOptions.data?.map((pipeline) => (
+													<option
+														key={pipeline.pipelineId}
+														value={pipeline.pipelineId}
+													>
+														{pipeline.name} · v{pipeline.currentVersionNumber}
+													</option>
+												))}
 											</select>
+										</label>
+										<label className="grid gap-2 text-sm font-medium">
+											Pipeline profile
+											<select
+												className="h-10 rounded-md border bg-background px-3"
+												value={pipelineProfileId}
+												onChange={(event) =>
+													setPipelineProfileId(event.target.value)
+												}
+												disabled={!pipelineId || pipelineProfiles.isLoading}
+											>
+												<option value="">Default pipeline settings</option>
+												{pipelineProfiles.data?.map((pipelineProfile) => (
+													<option
+														key={pipelineProfile.pipelineProfileId}
+														value={pipelineProfile.pipelineProfileId}
+													>
+														{pipelineProfile.name}
+													</option>
+												))}
+											</select>
+										</label>
+										<label className="grid gap-2 text-sm font-medium">
+											Repetitions
 											<Input
 												type="number"
 												min={1}
@@ -327,8 +477,10 @@ const ProfileDetailPage = () => {
 												onChange={(event) =>
 													setRepetitions(Number(event.target.value))
 												}
-												placeholder="Repetitions"
 											/>
+										</label>
+										<label className="grid gap-2 text-sm font-medium">
+											Time budget (seconds)
 											<Input
 												type="number"
 												min={1}
@@ -337,14 +489,17 @@ const ProfileDetailPage = () => {
 												onChange={(event) =>
 													setTimeBudgetSeconds(event.target.value)
 												}
-												placeholder="Time budget (s)"
+												placeholder="Optional"
 											/>
-											<Button
-												type="submit"
-												disabled={
+										</label>
+										<Button
+											type="submit"
+											className="md:col-span-2 md:justify-self-start lg:col-span-3"
+											disabled={
 													!data.canManage ||
 													data.status !== "ready" ||
 													selectedSampleIds.length === 0 ||
+													!pipelineId ||
 													createEvaluation.isLoading
 												}
 											>
@@ -545,6 +700,100 @@ const ProfileDetailPage = () => {
 					</DashboardPageTabContent>
 				</DashboardPageBody>
 			</DashboardPage>
+			<Dialog
+				open={checkoutDialogOpen}
+				onOpenChange={(open) => {
+					if (!open && checkoutIsRunning) return;
+					setCheckoutDialogOpen(open);
+				}}
+			>
+				<DialogContent className="sm:max-w-xl">
+					<DialogHeader>
+						<DialogTitle>
+							{checkoutIsCompleted
+								? "Dataset checkout complete"
+								: checkoutIsFailed
+									? "Dataset checkout failed"
+									: "Checking out dataset profile"}
+						</DialogTitle>
+						<DialogDescription>
+							{checkoutIsRunning
+								? "This process validates every sample and builds the checkout image. You can close this dialog after it finishes."
+								: checkoutIsCompleted
+									? `Prepared ${checkoutStatus.sampleCount ?? data.sampleCount} samples and saved the checkout image.`
+									: "The profile was not prepared. Review the error and retry checkout."}
+						</DialogDescription>
+					</DialogHeader>
+
+					<div className="space-y-4">
+						<div className="space-y-3">
+							{CHECKOUT_STAGES.map((stage, index) => {
+								const complete = index < checkoutStageIndex || checkoutIsCompleted;
+								const active = checkoutIsRunning && index === checkoutStageIndex;
+								return (
+									<div
+										key={stage.phase}
+										className="flex items-start gap-3"
+									>
+										<div className="mt-0.5 shrink-0">
+											{complete ? (
+												<CheckCircle2 className="size-5 text-emerald-600" />
+											) : active ? (
+												<Loader2 className="size-5 animate-spin text-primary" />
+											) : (
+												<Circle className="size-5 text-muted-foreground/40" />
+												)}
+										</div>
+										<div className="min-w-0">
+											<p className={active ? "font-medium" : "text-muted-foreground"}>
+												{stage.label}
+											</p>
+											{active && checkoutStatus?.message ? (
+												<p className="text-xs text-muted-foreground">
+													{checkoutStatus.message}
+												</p>
+											) : null}
+										</div>
+									</div>
+								);
+							})}
+						</div>
+
+						{checkoutStatus?.phase === "reading_manifest" && manifestProgress ? (
+							<div className="space-y-2 rounded-lg border bg-muted/20 p-3">
+								<div className="flex items-center justify-between gap-3 text-sm">
+									<span className="font-medium">Sample validation progress</span>
+									<span className="text-muted-foreground">
+										{manifestProgress.current} / {manifestProgress.total}
+									</span>
+								</div>
+								<Progress
+									value={manifestPercent}
+									aria-label="Sample validation progress"
+								/>
+							</div>
+						) : null}
+
+						{checkoutIsFailed ? (
+							<div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+								<XCircle className="mt-0.5 size-4 shrink-0" />
+								<span>{checkoutStartError || checkoutStatus?.errorMessage}</span>
+							</div>
+						) : null}
+					</div>
+
+					<DialogFooter>
+						<Button
+							type="button"
+							variant="outline"
+							disabled={checkoutIsRunning}
+							onClick={() => setCheckoutDialogOpen(false)}
+						>
+							{checkoutIsRunning ? "Checkout in progress" : "Close"}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</>
 	);
 };

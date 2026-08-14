@@ -47,7 +47,7 @@ import { Switch } from "@/components/ui/switch";
 import { api, type RouterOutputs } from "@/utils/api";
 import { formatScanStageLabel, scanT } from "./scan-i18n";
 
-type StageGraph = RouterOutputs["scan"]["jobPipeline"];
+export type StageGraph = RouterOutputs["scan"]["jobPipeline"];
 type QueueCount = RouterOutputs["scan"]["jobQueueCounts"]["queues"][number];
 type StageGraphNode = StageGraph["nodes"][number];
 type StageGraphEdge = StageGraph["edges"][number];
@@ -66,12 +66,12 @@ type FullScanStageGraphTarget =
 	| {
 			applicationId: string;
 			composeId?: never;
-			scanType?: "delta" | "full" | "research" | "tob-goal";
+			pipelineId: string;
 	  }
 	| {
 			composeId: string;
 			applicationId?: never;
-			scanType?: "delta" | "full" | "research" | "tob-goal";
+			pipelineId: string;
 	  };
 type StageFlowNodeData = Record<string, unknown> & {
 	label: ReactNode;
@@ -1515,7 +1515,7 @@ const buildFlowElements = (
 	return { nodes: flowNodes, edges: flowEdges };
 };
 
-const ScanStageGraphPanel = ({
+export const ScanStageGraphPanel = ({
 	graph,
 	isLoading = false,
 	error,
@@ -1622,7 +1622,7 @@ const ScanStageGraphPanel = ({
 	}, [effectiveGraph, handleEdgePointMove]);
 
 	return (
-		<div className="rounded-lg border bg-background">
+		<div className="w-full min-w-0 rounded-lg border bg-background">
 			<div className="border-b px-4 py-3">
 				<div className="font-medium">
 					{title || scanT(t, "scan.stageGraph.title", "Stage Graph")}
@@ -1768,31 +1768,31 @@ export const FullScanStageGraphPreview = ({
 	serviceData,
 	scanRuntimeSettings,
 	onScanRuntimeSettingsChange,
-	scanType = "full",
+	pipelineId = "",
 }: {
 	serviceData?: PreviewServiceData;
 	scanRuntimeSettings?: ScanRuntimeSettingsDraft;
 	onScanRuntimeSettingsChange?: (settings: ScanRuntimeSettingsDraft) => void;
-	scanType?: "delta" | "full" | "research" | "tob-goal";
+	pipelineId?: string;
 }) => {
 	const { t } = useTranslation("scan");
 	const target = useMemo<FullScanStageGraphTarget | null>(() => {
 		const serviceRecord = asRecord(serviceData);
 		const applicationId = serviceRecord?.applicationId;
 		if (typeof applicationId === "string" && applicationId) {
-			return { applicationId, scanType };
+			return { applicationId, pipelineId };
 		}
 		const composeId = serviceRecord?.composeId;
 		if (typeof composeId === "string" && composeId) {
-			return { composeId, scanType };
+			return { composeId, pipelineId };
 		}
 		return null;
-	}, [scanType, serviceData]);
+	}, [pipelineId, serviceData]);
 	const {
 		data: graph,
 		isLoading,
 		error,
-	} = api.scan.fullScanStageGraph.useQuery(target ?? { applicationId: "" }, {
+	} = api.scan.fullScanStageGraph.useQuery(target ?? { applicationId: "", pipelineId }, {
 		enabled: Boolean(target),
 	});
 	const { data: agentProfiles } = api.ai.getAgentProfiles.useQuery();
@@ -1819,17 +1819,17 @@ export const FullScanStageGraphPreview = ({
 				"{{type}} scan pipeline preview.",
 				{
 					type:
-						scanType === "delta"
+									pipelineId === "delta"
 							? scanT(t, "scan.scanType.delta", "Delta Scan")
-							: scanType === "research"
+											: pipelineId === "research"
 								? scanT(t, "scan.scanType.research", "Research Scan")
-								: scanType === "tob-goal"
+												: pipelineId === "tob-goal"
 									? scanT(t, "scan.scanType.goal", "Goal Scan")
 									: scanT(t, "scan.scanType.full", "Full Scan"),
 				},
 			)}
 			heightClassName={
-				scanType === "research" || scanType === "tob-goal"
+					pipelineId === "research" || pipelineId === "tob-goal"
 					? "h-[600px]"
 					: "h-[360px]"
 			}

@@ -4,8 +4,6 @@ import {
 	cancelScanJob,
 	cancelScanTask,
 	canRebuildCheckoutTools,
-	createScanEvaluationResult,
-	createScanJob,
 	findApplicationById,
 	findCandidateTaskLineage,
 	findCheckoutImageStatus,
@@ -14,7 +12,6 @@ import {
 	findCheckoutToolsStatus,
 	findComposeById,
 	findFullScanStageGraph,
-	findLatestScanEvaluationResult,
 	findResearchFindingRepo,
 	findRunningCheckoutTask,
 	findScanJobById,
@@ -29,7 +26,6 @@ import {
 	findVulnerabilityCandidateById,
 	findVulnerabilityCandidatesPageWithLatestAnalysisResultByScanJobId,
 	findVulnerabilityCandidateWithLatestAnalysisResultById,
-	getAgentProfileById,
 	getScanHomeOverview,
 	getScanHomeOverviewActivity,
 	getScanHomeOverviewSummary,
@@ -42,7 +38,6 @@ import {
 	listExploitPrimitivesPageRepo,
 	listResearchFindingsPageRepo,
 	listResearchTracksPageRepo,
-	listScanEvaluationResults,
 	listScanJobDirectory,
 	listScanTaskDirectory,
 	listTobGoalCandidatesPageRepo,
@@ -54,7 +49,6 @@ import {
 	rerunScanTask,
 	resumeScanJob,
 	retryFailedScanJobTasks,
-	scanEvaluationConfigSchema,
 	startCandidateAnalysis,
 	startCandidateReviewContainer,
 	startCandidateVerification,
@@ -69,7 +63,6 @@ import {
 import { z } from "zod";
 import {
 	apiCheckoutScanEnvironment,
-	apiCreateScanJob,
 	apiFindCheckoutStatus,
 	apiFindOneScanJob,
 	apiFindRunningCheckout,
@@ -79,7 +72,7 @@ import {
 	ScanRuntimeSettingsSchema,
 } from "@/server/db/schema";
 import type { ScanQueueJob } from "@/server/queues/queue-types";
-import { scanEvaluationsQueue, scansQueue } from "@/server/queues/queueSetup";
+import { scansQueue } from "@/server/queues/queueSetup";
 import { jobRuntimeStatusStore } from "../../scan/job-runtime-cache";
 import { apiFindResearchRegistryPageByScanJob } from "../schemas/research-registry";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
@@ -143,7 +136,7 @@ const apiFindFullScanStageGraph = z
 	.object({
 		applicationId: z.string().min(1).optional(),
 		composeId: z.string().min(1).optional(),
-		scanType: z.enum(["delta", "full", "research", "tob-goal"]).optional(),
+		pipelineId: z.string().min(1),
 	})
 	.refine(
 		(value) => Boolean(value.applicationId) !== Boolean(value.composeId),
@@ -161,11 +154,6 @@ const apiUpdateScanRuntimeSettings = z.object({
 const apiUpdateScanPipelineDefinitionSnapshot = z.object({
 	scanJobId: z.string().min(1),
 	scanPipelineDefinitionSnapshot: z.record(z.unknown()),
-});
-
-const apiStartScanEvaluation = z.object({
-	scanJobId: z.string().min(1),
-	configSnapshot: scanEvaluationConfigSchema,
 });
 
 const apiStartCandidateReviewContainer = z.object({
@@ -397,60 +385,6 @@ export const scanRouter = createTRPCRouter({
 				}
 			}
 			return await findRunningCheckoutTask(input);
-		}),
-
-	create: protectedProcedure
-		.input(apiCreateScanJob)
-		.mutation(async ({ input, ctx }) => {
-			// Grayscale gate: when V3 pipelines are enforced, legacy scanType
-			// writes are rejected — use pipeline.run instead. Old jobs keep
-			// working; only new writes are blocked.
-			if (process.env.VULSEEK_V3_ONLY === "true") {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message:
-						"Legacy scanType runs are disabled — use the Run Pipeline dialog with a published pipeline",
-				});
-			}
-			if (input.applicationId) {
-				const application = await findApplicationById(input.applicationId);
-				if (
-					application.environment.project.organizationId !==
-					ctx.session.activeOrganizationId
-				) {
-					throw new TRPCError({
-						code: "UNAUTHORIZED",
-						message: "You are not authorized to scan this application",
-					});
-				}
-			}
-
-			if (input.composeId) {
-				const compose = await findComposeById(input.composeId);
-				if (
-					compose.environment.project.organizationId !==
-					ctx.session.activeOrganizationId
-				) {
-					throw new TRPCError({
-						code: "UNAUTHORIZED",
-						message: "You are not authorized to scan this compose",
-					});
-				}
-			}
-
-			const scanJob = await createScanJob(input);
-			const queueData: ScanQueueJob = {
-				scanJobId: scanJob.scanJobId,
-				mode: input.scanType,
-			};
-
-			await scansQueue.add("scans", queueData, {
-				jobId: `scan:${scanJob.scanJobId}`,
-				removeOnComplete: true,
-				removeOnFail: true,
-			});
-
-			return scanJob;
 		}),
 
 	listByApplication: protectedProcedure
@@ -726,26 +660,47 @@ export const scanRouter = createTRPCRouter({
 				});
 			}
 
+			const cancellation = await cancelScanJob(input.scanJobId);
 			await Promise.all([
-				scansQueue
-					.getJob(`scan:${input.scanJobId}`)
-					.then((job) => job?.remove())
-					.catch(() => {}),
-				scansQueue
-					.getJob(`scan:retry:${input.scanJobId}`)
-					.then((job) => job?.remove())
-					.catch(() => {}),
-				scansQueue
-					.getJob(`scan:retry-analysis:${input.scanJobId}`)
-					.then((job) => job?.remove())
-					.catch(() => {}),
-				scansQueue
-					.getJob(`scan:retry-verification:${input.scanJobId}`)
-					.then((job) => job?.remove())
-					.catch(() => {}),
-			]);
+					scansQueue
+						.getJob(`scan:${input.scanJobId}`)
+						.then((job) => job?.remove())
+						.catch((error) =>
+							console.warn(
+								"[scan-cancel] root queue cleanup failed",
+								JSON.stringify({ scanJobId: input.scanJobId, error: String(error) }),
+							),
+						),
+					scansQueue
+						.getJob(`scan:retry:${input.scanJobId}`)
+						.then((job) => job?.remove())
+						.catch((error) =>
+							console.warn(
+								"[scan-cancel] retry queue cleanup failed",
+								JSON.stringify({ scanJobId: input.scanJobId, error: String(error) }),
+							),
+						),
+					scansQueue
+						.getJob(`scan:retry-analysis:${input.scanJobId}`)
+						.then((job) => job?.remove())
+						.catch((error) =>
+							console.warn(
+								"[scan-cancel] analysis retry queue cleanup failed",
+								JSON.stringify({ scanJobId: input.scanJobId, error: String(error) }),
+							),
+						),
+					scansQueue
+						.getJob(`scan:retry-verification:${input.scanJobId}`)
+						.then((job) => job?.remove())
+						.catch((error) =>
+							console.warn(
+								"[scan-cancel] verification retry queue cleanup failed",
+								JSON.stringify({ scanJobId: input.scanJobId, error: String(error) }),
+							),
+						),
+				]);
 
-			return await cancelScanJob(input.scanJobId);
+			return cancellation;
 		}),
 
 	pause: protectedProcedure
@@ -848,10 +803,7 @@ export const scanRouter = createTRPCRouter({
 			const scanJob = await findScanJobById(input.scanJobId);
 
 			const result = await retryFailedScanJobTasks(input.scanJobId);
-			const queueData: ScanQueueJob = {
-				scanJobId: scanJob.scanJobId,
-				mode: "retry-failed-tasks",
-			};
+			const queueData: ScanQueueJob = { scanJobId: scanJob.scanJobId };
 
 			await scansQueue.add("scans", queueData, {
 				jobId: `scan:retry:${scanJob.scanJobId}`,
@@ -872,10 +824,7 @@ export const scanRouter = createTRPCRouter({
 			);
 
 			const result = await rerunScanTask(input.taskId);
-			const queueData: ScanQueueJob = {
-				scanJobId: result.task.scanJobId,
-				mode: "rerun-task",
-			};
+			const queueData: ScanQueueJob = { scanJobId: result.task.scanJobId };
 
 			await scansQueue.add("scans", queueData, {
 				jobId: `scan:rerun-task:${result.task.scanJobId}:${result.task.taskId}`,
@@ -921,15 +870,6 @@ export const scanRouter = createTRPCRouter({
 				input.scanJobId,
 				ctx.session.activeOrganizationId,
 			);
-			const scanJob = await findScanJobById(input.scanJobId);
-			if (scanJob.scanType !== "research")
-				return {
-					items: [],
-					total: 0,
-					page: 1,
-					pageSize: input.pageSize,
-					totalPages: 1,
-				};
 			return await listResearchFindingsPageRepo(input);
 		}),
 
@@ -949,16 +889,6 @@ export const scanRouter = createTRPCRouter({
 				input.scanJobId,
 				ctx.session.activeOrganizationId,
 			);
-			const scanJob = await findScanJobById(input.scanJobId);
-			if (scanJob.scanType !== "tob-goal") {
-				return {
-					items: [],
-					total: 0,
-					page: 1,
-					pageSize: input.pageSize,
-					totalPages: 1,
-				};
-			}
 			return await listTobGoalCandidatesPageRepo(input);
 		}),
 
@@ -978,16 +908,6 @@ export const scanRouter = createTRPCRouter({
 				input.scanJobId,
 				ctx.session.activeOrganizationId,
 			);
-			const scanJob = await findScanJobById(input.scanJobId);
-			if (scanJob.scanType !== "tob-goal") {
-				return {
-					items: [],
-					total: 0,
-					page: 1,
-					pageSize: input.pageSize,
-					totalPages: 1,
-				};
-			}
 			return await listTobGoalFindingsPageRepo(input);
 		}),
 
@@ -1030,8 +950,6 @@ export const scanRouter = createTRPCRouter({
 				input.scanJobId,
 				ctx.session.activeOrganizationId,
 			);
-			const scanJob = await findScanJobById(input.scanJobId);
-			if (scanJob.scanType !== "research") return null;
 			return await findResearchFindingRepo(input);
 		}),
 
@@ -1053,111 +971,6 @@ export const scanRouter = createTRPCRouter({
 				ctx.session.activeOrganizationId,
 			);
 			return await listExploitChainsPageRepo(input);
-		}),
-
-	startEvaluation: protectedProcedure
-		.input(apiStartScanEvaluation)
-		.mutation(async ({ input, ctx }) => {
-			const scanJob = await findScanJobById(input.scanJobId);
-			if (!scanJob.applicationId || scanJob.composeId) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Evaluate only supports application scan jobs",
-				});
-			}
-			const application = await findApplicationById(scanJob.applicationId);
-			if (
-				application.environment.project.organizationId !==
-				ctx.session.activeOrganizationId
-			) {
-				throw new TRPCError({
-					code: "UNAUTHORIZED",
-					message: "You are not authorized to evaluate this scan job",
-				});
-			}
-			if (input.configSnapshot.agentProfileId) {
-				const agentProfile = await getAgentProfileById(
-					input.configSnapshot.agentProfileId,
-				);
-				if (agentProfile.organizationId !== ctx.session.activeOrganizationId) {
-					throw new TRPCError({
-						code: "UNAUTHORIZED",
-						message:
-							"You are not authorized to use this evaluate agent profile",
-					});
-				}
-				if (!agentProfile.isEnabled) {
-					throw new TRPCError({
-						code: "BAD_REQUEST",
-						message: "Evaluate agent profile is disabled",
-					});
-				}
-			}
-
-			const evaluation = await createScanEvaluationResult({
-				scanJobId: input.scanJobId,
-				configSnapshot: input.configSnapshot,
-			});
-			if (!evaluation) {
-				throw new TRPCError({
-					code: "INTERNAL_SERVER_ERROR",
-					message: "Failed to create scan evaluation result",
-				});
-			}
-			await scanEvaluationsQueue.add(
-				"scan-evaluations",
-				{ evaluateResultId: evaluation.evaluateResultId },
-				{
-					jobId: `scan-evaluation:${evaluation.evaluateResultId}`,
-					removeOnComplete: true,
-					removeOnFail: true,
-				},
-			);
-			return evaluation;
-		}),
-
-	latestEvaluation: protectedProcedure
-		.input(apiFindOneScanJob)
-		.query(async ({ input, ctx }) => {
-			const scanJob = await findScanJobById(input.scanJobId);
-			if (!scanJob.applicationId || scanJob.composeId) {
-				return null;
-			}
-			const application = await findApplicationById(scanJob.applicationId);
-			if (
-				application.environment.project.organizationId !==
-				ctx.session.activeOrganizationId
-			) {
-				throw new TRPCError({
-					code: "UNAUTHORIZED",
-					message:
-						"You are not authorized to access evaluations for this scan job",
-				});
-			}
-
-			return await findLatestScanEvaluationResult(input.scanJobId);
-		}),
-
-	evaluationHistory: protectedProcedure
-		.input(apiFindOneScanJob)
-		.query(async ({ input, ctx }) => {
-			const scanJob = await findScanJobById(input.scanJobId);
-			if (!scanJob.applicationId || scanJob.composeId) {
-				return [];
-			}
-			const application = await findApplicationById(scanJob.applicationId);
-			if (
-				application.environment.project.organizationId !==
-				ctx.session.activeOrganizationId
-			) {
-				throw new TRPCError({
-					code: "UNAUTHORIZED",
-					message:
-						"You are not authorized to access evaluations for this scan job",
-				});
-			}
-
-			return await listScanEvaluationResults(input.scanJobId);
 		}),
 
 	resultSummary: protectedProcedure
@@ -1467,10 +1280,7 @@ export const scanRouter = createTRPCRouter({
 			);
 
 			const result = await startCandidateAnalysis(input);
-			const queueData: ScanQueueJob = {
-				scanJobId: result.scanJobId,
-				mode: "full",
-			};
+			const queueData: ScanQueueJob = { scanJobId: result.scanJobId };
 
 			await scansQueue.add("scans", queueData, {
 				jobId: `scan:reanalyze:${result.scanJobId}:${result.taskId}`,
@@ -1653,31 +1463,10 @@ export const scanRouter = createTRPCRouter({
 	stageGraph: protectedProcedure
 		.input(apiFindOneScanJob)
 		.query(async ({ input, ctx }) => {
-			const scanJob = await findScanJobById(input.scanJobId);
-			let organizationId: string | undefined;
-			if (scanJob.applicationId) {
-				const application = await findApplicationById(scanJob.applicationId);
-				organizationId = application.environment.project.organizationId;
-			}
-			if (scanJob.composeId) {
-				const compose = await findComposeById(scanJob.composeId);
-				organizationId = compose.environment.project.organizationId;
-			}
-			if (!organizationId) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Invalid scan job target",
-				});
-			}
-
-			if (organizationId !== ctx.session.activeOrganizationId) {
-				throw new TRPCError({
-					code: "UNAUTHORIZED",
-					message:
-						"You are not authorized to access stage graph for this scan job",
-				});
-			}
-
+			await authorizeScanJobAccess(
+				input.scanJobId,
+				ctx.session.activeOrganizationId,
+			);
 			return await findScanJobStageGraph(input.scanJobId);
 		}),
 });

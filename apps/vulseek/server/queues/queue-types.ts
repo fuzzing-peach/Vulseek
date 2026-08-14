@@ -32,11 +32,6 @@ export type DeploymentJob = DeployJob;
 
 export type ScanQueueJob = {
 	scanJobId: string;
-	mode?: "full" | "delta" | "research" | "tob-goal" | "retry-failed-tasks" | "rerun-task";
-};
-
-export type ScanEvaluationQueueJob = {
-	evaluateResultId: string;
 };
 
 export type DatasetEvaluationQueueJob = {

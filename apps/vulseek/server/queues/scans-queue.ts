@@ -3,7 +3,7 @@ import {
 	findScanJobById,
 	getScanJobConcurrencySetting,
 	runScanJobInContainer,
-	updateScanJobStatus,
+	transitionScanJobStatus,
 } from "@vulseek/server";
 import { type Job, Worker } from "bullmq";
 import type { ScanQueueJob } from "./queue-types";
@@ -63,24 +63,29 @@ export const scansWorker = new Worker(
 					await cancelOpenScanJobTasks(
 						job.data.scanJobId,
 						scanJob.errorMessage,
-					).catch(() => {});
+					).catch((cleanupError) => {
+						console.warn(
+							"[scans-worker] failed-job task cleanup failed",
+							JSON.stringify({
+								scanJobId: job.data.scanJobId,
+								error: String(cleanupError),
+							}),
+						);
+					});
 				}
 				return;
 			}
 
-			const mode = job.data.mode ?? scanJob.scanType;
-			const isPrimaryScanMode =
-				mode === "full" || mode === "delta" || mode === "research" || mode === "tob-goal";
 			console.log(
 				"[scans-worker]",
 				JSON.stringify({
 					event: "scan-job.start",
 					scanJobId: scanJob.scanJobId,
-					mode,
+					pipelineId: scanJob.pipelineId,
 				}),
 			);
 
-			if (isPrimaryScanMode) {
+			{
 				const latestScanJob = await findScanJobById(job.data.scanJobId);
 				if (
 					latestScanJob.status === "failed" ||
@@ -88,10 +93,18 @@ export const scansWorker = new Worker(
 					latestScanJob.status === "paused"
 				) {
 					if (latestScanJob.status === "failed") {
-						await cancelOpenScanJobTasks(
-							job.data.scanJobId,
-							latestScanJob.errorMessage,
-						).catch(() => {});
+							await cancelOpenScanJobTasks(
+								job.data.scanJobId,
+								latestScanJob.errorMessage,
+							).catch((cleanupError) => {
+								console.warn(
+									"[scans-worker] failed-job task cleanup failed",
+									JSON.stringify({
+										scanJobId: job.data.scanJobId,
+										error: String(cleanupError),
+									}),
+								);
+							});
 					}
 					return;
 				}
@@ -101,7 +114,7 @@ export const scansWorker = new Worker(
 						JSON.stringify({
 							event: "scan-job.resume_already_running",
 							scanJobId: latestScanJob.scanJobId,
-							mode,
+							pipelineId: latestScanJob.pipelineId,
 						}),
 					);
 					await runScanJobInContainer(scanJob.scanJobId, {
@@ -114,10 +127,24 @@ export const scansWorker = new Worker(
 					return;
 				}
 			}
-			await updateScanJobStatus(scanJob.scanJobId, "running");
+			const started = await transitionScanJobStatus({
+				scanJobId: scanJob.scanJobId,
+				from: ["pending"],
+				to: "running",
+			});
+			if (!started.updated) {
+				console.log(
+					"[scans-worker]",
+					JSON.stringify({
+						event: "scan-job.start_skipped",
+						scanJobId: scanJob.scanJobId,
+						status: started.job?.status ?? "missing",
+					}),
+				);
+				return;
+			}
 			await runScanJobInContainer(scanJob.scanJobId, {
-				enqueueInitialRepositoryTask:
-					mode === "full" || mode === "research" || mode === "tob-goal",
+				enqueueInitialRepositoryTask: true,
 			});
 
 			const scanJobAfterRun = await findScanJobById(job.data.scanJobId);
@@ -129,7 +156,7 @@ export const scansWorker = new Worker(
 				JSON.stringify({
 					event: "scan-job.completed",
 					scanJobId: scanJob.scanJobId,
-					mode,
+					pipelineId: scanJob.pipelineId,
 				}),
 			);
 		} catch (error) {
@@ -152,16 +179,45 @@ export const scansWorker = new Worker(
 					await cancelOpenScanJobTasks(
 						job.data.scanJobId,
 						latestScanJob.errorMessage,
-					).catch(() => {});
+					).catch((cleanupError) => {
+						console.warn(
+							"[scans-worker] failed-job task cleanup failed",
+							JSON.stringify({
+								scanJobId: job.data.scanJobId,
+								error: String(cleanupError),
+							}),
+						);
+					});
 					return;
 				}
-			} catch (_) {}
+			} catch (stateError) {
+				console.warn(
+					"[scans-worker] failed-job state check failed",
+					JSON.stringify({
+						scanJobId: job.data.scanJobId,
+						error: String(stateError),
+					}),
+				);
+			}
 
 			const message = error instanceof Error ? error.message : "Unknown error";
 			try {
-				await updateScanJobStatus(job.data.scanJobId, "failed", message);
+				await transitionScanJobStatus({
+					scanJobId: job.data.scanJobId,
+					from: ["pending", "running", "paused"],
+					to: "failed",
+					errorMessage: message,
+				});
 				await cancelOpenScanJobTasks(job.data.scanJobId, message);
-			} catch (_) {}
+			} catch (cleanupError) {
+				console.warn(
+					"[scans-worker] failed-job cleanup failed",
+					JSON.stringify({
+						scanJobId: job.data.scanJobId,
+						error: String(cleanupError),
+					}),
+				);
+			}
 			console.log(
 				"[scans-worker]",
 				JSON.stringify({

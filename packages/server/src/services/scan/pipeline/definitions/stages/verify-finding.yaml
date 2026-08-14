@@ -10,7 +10,6 @@ verify-finding:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: fanout
     nullableOutput: false
     cwd: /workspace/repo
     skills: [verify-finding]

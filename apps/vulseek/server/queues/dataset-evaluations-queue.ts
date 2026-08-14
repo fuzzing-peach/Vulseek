@@ -1,4 +1,8 @@
-import { cancelScanJob, createScanJob, findScanJobById } from "@vulseek/server";
+import {
+	cancelScanJob,
+	findScanJobById,
+	scoreDatasetEvaluationTrial,
+} from "@vulseek/server";
 import {
 	datasetEvaluations,
 	datasetEvaluationTrials,
@@ -7,6 +11,7 @@ import {
 	datasets,
 	scanJobs,
 } from "@vulseek/server/db/schema";
+import { createPipelineRun } from "@vulseek/server/services/scan/api/pipeline-runs";
 import { type Job, Worker } from "bullmq";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/server/db";
@@ -98,8 +103,16 @@ const claimNextTrial = async (evaluationId: string) => {
 const finishTrial = async (input: {
 	trialId: string;
 	scanJobId: string;
-	status: "completed" | "scan_failed" | "timed_out" | "canceled";
+	status:
+		| "completed"
+		| "scan_failed"
+		| "scoring_failed"
+		| "timed_out"
+		| "canceled";
 	scanJob: Awaited<ReturnType<typeof findScanJobById>>;
+	result?: Record<string, unknown>;
+	postScanStatus?: "pending" | "running" | "completed" | "failed";
+	postScanResult?: Record<string, unknown> | null;
 	errorMessage?: string | null;
 }) => {
 	const startedAt = input.scanJob.startedAt
@@ -119,12 +132,27 @@ const finishTrial = async (input: {
 			thoughtTokens: input.scanJob.thoughtTokens,
 			totalTokens: input.scanJob.totalTokens,
 			estimatedCost: input.scanJob.estimatedCost ?? 0,
-			result: { scanJobId: input.scanJobId, scanStatus: input.scanJob.status },
+			result: {
+				scanJobId: input.scanJobId,
+				scanStatus: input.scanJob.status,
+				...(input.result ?? {}),
+			},
+			...(input.postScanStatus
+				? {
+						postScanStatus: input.postScanStatus,
+						postScanResult: input.postScanResult ?? null,
+					}
+				: {}),
 			errorMessage: input.errorMessage ?? input.scanJob.errorMessage,
 			finishedAt: new Date().toISOString(),
 			updatedAt: new Date().toISOString(),
 		})
-		.where(eq(datasetEvaluationTrials.trialId, input.trialId));
+		.where(
+			and(
+				eq(datasetEvaluationTrials.trialId, input.trialId),
+				inArray(datasetEvaluationTrials.status, ["preparing", "running"]),
+			),
+		);
 };
 
 const waitForScan = async (
@@ -143,7 +171,15 @@ const waitForScan = async (
 			.limit(1)
 			.then((rows) => rows[0]);
 		if (!evaluation || evaluation.status === "canceled") {
-			await cancelScanJob(scanJobId).catch(() => {});
+			await cancelScanJob(scanJobId, {
+				reason: "manual_cancel",
+				message: "Evaluation canceled",
+			}).catch((error) => {
+				console.warn(
+					"[dataset-evaluations] scan cancellation failed",
+					JSON.stringify({ scanJobId, evaluationId, error: String(error) }),
+				);
+			});
 			return { scanJob: await findScanJobById(scanJobId), timedOut: false };
 		}
 		if (evaluation.status === "paused") {
@@ -162,7 +198,15 @@ const waitForScan = async (
 			budgetSeconds &&
 			Date.now() - startedAt - pausedDurationMs >= budgetSeconds * 1000
 		) {
-			await cancelScanJob(scanJobId).catch(() => {});
+			await cancelScanJob(scanJobId, {
+				reason: "evaluation_time_budget",
+				message: "Evaluation time budget exceeded",
+			}).catch((error) => {
+				console.warn(
+					"[dataset-evaluations] scan timeout cancellation failed",
+					JSON.stringify({ scanJobId, evaluationId, error: String(error) }),
+				);
+			});
 			return { scanJob: await findScanJobById(scanJobId), timedOut: true };
 		}
 		await sleep(2000);
@@ -185,18 +229,23 @@ const processTrial = async (input: {
 		if (existing) {
 			scanJobId = existing.scanJobId;
 		} else {
-			const scanJob = await createScanJob({
-				datasetEvaluationTrialId: input.trial.trialId,
-				scanType: input.evaluation.evaluation.legacyPipelineKey as
-					| "full"
-					| "research"
-					| "tob-goal",
-				title: `${input.evaluation.evaluation.name}: ${input.sample.title || input.sample.id}`,
-				description: `Dataset evaluation trial ${input.trial.trialId}`,
-				triggerSource: "manual",
-				scanRuntimeSettings: input.evaluation.evaluation.scanRuntimeSettings,
-				scanPipelineDefinitionSnapshot:
-					input.evaluation.evaluation.scanPipelineDefinitionSnapshot,
+			const title = `${input.evaluation.evaluation.name}: ${input.sample.title || input.sample.id}`;
+			const description = `Dataset evaluation trial ${input.trial.trialId}`;
+			if (
+				!input.evaluation.evaluation.pipelineId ||
+				!input.evaluation.evaluation.pipelineVersionId
+			) {
+				throw new Error("Evaluation has no executable pipeline version");
+			}
+			const scanJob = await createPipelineRun({
+					organizationId: input.evaluation.dataset.organizationId,
+					target: { type: "datasetTrial", trialId: input.trial.trialId },
+					pipelineId: input.evaluation.evaluation.pipelineId,
+					pipelineVersionId: input.evaluation.evaluation.pipelineVersionId,
+					title,
+					description,
+					scanRuntimeSettings:
+						input.evaluation.evaluation.scanRuntimeSettings,
 			});
 			scanJobId = scanJob.scanJobId;
 		}
@@ -219,7 +268,6 @@ const processTrial = async (input: {
 			"dataset-trial-scan",
 			{
 				scanJobId: scanJobId as string,
-				mode: input.evaluation.evaluation.legacyPipelineKey,
 			},
 			{
 				jobId: `dataset-trial-${scanJobId}`,
@@ -234,6 +282,80 @@ const processTrial = async (input: {
 		input.evaluation.evaluation.timeBudgetSeconds,
 	);
 	const scanJob = outcome.scanJob;
+	const shouldRunPostScan =
+		outcome.timedOut ||
+		scanJob.status === "finished" ||
+		scanJob.status === "partially_finished";
+	if (shouldRunPostScan) {
+		await db
+			.update(datasetEvaluationTrials)
+			.set({ postScanStatus: "running", updatedAt: new Date().toISOString() })
+			.where(
+				and(
+					eq(datasetEvaluationTrials.trialId, input.trial.trialId),
+					inArray(datasetEvaluationTrials.status, ["preparing", "running"]),
+				),
+			);
+		console.log(
+			"[dataset-evaluations-worker]",
+			JSON.stringify({
+				event: "trial.scoring_started",
+				evaluationId: input.evaluation.evaluation.evaluationId,
+				trialId: input.trial.trialId,
+				scanJobId,
+			}),
+		);
+		try {
+			const scoring = await scoreDatasetEvaluationTrial({
+				trialId: input.trial.trialId,
+				scanJobId,
+			});
+			await finishTrial({
+				trialId: input.trial.trialId,
+				scanJobId,
+				status: outcome.timedOut ? "timed_out" : "completed",
+				scanJob,
+				result: { scoring },
+				postScanStatus: "completed",
+				postScanResult: { scoring },
+			});
+			console.log(
+				"[dataset-evaluations-worker]",
+				JSON.stringify({
+					event: "trial.scoring_completed",
+					evaluationId: input.evaluation.evaluation.evaluationId,
+					trialId: input.trial.trialId,
+					scanJobId,
+					jobOutputCount: scoring.jobOutputs.length,
+					hitCount: scoring.jobOutputs.filter((output) => output.hit).length,
+				}),
+			);
+			return;
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			await finishTrial({
+				trialId: input.trial.trialId,
+				scanJobId,
+				status: outcome.timedOut ? "timed_out" : "scoring_failed",
+				scanJob,
+				result: { scoring: { status: "failed" } },
+				postScanStatus: "failed",
+				postScanResult: { status: "failed", errorMessage },
+				errorMessage,
+			});
+			console.error(
+				"[dataset-evaluations-worker]",
+				JSON.stringify({
+					event: "trial.scoring_failed",
+					evaluationId: input.evaluation.evaluation.evaluationId,
+					trialId: input.trial.trialId,
+					scanJobId,
+					errorMessage,
+				}),
+			);
+			return;
+		}
+	}
 	await finishTrial({
 		trialId: input.trial.trialId,
 		scanJobId,
@@ -241,10 +363,7 @@ const processTrial = async (input: {
 			? "timed_out"
 			: scanJob.status === "canceled"
 				? "canceled"
-				: scanJob.status === "finished" ||
-						scanJob.status === "partially_finished"
-					? "completed"
-					: "scan_failed",
+				: "scan_failed",
 		scanJob,
 	});
 };

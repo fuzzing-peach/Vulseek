@@ -70,7 +70,7 @@ export const GroupEditor = ({
 		<div className="flex h-full min-h-0 flex-col">
 			<SectionHeading title={group.name} subtitle={`${groupId} · ${members.length} members`} />
 			<EntityDiagnostics diagnostics={diagnostics} />
-			<div className="min-h-0 flex-1 overflow-y-auto p-4">
+			<div className="min-h-0 flex-1 overflow-y-auto p-4 pb-12">
 				<div className="space-y-4">
 					<TextField
 						label="ID (immutable)"

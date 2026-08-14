@@ -1,7 +1,7 @@
 You are the Attack Surface Model stage for one full-scan module task.
 {{taskIsolation}}
 Use the installed skill named attack-surface-model as your working method.
-The attack-surface-model skill file is /workspace/repo/.agents/skills/attack-surface-model/SKILL.md.
+The attack-surface-model skill file is $VULSEEK_AGENT_HOME/skills/attack-surface-model/SKILL.md.
 Do not emit candidate or candidate_batch events.
 scan_job_id: {{scanJobId}}
 module_id: {{moduleId}}

@@ -5,8 +5,6 @@ import type {
 } from "../stages/full-scan-stage.runtime";
 import type { StructuredOutputSchemaSource } from "./scan-pipeline-schema-contracts";
 
-export type StageRunMode = "serial" | "fanout";
-
 export type StageExecution<TInput> = {
 	taskId: string;
 	input: TInput;
@@ -31,7 +29,6 @@ export type StageRuntimeConfigGetters = {
 	getAgentProfile: () => Promise<string | null>;
 	getPersistent: () => Promise<boolean | null>;
 	getReuseContainer: () => Promise<boolean | null>;
-	getMode: () => Promise<StageRunMode | null>;
 	getNullableOutput: () => Promise<boolean | null>;
 	getCwd: () => Promise<string | null>;
 	getSkills: () => Promise<string[]>;
@@ -81,10 +78,11 @@ export type StageDefinition<
 > = {
 	id: string;
 	name: string;
-	mode: StageRunMode;
 	persistent?: boolean;
 	reuseContainer?: boolean;
 	nullableOutput?: boolean;
+	jobOutput?: boolean;
+	goal?: boolean;
 	allowAgentExit?: boolean;
 	outputSchema?: StructuredOutputSchemaSource;
 	runtimeConfig?: StageRuntimeConfigGetters;
@@ -132,16 +130,9 @@ export const createStageDefinition = <
 	persistent: stage.persistent ?? true,
 	reuseContainer: stage.reuseContainer ?? true,
 	nullableOutput: stage.nullableOutput ?? false,
+	jobOutput: stage.jobOutput ?? false,
+	goal: stage.goal ?? false,
 });
-
-export const isFanoutStage = <
-	TPipelineContext extends PipelineContext,
-	TInput,
-	TOutput,
-	TStageContext extends StageContext,
->(
-	stage: StageDefinition<TPipelineContext, TInput, TOutput, TStageContext>,
-) => stage.mode === "fanout";
 
 const resolveJobInputId = <TPipelineContext extends PipelineContext, TInput>(
 	binding: Pick<

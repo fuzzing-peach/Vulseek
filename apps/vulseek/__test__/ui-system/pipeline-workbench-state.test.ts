@@ -24,7 +24,6 @@ stages:
     name: Start # stage comment
     role: scan
     group: g
-    mode: serial
     concurrency: 1
     runtime:
       prompt: Do the thing.
@@ -32,7 +31,6 @@ stages:
     name: Review
     role: verification
     group: g
-    mode: serial
     concurrency: 1
     runtime:
       prompt: Review it.
@@ -58,9 +56,8 @@ describe("pipelineEditorReducer — typed patch", () => {
 						name: "Review v2",
 						role: "verification",
 						group: "g",
-						mode: "serial",
 						concurrency: 2,
-						runtime: { kind: "agent", prompt: "Review it harder.", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {},
+						runtime: { kind: "agent", prompt: "Review it harder.", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], jobOutput: false, effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {},
 					},
 				},
 			],
@@ -158,9 +155,8 @@ describe("pipelineEditorReducer — coalescing and history", () => {
 							name,
 							role: "scan",
 							group: "g",
-							mode: "serial",
 							concurrency: 1,
-							runtime: { kind: "agent", prompt: "Do the thing.", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {},
+							runtime: { kind: "agent", prompt: "Do the thing.", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], jobOutput: false, effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {},
 						},
 					},
 				],
@@ -191,9 +187,8 @@ describe("pipelineEditorReducer — coalescing and history", () => {
 						name: "Triage",
 						role: "analysis",
 						group: "g",
-						mode: "serial",
 						concurrency: 1,
-						runtime: { kind: "agent", prompt: "Triage.", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {},
+						runtime: { kind: "agent", prompt: "Triage.", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], jobOutput: false, effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {},
 					},
 				},
 			],
@@ -268,9 +263,8 @@ describe("Definition / Visual synchronization", () => {
 						name: "Renamed",
 						role: "verification",
 						group: "g",
-						mode: "serial",
 						concurrency: 1,
-						runtime: { kind: "agent", prompt: "Review it.", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {},
+						runtime: { kind: "agent", prompt: "Review it.", prepareRepository: "none", includePolicy: false, plugins: [] }, disableable: true, inputArtifacts: [], outputArtifacts: [], jobOutput: false, effects: [], containerNameParts: [], allowAgentExit: false, promptValues: {},
 					},
 				},
 			],

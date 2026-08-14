@@ -203,15 +203,15 @@ export const formatTriageResultLabel = (
 	);
 };
 
-export const formatScanTypeLabel = (
+export const formatPipelineSystemKeyLabel = (
 	t: ScanTranslation,
-	scanType?: string | null,
+	pipelineSystemKey?: string | null,
 ) =>
-	scanType === "delta"
+	pipelineSystemKey === "delta"
 		? scanT(t, "scan.scanType.delta", "Delta Scan")
-		: scanType === "research"
+		: pipelineSystemKey === "research"
 			? scanT(t, "scan.scanType.research", "Research Scan")
-			: scanType === "tob-goal"
+			: pipelineSystemKey === "tob-goal"
 				? scanT(t, "scan.scanType.goal", "Goal Scan")
 				: scanT(t, "scan.scanType.full", "Full Scan");
 

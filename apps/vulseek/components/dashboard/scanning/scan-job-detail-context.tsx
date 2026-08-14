@@ -88,11 +88,6 @@ export type ScanJobDetailContextValue = {
 	/** Invalidates every job view; shared with the tabs. */
 	refreshScanJobViews: () => Promise<void>;
 
-	// Evaluate.
-	canEvaluateScanJob: boolean;
-	latestEvaluation: RouterOutputs["scan"]["latestEvaluation"] | undefined;
-	isLoadingLatestEvaluation: boolean;
-
 	// Candidates: URL-backed list state plus the last-good-data pattern.
 	candidates: RouterOutputs["scan"]["candidates"] | undefined;
 	isLoadingCandidates: boolean;
@@ -299,6 +294,7 @@ export const ScanJobDetailProvider = ({
 			enabled: !!scanJobId && shouldLoadJobRuntime,
 			staleTime: Number.POSITIVE_INFINITY,
 			refetchOnWindowFocus: false,
+			trpc: { context: { skipBatch: true } },
 		},
 	);
 	const { data: resultSummary, isLoading: isLoadingResultSummary } =
@@ -310,17 +306,6 @@ export const ScanJobDetailProvider = ({
 					activeTab === "overview" && !isTerminalScanJobStatus(scanJob?.status)
 						? 10_000
 						: false,
-			},
-		);
-	const { data: latestEvaluation, isLoading: isLoadingLatestEvaluation } =
-		api.scan.latestEvaluation.useQuery(
-			{ scanJobId },
-			{
-				enabled:
-					!!scanJobId &&
-					activeTab === "evaluate" &&
-					serviceType === "application",
-				refetchInterval: activeTab === "evaluate" ? 2000 : false,
 			},
 		);
 	const { data: selectedFile, isLoading: isLoadingSelectedFile } =
@@ -348,16 +333,16 @@ export const ScanJobDetailProvider = ({
 
 	const requestedTab = useMemo(() => {
 		const tab = resolveRequestedTab(router.query.tab);
-		if (scanJob?.scanType === "research" && tab === "candidates")
+		if (scanJob?.pipelineSystemKey === "research" && tab === "candidates")
 			return "findings";
 		// tob-goal uses dedicated tabs; legacy `findings` query maps to goal-findings.
-		if (scanJob?.scanType === "tob-goal" && tab === "findings") {
+		if (scanJob?.pipelineSystemKey === "tob-goal" && tab === "findings") {
 			return "goal-findings";
 		}
 		if (
 			scanJob &&
-			scanJob.scanType !== "research" &&
-			scanJob.scanType !== "tob-goal" &&
+			scanJob.pipelineSystemKey !== "research" &&
+			scanJob.pipelineSystemKey !== "tob-goal" &&
 			(tab === "findings" ||
 				tab === "goal-candidates" ||
 				tab === "goal-findings")
@@ -367,14 +352,12 @@ export const ScanJobDetailProvider = ({
 		return tab;
 	}, [router.query.tab, scanJob]);
 
-	const canEvaluateScanJob =
-		serviceType === "application" && Boolean(scanJob?.applicationId);
-	const researchRegistryTabs = getResearchRegistryTabs(scanJob?.scanType);
+	const researchRegistryTabs = getResearchRegistryTabs(scanJob?.pipelineSystemKey);
 
 	useEffect(() => {
 		if (
 			scanJob &&
-			scanJob.scanType !== "research" &&
+			scanJob.pipelineSystemKey !== "research" &&
 			isResearchRegistryTab(activeTab)
 		) {
 			setActiveTab("overview");
@@ -387,7 +370,6 @@ export const ScanJobDetailProvider = ({
 			utils.scan.jobRunningTasks.invalidate({ scanJobId }),
 			utils.scan.jobQueueCounts.invalidate({ scanJobId }),
 			utils.scan.resultSummary.invalidate({ scanJobId }),
-			utils.scan.latestEvaluation.invalidate({ scanJobId }),
 			utils.scan.candidates.invalidate({ scanJobId }),
 			serviceType === "application" && serviceId
 				? utils.scan.listByApplication.invalidate({ applicationId: serviceId })
@@ -817,9 +799,6 @@ export const ScanJobDetailProvider = ({
 		resultSummary,
 		isLoadingResultSummary,
 		refreshScanJobViews,
-		canEvaluateScanJob,
-		latestEvaluation,
-		isLoadingLatestEvaluation,
 		candidates,
 		isLoadingCandidates,
 		isFetchingCandidates,

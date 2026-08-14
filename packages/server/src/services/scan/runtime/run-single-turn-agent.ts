@@ -7,7 +7,7 @@ import { execAsync } from "../../../utils/process/execAsync";
 import { getAgentProfileById } from "../../ai";
 import { findApplicationById } from "../../application";
 import { findComposeById } from "../../compose";
-import { resolveDatasetTrialRuntime } from "../../dataset";
+import { resolveDatasetToolsImage, resolveDatasetTrialRuntime } from "../../dataset";
 import { findTaskByIdRepo, updateTaskRepo } from "../persistence/task.repo";
 import type { StructuredOutputSchemaSource } from "../pipeline/scan-pipeline-schema-contracts";
 import { getRuntimeStageSetting } from "../runtime-settings";
@@ -253,7 +253,7 @@ const copyHostFileToContainer = async (input: {
 
 	try {
 		await execAsync(
-			`docker create --name ${helperName} -v '${escapeSingleQuotes(sourceDirectory)}:/host-credential:ro' '${escapeSingleQuotes(image)}' bash -lc 'sleep 30'`,
+			`docker create --name ${helperName} -v '${escapeSingleQuotes(sourceDirectory)}:/host-credential:ro' --entrypoint bash '${escapeSingleQuotes(image)}' -lc 'sleep 30'`,
 		);
 		await execAsync(
 			`docker cp ${helperName}:'/host-credential/${escapeSingleQuotes(sourceFile)}' '${escapeSingleQuotes(localCopyPath)}'`,
@@ -677,11 +677,11 @@ const resolveScanExecutionContext = async (
 		}
 		const projectName = `dataset-${datasetRuntime.dataset.datasetId}`;
 		const serviceName = `${datasetRuntime.profile.profileId}-${datasetRuntime.sample.id}`;
-		const imageTag = datasetRuntime.checkoutImage;
+		const imageTag = await resolveDatasetToolsImage();
 		await execAsync(
 			`docker image inspect ${escapeSingleQuotes(imageTag)}`,
 		).catch(() => {
-			throw new Error(`Dataset checkout image not found: ${imageTag}`);
+			throw new Error(`Dataset scan tools image not found: ${imageTag}`);
 		});
 		const repositoryProfileAgentProfileId =
 			getRuntimeStageSetting(
@@ -750,7 +750,7 @@ const resolveScanExecutionContext = async (
 		await execAsync(`docker image inspect ${imageTag}`);
 	} catch {
 		throw new Error(
-			`Checkout image not found: ${imageTag}. Run Checkout before ${scanJob.scanType} scan.`,
+			`Checkout image not found: ${imageTag}. Run Checkout before pipeline ${scanJob.pipelineId}.`,
 		);
 	}
 
@@ -1109,12 +1109,20 @@ export type RunSingleTurnAgentResult = {
 	threadId: string | null;
 };
 
+const isResearchPipeline = (value: ScanJob | string) =>
+	typeof value === "string"
+		? value === "research"
+		: Array.isArray((value.pipelineCompiledSnapshot as { stages?: Array<{ id: string }> } | null)?.stages) &&
+			(value.pipelineCompiledSnapshot as { stages: Array<{ id: string }> }).stages.some(
+				(stage) => stage.id === "research-scope",
+			);
+
 export const buildResearchContainerEnvPairs = (
-	scanType: ScanJob["scanType"],
+	scanJob: ScanJob | string,
 	scanJobId: string,
 	taskId: string,
 ) =>
-	scanType === "research"
+	isResearchPipeline(scanJob)
 		? [
 				`VULSEEK_SCAN_JOB_ID=${scanJobId}`,
 				`VULSEEK_TASK_ID=${taskId}`,
@@ -1123,11 +1131,11 @@ export const buildResearchContainerEnvPairs = (
 		: [];
 
 export const requireResearchDatabaseContext = (
-	scanType: ScanJob["scanType"],
+	scanJob: ScanJob | string,
 	environment: Record<string, string | undefined>,
 ) => {
 	if (
-		scanType === "research" &&
+		isResearchPipeline(scanJob) &&
 		!environment.VULSEEK_RESEARCH_DATABASE_URL?.trim()
 	) {
 		throw new Error(
@@ -1148,7 +1156,7 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		input.scanJob,
 		input.datasetAgentRuntime,
 	);
-	requireResearchDatabaseContext(input.scanJob.scanType, process.env);
+	requireResearchDatabaseContext(input.scanJob, process.env);
 	const globalContainerEnvPairs = getGlobalContainerEnvironmentPairs();
 	const agentsDir = await resolveAgentsDirectory();
 	const hostProfileDir =
@@ -1176,8 +1184,9 @@ const resolveStageContainerRuntime = async (input: StageContainerInput) => {
 		...globalContainerEnvPairs,
 		`VULSEEK_PROJECT_PROFILE_DIR=${mountedProfileDir}`,
 		`VULSEEK_PROJECT_CACHE_DIR=${path.posix.join(mountedProfileDir, "cache")}`,
+		`VULSEEK_AGENT_HOME=${jobAgentHomeContainerPath}`,
 		...buildResearchContainerEnvPairs(
-			input.scanJob.scanType,
+			input.scanJob,
 			input.scanJob.scanJobId,
 			input.taskId || "",
 		),
@@ -1298,7 +1307,7 @@ export const startContainer = async (input: StageContainerInput) => {
 				containerName: input.containerName,
 				taskId: input.taskId,
 				logPath,
-				command: `docker run -d --init --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.memoryArgs} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.datasetSampleMountArg} ${runtime.containerEnvArgs} ${runtime.imageTag} bash -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
+				command: `docker run -d --init --name ${input.containerName} ${runtime.containerNetworkArg} ${buildNamespaceEnabledContainerArgs()} ${runtime.memoryArgs} ${runtime.taskRuntimeMount.dockerMountArg} ${runtime.datasetSampleMountArg} ${runtime.containerEnvArgs} --entrypoint bash ${runtime.imageTag} -lc "mkdir -p '${input.stageRootInContainer}' '${runtime.agentHome.codexContainerDir}/skills' '${runtime.agentHome.claudeContainerDir}' && sleep infinity"`,
 			}),
 	);
 
@@ -1306,6 +1315,7 @@ export const startContainer = async (input: StageContainerInput) => {
 		installRuntimeSkillsInContainer({
 			containerName: input.containerName,
 			agentsDir: runtime.agentsDir,
+			agentHomeDir: runtime.agentHome.codexContainerDir,
 			skillNames: RUNTIME_CUSTOM_SKILLS,
 			logPath,
 		}),
@@ -1660,11 +1670,13 @@ export const runSingleTurnAgentInContainer = async (
 	const resolvedPromptFinal = promptAdditions.length
 		? `${resolvedPrompt.trimEnd()}\n\n${promptAdditions.join("\n\n")}`
 		: resolvedPrompt;
-	// Codex native `/goal` (via codex-acp) rejects objectives longer than 4000
-	// characters and treats the entire first text block after `/goal` as the
-	// objective. Skip the bulky schema suffix — the tob-goal hunt objective
-	// already embeds the /task/output.json contract.
-	const isNativeCodexGoalPrompt = /^\s*\/goal\b/i.test(resolvedPromptFinal);
+	// Codex native `/goal` (via codex-acp) treats the first text block after the
+	// marker as the objective. Only skip the standard suffix when the stage has
+	// explicitly embedded its own complete output contract; generic goal stages
+	// still receive the regular schema instructions.
+	const isNativeCodexGoalPrompt =
+		/^\s*\/goal\b/i.test(resolvedPromptFinal) &&
+		/Structured JSON output requirement/i.test(resolvedPromptFinal);
 	const promptWithOutputSchema =
 		!isNativeCodexGoalPrompt &&
 		(input.outputSchema || input.routeOutputSchemas?.length)

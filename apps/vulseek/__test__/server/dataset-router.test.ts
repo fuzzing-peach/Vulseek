@@ -134,9 +134,10 @@ const mocks = vi.hoisted(() => {
 		cancelScanJob: vi.fn(),
 		getScanPipelineDefinitions: vi.fn(),
 		pauseScanJob: vi.fn(),
-		prepareDatasetProfile: vi.fn(),
+		findDatasetProfileCheckoutStatus: vi.fn(),
 		pruneDatasetProfile: vi.fn(),
 		resumeScanJob: vi.fn(),
+		startDatasetProfileCheckout: vi.fn(),
 		validateRequest: vi.fn(),
 	};
 });
@@ -151,9 +152,10 @@ vi.mock("@vulseek/server", () => ({
 	cancelScanJob: mocks.cancelScanJob,
 	getScanPipelineDefinitions: mocks.getScanPipelineDefinitions,
 	pauseScanJob: mocks.pauseScanJob,
-	prepareDatasetProfile: mocks.prepareDatasetProfile,
+	findDatasetProfileCheckoutStatus: mocks.findDatasetProfileCheckoutStatus,
 	pruneDatasetProfile: mocks.pruneDatasetProfile,
 	resumeScanJob: mocks.resumeScanJob,
+	startDatasetProfileCheckout: mocks.startDatasetProfileCheckout,
 }));
 
 vi.mock("@vulseek/server/lib/auth", () => ({
@@ -322,7 +324,17 @@ beforeEach(() => {
 	mocks.claimed.clear();
 	mocks.datasetEvaluationQueue.add.mockClear();
 	mocks.pruneDatasetProfile.mockClear();
-	mocks.prepareDatasetProfile.mockClear();
+	mocks.findDatasetProfileCheckoutStatus.mockClear();
+	mocks.startDatasetProfileCheckout.mockClear();
+	mocks.startDatasetProfileCheckout.mockReturnValue({
+		checkoutId: "checkout-1",
+		profileId: "profile-1",
+		status: "running",
+		phase: "validating_source",
+		message: "Starting dataset checkout",
+		manifestProgress: null,
+		startedAt: "2026-08-09T00:00:00.000Z",
+	});
 	mocks.getScanPipelineDefinitions.mockReturnValue({
 		pipelines: {
 			full: { rootStageId: "repository-profile" },
@@ -519,7 +531,7 @@ describe("dataset.profiles.checkout", () => {
 				profileId: "profile-1",
 			}),
 		).rejects.toMatchObject({ code: "BAD_REQUEST" });
-		expect(mocks.prepareDatasetProfile).not.toHaveBeenCalled();
+		expect(mocks.startDatasetProfileCheckout).not.toHaveBeenCalled();
 	});
 
 	it("prepares the profile when unlocked", async () => {
@@ -533,8 +545,8 @@ describe("dataset.profiles.checkout", () => {
 			profileId: "profile-1",
 		});
 
-		expect(mocks.prepareDatasetProfile).toHaveBeenCalledWith("profile-1");
-		expect(result?.profileId).toBe("profile-1");
+		expect(mocks.startDatasetProfileCheckout).toHaveBeenCalledWith("profile-1");
+		expect(result?.checkoutId).toBe("checkout-1");
 	});
 });
 
@@ -646,6 +658,9 @@ describe("dataset.evaluations.trialsList", () => {
 						sampleId: "sample-1",
 						id: "sample-1",
 						title: "Sample one",
+						groundTruthArtifacts: [
+							"ground-truth/description.txt",
+						],
 					},
 				},
 			],
@@ -675,6 +690,7 @@ describe("dataset.evaluations.trialsList", () => {
 			sampleId: "sample-1",
 			id: "sample-1",
 			title: "Sample one",
+			groundTruthArtifacts: ["ground-truth/description.txt"],
 		});
 		expect(result.total).toBe(1);
 	});
@@ -741,6 +757,26 @@ describe("dataset.evaluations.create", () => {
 			{ id: "sample-1", profileId: "profile-1", ordinal: 0 },
 			{ id: "sample-2", profileId: "profile-1", ordinal: 1 },
 		]);
+		seedSelect("scan_pipelines", [
+			{
+				pipelineId: "full",
+				organizationId: "org-1",
+				archivedAt: null,
+				currentPublishedVersionId: "version-1",
+			},
+		]);
+		seedSelect("scan_pipeline_versions", [
+			{
+				pipelineVersionId: "version-1",
+				pipelineId: "full",
+				yaml: "",
+				compiledDefinition: {
+					root: "discovery",
+					stages: [{ id: "discovery" }],
+					supportedTargets: ["evaluation"],
+				},
+			},
+		]);
 		seedInsert("dataset_evaluations", [
 			{
 				evaluationId: "evaluation-1",
@@ -777,6 +813,76 @@ describe("dataset.evaluations.create", () => {
 		expect(mocks.datasetEvaluationQueue.add).toHaveBeenCalledTimes(1);
 		expect(mocks.datasetEvaluationQueue.add.mock.calls[0]?.[1]).toMatchObject({
 			evaluationId: expect.stringMatching(/^evaluation-/),
+		});
+	});
+
+	it("freezes the selected pipeline profile and published version", async () => {
+		seedSelect("datasets", [datasetRow()]);
+		seedSelect("dataset_profiles", [profileRow()]);
+		seedSelect("dataset_samples", [
+			{ id: "sample-1", profileId: "profile-1", ordinal: 0 },
+		]);
+		seedSelect("scan_pipelines", [
+			{
+				pipelineId: "pipeline-1",
+				organizationId: "org-1",
+				currentPublishedVersionId: "version-1",
+				archivedAt: null,
+			},
+		]);
+		seedSelect("scan_pipeline_profiles", [
+			{
+				pipelineProfileId: "pipeline-profile-1",
+				pipelineId: "pipeline-1",
+				pipelineVersionId: "version-1",
+				organizationId: "org-1",
+				settings: {
+					stages: { discovery: { concurrency: 8 } },
+				},
+			},
+		]);
+		const compiledDefinition = {
+			version: 3,
+			pipelineId: "pipeline-1",
+			name: "Evaluation pipeline",
+			supportedTargets: ["evaluation"],
+			root: "discovery",
+			limits: { maxTasks: 100, maxDurationSeconds: 3600 },
+			prepareRepository: "target",
+			capabilities: { candidates: true, research: false, tobGoal: false },
+			schemas: {},
+			stages: [{ id: "discovery" }],
+			edges: [],
+			groups: [],
+		};
+		seedSelect("scan_pipeline_versions", [
+			{
+				pipelineVersionId: "version-1",
+				pipelineId: "pipeline-1",
+				yaml: "version: 3",
+				compiledDefinition,
+			},
+		]);
+		seedInsert("dataset_evaluations", [
+			{ evaluationId: "evaluation-1", name: "eval" },
+		]);
+		seedInsert("dataset_evaluation_trials", []);
+
+		await callerFor({ orgId: "org-1", role: "owner" }).evaluations.create({
+			...evaluationInput,
+			pipelineId: "pipeline-1",
+			pipelineProfileId: "pipeline-profile-1",
+		});
+
+		const inserted = firstQueryOn("insert", "dataset_evaluations")?.values;
+		expect(inserted).toMatchObject({
+			pipelineId: "pipeline-1",
+			pipelineProfileId: "pipeline-profile-1",
+			pipelineVersionId: "version-1",
+			pipelineCompiledSnapshot: compiledDefinition,
+			scanRuntimeSettings: {
+				stages: { discovery: { concurrency: 8 } },
+			},
 		});
 	});
 });

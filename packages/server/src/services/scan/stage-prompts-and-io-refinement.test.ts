@@ -16,7 +16,10 @@ import {
 } from "./artifacts/contracts/domain-object.contract";
 import { renderPromptTemplateString } from "./prompts/prompt-template";
 import { createJsonSchemaContract } from "./pipeline/scan-pipeline-schema-contracts";
-import { buildStructuredOutputPromptSuffix } from "./runtime/structured-output-schema";
+import {
+	buildStructuredOutputEnvelopeJsonSchema,
+	buildStructuredOutputPromptSuffix,
+} from "./runtime/structured-output-schema";
 
 const scanDir = dirname(fileURLToPath(import.meta.url));
 const readStagePromptTemplate = (fileName: string) =>
@@ -471,6 +474,45 @@ test("structured output prompts include YAML JSON Schema contract artifact schem
 	assert.match(suffix, /"moduleId"/);
 	assert.match(suffix, /"output":/);
 	assert.doesNotMatch(suffix, /"\\$pathOf"/);
+});
+
+test("property descriptions survive schema normalization and output envelopes", () => {
+	const contract = createJsonSchemaContract({
+		schemas: {
+			Finding: {
+				type: "object",
+				properties: {
+					title: {
+						type: "string",
+						description: "Short finding title.",
+					},
+				},
+			},
+		},
+		schema: {
+			type: "object",
+			properties: {
+				finding: { $ref: "#/schemas/Finding" },
+			},
+		},
+	});
+
+	const normalizedFinding = (
+		(contract.schema.properties as Record<string, unknown>).finding as Record<string, unknown>
+	);
+	const normalizedTitle = (
+		(normalizedFinding.properties as Record<string, unknown>).title as Record<string, unknown>
+	);
+	assert.equal(normalizedTitle.description, "Short finding title.");
+
+	const envelope = buildStructuredOutputEnvelopeJsonSchema(contract) as Record<string, unknown>;
+	const envelopeProperties = envelope.properties as Record<string, unknown>;
+	const envelopeOutput = envelopeProperties.output as Record<string, unknown>;
+	const envelopeOutputProperties = envelopeOutput.properties as Record<string, unknown>;
+	const envelopeFinding = envelopeOutputProperties.finding as Record<string, unknown>;
+	const envelopeFindingProperties = envelopeFinding.properties as Record<string, unknown>;
+	const envelopeTitle = envelopeFindingProperties.title as Record<string, unknown>;
+	assert.equal(envelopeTitle.description, "Short finding title.");
 });
 
 test("analysis prompt removes fuzz routing", () => {

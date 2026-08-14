@@ -5,12 +5,16 @@ import { z } from "zod";
 
 export const datasetManifestRelativePath = path.join(
 	".vulseek",
-	"samples.json",
+	"manifest.json",
 );
 
-export const assertDatasetPathInside = (root: string, relativePath: string) => {
+export const assertDatasetPathInside = (
+	root: string,
+	relativePath: string,
+	fieldName = "repositoryPath",
+) => {
 	if (path.isAbsolute(relativePath))
-		throw new Error(`Dataset repositoryPath must be relative: ${relativePath}`);
+		throw new Error(`Dataset ${fieldName} must be relative: ${relativePath}`);
 	const resolvedRoot = path.resolve(root);
 	const resolved = path.resolve(root, relativePath);
 	if (
@@ -18,7 +22,7 @@ export const assertDatasetPathInside = (root: string, relativePath: string) => {
 		!resolved.startsWith(`${resolvedRoot}${path.sep}`)
 	)
 		throw new Error(
-			`Dataset repositoryPath escapes the profile root: ${relativePath}`,
+			`Dataset ${fieldName} escapes the profile root: ${relativePath}`,
 		);
 	return resolved;
 };
@@ -26,8 +30,9 @@ export const assertDatasetPathInside = (root: string, relativePath: string) => {
 export const resolveDatasetPathInside = async (
 	root: string,
 	relativePath: string,
+	fieldName = "repositoryPath",
 ) => {
-	const candidate = assertDatasetPathInside(root, relativePath);
+	const candidate = assertDatasetPathInside(root, relativePath, fieldName);
 	const [realRoot, realCandidate] = await Promise.all([
 		fs.realpath(root),
 		fs.realpath(candidate),
@@ -37,7 +42,7 @@ export const resolveDatasetPathInside = async (
 		!realCandidate.startsWith(`${realRoot}${path.sep}`)
 	) {
 		throw new Error(
-			`Dataset repositoryPath resolves outside the profile root: ${relativePath}`,
+			`Dataset ${fieldName} resolves outside the profile root: ${relativePath}`,
 		);
 	}
 	return realCandidate;
@@ -51,6 +56,10 @@ const manifestSchema = z.object({
 				id: z.string().trim().min(1).max(300),
 				title: z.string().optional().default(""),
 				repositoryPath: z.string().trim().min(1),
+				groundTruthArtifacts: z
+					.array(z.string().trim().min(1))
+					.optional()
+					.default([]),
 				metadata: z.record(z.unknown()).optional().default({}),
 			}),
 		)
@@ -93,6 +102,29 @@ export const validateDatasetManifest = async (
 			throw new Error(
 				`Dataset sample directory does not exist: ${sample.repositoryPath}`,
 			);
+		for (const artifact of sample.groundTruthArtifacts) {
+			let artifactPath: string;
+			try {
+				artifactPath = await resolveDatasetPathInside(
+					hostRoot,
+					artifact,
+					"groundTruthArtifacts entry",
+				);
+			} catch (error) {
+				if ((error as { code?: unknown }).code === "ENOENT") {
+					throw new Error(
+						`Dataset groundTruth artifact does not exist: ${artifact}`,
+					);
+				}
+				throw error;
+			}
+			const artifactStat = await fs.stat(artifactPath).catch(() => null);
+			if (!artifactStat?.isFile()) {
+				throw new Error(
+					`Dataset groundTruth artifact must be a file: ${artifact}`,
+				);
+			}
+		}
 	}
 	return manifest;
 };

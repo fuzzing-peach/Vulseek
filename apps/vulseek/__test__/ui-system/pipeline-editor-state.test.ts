@@ -21,7 +21,6 @@ stages:
     name: Start
     role: scan
     group: g
-    mode: serial
     concurrency: 1
     runtime:
       prompt: Do the thing.
@@ -66,7 +65,6 @@ stages:
     name: Start
     role: scan
     group: g
-    mode: serial
     concurrency: 1
     runtime:
       prompt: Do the thing.
@@ -99,7 +97,6 @@ stages:
     name: Start
     role: scan
     group: g
-    mode: serial
     concurrency: 1
     runtime:
       prompt: Do the thing.
@@ -109,11 +106,30 @@ groups: []
 		let state = initialEditorState(yaml);
 		const before = state.diagnostics.length;
 		const document = validDocument(state)!;
-		state = pipelineEditorReducer(state, {
+		const next = pipelineEditorReducer(state, {
 			type: "canvasModified",
 			document: { ...document, name: document.name },
 		});
 		expect(state.diagnostics.length).toBe(before);
+		expect(next).toBe(state);
+	});
+
+	it("does not update state when the selection is unchanged", () => {
+		const state = initialEditorState(VALID_YAML);
+		expect(
+			pipelineEditorReducer(state, { type: "select", entity: null }),
+		).toBe(state);
+
+		const selected = pipelineEditorReducer(state, {
+			type: "select",
+			entity: { type: "stage", id: "start" },
+		});
+		expect(
+			pipelineEditorReducer(selected, {
+				type: "select",
+				entity: { type: "stage", id: "start" },
+			}),
+		).toBe(selected);
 	});
 });
 

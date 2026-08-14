@@ -837,18 +837,10 @@ export const ShowScanCandidateDetail = ({
 					},
 					{
 						name: serviceData?.name || "",
-						href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}?tab=deployments`,
-					},
-					{
-						name: scanT(t, "scan.jobs.title", "Jobs"),
-						href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}?tab=deployments`,
+						href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}`,
 					},
 					{
 						name: `Job ${scanJobId.slice(0, 6)}`,
-						href: jobCandidatesHref,
-					},
-					{
-						name: scanT(t, "scan.job.tabs.candidates", "Candidates"),
 						href: jobCandidatesHref,
 					},
 					{

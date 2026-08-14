@@ -4,7 +4,7 @@
 
 新增与 Project 并列的组织级 `Dataset`，并在 Dataset 下引入与现有 Project Profile 对应的 `Dataset Profile`。Dataset Profile 表示一次准备完成、可复现、可运行的数据集工作区。Evaluation 按 sample、repetition 严格串行运行真实 `scan_job`，汇总时间、token、cost 和内置结构化结果。
 
-现有单 Job `Evaluate` 在 UI 中改名为 **Ground Truth Scoring**，保留原表和 API。CyberGym 作为首个参考 adapter；其任务生成独立 workspace 的模式与 Dataset manifest 契约匹配。[CyberGym 官方仓库](https://github.com/sunblaze-ucb/cybergym)
+每个成功结束的 Dataset Trial 都会在独立 agent 容器中比较 `groundTruthArtifacts` 与该 Scan Job 的 `outputs`，并保存逐 Job output 的 hit/miss、匹配依据和未命中的 ground truth。旧 Application Job `Evaluate` UI、API 和 worker 被移除；历史表暂时保留，不执行破坏性迁移。CyberGym 作为首个参考 adapter；其任务生成独立 workspace 的模式与 Dataset manifest 契约匹配。[CyberGym 官方仓库](https://github.com/sunblaze-ucb/cybergym)
 
 ## Data And Contracts
 
@@ -12,14 +12,14 @@
 
 - `datasets`：组织、名称和 Git/local source。
 - `dataset_profiles`：local host root、轻量 checkout image digest 和配置 snapshot；source digest 保留为空。
-- `dataset_samples`：profile 下的 id、顺序、repositoryPath 和 metadata。
+- `dataset_samples`：profile 下的 id、顺序、repositoryPath、groundTruthArtifacts 和 metadata。
 - `dataset_evaluations`：引用 profile，保存 pipeline、预算、repetitions、stage settings snapshot 和汇总状态。
 - `dataset_evaluation_trials`：sample x repetition、scan 状态、用时、token、cost、结果和错误。
 
 固定 manifest 路径：
 
 ```text
-/workspace/dataset/.vulseek/samples.json
+/workspace/dataset/.vulseek/manifest.json
 ```
 
 实际文件位于 Dataset 配置的 local path；Evaluation 运行时只挂载当前 sample 子目录。
@@ -34,13 +34,17 @@ Manifest V1 包含：
       "id": "unique-key",
       "title": "Sample title",
       "repositoryPath": "samples/example/repo",
+      "groundTruthArtifacts": [
+        "samples/example/description.txt",
+        "samples/example/patch.diff"
+      ],
       "metadata": {}
     }
   ]
 }
 ```
 
-`repositoryPath` 必须是存在的相对目录且不能逃逸 Dataset 根目录。`metadata` 仅供评估器使用，不暴露给 scan agent。
+`repositoryPath` 必须是存在的相对目录且不能逃逸 Dataset 根目录。`groundTruthArtifacts` 中的每一项也是相对 Dataset 根目录的路径，必须指向根目录内已存在的文件，但不限制扩展名或内容格式；省略时按空数组处理。`metadata` 仅供评估器使用，不暴露给 scan agent。
 
 ## Checkout And Execution
 
@@ -63,6 +67,9 @@ Manifest V1 包含：
 - scan job 终态或 timeout 时唤醒 coordinator。
 - timeout 取消 scan job；预算不包含准备和暂停时间。
 - 单个 scan 失败记录后继续；最终状态为 `completed_with_errors`。
+- 成功或部分成功的 scan 在 Trial 终态前启动一次非持久、不可复用的评分容器；评分 agent profile 从 Job output producer task 的快照解析，缺失时回退到该 Job 的其他 agent task。
+- 评分输入复制到 Job 下的隔离 evaluation 目录，agent 只能读取当前 sample、ground-truth 副本和 Job output 副本；强制为每个 Job output 返回且只返回一条结果。
+- 评分失败记录为 `scoring_failed`，不混同于 `scan_failed`；评分结果写入 `dataset_evaluation_trials.result.scoring`。
 - 所有 trials 结束后生成内置汇总；汇总失败则 Evaluation 为 `failed`。
 - Pause 立即暂停当前 scan。
 - Cancel 立即停止 scan 并清理运行中的容器，不删除可复用的 Dataset Profile host 数据。
@@ -93,7 +100,7 @@ Dataset 页面包含：
 - Samples：搜索、分页、metadata 详情。
 - Evaluations：运行历史和创建入口。
 
-Evaluation 创建页提供 sample 子集、repetitions、pipeline、time budget 和 Stage Agent Settings。详情页展示总体进度、trial 列表、状态、时长、token、cost、自定义 JSON、aggregate JSON，并链接复用现有 Job/Task/Files/Session 页面。首版不增加 JSONL/CSV 导出。
+Evaluation 创建页提供 sample 子集、repetitions、pipeline、time budget 和 Stage Agent Settings。详情页展示总体进度、trial 列表、状态、时长、token、cost 和逐 Job output 的 ground-truth 比对详情，并链接复用现有 Job/Task/Files/Session 页面。首版不增加 JSONL/CSV 导出。
 
 被 Evaluation 引用的 profile 不可删除；Prune 只删除未引用 profile、镜像和 artifacts。
 
@@ -103,8 +110,9 @@ Evaluation 创建页提供 sample 子集、repetitions、pipeline、time budget 
 - Checkout：Git/local、非法 manifest、credential 不进入镜像、失败恢复。
 - Isolation：scan agent 只能看到当前 sample；挂载只读且不同 trial/task 不共享可写数据；persistent lane 行为不回归。
 - Coordinator：严格串行、round-robin、重复次数、timeout、continue-on-error、幂等唤醒和重启恢复。
+- Scoring：任意文件类型、路径隔离、每个 output 恰好一条结果、未知 artifact 拒绝、半写 output、agent 失败和评分超时。
 - Lifecycle：Pause/Resume 排除暂停时间；Cancel 后无 task container、挂载清理和 BullMQ 残留。
-- Regression：Project Application/Compose scans 和旧 Ground Truth Scoring 保持兼容。
+- Regression：Project Application/Compose scans 保持兼容；旧 Ground Truth Scoring 不再注册 API、队列或 worker。
 - UI：使用 agent-browser 验证 Dataset CRUD、checkout、sample 列表、Evaluation 创建/控制、trial Job 链接、结果和错误状态。
 - UI：验证 Projects 页 `Create` 下拉菜单、Project 创建对话框、Dataset 创建导航和不同权限用户的菜单可见性；覆盖提交、取消、刷新、键盘/点击关闭和直接访问 `/dashboard/datasets/new`。
 - CyberGym：实现时浅克隆到 `third_party/cybergym` 供本地参考，不作为生产依赖；提交轻量 adapter 示例和 synthetic fixture，不下载约 240 GB 的完整数据。可在本地已有 CyberGym subset 时额外执行单 sample smoke test。

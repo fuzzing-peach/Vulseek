@@ -8,6 +8,7 @@ const escapeSingleQuotes = (value: string) => value.replace(/'/g, `'"'"'`);
 export const installRuntimeSkillsInContainer = async (input: {
 	containerName: string;
 	agentsDir: string | null;
+	agentHomeDir: string;
 	skillNames: readonly string[];
 	logPath?: string | null;
 }) => {
@@ -104,18 +105,16 @@ export const installRuntimeSkillsInContainer = async (input: {
 			),
 		);
 
-		const skillFlags = copiedSkills
-			.map((skillName) => `--skill '${escapeSingleQuotes(skillName)}'`)
-			.join(" ");
+		const agentHomeSkillsDir = path.posix.join(input.agentHomeDir, "skills");
 
-		await timed("skills_add", () =>
+		await timed("agent_home_skills_copy", () =>
 			execAsync(
-				`docker exec ${input.containerName} bash -lc "mkdir -p /workspace/repo/.agents && cd /workspace/repo && skills add '${containerRepoRoot}' ${skillFlags} -a claude-code -a codex --copy -y"`,
+				`docker exec ${input.containerName} bash -lc "mkdir -p '${escapeSingleQuotes(agentHomeSkillsDir)}' && cp -a '${containerRepoRoot}/skills/.' '${escapeSingleQuotes(agentHomeSkillsDir)}/'"`,
 			),
 		);
-		await timed("workspace_agents_skills_copy", () =>
+		await timed("agent_home_cache_schema_copy", () =>
 			execAsync(
-				`docker exec ${input.containerName} bash -lc "mkdir -p /workspace/repo/.agents/skills && cp -a '${containerRepoRoot}/skills/.' /workspace/repo/.agents/skills/"`,
+				`docker exec ${input.containerName} bash -lc "if [ -d '${containerRepoRoot}/cache-schema' ]; then mkdir -p '${escapeSingleQuotes(agentHomeSkillsDir)}/cache-schema' && cp -a '${containerRepoRoot}/cache-schema/.' '${escapeSingleQuotes(agentHomeSkillsDir)}/cache-schema/'; fi"`,
 			),
 		);
 

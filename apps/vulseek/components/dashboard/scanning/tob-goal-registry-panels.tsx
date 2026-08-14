@@ -31,7 +31,7 @@ type GoalPage<T> = {
 	page: number;
 	pageSize: number;
 	totalPages: number;
-	filterOptions?: { statuses: string[]; huntGoalIds: string[] };
+	filterOptions?: { statuses: string[] };
 };
 
 const formatDate = (value: string) => new Date(value).toLocaleString();
@@ -44,17 +44,15 @@ const formatStatus = (value: string) =>
 const goalConfig = (prefix: string): ListQueryConfig => ({
 	prefix,
 	sortOptions: [],
-	filterKeys: ["status", "huntGoal"],
-	allowedFilterValues: { status: [], huntGoal: [] },
+	filterKeys: ["status"],
+	allowedFilterValues: { status: [] },
 	defaultSortKey: "",
 	defaultPageSize: 20,
 });
 
 /** ListQueryState -> tob-goal registry API request shape. */
 const toGoalRequest = (state: ListQueryState) => ({
-	query: state.query || undefined,
 	status: (state.filters.status ?? []).join(",") || undefined,
-	huntGoalId: (state.filters.huntGoal ?? []).join(",") || undefined,
 	page: state.page,
 	pageSize: state.pageSize,
 });
@@ -244,8 +242,6 @@ const GoalList = <T extends GoalRecord>({
 	isFetching,
 	state,
 	setState,
-	searchInput,
-	setSearchInput,
 	columns,
 	itemKey,
 }: {
@@ -257,8 +253,6 @@ const GoalList = <T extends GoalRecord>({
 	isFetching: boolean;
 	state: ListQueryState;
 	setState: (updater: (previous: ListQueryState) => ListQueryState) => void;
-	searchInput: string;
-	setSearchInput: (value: string) => void;
 	columns: GoalColumn<T>[];
 	itemKey: (item: T) => string;
 }) => {
@@ -289,32 +283,18 @@ const GoalList = <T extends GoalRecord>({
 
 	const filters = useMemo(
 		() =>
-			[
-				...(data?.filterOptions?.statuses.length
-					? [
-							{
-								key: "status",
-								label: "Status",
-								options: data.filterOptions.statuses.map((value) => ({
-									value,
-									label: formatStatus(value),
-								})),
-							},
-						]
-					: []),
-				...(data?.filterOptions?.huntGoalIds.length
-					? [
-							{
-								key: "huntGoal",
-								label: "Hunt goal",
-								options: data.filterOptions.huntGoalIds.map((value) => ({
-									value,
-									label: value,
-								})),
-							},
-						]
-					: []),
-			] as const,
+			data?.filterOptions?.statuses.length
+				? [
+						{
+							key: "status",
+							label: "Status",
+							options: data.filterOptions.statuses.map((value) => ({
+								value,
+								label: formatStatus(value),
+							})),
+						},
+					]
+				: [],
 		[data?.filterOptions],
 	);
 
@@ -329,12 +309,9 @@ const GoalList = <T extends GoalRecord>({
 				isRefreshing={isFetching}
 				columns={toColumns(columns, openDetail)}
 				getRowId={itemKey}
-				searchValue={searchInput}
-				onSearchValueChange={setSearchInput}
-				searchPlaceholder={`Search ${title.toLowerCase()}`}
 				filters={filters}
 				emptyTitle={`No matching ${title.toLowerCase()}.`}
-				emptyDescription="Try adjusting the search or filters."
+				emptyDescription="Try adjusting the status filter."
 				onRowClick={openDetail}
 			/>
 			<GoalDetails
@@ -357,30 +334,26 @@ export const TobGoalCandidatesPanel = ({
 }) => {
 	const router = useRouter();
 	const config = GOAL_CANDIDATES_CONFIG;
-	const { state, setState, searchInput, setSearchInput, deferredQuery } =
-		useCollectionQuery(router, config);
-	const request = useMemo(
-		() => toGoalRequest({ ...state, query: deferredQuery }),
-		[state, deferredQuery],
-	);
+	const { state, setState } = useCollectionQuery(router, config);
+	const request = useMemo(() => toGoalRequest(state), [state]);
 	const { data, isLoading, isFetching } = api.scan.tobGoalCandidates.useQuery(
 		{ scanJobId, ...request },
 		{ refetchInterval: 5000, keepPreviousData: true },
 	);
 	return (
-		<GoalList
-			title="Goal Candidates"
-			description="Candidate attack paths produced by the goal-directed hunt."
-			kind="candidate"
-			data={data}
-			isLoading={isLoading}
-			isFetching={isFetching}
-			state={state}
-			setState={setState}
-			searchInput={searchInput}
-			setSearchInput={setSearchInput}
-			itemKey={(item) => item.candidateId}
-			columns={[
+		<div className="flex flex-col gap-4">
+			<h2 className="text-lg font-semibold">Goal Candidates</h2>
+			<GoalList
+				title="Goal Candidates"
+				description="Candidate attack paths produced by the goal-directed hunt."
+				kind="candidate"
+				data={data}
+				isLoading={isLoading}
+				isFetching={isFetching}
+				state={state}
+				setState={setState}
+				itemKey={(item) => item.candidateId}
+				columns={[
 				{
 					label: "Candidate",
 					className: "min-w-72",
@@ -421,8 +394,9 @@ export const TobGoalCandidatesPanel = ({
 					className: "whitespace-nowrap",
 					render: (item: GoalCandidate) => formatDate(item.updatedAt),
 				},
-			]}
-		/>
+				]}
+			/>
+		</div>
 	);
 };
 
@@ -480,18 +454,15 @@ const TobGoalThreatDirection = ({ scanJobId }: { scanJobId: string }) => {
 export const TobGoalFindingsPanel = ({ scanJobId }: { scanJobId: string }) => {
 	const router = useRouter();
 	const config = GOAL_FINDINGS_CONFIG;
-	const { state, setState, searchInput, setSearchInput, deferredQuery } =
-		useCollectionQuery(router, config);
-	const request = useMemo(
-		() => toGoalRequest({ ...state, query: deferredQuery }),
-		[state, deferredQuery],
-	);
+	const { state, setState } = useCollectionQuery(router, config);
+	const request = useMemo(() => toGoalRequest(state), [state]);
 	const { data, isLoading, isFetching } = api.scan.tobGoalFindings.useQuery(
 		{ scanJobId, ...request },
 		{ refetchInterval: 5000, keepPreviousData: true },
 	);
 	return (
 		<div className="flex flex-col gap-4">
+			<h2 className="text-lg font-semibold">Goal Findings</h2>
 			<TobGoalThreatDirection scanJobId={scanJobId} />
 			<GoalList
 				title="Goal Findings"
@@ -502,8 +473,6 @@ export const TobGoalFindingsPanel = ({ scanJobId }: { scanJobId: string }) => {
 				isFetching={isFetching}
 				state={state}
 				setState={setState}
-				searchInput={searchInput}
-				setSearchInput={setSearchInput}
 				itemKey={(item) => item.findingId}
 				columns={[
 					{

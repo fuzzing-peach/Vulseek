@@ -40,6 +40,16 @@
           "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
           "description": "Relative directory containing this sample. It must exist below the Dataset root."
         },
+        "groundTruthArtifacts": {
+          "type": "array",
+          "default": [],
+          "description": "Relative paths to files that describe the ground-truth vulnerability. Files may use any format.",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+          }
+        },
         "metadata": {
           "type": "object",
           "default": {},

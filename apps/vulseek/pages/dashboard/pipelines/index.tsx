@@ -11,6 +11,7 @@ import {
 	DashboardPage,
 	DashboardPageBody,
 	DashboardPageHeader,
+	FilterChip,
 	ResourceCard,
 } from "@/components/dashboard/ui-system";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
@@ -20,8 +21,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/utils/api";
 import { appRouter } from "@/server/api/root";
 
-const PIPELINE_TABS = [
-	{ value: "all", label: "All" },
+const PIPELINE_FILTERS = [
 	{ value: "system", label: "System" },
 	{ value: "archived", label: "Archived" },
 ] as const;
@@ -88,14 +88,23 @@ const PipelinesPage = ({
 		staleTime: 30_000,
 		refetchOnWindowFocus: false,
 	});
-	const [tab, setTab] = React.useState<string>("all");
+	const [activeFilters, setActiveFilters] = React.useState<string[]>([]);
 
 	const rows = list.data ?? [];
 	const filtered = rows.filter((row) => {
-		if (tab === "system") return Boolean(row.systemKey);
-		if (tab === "archived") return Boolean(row.archivedAt);
-		return true;
+		if (activeFilters.length === 0) return true;
+		return activeFilters.some((filter) =>
+			filter === "system" ? Boolean(row.systemKey) : Boolean(row.archivedAt),
+		);
 	});
+
+	const toggleFilter = (value: string) => {
+		setActiveFilters((previous) =>
+			previous.includes(value)
+				? previous.filter((item) => item !== value)
+				: [...previous, value],
+		);
+	};
 
 	return (
 		<DashboardLayout hideBreadcrumb>
@@ -113,21 +122,18 @@ const PipelinesPage = ({
 					}
 				/>
 				<DashboardPageBody>
-					<div className="mb-4 flex items-center gap-1 rounded-lg border bg-muted/30 p-1">
-						{PIPELINE_TABS.map((item) => (
-							<button
-								key={item.value}
-								type="button"
-								onClick={() => setTab(item.value)}
-								className={
-									"flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors " +
-									(tab === item.value
-										? "bg-background shadow-sm"
-										: "text-muted-foreground hover:text-foreground")
-								}
-							>
-								{item.label}
-							</button>
+					<div
+						className="mb-4 flex flex-wrap items-center gap-1.5"
+						role="group"
+						aria-label="Pipeline filters"
+					>
+						{PIPELINE_FILTERS.map((filter) => (
+							<FilterChip
+								key={filter.value}
+								label={filter.label}
+								selected={activeFilters.includes(filter.value)}
+								onToggle={() => toggleFilter(filter.value)}
+							/>
 						))}
 					</div>
 
@@ -136,14 +142,16 @@ const PipelinesPage = ({
 						description={
 							filtered.length > 0
 								? `${filtered.length} pipeline${filtered.length === 1 ? "" : "s"} in this organization`
-								: "No pipelines yet"
+								: rows.length === 0
+									? "No pipelines yet"
+									: "No pipelines match these filters"
 						}
 					>
 						{filtered.length === 0 ? (
 							<div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
 								{rows.length === 0
 									? "No pipelines yet — create your first one."
-									: "Nothing in this tab."}
+									: "No pipelines match these filters."}
 							</div>
 						) : (
 							<div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-5">
@@ -154,6 +162,7 @@ const PipelinesPage = ({
 										title={row.name}
 										description={row.slug}
 										metadata={statusBadge(row)}
+										metadataPlacement="top-right"
 										footer={
 											<span className="text-xs text-muted-foreground">
 												{row.currentVersionNumber

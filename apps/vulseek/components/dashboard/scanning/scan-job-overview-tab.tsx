@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type RouterOutputs } from "@/utils/api";
-import { formatScanTypeLabel, scanT } from "./scan-i18n";
+import { formatPipelineSystemKeyLabel, scanT } from "./scan-i18n";
 import {
 	formatDurationSeconds,
 	formatTokenCount,
@@ -295,13 +295,13 @@ export const ScanJobOverviewTab = ({
 						</div>
 						<div className="border rounded-lg p-3">
 							<div className="text-sm text-muted-foreground">
-								{scanT(t, "scan.field.scanType", "Scan Type")}
+								{scanT(t, "scan.field.pipeline", "Pipeline")}
 							</div>
 							<div className="font-medium">
 								{scanJob.pipelineVersionId ? (
 									<span className="text-primary">V3 pipeline run</span>
 								) : (
-									formatScanTypeLabel(t, scanJob.scanType)
+									formatPipelineSystemKeyLabel(t, scanJob.pipelineSystemKey)
 								)}
 							</div>
 						</div>
@@ -385,7 +385,7 @@ export const ScanJobOverviewTab = ({
 								) : null}
 							</div>
 						</div>
-						{scanJob.scanType === "delta" ? (
+						{scanJob.pipelineSystemKey === "delta" ? (
 							<div className="border rounded-lg p-3">
 								<div className="text-sm text-muted-foreground">
 									{scanT(t, "scan.field.commitWindow", "Commit Window")}

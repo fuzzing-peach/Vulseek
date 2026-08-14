@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { PIPELINE_SLUG_PATTERN } from "../../services/scan/pipeline/document-v3";
+import { ScanRuntimeSettingsSchema } from "./shared";
 
 export const apiPipelineId = z.object({
 	pipelineId: z.string().min(1),
@@ -42,6 +43,23 @@ export const apiDuplicatePipeline = apiPipelineId.extend({
 export const apiArchivePipeline = apiPipelineId;
 export const apiUnarchivePipeline = apiPipelineId;
 export const apiDeletePipelineDraft = apiPipelineId;
+
+export const apiPipelineProfileId = z.object({
+	pipelineProfileId: z.string().min(1),
+});
+
+export const apiCreatePipelineProfile = apiPipelineId.extend({
+	pipelineVersionId: z.string().min(1),
+	name: z.string().trim().min(1).max(120),
+	description: z.string().max(400).nullable().optional(),
+	settings: ScanRuntimeSettingsSchema,
+});
+
+export const apiUpdatePipelineProfile = apiPipelineProfileId.extend({
+	name: z.string().trim().min(1).max(120),
+	description: z.string().max(400).nullable().optional(),
+	settings: ScanRuntimeSettingsSchema,
+});
 
 export const apiValidatePipelineYaml = z.object({
 	yaml: z.string().max(2 * 1024 * 1024),

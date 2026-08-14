@@ -492,7 +492,7 @@ export const ShowScanTaskDetail = ({
 		typeof router.query.taskId === "string" ? router.query.taskId : "";
 
 	const jobTasksHref = navigation
-		? navigation.jobsListHref
+		? `${navigation.jobHref(scanJobId)}?tab=tasks`
 		: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}/jobs/${scanJobId}?tab=tasks`;
 
 	const applicationServiceQuery = api.application.one.useQuery(
@@ -731,11 +731,7 @@ export const ShowScanTaskDetail = ({
 								},
 								{
 									name: serviceData?.name || "",
-									href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}?tab=deployments`,
-								},
-								{
-									name: scanT(t, "scan.jobs.title", "Jobs"),
-									href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}?tab=deployments`,
+									href: `/dashboard/project/${projectId}/environment/${environmentId}/${routeSegment}/${serviceType}/${serviceId}`,
 								},
 								{
 									name: scanT(t, "scan.job.shortTitle", "Job {{id}}", {

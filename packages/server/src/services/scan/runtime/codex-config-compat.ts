@@ -17,7 +17,7 @@ export const sanitizeCodexAcpConfigToml = (configToml: string) => {
 
 /**
  * Ensure Codex native Goals (`/goal`, thread_goals) are enabled.
- * Required for tob-goal hunt stages that activate objectives via `/goal …`.
+ * Required for goal-enabled stages that activate objectives via `/goal …`.
  */
 export const ensureCodexGoalsFeature = (configToml: string) => {
 	const source = (configToml || "").trimEnd();

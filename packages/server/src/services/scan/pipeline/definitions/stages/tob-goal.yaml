@@ -11,7 +11,6 @@ goal-craft:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: serial
     cwd: /workspace/repo
     skills: [goal-craft]
     promptFile: goal-craft.prompt.md
@@ -35,7 +34,6 @@ goal-surface:
   runtimeConfig:
     persistent: true
     reuseContainer: true
-    mode: serial
     cwd: /workspace/repo
     skills: [goal-surface]
     promptFile: goal-surface.prompt.md
@@ -54,11 +52,11 @@ goal-hunt:
   concurrency: 8
   maxConcurrency: 8
   disableable: false
+  goal: true
   description: One hunt goal, one candidate or exhaustion declaration.
   runtimeConfig:
     persistent: true
     reuseContainer: true
-    mode: fanout
     cwd: /workspace/repo
     skills: [goal-hunt, codeql, semgrep, tree-sitter]
     promptFile: goal-hunt.prompt.md
@@ -83,7 +81,6 @@ goal-judge:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: fanout
     cwd: /workspace/repo
     skills: [goal-judge]
     promptFile: goal-judge.prompt.md
@@ -109,7 +106,6 @@ goal-dedup:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: fanout
     cwd: /workspace/repo
     skills: [goal-dedup, search-registries]
     promptFile: goal-dedup.prompt.md

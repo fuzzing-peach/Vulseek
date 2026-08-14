@@ -1590,6 +1590,41 @@
       "when": 1786080000000,
       "tag": "0226_scan_pipelines",
       "breakpoints": true
+    },
+    {
+      "idx": 227,
+      "version": "7",
+      "when": 1786166400000,
+      "tag": "0227_dataset_ground_truth_artifacts",
+      "breakpoints": true
+    },
+    {
+      "idx": 228,
+      "version": "7",
+      "when": 1786252800000,
+      "tag": "0228_scan_job_outputs",
+      "breakpoints": true
+    },
+    {
+      "idx": 229,
+      "version": "7",
+      "when": 1786339200000,
+      "tag": "0229_scan_pipeline_profiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 230,
+      "version": "7",
+      "when": 1786425600000,
+      "tag": "0230_dataset_evaluation_pipeline_profiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 231,
+      "version": "7",
+      "when": 1786512000000,
+      "tag": "0231_remove_scan_type",
+      "breakpoints": true
     }
   ]
 }

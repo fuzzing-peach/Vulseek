@@ -10,7 +10,6 @@ repository-profile:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: serial
     nullableOutput: false
     cwd: /workspace/repo
     skills: [repository-profile]

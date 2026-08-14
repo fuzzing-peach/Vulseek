@@ -332,7 +332,7 @@ test("identify-target and scan-target input schemas require vulnerabilityClassFo
 	validateJsonSchemaContract(identifyContract, {
 		scanJob: {
 			scanJobId: "scan-1",
-			scanType: "full",
+			pipelineId: "full",
 			status: "running",
 		},
 		repositoryPath: artifactPath("repository"),
@@ -347,7 +347,7 @@ test("identify-target and scan-target input schemas require vulnerabilityClassFo
 	validateJsonSchemaContract(scanContract, {
 		scanJob: {
 			scanJobId: "scan-1",
-			scanType: "full",
+			pipelineId: "full",
 			status: "running",
 		},
 		repositoryPath: artifactPath("repository"),

@@ -25,16 +25,13 @@ export const getScanJobSettlementRepo = async (
 		.select({
 			rootCount: sql<number>`count(*) filter (
 				where ${tasks.parentTaskId} is null
-				and ${tasks.stageName} in ('repository-profile', 'delta-scope')
 			)`,
 			rootTerminalCount: sql<number>`count(*) filter (
 				where ${tasks.parentTaskId} is null
-				and ${tasks.stageName} in ('repository-profile', 'delta-scope')
 				and ${tasks.status} in ('completed', 'failed', 'exited', 'canceled')
 			)`,
 			rootFailedCount: sql<number>`count(*) filter (
 				where ${tasks.parentTaskId} is null
-				and ${tasks.stageName} in ('repository-profile', 'delta-scope')
 				and ${tasks.status}::text in ('failed', 'exited')
 			)`,
 			openTaskCount: sql<number>`count(*) filter (
@@ -65,24 +62,53 @@ export const getScanJobSettlementRepo = async (
 	};
 };
 
-export const claimPendingDownstreamDispatchRepo = async (taskId: string) => {
-	const [row] = await db
-		.update(tasks)
-		.set({
-			downstreamDispatchStatus: "dispatching",
-			downstreamDispatchedAt: new Date().toISOString(),
-			updatedAt: new Date().toISOString(),
-		})
-		.where(
-			and(
-				eq(tasks.taskId, taskId),
-				inArray(tasks.status, [...TERMINAL_TASK_STATUSES]),
-				eq(tasks.downstreamDispatchStatus, "pending"),
-			),
-		)
-		.returning({ taskId: tasks.taskId });
-	return Boolean(row);
+export type DownstreamDispatchClaimResult = {
+	claimed: boolean;
+	jobStatus: (typeof scanJobs.$inferSelect)["status"] | null;
 };
+
+export const claimPendingDownstreamDispatchResultRepo = async (
+	taskId: string,
+): Promise<DownstreamDispatchClaimResult> => {
+	return await db.transaction(async (tx) => {
+		const task = await tx
+			.select({ scanJobId: tasks.scanJobId })
+			.from(tasks)
+			.where(eq(tasks.taskId, taskId))
+			.limit(1)
+			.then((rows) => rows[0] ?? null);
+		if (!task) return { claimed: false, jobStatus: null };
+		const job = await tx
+			.select({ status: scanJobs.status })
+			.from(scanJobs)
+			.where(eq(scanJobs.scanJobId, task.scanJobId))
+			.for("share")
+			.limit(1)
+			.then((rows) => rows[0] ?? null);
+		if (!job || job.status !== "running") {
+			return { claimed: false, jobStatus: job?.status ?? null };
+		}
+		const [row] = await tx
+			.update(tasks)
+			.set({
+				downstreamDispatchStatus: "dispatching",
+				downstreamDispatchedAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			})
+			.where(
+				and(
+					eq(tasks.taskId, taskId),
+					inArray(tasks.status, [...TERMINAL_TASK_STATUSES]),
+					eq(tasks.downstreamDispatchStatus, "pending"),
+				),
+			)
+			.returning({ taskId: tasks.taskId });
+		return { claimed: Boolean(row), jobStatus: job.status };
+	});
+};
+
+export const claimPendingDownstreamDispatchRepo = async (taskId: string) =>
+	(await claimPendingDownstreamDispatchResultRepo(taskId)).claimed;
 
 export const completeDownstreamDispatchRepo = async (taskId: string) => {
 	await db

@@ -20,7 +20,6 @@ test("parses a generic YAML pipeline with declarative artifacts and effects", ()
 			discover: {
 				name: "Discover",
 				role: "scan",
-				mode: "fanout",
 				concurrency: 2,
 				runtime: {
 					promptFile: "discover.prompt.md",
@@ -32,7 +31,6 @@ test("parses a generic YAML pipeline with declarative artifacts and effects", ()
 			review: {
 				name: "Review",
 				role: "analysis",
-				mode: "serial",
 				concurrency: 1,
 				runtime: { prompt: "Review the finding." },
 			},
@@ -57,7 +55,7 @@ test("parses a generic YAML pipeline with declarative artifacts and effects", ()
 
 	assert.equal(definition.version, 2);
 	assert.equal(definition.root, "discover");
-	assert.equal(definition.stages.discover!.mode, "fanout");
+	assert.equal(definition.stages.discover!.concurrency, 2);
 	assert.equal(definition.edges[0]?.artifacts[0]?.to, "inputs/finding.json");
 	assert.equal(definition.stages.discover!.effects[0]?.type, "sync-candidates");
 });
@@ -73,7 +71,6 @@ test("rejects a generic pipeline with an unknown stage or effect", () => {
 					known: {
 						name: "Known",
 						role: "scan",
-						mode: "serial",
 						concurrency: 1,
 						runtime: { prompt: "test" },
 					effects: [{ type: "run-shell" }],
@@ -94,7 +91,6 @@ test("decodes legacy research registry effects without an executor", () => {
 			scope: {
 				name: "Scope",
 				role: "scan",
-				mode: "serial",
 				concurrency: 1,
 				runtime: { prompt: "Define scope." },
 				effects: [{ type: "research-registry", operation: "persist-scope" }],

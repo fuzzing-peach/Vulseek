@@ -22,13 +22,11 @@ export const PIPELINE_SLUG_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 
 export const PIPELINE_SUPPORTED_TARGETS = ["project", "evaluation"] as const;
 export const PIPELINE_STAGE_ROLES = ["scan", "analysis", "verification"] as const;
-export const PIPELINE_STAGE_MODES = ["serial", "fanout"] as const;
 export const PIPELINE_PREPARE_MODES = ["none", "target", "diff"] as const;
 
 export const ALLOWED_RUNTIME_PLUGINS = [
 	"research-track",
 	"research-deadline",
-	"tob-goal-native",
 ] as const;
 
 export const ALLOWED_EFFECT_TYPES = [
@@ -104,6 +102,7 @@ const runtimeSchema = z
 	reuseContainer: z.boolean().optional(),
 	nullableOutput: z.boolean().optional(),
 	cwd: z.string().min(1).optional(),
+	/** Installed agent skill names. Copied into the sandbox and injected into the generated prompt. */
 	skills: z.array(z.string().min(1)).optional(),
 	prompt: z.string().min(1),
 	prepareRepository: z.enum(PIPELINE_PREPARE_MODES).optional().default("none"),
@@ -120,15 +119,16 @@ const stageSchema = z.object({
 	description: z.string().optional(),
 	role: z.enum(PIPELINE_STAGE_ROLES),
 	group: z.string().min(1),
-	mode: z.enum(PIPELINE_STAGE_MODES),
 	concurrency: z.number().int().min(1),
 	maxConcurrency: z.number().int().min(1).optional(),
 	disableable: z.boolean().optional().default(true),
+	goal: z.boolean().optional(),
 	runtime: runtimeSchema,
 	inputSchema: jsonSchemaSchema.optional(),
 	outputSchema: jsonSchemaSchema.optional(),
 	inputArtifacts: z.array(artifactMappingSchema).optional().default([]),
 	outputArtifacts: z.array(artifactMappingSchema).optional().default([]),
+	jobOutput: z.boolean().optional().default(false),
 	effects: z.array(effectSchema).optional().default([]),
 	report: z
 		.object({

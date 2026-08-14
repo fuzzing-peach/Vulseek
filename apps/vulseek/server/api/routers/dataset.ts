@@ -1,16 +1,17 @@
 import { TRPCError } from "@trpc/server";
 import {
 	cancelScanJob,
-	getScanPipelineDefinitions,
+	findDatasetProfileCheckoutStatus,
 	pauseScanJob,
-	prepareDatasetProfile,
 	pruneDatasetProfile,
 	resumeScanJob,
+	startDatasetProfileCheckout,
 } from "@vulseek/server";
 import {
 	apiCreateDataset,
 	apiCreateDatasetEvaluation,
 	apiCreateDatasetProfile,
+	apiDatasetProfileCheckoutId,
 	apiDatasetEvaluationId,
 	apiDatasetId,
 	apiDatasetProfileId,
@@ -27,7 +28,11 @@ import {
 	datasetProfiles,
 	datasetSamples,
 	datasets,
+	scanPipelineProfiles,
+	scanPipelines,
+	scanPipelineVersions,
 } from "@vulseek/server/db/schema";
+import { resolveCompiledDefinition } from "@vulseek/server/services/scan/api/pipeline-runs";
 import {
 	and,
 	asc,
@@ -39,6 +44,7 @@ import {
 	type SQL,
 	sql,
 } from "drizzle-orm";
+import { z } from "zod";
 import { createTRPCRouter, protectedProcedure } from "@/server/api/trpc";
 import { db } from "@/server/db";
 import { datasetEvaluationQueue } from "@/server/queues/queueSetup";
@@ -519,13 +525,29 @@ export const datasetRouter = createTRPCRouter({
 						code: "BAD_REQUEST",
 						message: "Dataset profile is locked by an active evaluation",
 					});
-				await prepareDatasetProfile(input.profileId);
-				return db
-					.select()
+				return startDatasetProfileCheckout(input.profileId);
+			}),
+		checkoutStatus: protectedProcedure
+			.input(apiDatasetProfileCheckoutId)
+			.query(async ({ ctx, input }) => {
+				const status = findDatasetProfileCheckoutStatus(input.checkoutId);
+				if (!status) return null;
+				const profile = await db
+					.select({ profileId: datasetProfiles.profileId })
 					.from(datasetProfiles)
-					.where(eq(datasetProfiles.profileId, input.profileId))
-					.limit(1)
-					.then((rows) => rows[0] && profileSummary(rows[0]));
+					.innerJoin(
+						datasets,
+						eq(datasetProfiles.datasetId, datasets.datasetId),
+					)
+					.where(
+						and(
+							eq(datasetProfiles.profileId, status.profileId),
+							eq(datasets.organizationId, ctx.session.activeOrganizationId),
+						),
+					)
+					.limit(1);
+				if (!profile[0]) return null;
+				return status;
 			}),
 		remove: protectedProcedure
 			.input(apiDatasetProfileId)
@@ -616,6 +638,50 @@ export const datasetRouter = createTRPCRouter({
 	}),
 
 	evaluations: createTRPCRouter({
+		navigationByScanJob: protectedProcedure
+			.input(z.object({ scanJobId: z.string().min(1) }))
+			.query(async ({ ctx, input }) => {
+				const context = await db
+					.select({
+						datasetId: datasets.datasetId,
+						datasetName: datasets.name,
+						profileId: datasetProfiles.profileId,
+						profileName: datasetProfiles.profileKey,
+						evaluationId: datasetEvaluations.evaluationId,
+						evaluationName: datasetEvaluations.name,
+						trialId: datasetEvaluationTrials.trialId,
+					})
+					.from(datasetEvaluationTrials)
+					.innerJoin(
+						datasetEvaluations,
+						eq(
+							datasetEvaluationTrials.evaluationId,
+							datasetEvaluations.evaluationId,
+						),
+					)
+					.innerJoin(
+						datasetProfiles,
+						eq(datasetEvaluations.profileId, datasetProfiles.profileId),
+					)
+					.innerJoin(datasets, eq(datasetEvaluations.datasetId, datasets.datasetId))
+					.where(
+						and(
+							eq(datasetEvaluationTrials.scanJobId, input.scanJobId),
+							eq(datasets.organizationId, ctx.session.activeOrganizationId),
+						),
+					)
+					.limit(1)
+					.then((rows) => rows[0]);
+
+				if (!context) {
+					throw new TRPCError({
+						code: "NOT_FOUND",
+						message: "Dataset trial navigation context not found",
+					});
+				}
+
+				return context;
+			}),
 		list: protectedProcedure
 			.input(apiListDatasetEvaluations)
 			.query(async ({ ctx, input }) => {
@@ -789,6 +855,8 @@ export const datasetRouter = createTRPCRouter({
 											sampleId: row.dataset_samples.sampleId,
 											id: row.dataset_samples.id,
 											title: row.dataset_samples.title,
+											groundTruthArtifacts:
+												row.dataset_samples.groundTruthArtifacts,
 										}
 									: null,
 							})),
@@ -849,13 +917,98 @@ export const datasetRouter = createTRPCRouter({
 						code: "BAD_REQUEST",
 						message: "One or more samples are not in the selected profile",
 					});
-				const definitions = getScanPipelineDefinitions();
-				const legacyKey = input.legacyPipelineKey ?? input.pipelineId;
-				if (legacyKey && !definitions.pipelines[legacyKey])
-					throw new TRPCError({
-						code: "BAD_REQUEST",
-						message: "Unknown scan pipeline",
-					});
+				const pipeline = await db
+						.select()
+						.from(scanPipelines)
+						.where(
+							and(
+								eq(scanPipelines.pipelineId, input.pipelineId),
+								eq(
+									scanPipelines.organizationId,
+									ctx.session.activeOrganizationId,
+								),
+							),
+						)
+						.limit(1)
+						.then((rows) => rows[0]);
+					if (!pipeline || pipeline.archivedAt)
+						throw new TRPCError({
+							code: "BAD_REQUEST",
+							message: "Published pipeline is not available",
+						});
+					const selectedProfile = input.pipelineProfileId
+						? await db
+								.select()
+								.from(scanPipelineProfiles)
+								.where(
+									and(
+										eq(
+											scanPipelineProfiles.pipelineProfileId,
+											input.pipelineProfileId,
+										),
+										eq(
+											scanPipelineProfiles.pipelineId,
+											pipeline.pipelineId,
+										),
+										eq(
+											scanPipelineProfiles.organizationId,
+											ctx.session.activeOrganizationId,
+										),
+									),
+								)
+								.limit(1)
+								.then((rows) => rows[0])
+						: null;
+					if (input.pipelineProfileId && !selectedProfile)
+						throw new TRPCError({
+							code: "BAD_REQUEST",
+							message: "Pipeline profile is not available for this pipeline",
+						});
+					const pipelineVersionId =
+						selectedProfile?.pipelineVersionId ??
+						pipeline.currentPublishedVersionId;
+					if (!pipelineVersionId)
+						throw new TRPCError({
+							code: "BAD_REQUEST",
+							message: "Pipeline has no published version",
+						});
+					const version = await db
+						.select()
+						.from(scanPipelineVersions)
+						.where(
+							and(
+								eq(
+									scanPipelineVersions.pipelineVersionId,
+									pipelineVersionId,
+								),
+								eq(scanPipelineVersions.pipelineId, pipeline.pipelineId),
+							),
+						)
+						.limit(1)
+						.then((rows) => rows[0]);
+					if (!version)
+						throw new TRPCError({
+							code: "BAD_REQUEST",
+							message: "Pipeline version is not available",
+						});
+					const compiled = resolveCompiledDefinition(
+						version.compiledDefinition,
+						version.yaml,
+					);
+					if (!compiled.supportedTargets.includes("evaluation"))
+						throw new TRPCError({
+							code: "BAD_REQUEST",
+							message: "Pipeline does not support Dataset Evaluations",
+						});
+				const pipelineSnapshot = {
+						pipelineId: pipeline.pipelineId,
+						pipelineProfileId: selectedProfile?.pipelineProfileId ?? null,
+						pipelineVersionId: version.pipelineVersionId,
+						pipelineYamlSnapshot: version.yaml,
+						pipelineCompiledSnapshot: compiled,
+						scanRuntimeSettings: selectedProfile?.settings ?? {},
+						scanPipelineDefinitionSnapshot: {},
+					};
 				const evaluationId = `evaluation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 				const result = await db.transaction(async (tx) => {
 					const evaluation = await tx
@@ -865,12 +1018,18 @@ export const datasetRouter = createTRPCRouter({
 							datasetId: dataset.datasetId,
 							profileId: profile.profileId,
 							name: input.name,
-							legacyPipelineKey: input.legacyPipelineKey ?? input.pipelineId ?? null,
+							pipelineId: pipelineSnapshot.pipelineId,
+							pipelineProfileId: pipelineSnapshot.pipelineProfileId,
+							pipelineVersionId: pipelineSnapshot.pipelineVersionId,
+							pipelineYamlSnapshot: pipelineSnapshot.pipelineYamlSnapshot,
+							pipelineCompiledSnapshot:
+								pipelineSnapshot.pipelineCompiledSnapshot,
 							sampleIds: input.sampleIds,
 							repetitions: input.repetitions,
 							timeBudgetSeconds: input.timeBudgetSeconds ?? null,
-							scanRuntimeSettings: input.scanRuntimeSettings,
-							scanPipelineDefinitionSnapshot: definitions,
+							scanRuntimeSettings: pipelineSnapshot.scanRuntimeSettings,
+							scanPipelineDefinitionSnapshot:
+								pipelineSnapshot.scanPipelineDefinitionSnapshot,
 						})
 						.returning()
 						.then((rows) => rows[0]);
@@ -1000,8 +1159,9 @@ export const datasetRouter = createTRPCRouter({
 				.orderBy(asc(datasetEvaluationTrials.ordinal))
 				.limit(1)
 				.then((rows) => rows[0]);
-			if (activeTrial?.scanJobId)
-				await pauseScanJob(activeTrial.scanJobId).catch(() => {});
+			if (activeTrial?.scanJobId) {
+				await pauseScanJob(activeTrial.scanJobId);
+			}
 			await db
 				.update(datasetEvaluations)
 				.set({ status: "paused", updatedAt: new Date().toISOString() })
@@ -1048,8 +1208,12 @@ export const datasetRouter = createTRPCRouter({
 				.orderBy(asc(datasetEvaluationTrials.ordinal))
 				.limit(1)
 				.then((rows) => rows[0]);
-			if (activeTrial?.scanJobId)
-				await cancelScanJob(activeTrial.scanJobId).catch(() => {});
+			if (activeTrial?.scanJobId) {
+				await cancelScanJob(activeTrial.scanJobId, {
+					reason: "manual_cancel",
+					message: "Evaluation canceled",
+				});
+			}
 			await db
 				.update(datasetEvaluationTrials)
 				.set({

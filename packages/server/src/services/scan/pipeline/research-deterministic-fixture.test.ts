@@ -302,7 +302,6 @@ const buildFixturePipeline = (
 		return createStageDefinition<PipelineContext, unknown, unknown>({
 			id: config.id,
 			name: config.name,
-			mode: config.runtimeConfig?.mode ?? "serial",
 			outputSchema,
 			run: async () => ({completion: "immediate", rawOutput: "{}"}),
 		});

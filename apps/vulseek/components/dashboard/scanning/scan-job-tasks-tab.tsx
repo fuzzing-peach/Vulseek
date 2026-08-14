@@ -681,6 +681,19 @@ export const ScanJobTasksTab = ({
 
 	const finishedColumns = [
 		{
+			id: "task",
+			header: scanT(t, "scan.monitoring.task", "阶段任务"),
+			cell: ({ row }: { row: { original: TerminalTask } }) => (
+				<Link
+					href={taskHref(row.original.taskId)}
+					className="block min-w-[14rem] max-w-[30rem] truncate font-medium hover:underline"
+					title={localizeTaskListText(t, row.original.title) || "-"}
+				>
+					{localizeTaskListText(t, row.original.title) || "-"}
+				</Link>
+			),
+		},
+		{
 			id: "stage",
 			header: scanT(t, "scan.field.stage", "阶段"),
 			cell: ({ row }: { row: { original: TerminalTask } }) => (
@@ -690,30 +703,6 @@ export const ScanJobTasksTab = ({
 				>
 					{getTaskStageLabel(t, row.original.stage)}
 				</span>
-			),
-		},
-		{
-			id: "task",
-			header: scanT(t, "scan.monitoring.task", "阶段任务"),
-			cell: ({ row }: { row: { original: TerminalTask } }) => (
-				<Link
-					href={taskHref(row.original.taskId)}
-					className="line-clamp-2 font-medium hover:underline"
-				>
-					{localizeTaskListText(t, row.original.title) || "-"}
-				</Link>
-			),
-		},
-		{
-			id: "status",
-			header: scanT(t, "scan.field.status", "状态"),
-			cell: ({ row }: { row: { original: TerminalTask } }) => (
-				<Badge
-					variant="outline"
-					className={getTaskStatusBadgeClassName(row.original.status)}
-				>
-					{getTaskStatusLabel(t, row.original.status)}
-				</Badge>
 			),
 		},
 		{
@@ -739,6 +728,18 @@ export const ScanJobTasksTab = ({
 				) : (
 					"-"
 				),
+		},
+		{
+			id: "status",
+			header: scanT(t, "scan.field.status", "状态"),
+			cell: ({ row }: { row: { original: TerminalTask } }) => (
+				<Badge
+					variant="outline"
+					className={getTaskStatusBadgeClassName(row.original.status)}
+				>
+					{getTaskStatusLabel(t, row.original.status)}
+				</Badge>
+			),
 		},
 		{
 			id: "actions",
@@ -974,7 +975,7 @@ export const ScanJobTasksTab = ({
 					getRowId={(task) => task.id}
 					getRowLabel={(task) => localizeTaskListText(t, task.title) || "-"}
 					emptyTitle={finishedEmptyTitle}
-					renderRow={(task) => (
+					mobileRender={(task) => (
 						<RowListItem className="items-start sm:items-center">
 							<div className="flex min-w-0 flex-1 items-start gap-3">
 								<Checkbox

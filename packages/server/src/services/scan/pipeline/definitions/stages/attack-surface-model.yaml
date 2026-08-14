@@ -10,7 +10,6 @@ attack-surface-model:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: fanout
     nullableOutput: false
     cwd: /workspace/repo
     skills: [attack-surface-model]

@@ -18,6 +18,10 @@ vi.mock("next/router", () => ({
 	useRouter: () => router,
 }));
 
+vi.mock("@/components/dashboard/pipelines/canvas-editor", () => ({
+	CanvasEditor: () => <div>canvas</div>,
+}));
+
 const VALID_YAML = `version: 3
 name: Test pipeline
 supportedTargets:
@@ -29,12 +33,24 @@ limits:
 schemas:
   finding:
     type: object
+    properties:
+      summary:
+        type: string
+        description: Existing summary
+      details:
+        type: object
+        description: Existing details
+        properties:
+          source:
+            type: string
+        items:
+          type: string
+        x-custom: preserve-me
 stages:
   discovery:
     name: Discovery
     role: scan
     group: core
-    mode: serial
     concurrency: 1
     runtime:
       prompt: Discover.
@@ -42,7 +58,6 @@ stages:
     name: Review
     role: verification
     group: core
-    mode: serial
     concurrency: 1
     runtime:
       prompt: Review.
@@ -76,22 +91,28 @@ const Harness = ({
 	readOnly = false,
 	readOnlyYaml,
 	versionLabel,
+	initialView,
 }: {
 	initial: PipelineEditorState;
 	readOnly?: boolean;
 	readOnlyYaml?: string;
 	versionLabel?: string | null;
+	initialView?: "definition" | "visual" | "raw" | "profiles";
 }) => {
 	const [state, dispatch] = React.useReducer(pipelineEditorReducer, initial);
 	return (
-		<PipelineWorkbench
-			state={state}
-			dispatch={dispatch}
-			readOnly={readOnly}
-			readOnlyYaml={readOnlyYaml}
-			versionLabel={versionLabel}
-			draftState={{ dirty: false, draftRevision: 0, publishedVersion: "1" }}
-		/>
+		<>
+			<PipelineWorkbench
+				state={state}
+				dispatch={dispatch}
+				readOnly={readOnly}
+				readOnlyYaml={readOnlyYaml}
+				versionLabel={versionLabel}
+				initialView={initialView}
+				draftState={{ dirty: false, draftRevision: 0, publishedVersion: "1" }}
+			/>
+			<pre data-testid="raw-yaml">{state.rawYamlBuffer}</pre>
+		</>
 	);
 };
 
@@ -110,6 +131,18 @@ describe("PipelineWorkbench — three views", () => {
 		expect(screen.getByRole("button", { name: /Schemas/ })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Groups 1" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Layout" })).toBeInTheDocument();
+	});
+
+	it("isolates the Visual canvas so React Flow cannot cover page chrome", () => {
+		render(
+			<Harness
+				initial={initialEditorState(VALID_YAML)}
+				initialView="visual"
+			/>,
+		);
+		const canvas = screen.getByTestId("pipeline-visual-canvas");
+		expect(canvas).toHaveClass("overflow-hidden", "isolate");
+		expect(canvas.parentElement).toHaveClass("overflow-hidden");
 	});
 
 	it("navigates from the rail to the entity list and editor", () => {
@@ -132,6 +165,40 @@ describe("PipelineWorkbench — three views", () => {
 		expect(screen.getByText("Used by")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "stage: discovery" }));
 		expect(screen.getByDisplayValue("Discovery")).toBeInTheDocument();
+	});
+
+	it("jumps from a stage input schema $ref to the schema editor", () => {
+		const yaml = VALID_YAML.replace(
+			"    runtime:\n      prompt: Discover.",
+			"    runtime:\n      prompt: Discover.\n    inputSchema:\n      $ref: \"#/schemas/finding\"",
+		);
+		render(<Harness initial={initialEditorState(yaml)} />);
+		fireEvent.click(screen.getByRole("button", { name: "Stages 2" }));
+		fireEvent.click(screen.getByRole("button", { name: /Discovery/ }));
+		fireEvent.click(screen.getByRole("button", { name: "I/O" }));
+		fireEvent.click(screen.getByRole("button", { name: "#/schemas/finding" }));
+		expect(screen.getByText("Used by")).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "finding" })).toBeInTheDocument();
+	});
+
+	it("edits and clears a top-level property description without losing advanced schema keys", () => {
+		render(<Harness initial={initialEditorState(VALID_YAML)} />);
+		fireEvent.click(screen.getByRole("button", { name: /Schemas/ }));
+		fireEvent.click(screen.getByRole("button", { name: /finding/ }));
+
+		const summaryInput = screen.getByDisplayValue("summary");
+		const summaryCard = summaryInput.parentElement;
+		if (!summaryCard) throw new Error("summary property card was not rendered");
+		const summaryTextboxes = within(summaryCard).getAllByRole("textbox");
+		const summaryDescription = summaryTextboxes[1];
+		if (!summaryDescription) throw new Error("summary description field was not rendered");
+		fireEvent.change(summaryDescription, { target: { value: "Updated summary" } });
+		expect(screen.getByTestId("raw-yaml")).toHaveTextContent("description: Updated summary");
+
+		fireEvent.change(summaryDescription, { target: { value: "   " } });
+		expect(screen.getByTestId("raw-yaml")).not.toHaveTextContent("description: Updated summary");
+		expect(screen.getByTestId("raw-yaml")).toHaveTextContent("x-custom: preserve-me");
+		expect(screen.getByTestId("raw-yaml")).toHaveTextContent("source:");
 	});
 
 	it("applies typed patches from the Definition editor and reflects them in the document", () => {
@@ -165,6 +232,26 @@ describe("PipelineWorkbench — read-only / version view", () => {
 		expect(nameInput.disabled).toBe(true);
 		// No delete affordance in read-only mode.
 		expect(screen.queryByRole("button", { name: /Delete stage/ })).not.toBeInTheDocument();
+	});
+
+	it("disables property descriptions in a read-only schema version", () => {
+		render(
+			<Harness
+				initial={initialEditorState(VALID_YAML)}
+				readOnly
+				readOnlyYaml={VALID_VERSION_YAML}
+				versionLabel="v3 · published"
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: /Schemas/ }));
+		fireEvent.click(screen.getByRole("button", { name: /finding/ }));
+		const summaryInput = screen.getByDisplayValue("summary");
+		const summaryCard = summaryInput.parentElement;
+		if (!summaryCard) throw new Error("summary property card was not rendered");
+		const summaryTextboxes = within(summaryCard).getAllByRole("textbox");
+		const summaryDescription = summaryTextboxes[1];
+		if (!summaryDescription) throw new Error("summary description field was not rendered");
+		expect(summaryDescription).toBeDisabled();
 	});
 
 	it("keeps the draft buffer out of the read-only Raw YAML view", () => {

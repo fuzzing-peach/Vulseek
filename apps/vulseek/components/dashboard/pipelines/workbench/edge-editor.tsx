@@ -93,7 +93,7 @@ export const EdgeEditor = ({
 					</button>
 				))}
 			</div>
-			<div className="min-h-0 flex-1 overflow-y-auto p-4">
+			<div className="min-h-0 flex-1 overflow-y-auto p-4 pb-12">
 				{tab === "general" ? (
 					<div className="space-y-4">
 						<TextField label="ID (immutable)" value={edgeId} readOnly />
@@ -290,6 +290,7 @@ export const EdgeEditor = ({
 							value={edge.outputSchema}
 							schemaIds={Object.keys(document.schemas)}
 							readOnly={readOnly}
+							onNavigateToSchema={(schemaId) => onSelect({ type: "schema", id: schemaId })}
 							onChange={(outputSchema) =>
 								patch({ ...edge, outputSchema }, `edge:${edgeId}:outputSchema`)
 							}

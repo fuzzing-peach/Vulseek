@@ -10,7 +10,6 @@ triage-finding:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: fanout
     nullableOutput: false
     cwd: /workspace/repo
     skills: [triage-finding]

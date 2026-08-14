@@ -5,7 +5,6 @@ import { spawn } from "node:child_process";
 import {
 	DEFAULT_DELTA_COMMIT_WINDOW,
 	authGithub,
-	createScanJob,
 	findApplicationById,
 	findCheckoutImageStatus,
 	findComposeById,
@@ -17,7 +16,9 @@ import {
 	applications,
 	compose,
 	scanJobs,
+	scanPipelines,
 } from "@vulseek/server/db/schema";
+import { createPipelineRun } from "@vulseek/server/services/scan/api/pipeline-runs";
 import { and, desc, eq } from "drizzle-orm";
 import { scansQueue } from "../queues/queueSetup";
 
@@ -421,12 +422,27 @@ const findLatestDeltaScanJobByTarget = async (input: {
 	applicationId?: string;
 	composeId?: string;
 }) => {
+	const organizationId = input.applicationId
+		? (await findApplicationById(input.applicationId)).environment.project.organizationId
+		: (await findComposeById(input.composeId as string)).environment.project.organizationId;
+	const pipeline = await db
+		.select({ pipelineId: scanPipelines.pipelineId })
+		.from(scanPipelines)
+		.where(
+			and(
+				eq(scanPipelines.organizationId, organizationId),
+				eq(scanPipelines.systemKey, "delta"),
+			),
+		)
+		.limit(1)
+		.then((rows) => rows[0]);
+	if (!pipeline) return null;
 	const rows = await db
 		.select()
 		.from(scanJobs)
 		.where(
 			and(
-				eq(scanJobs.scanType, "delta"),
+				eq(scanJobs.pipelineId, pipeline.pipelineId),
 				input.applicationId
 					? eq(scanJobs.applicationId, input.applicationId)
 					: eq(scanJobs.composeId, input.composeId as string),
@@ -444,16 +460,34 @@ const enqueueAutoDeltaScan = async (input: {
 	headSha: string;
 	branch: string;
 }) => {
-	const scanJob = await createScanJob({
-		applicationId: input.applicationId,
-		composeId: input.composeId,
-		scanType: "delta",
+	const organizationId = input.applicationId
+		? (await findApplicationById(input.applicationId)).environment.project.organizationId
+		: (await findComposeById(input.composeId as string)).environment.project.organizationId;
+	const pipeline = await db
+		.select({ pipelineId: scanPipelines.pipelineId })
+		.from(scanPipelines)
+		.where(
+			and(
+				eq(scanPipelines.organizationId, organizationId),
+				eq(scanPipelines.systemKey, "delta"),
+			),
+		)
+		.limit(1)
+		.then((rows) => rows[0]);
+	if (!pipeline) throw new Error("Delta system pipeline is not configured");
+	const scanJob = await createPipelineRun({
+		organizationId,
+		target: input.applicationId
+			? { type: "application", applicationId: input.applicationId }
+			: { type: "compose", composeId: input.composeId as string },
+		pipelineId: pipeline.pipelineId,
 		title: "Auto Delta Scan",
 		description: `Auto-created after detecting a new HEAD on ${input.branch}: ${input.headSha}`,
-		triggerSource: "schedule",
-		commitSha: input.headSha,
-		targetRef: input.branch,
-		commitWindow: DEFAULT_DELTA_COMMIT_WINDOW,
+		repository: {
+			commitSha: input.headSha,
+			targetRef: input.branch,
+			commitWindow: DEFAULT_DELTA_COMMIT_WINDOW,
+		},
 	});
 
 	await scansQueue.add(

@@ -153,6 +153,12 @@ export const pipelineEditorReducer = (
 				draftRevision: action.draftRevision,
 			};
 		case "select":
+			if (
+				state.selectedEntity?.type === action.entity?.type &&
+				state.selectedEntity?.id === action.entity?.id
+			) {
+				return state;
+			}
 			return { ...state, selectedEntity: action.entity };
 		case "patch": {
 			// Typed YAML AST patch: structured edits preserve comments and
@@ -217,10 +223,7 @@ export const pipelineEditorReducer = (
 				currentDocument &&
 				serializePipelineDocumentV3(currentDocument) === serialized
 			) {
-				return {
-					...state,
-					status: { kind: "valid", document: action.document, stale: false },
-				};
+				return state;
 			}
 			const analyzed = analyze(serialized);
 			return {

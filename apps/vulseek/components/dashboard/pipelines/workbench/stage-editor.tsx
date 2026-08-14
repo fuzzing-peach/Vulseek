@@ -6,12 +6,14 @@ import type {
 	PipelineStageV3,
 } from "@vulseek/server/services/scan/pipeline/document-v3";
 import { ALLOWED_RUNTIME_PLUGINS } from "@vulseek/server/services/scan/pipeline/document-v3";
+import { SkillMultiSelect } from "@/components/dashboard/pipelines/skill-multi-select";
 import type { PipelineEditorAction } from "@/lib/pipeline-editor/pipeline-editor-state";
 import { cn } from "@/lib/utils";
 import {
 	ArrayField,
 	CheckboxField,
 	EntityDiagnostics,
+	FieldTemplate,
 	JsonField,
 	NumberField,
 	SchemaReferenceField,
@@ -32,11 +34,6 @@ const ROLE_OPTIONS = [
 	{ value: "scan", label: "Scan" },
 	{ value: "analysis", label: "Analysis" },
 	{ value: "verification", label: "Verification" },
-] as const;
-
-const MODE_OPTIONS = [
-	{ value: "serial", label: "Serial" },
-	{ value: "fanout", label: "Fan-out" },
 ] as const;
 
 const PREPARE_OPTIONS = [
@@ -78,6 +75,7 @@ export type StageEditorProps = {
 	diagnostics: PipelineDiagnostic[];
 	dispatch: React.Dispatch<PipelineEditorAction>;
 	readOnly: boolean;
+	onSelect: (entity: { type: "stage" | "edge" | "schema" | "group"; id: string }) => void;
 };
 
 export const StageEditor = ({
@@ -87,6 +85,7 @@ export const StageEditor = ({
 	diagnostics,
 	dispatch,
 	readOnly,
+	onSelect,
 }: StageEditorProps) => {
 	const [tab, setTab] = React.useState<
 		"general" | "runtime" | "prompt" | "io" | "artifacts" | "effects"
@@ -116,7 +115,7 @@ export const StageEditor = ({
 		<div className="flex h-full min-h-0 flex-col">
 			<SectionHeading
 				title={stage.name}
-				subtitle={`${stageId} · ${stage.role} · ${stage.mode}`}
+				subtitle={`${stageId} · ${stage.role} · concurrency ${stage.concurrency}`}
 			/>
 			<EntityDiagnostics diagnostics={diagnostics} />
 			<div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b px-2">
@@ -136,7 +135,7 @@ export const StageEditor = ({
 					</button>
 				))}
 			</div>
-			<div className="min-h-0 flex-1 overflow-y-auto p-4">
+			<div className="min-h-0 flex-1 overflow-y-auto p-4 pb-12">
 				{tab === "general" ? (
 					<div className="space-y-4">
 						<TextField
@@ -214,15 +213,6 @@ export const StageEditor = ({
 
 				{tab === "runtime" ? (
 					<div className="space-y-4">
-						<SelectField
-							label="Mode"
-							value={stage.mode}
-							options={MODE_OPTIONS}
-							readOnly={readOnly}
-							onChange={(mode) =>
-								patch({ ...stage, mode: mode as PipelineStageV3["mode"] }, `stage:${stageId}:mode`)
-							}
-						/>
 						<div className="grid grid-cols-2 gap-2">
 							<NumberField
 								label="Concurrency"
@@ -277,11 +267,27 @@ export const StageEditor = ({
 							}
 						/>
 						<ToggleField
+							label="Goal prompt"
+							description="Prefix the prompt with /goal and render task input as readable context."
+							checked={stage.goal ?? false}
+							readOnly={readOnly}
+							onChange={(goal) => patch({ ...stage, goal }, `stage:${stageId}:goal`)}
+						/>
+						<ToggleField
 							label="Allow agent exit"
 							checked={stage.allowAgentExit ?? false}
 							readOnly={readOnly}
 							onChange={(allowAgentExit) =>
 								patch({ ...stage, allowAgentExit }, `stage:${stageId}:allowAgentExit`)
+							}
+						/>
+						<ToggleField
+							label="Publish job output"
+							description="Copy files referenced by output.json into /task/job-output."
+							checked={stage.jobOutput ?? false}
+							readOnly={readOnly}
+							onChange={(jobOutput) =>
+								patch({ ...stage, jobOutput }, `stage:${stageId}:jobOutput`)
 							}
 						/>
 						<TextField
@@ -324,37 +330,24 @@ export const StageEditor = ({
 								patchRuntime({ ...stage.runtime, includePolicy }, `stage:${stageId}:policy`)
 							}
 						/>
-						<ArrayField
+						<FieldTemplate
 							label="Skills"
-							items={stage.runtime.skills ?? []}
-							readOnly={readOnly}
-							onAdd={() =>
-								patchRuntime(
-									{ ...stage.runtime, skills: [...(stage.runtime.skills ?? []), "new-skill"] },
-									`stage:${stageId}:skills`,
-								)
-							}
-							onRemove={(index) =>
-								patchRuntime(
-									{ ...stage.runtime, skills: (stage.runtime.skills ?? []).filter((_, i) => i !== index) },
-									`stage:${stageId}:skills`,
-								)
-							}
-							onChange={(index, skill) =>
-								patchRuntime(
-									{ ...stage.runtime, skills: (stage.runtime.skills ?? []).map((s, i) => (i === index ? skill : s)) },
-									`stage:${stageId}:skills`,
-								)
-							}
-							renderItem={(skill, _index, onChange) => (
-								<input
-									value={skill}
-									disabled={readOnly}
-									onChange={(event) => onChange(event.target.value)}
-									className="h-8 w-full rounded-md border bg-background px-2 text-xs"
-								/>
-							)}
-						/>
+							description="Search and select skills to load into the sandbox. Their names and SKILL.md paths are prepended to the generated prompt."
+						>
+							<SkillMultiSelect
+								value={stage.runtime.skills}
+								readOnly={readOnly}
+								onChange={(skills) =>
+									patchRuntime(
+										{
+											...stage.runtime,
+											skills: skills.length > 0 ? skills : undefined,
+										},
+										`stage:${stageId}:skills`,
+									)
+								}
+							/>
+						</FieldTemplate>
 						<div className="space-y-2">
 							<p className="text-xs font-medium text-foreground">Plugins</p>
 							{ALLOWED_RUNTIME_PLUGINS.map((plugin) => (
@@ -408,6 +401,7 @@ export const StageEditor = ({
 							value={stage.inputSchema}
 							schemaIds={schemaIds}
 							readOnly={readOnly}
+							onNavigateToSchema={(schemaId) => onSelect({ type: "schema", id: schemaId })}
 							onChange={(inputSchema) =>
 								patch({ ...stage, inputSchema }, `stage:${stageId}:inputSchema`)
 							}
@@ -417,6 +411,7 @@ export const StageEditor = ({
 							value={stage.outputSchema}
 							schemaIds={schemaIds}
 							readOnly={readOnly}
+							onNavigateToSchema={(schemaId) => onSelect({ type: "schema", id: schemaId })}
 							onChange={(outputSchema) =>
 								patch({ ...stage, outputSchema }, `stage:${stageId}:outputSchema`)
 							}

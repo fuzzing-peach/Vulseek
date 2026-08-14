@@ -11,7 +11,9 @@ import {
 import { and, eq, or } from "drizzle-orm";
 import { findApplicationById } from "../application";
 import { findComposeById } from "../compose";
+import { resolveDatasetTrialRuntime } from "../dataset";
 import { findScanJobByIdRepo } from "./persistence/scan-job.repo";
+import { findScanJobOrganizationIdRepo } from "./persistence/scan-job-access.repo";
 import {
 	findTaskByIdRepo,
 	listRunningTaskRuntimeMetadataRepo,
@@ -65,7 +67,6 @@ const findScanJobTargetSummary = async (scanJobId: string) => {
 			projectName: projects.name,
 			serviceName: applications.name,
 			appName: applications.appName,
-			organizationId: projects.organizationId,
 		})
 		.from(scanJobs)
 		.innerJoin(
@@ -88,7 +89,6 @@ const findScanJobTargetSummary = async (scanJobId: string) => {
 				applicationTarget.serviceName ||
 				applicationTarget.appName ||
 				"application",
-			organizationId: applicationTarget.organizationId,
 		};
 	}
 
@@ -97,7 +97,6 @@ const findScanJobTargetSummary = async (scanJobId: string) => {
 			projectName: projects.name,
 			serviceName: compose.name,
 			appName: compose.appName,
-			organizationId: projects.organizationId,
 		})
 		.from(scanJobs)
 		.innerJoin(compose, eq(scanJobs.composeId, compose.composeId))
@@ -115,7 +114,14 @@ const findScanJobTargetSummary = async (scanJobId: string) => {
 			projectName: composeTarget.projectName,
 			serviceName:
 				composeTarget.serviceName || composeTarget.appName || "compose",
-			organizationId: composeTarget.organizationId,
+		};
+	}
+
+	const datasetRuntime = await resolveDatasetTrialRuntime(scanJobId);
+	if (datasetRuntime) {
+		return {
+			projectName: `dataset-${datasetRuntime.dataset.datasetId}`,
+			serviceName: `${datasetRuntime.profile.profileId}-${datasetRuntime.sample.id}`,
 		};
 	}
 
@@ -123,7 +129,7 @@ const findScanJobTargetSummary = async (scanJobId: string) => {
 };
 
 export const findScanJobOrganizationId = async (scanJobId: string) =>
-	(await findScanJobTargetSummary(scanJobId))?.organizationId || null;
+	await findScanJobOrganizationIdRepo(scanJobId);
 
 export const findScanJobStatusById = async (scanJobId: string) =>
 	await db
@@ -137,6 +143,9 @@ const resolveScanJobBaseDir = async (scanJobId: string) => {
 	const target = await findScanJobTargetSummary(scanJobId);
 	if (!target) {
 		const scanJob = await findScanJobByIdRepo(scanJobId);
+		if (!scanJob.applicationId && !scanJob.composeId) {
+			throw new Error(`Scan job ${scanJobId} has no supported runtime target`);
+		}
 		const fullTarget = scanJob.applicationId
 			? await findApplicationById(scanJob.applicationId)
 			: await findComposeById(scanJob.composeId as string);
@@ -194,7 +203,12 @@ export type AgentTaskRuntime = {
 		| "chain-review"
 		| "exploit-validation"
 		| "exploit-review"
-		| "research-report";
+		| "research-report"
+		| "goal-craft"
+		| "goal-surface"
+		| "goal-hunt"
+		| "goal-judge"
+		| "goal-dedup";
 	status: string;
 	containerName: string | null;
 	sessionId: string | null;
@@ -282,6 +296,11 @@ const buildAgentTaskRuntime = async (
 		case "exploit-validation":
 		case "exploit-review":
 		case "research-report":
+		case "goal-craft":
+		case "goal-surface":
+		case "goal-hunt":
+		case "goal-judge":
+		case "goal-dedup":
 			taskKind = task.stageName as AgentTaskRuntime["taskKind"];
 			break;
 	}

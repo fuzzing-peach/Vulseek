@@ -42,8 +42,6 @@ export const ComposeActions = ({ composeId }: Props) => {
 		},
 	);
 	const { mutateAsync: update } = api.compose.update.useMutation();
-	const { mutateAsync: createScanJob, isLoading: isCreatingScanJob } =
-		api.scan.create.useMutation();
 	const { mutateAsync: stop, isLoading: isStopping } =
 		api.compose.stop.useMutation();
 	return (

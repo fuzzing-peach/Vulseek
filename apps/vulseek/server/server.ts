@@ -104,11 +104,6 @@ void app.prepare().then(async () => {
 			console.log("Starting Scans Worker");
 			const { scansWorker } = await import("./queues/scans-queue");
 			void scansWorker.run();
-			console.log("Starting Scan Evaluations Worker");
-			const { scanEvaluationsWorker } = await import(
-				"./queues/scan-evaluations-queue"
-			);
-			void scanEvaluationsWorker.run();
 			console.log("Starting Dataset Evaluations Worker");
 			const { datasetEvaluationsWorker, recoverPendingDatasetEvaluations } = await import(
 				"./queues/dataset-evaluations-queue"

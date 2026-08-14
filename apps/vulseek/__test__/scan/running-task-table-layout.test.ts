@@ -100,14 +100,14 @@ describe("running task table layout", () => {
 		);
 	});
 
-	it("does not repeat the stage name in the finished task column", () => {
+	it("renders finished tasks as a task-first desktop table with mobile cards", () => {
 		const source = readComponent("scan-job-tasks-tab.tsx");
 		const finishedStart = source.indexOf("const finishedColumns");
 		const finishedColumns = source.slice(finishedStart);
 
-		// Stage column precedes the task column.
-		expect(finishedColumns.indexOf('"scan.field.stage"')).toBeLessThan(
-			finishedColumns.indexOf('"scan.monitoring.task"'),
+		// The primary task column precedes supporting metadata.
+		expect(finishedColumns.indexOf('"scan.monitoring.task"')).toBeLessThan(
+			finishedColumns.indexOf('"scan.field.stage"'),
 		);
 		// The task column renders the localized title only.
 		expect(finishedColumns).toContain(
@@ -121,6 +121,11 @@ describe("running task table layout", () => {
 			"RERUNNABLE_TASK_STATUSES.has(task.status)",
 		);
 		expect(source).toContain("getRowSelectable");
+		const finishedSection = source.slice(
+			source.indexOf('"scan.tasks.finishedDescription"'),
+		);
+		expect(finishedSection).toContain("mobileRender={(task) => (");
+		expect(finishedSection).not.toContain("renderRow={(task) => (");
 	});
 
 	it("uses the dashboard ping effect for connected activity", () => {

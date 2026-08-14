@@ -40,12 +40,16 @@ export type TaskAgentProfileSnapshot = {
 	thinkingLevelEnabled?: boolean | null;
 };
 
-export const scanTypeEnum = pgEnum("scanType", [
-	"delta",
-	"full",
-	"research",
-	"tob-goal",
-]);
+export type ScanJobOutputArtifact = {
+	path: string;
+};
+
+export type ScanJobOutput = {
+	taskId: string;
+	stageName: string;
+	artifacts: ScanJobOutputArtifact[];
+};
+
 export const scanJobStatusEnum = pgEnum("scanJobStatus", [
 	"pending",
 	"running",
@@ -163,6 +167,48 @@ export const scanPipelineVersions = pgTable(
 	}),
 );
 
+/** Organization-scoped runtime presets for a published pipeline. */
+export const scanPipelineProfiles = pgTable(
+	"scan_pipeline_profiles",
+	{
+		pipelineProfileId: text("pipelineProfileId")
+			.notNull()
+			.primaryKey()
+			.$defaultFn(() => nanoid()),
+		pipelineId: text("pipelineId")
+			.notNull()
+			.references(() => scanPipelines.pipelineId, { onDelete: "cascade" }),
+		pipelineVersionId: text("pipelineVersionId")
+			.notNull()
+			.references(() => scanPipelineVersions.pipelineVersionId, { onDelete: "cascade" }),
+		organizationId: text("organizationId")
+			.notNull()
+			.references(() => organization.id, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		description: text("description"),
+		settings: jsonb("settings")
+			.$type<ScanRuntimeSettings>()
+			.notNull()
+			.default({}),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => ({
+		pipelineNameUnique: uniqueIndex("scan_pipeline_profiles_pipeline_name_unique").on(
+			table.pipelineId,
+			table.name,
+		),
+		organizationPipelineIndex: index("scan_pipeline_profiles_org_pipeline_idx").on(
+			table.organizationId,
+			table.pipelineId,
+		),
+	}),
+);
+
 export const scanJobs = pgTable(
 	"scan_jobs",
 	{
@@ -173,7 +219,6 @@ export const scanJobs = pgTable(
 		title: text("title").notNull().default("Scan Job"),
 		description: text("description"),
 		note: text("note"),
-		scanType: scanTypeEnum("scanType").notNull(),
 		status: scanJobStatusEnum("status").notNull().default("pending"),
 		triggerSource: text("triggerSource").notNull().default("manual"),
 		commitSha: text("commitSha"),
@@ -188,6 +233,10 @@ export const scanJobs = pgTable(
 			.$type<Record<string, unknown>>()
 			.notNull()
 			.default({}),
+		outputs: jsonb("outputs")
+			.$type<ScanJobOutput[]>()
+			.notNull()
+			.default([]),
 		commitWindow: integer("commitWindow").notNull().default(3),
 		inputTokens: bigint("input_tokens", { mode: "number" })
 			.notNull()
@@ -222,10 +271,12 @@ export const scanJobs = pgTable(
 		datasetEvaluationTrialId: text("datasetEvaluationTrialId"),
 		// Frozen pipeline linkage for V3 runs: the exact version and its
 		// snapshots make the job reproducible after version switches/archival.
-		pipelineId: text("pipelineId").references(
+		pipelineId: text("pipelineId")
+			.notNull()
+			.references(
 			() => scanPipelines.pipelineId,
-			{ onDelete: "set null" },
-		),
+			{ onDelete: "restrict" },
+			),
 		pipelineVersionId: text("pipelineVersionId").references(
 			() => scanPipelineVersions.pipelineVersionId,
 			{ onDelete: "set null" },
@@ -236,9 +287,7 @@ export const scanJobs = pgTable(
 		maxTasks: integer("maxTasks"),
 		deadlineAt: text("deadlineAt"),
 		taskCount: integer("taskCount").notNull().default(0),
-		terminationReason: text("terminationReason").$type<
-			"task_limit" | "duration_limit" | null
-		>(),
+		terminationReason: text("terminationReason").$type<string | null>(),
 		createdAt: text("createdAt")
 			.notNull()
 			.$defaultFn(() => new Date().toISOString()),
@@ -834,62 +883,6 @@ export const scanEvaluateResultsRelations = relations(
 		}),
 	}),
 );
-
-export const apiCreateScanJob = z
-	.object({
-		applicationId: z.string().min(1).optional(),
-		composeId: z.string().min(1).optional(),
-		datasetEvaluationTrialId: z.string().min(1).optional(),
-		scanType: z.enum(["delta", "full", "research", "tob-goal"]),
-		title: z.string().min(1).optional(),
-		description: z.string().optional(),
-		triggerSource: z.enum(["manual", "webhook", "schedule"]).default("manual"),
-		commitSha: z.string().optional(),
-		baseSha: z.string().optional(),
-		targetRef: z.string().optional(),
-		targetTag: z.string().optional(),
-		commitWindow: z.number().int().min(1).max(50).optional(),
-		scanRuntimeSettings: ScanRuntimeSettingsSchema.optional(),
-		researchScope: z.record(z.unknown()).optional(),
-		scanPipelineDefinitionSnapshot: z.record(z.unknown()).optional(),
-		threatDirection: z
-			.object({
-				focus: z.string().min(1),
-				attackerModel: z.string().min(1),
-				nonGoals: z.array(z.string()).optional(),
-				notes: z.string().optional(),
-			})
-			.optional(),
-	})
-	.refine(
-		(value) =>
-			[
-				Boolean(value.applicationId),
-				Boolean(value.composeId),
-				Boolean(value.datasetEvaluationTrialId),
-			].filter(Boolean).length === 1,
-		{
-			message:
-				"Provide exactly one target: applicationId, composeId, or datasetEvaluationTrialId",
-			path: ["applicationId"],
-		},
-	)
-	.refine(
-		(value) => !value.datasetEvaluationTrialId || value.scanType !== "delta",
-		{
-			message: "Dataset evaluations do not support delta scans",
-			path: ["applicationId"],
-		},
-	)
-	.refine(
-		(value) =>
-			value.scanType !== "tob-goal" ||
-			Boolean(value.threatDirection?.focus?.trim()),
-		{
-			message: "Goal scans require threatDirection.focus",
-			path: ["threatDirection"],
-		},
-	);
 
 export const apiFindScanJobsByApplication = z
 	.object({

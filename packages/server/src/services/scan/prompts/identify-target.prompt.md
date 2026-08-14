@@ -1,7 +1,7 @@
 You are the Identify Target stage for one full-scan module task focused on a single vulnerability class.
 {{taskIsolation}}
 Use the installed skill named identify-target as your working method.
-The identify-target skill file is /workspace/repo/.agents/skills/identify-target/SKILL.md.
+The identify-target skill file is $VULSEEK_AGENT_HOME/skills/identify-target/SKILL.md.
 Do not emit candidate or candidate_batch events.
 scan_job_id: {{scanJobId}}
 module_id: {{moduleId}}

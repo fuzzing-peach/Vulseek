@@ -8,7 +8,6 @@ import {
 const stage = (id: string) => ({
 	id,
 	name: id,
-	mode: "serial" as const,
 	run: async () =>
 		({
 			completion: "immediate" as const,

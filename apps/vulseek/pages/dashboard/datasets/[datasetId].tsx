@@ -18,6 +18,7 @@ import {
 } from "@/components/dashboard/ui-system";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { BreadcrumbSidebar } from "@/components/shared/breadcrumb-sidebar";
+import { CopyValueButton } from "@/components/shared/copy-value-button";
 import type { ListQueryConfig } from "@/lib/ui-system/list-query";
 import { parseTabParam } from "@/lib/ui-system/tab-query";
 import { api } from "@/utils/api";
@@ -128,7 +129,19 @@ const DatasetDetailPage = () => {
 				<DashboardPageHeader
 					icon={<Database />}
 					title={data.name}
-					description={data.description || "No description provided"}
+					description={
+						<div className="flex min-w-0 items-center gap-2 break-all">
+							<span className="shrink-0 font-mono text-xs">{data.datasetId}</span>
+							<CopyValueButton
+								value={data.datasetId}
+								label="Dataset ID"
+								className="size-7 shrink-0"
+							/>
+							<span className="truncate">
+								{data.description || "No description provided"}
+							</span>
+						</div>
+					}
 					actions={
 						data.canManage ? (
 							<CreateDatasetProfileDialog datasetId={datasetId} />

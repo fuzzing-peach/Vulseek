@@ -9,7 +9,6 @@ research-scope:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: serial
     cwd: /workspace/repo
     skills: [research-agent, research-db]
     promptFile: research-scope.prompt.md
@@ -30,7 +29,6 @@ surface-map:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: serial
     cwd: /workspace/repo
     skills: [research-agent]
     promptFile: surface-map.prompt.md
@@ -49,7 +47,6 @@ track-plan:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: serial
     cwd: /workspace/repo
     skills: [research-agent, research-db]
     promptFile: track-plan.prompt.md
@@ -68,7 +65,6 @@ vulnerability-discovery:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: fanout
     cwd: /workspace/repo
     skills: [research-agent, research-db]
     promptFile: vulnerability-discovery.prompt.md
@@ -87,7 +83,6 @@ track-review:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: fanout
     cwd: /workspace/repo
     skills: [research-agent, research-db]
     promptFile: track-review.prompt.md
@@ -106,7 +101,6 @@ finding-validation:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: fanout
     cwd: /workspace/repo
     skills: [research-agent, research-db]
     promptFile: finding-validation.prompt.md
@@ -125,7 +119,6 @@ finding-review:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: fanout
     cwd: /workspace/repo
     skills: [research-agent, research-db]
     promptFile: finding-review.prompt.md
@@ -144,7 +137,6 @@ chain-synthesis:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: serial
     cwd: /workspace/repo
     skills: [research-agent, research-db]
     promptFile: chain-synthesis.prompt.md
@@ -163,7 +155,6 @@ chain-review:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: fanout
     cwd: /workspace/repo
     skills: [research-agent, research-db]
     promptFile: chain-review.prompt.md
@@ -182,7 +173,6 @@ exploit-validation:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: fanout
     cwd: /workspace/repo
     skills: [research-agent, research-db]
     promptFile: exploit-validation.prompt.md
@@ -201,7 +191,6 @@ exploit-review:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: fanout
     cwd: /workspace/repo
     skills: [research-agent, research-db]
     promptFile: exploit-review.prompt.md
@@ -221,7 +210,6 @@ research-report:
   runtimeConfig:
     persistent: false
     reuseContainer: true
-    mode: fanout
     cwd: /workspace/repo
     skills: [research-agent, research-db]
     promptFile: research-report.prompt.md

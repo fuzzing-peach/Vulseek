@@ -25,12 +25,10 @@ import {
  * - Prompts are inlined: `loadScanPipelineDefinitions` hydrates
  *   `runtimeConfig.prompt` from prompt files, so V3 always carries inline
  *   prompts and never `promptFile`.
- * - `runtimeConfig.mode` moves from runtime into the stage-level `mode`.
  * - `prepareRepository` derives from the pipeline kind: full/research/
  *   tob-goal → `target` on the root stage, delta → `diff`.
- * - scanType-specific runtime behaviors become explicit plugins on the
- *   stages that owned them (research → research-track/research-deadline,
- *   tob-goal → tob-goal-native).
+ * - research-specific runtime behaviors become explicit plugins on the
+ *   stages that owned them (research → research-track/research-deadline).
  * - Edge `name` is kept as both `id` (stable slug when possible) and `name`.
  */
 
@@ -119,12 +117,6 @@ const pluginsForStage = (
 			plugins.push("research-deadline");
 		}
 	}
-	if (kind === "tob-goal") {
-		const hasRegistry = effects.some(
-			(effect) => effect.type === "tob-goal-registry",
-		);
-		if (hasRegistry) plugins.push("tob-goal-native");
-	}
 	return plugins;
 };
 
@@ -148,12 +140,12 @@ const convertStage = (
 			...(stage.description ? { description: stage.description } : {}),
 			role: stage.role,
 			group: stage.group,
-			mode: (runtimeConfig?.mode ?? "serial") as "serial" | "fanout",
 			concurrency: stage.concurrency,
 			...(stage.maxConcurrency != null
 				? { maxConcurrency: stage.maxConcurrency }
 				: {}),
 			disableable: stage.disableable,
+			goal: stage.goal,
 			runtime: {
 				kind: "agent",
 				...(runtimeConfig?.agentProfile
@@ -200,6 +192,7 @@ const convertStage = (
 				: {}),
 			inputArtifacts: stage.inputArtifacts,
 			outputArtifacts: stage.outputArtifacts,
+			jobOutput: stage.jobOutput,
 			effects,
 			...(stage.report ? { report: stage.report } : {}),
 			...(stage.taskName ? { taskName: stage.taskName } : {}),

@@ -204,13 +204,13 @@ export const DefinitionView = ({
 	);
 
 	const entityList = (
-		<div className="w-56 shrink-0 border-r">
+		<div className="flex h-full min-h-0 w-56 shrink-0 flex-col border-r">
 			{section === "stages" ? (
 				<EntityList
 					items={Object.entries(document.stages).map(([id, stage]) => ({
 						id,
 						title: stage.name,
-						subtitle: `${id} · ${stage.mode}${stage.group ? ` · ${stage.group}` : ""}`,
+						subtitle: `${id} · concurrency ${stage.concurrency}${stage.group ? ` · ${stage.group}` : ""}`,
 						badge: stage.role,
 						errorCount: diagnosticsForEntity(state.diagnostics, "stage", id).filter(
 							(d) => d.severity === "error",
@@ -287,7 +287,7 @@ export const DefinitionView = ({
 	);
 
 	const editor = (
-		<div className="min-w-0 flex-1">
+		<div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
 			{section === "overview" ? (
 				<OverviewEditor
 					document={document}
@@ -318,6 +318,7 @@ export const DefinitionView = ({
 							diagnostics={diagnosticsForEntity(state.diagnostics, "stage", selected.id)}
 							dispatch={dispatch}
 							readOnly={readOnly}
+							onSelect={handleSelect}
 						/>
 					</>
 				) : (
@@ -471,6 +472,7 @@ const DeleteEntityBar = ({
 	const entityDiagnostics = diagnostics.filter(
 		(d) => d.entity?.type === kind && d.entity.id === id,
 	);
+	const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
 	if (readOnly) return null;
 	const doDelete = () => {
 		const ops =
@@ -482,48 +484,55 @@ const DeleteEntityBar = ({
 						? [{ op: "deleteSchema" as const, schemaId: id }]
 						: [{ op: "deleteGroup" as const, groupId: id }];
 		dispatch({ type: "patch", ops });
+		setDeleteDialogOpen(false);
 		onDeleted?.();
 	};
 	return (
-		<div className="flex shrink-0 items-center justify-between gap-2 border-b px-4 py-1.5">
-			<div className="min-w-0 text-xs text-muted-foreground">
-				{blockers.length > 0 ? (
-					<span className="text-red-600">{blockers.length} reference(s) block deletion</span>
-				) : (
-					<span>{entityDiagnostics.length} diagnostic(s) on this entity</span>
-				)}
-			</div>
-			{blockers.length > 0 ? (
-				<div className="flex max-w-64 flex-wrap gap-1">
-					{blockers.map((blocker, index) => (
-						<span
-							key={index}
-							title={blocker.message}
-							className="truncate rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-600"
-						>
-							{blocker.message}
-						</span>
-					))}
-				</div>
-			) : (
+		<>
+			<div className="flex shrink-0 items-center justify-end border-b px-4 py-1.5">
 				<button
 					type="button"
-					onClick={() => {
-						if (
-							window.confirm(
-								`Delete ${kind} "${id}"? This removes it from the draft; save to persist.`,
-							)
-						) {
-							doDelete();
-						}
-					}}
+					onClick={() => setDeleteDialogOpen(true)}
 					className="inline-flex items-center gap-1 rounded-md border border-red-500/30 px-2 py-1 text-xs text-red-600 hover:bg-red-500/10"
 				>
 					<Trash2 className="size-3" />
 					Delete {kind}
 				</button>
-			)}
-		</div>
+			</div>
+			<Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+				<DialogContent className="sm:max-w-lg">
+					<DialogHeader>
+						<DialogTitle>Delete {kind} &quot;{id}&quot;?</DialogTitle>
+						<DialogDescription>
+							This removes the entity from the draft. Save the draft to persist the change.
+						</DialogDescription>
+					</DialogHeader>
+					{blockers.length > 0 ? (
+						<div className="space-y-2 rounded-md border border-red-500/30 bg-red-500/5 p-3">
+							<p className="text-sm font-medium text-red-600">Resolve these references before deleting:</p>
+							<ul className="list-disc space-y-1 pl-5 text-xs text-red-600">
+								{blockers.map((blocker, index) => (
+									<li key={index}>{blocker.message}</li>
+								))}
+							</ul>
+						</div>
+					) : (
+						<p className="text-sm text-muted-foreground">No references block this deletion.</p>
+					)}
+					{entityDiagnostics.length > 0 ? (
+						<p className="text-xs text-muted-foreground">{entityDiagnostics.length} diagnostic(s) are associated with this entity.</p>
+					) : null}
+					<DialogFooter>
+						<Button variant="outline" size="sm" onClick={() => setDeleteDialogOpen(false)}>
+							Cancel
+						</Button>
+						<Button variant="destructive" size="sm" disabled={blockers.length > 0} onClick={doDelete}>
+							Delete {kind}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+		</>
 	);
 };
 

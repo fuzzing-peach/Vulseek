@@ -1,12 +1,4 @@
 import { TRPCError } from "@trpc/server";
-import { db } from "@vulseek/server/db";
-import type {
-	apiCreateScanJob,
-	ScanStageSettings,
-} from "@vulseek/server/db/schema";
-import { applications, compose } from "@vulseek/server/db/schema";
-import { eq } from "drizzle-orm";
-import { DEFAULT_DELTA_COMMIT_WINDOW } from "../constants";
 import {
 	createScanJobRepo,
 	findScanJobByIdRepo,
@@ -19,6 +11,7 @@ import {
 	updateScanJobRepositoryTaskStatusRepo,
 	updateScanJobRuntimeSettingsRepo,
 	updateScanJobStatusRepo,
+	transitionScanJobStatusRepo,
 } from "../persistence/scan-job.repo";
 import { findScanJobOrganizationIdRepo } from "../persistence/scan-job-access.repo";
 import { wakePipelineRuntimesForScanJob } from "../pipeline/pipeline-runner";
@@ -27,7 +20,6 @@ import {
 	type ScanPipelineDefinitions,
 } from "../pipeline/scan-pipeline-definitions";
 import {
-	buildCompleteScanRuntimeSettings,
 	normalizeScanRuntimeSettings,
 } from "../runtime-settings";
 
@@ -49,52 +41,6 @@ export const authorizeScanJobAccess = async (
 		});
 	}
 	return targetOrganizationId;
-};
-
-const resolveCreateScanJobTargetStageSettings = async (
-	input: typeof apiCreateScanJob._type,
-): Promise<ScanStageSettings> => {
-	if (input.applicationId) {
-		const [row] = await db
-			.select({ scanStageSettings: applications.scanStageSettings })
-			.from(applications)
-			.where(eq(applications.applicationId, input.applicationId))
-			.limit(1);
-		return row?.scanStageSettings ?? {};
-	}
-	if (input.composeId) {
-		const [row] = await db
-			.select({ scanStageSettings: compose.scanStageSettings })
-			.from(compose)
-			.where(eq(compose.composeId, input.composeId))
-			.limit(1);
-		return row?.scanStageSettings ?? {};
-	}
-	if (input.datasetEvaluationTrialId) {
-		return {};
-	}
-	return {};
-};
-
-export const createScanJob = async (input: typeof apiCreateScanJob._type) => {
-	const targetStageSettings =
-		await resolveCreateScanJobTargetStageSettings(input);
-	const runtimeOverrides = {
-		...(input.scanRuntimeSettings ?? {}),
-		...(input.threatDirection
-			? { threatDirection: input.threatDirection }
-			: {}),
-	};
-	const scanRuntimeSettings = buildCompleteScanRuntimeSettings({
-		scanType: input.scanType,
-		targetStageSettings,
-		runtimeOverrides,
-	});
-	return await createScanJobRepo({
-		...input,
-		scanRuntimeSettings,
-		defaultDeltaCommitWindow: DEFAULT_DELTA_COMMIT_WINDOW,
-	});
 };
 
 export const findScanJobById = async (scanJobId: string) => {
@@ -173,6 +119,31 @@ export const updateScanJobStatus = async (
 		| "canceled",
 	errorMessage?: string,
 ) => await updateScanJobStatusRepo(scanJobId, status, errorMessage);
+
+export const transitionScanJobStatus = async (input: {
+	scanJobId: string;
+	from: Array<
+		| "pending"
+		| "running"
+		| "paused"
+		| "finalizing"
+		| "finished"
+		| "partially_finished"
+		| "failed"
+		| "canceled"
+	>;
+	to:
+		| "pending"
+		| "running"
+		| "paused"
+		| "finalizing"
+		| "finished"
+		| "partially_finished"
+		| "failed"
+		| "canceled";
+	errorMessage?: string | null;
+	terminationReason?: string | null;
+}) => await transitionScanJobStatusRepo(input);
 
 export const resetScanJobForRetry = async (
 	scanJobId: string,

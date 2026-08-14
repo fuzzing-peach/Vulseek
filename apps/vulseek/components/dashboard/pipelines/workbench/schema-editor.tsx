@@ -39,10 +39,14 @@ const SCHEMA_TYPES = [
 
 type PropertyDraft = {
 	name: string;
+	originalName: string;
 	type: string;
 	description: string;
 	enumValues: unknown[];
 };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 const schemaToFormState = (
 	schema: Record<string, unknown>,
@@ -56,6 +60,7 @@ const schemaToFormState = (
 			const property = (value ?? {}) as Record<string, unknown>;
 			return {
 				name,
+				originalName: name,
 				type: typeof property.type === "string" ? property.type : "string",
 				description: typeof property.description === "string" ? property.description : "",
 				enumValues: Array.isArray(property.enum) ? property.enum : [],
@@ -73,12 +78,17 @@ const formStateToSchema = (
 	form: ReturnType<typeof schemaToFormState>,
 	base: Record<string, unknown>,
 ): Record<string, unknown> => {
+	const baseProperties = isRecord(base.properties) ? base.properties : {};
 	const properties: Record<string, unknown> = {};
 	for (const property of form.properties) {
 		if (!property.name.trim()) continue;
-		const entry: Record<string, unknown> = { type: property.type };
-		if (property.description) entry.description = property.description;
+		const basePropertyValue = baseProperties[property.originalName];
+		const baseProperty = isRecord(basePropertyValue) ? basePropertyValue : {};
+		const entry: Record<string, unknown> = { ...baseProperty, type: property.type };
+		if (property.description.trim()) entry.description = property.description;
+		else delete entry.description;
 		if (property.enumValues.length > 0) entry.enum = property.enumValues;
+		else delete entry.enum;
 		properties[property.name] = entry;
 	}
 	const next: Record<string, unknown> = {
@@ -131,6 +141,28 @@ export const SchemaEditor = ({
 	const setSchema = (next: Record<string, unknown>, key: string) =>
 		dispatch({ type: "patch", ops: [{ op: "setSchema", schemaId, schema: next }], key });
 
+	const setPropertyDescription = (index: number, description: string) => {
+		const property = form.properties[index];
+		if (!property) return;
+		setForm({
+			...form,
+			properties: form.properties.map((item, itemIndex) =>
+				itemIndex === index ? { ...item, description } : item,
+			),
+		});
+
+		const schemaProperties = isRecord(schema.properties) ? schema.properties : {};
+		const currentProperty = schemaProperties[property.name];
+		if (!isRecord(currentProperty)) return;
+		const nextProperty = { ...currentProperty };
+		if (description.trim()) nextProperty.description = description;
+		else delete nextProperty.description;
+		setSchema(
+			{ ...schema, properties: { ...schemaProperties, [property.name]: nextProperty } },
+			`schema:${schemaId}:prop-description:${property.name}`,
+		);
+	};
+
 	const usedBy = schemaReferrers(document, schemaId);
 	const references = React.useMemo(() => {
 		const refs = new Set<string>();
@@ -166,7 +198,7 @@ export const SchemaEditor = ({
 				}
 			/>
 			<EntityDiagnostics diagnostics={diagnostics} />
-			<div className="min-h-0 flex-1 overflow-y-auto p-4">
+			<div className="min-h-0 flex-1 overflow-y-auto p-4 pb-12">
 				{mode === "json" ? (
 					<JsonField
 						label="JSON Schema"
@@ -233,8 +265,16 @@ export const SchemaEditor = ({
 													setSchema(formStateToSchema(next, schema), `schema:${schemaId}:props`);
 												}}
 												className="h-8 w-full rounded-md border bg-background px-2 text-xs"
-											/>
-											<div className="grid grid-cols-2 gap-2">
+												/>
+												<TextAreaField
+													label="Description (optional)"
+													value={property.description}
+													rows={2}
+													readOnly={readOnly}
+													placeholder="Describe this field"
+													onChange={(description) => setPropertyDescription(index, description)}
+												/>
+												<div className="grid grid-cols-2 gap-2">
 												<select
 													value={property.type}
 													disabled={readOnly}
@@ -277,7 +317,10 @@ export const SchemaEditor = ({
 											onClick={() => {
 												const next = {
 													...form,
-													properties: [...form.properties, { name: "newProperty", type: "string", description: "", enumValues: [] }],
+														properties: [
+															...form.properties,
+															{ name: "newProperty", originalName: "", type: "string", description: "", enumValues: [] },
+														],
 												};
 												setForm(next);
 												setSchema(formStateToSchema(next, schema), `schema:${schemaId}:props`);

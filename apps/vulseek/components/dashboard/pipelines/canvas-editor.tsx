@@ -414,6 +414,31 @@ type EditorFlowEdge = FlowEdge & {
 	data?: GroupedEdgeData;
 };
 
+const areFlowNodesEquivalent = (
+	left: EditorFlowNode[],
+	right: EditorFlowNode[],
+): boolean => {
+	if (left === right) return true;
+	if (left.length !== right.length) return false;
+	return left.every((node, index) => {
+		const other = right[index];
+		if (!other) return false;
+		return (
+			node.id === other.id &&
+			node.type === other.type &&
+			node.selected === other.selected &&
+			node.dragging === other.dragging &&
+			node.hidden === other.hidden &&
+			node.width === other.width &&
+			node.height === other.height &&
+			node.position.x === other.position.x &&
+			node.position.y === other.position.y &&
+			node.zIndex === other.zIndex &&
+			node.data === other.data
+		);
+	});
+};
+
 const CanvasEditorInner = ({
 	document,
 	readOnly,
@@ -540,8 +565,10 @@ const CanvasEditorInner = ({
 				id: displayEdge.id,
 				source: displayEdge.from,
 				target: displayEdge.to,
-				sourceHandle,
-				targetHandle,
+				// Published/read-only nodes intentionally do not render Handles.
+				// Omitting these fields makes React Flow use the node bounds instead
+				// of trying to resolve a handle that cannot exist in the DOM.
+				...(readOnly ? {} : { sourceHandle, targetHandle }),
 				type: "pipelineEdge",
 				selected:
 					selectedEdgeId !== null &&
@@ -569,7 +596,11 @@ const CanvasEditorInner = ({
 	]);
 
 	const [localNodes, setLocalNodes] = React.useState<EditorFlowNode[]>(nodes);
-	React.useEffect(() => setLocalNodes(nodes), [nodes]);
+	React.useEffect(() => {
+		setLocalNodes((previous) =>
+			areFlowNodesEquivalent(previous, nodes) ? previous : nodes,
+		);
+	}, [nodes]);
 
 	// Canvas size tracking: ResizeObserver (not only window.resize) so
 	// Inspector toggles and sidebar changes trigger settled refits.
@@ -730,10 +761,44 @@ const CanvasEditorInner = ({
 
 	const onNodesChange = React.useCallback(
 		(changes: NodeChange<EditorFlowNode>[]) => {
-			const next = applyNodeChanges(changes, localNodes) as EditorFlowNode[];
-			setLocalNodes(next);
+			if (changes.length === 0) return;
+			setLocalNodes((previous) => {
+				const next = applyNodeChanges(changes, previous) as EditorFlowNode[];
+				return areFlowNodesEquivalent(previous, next) ? previous : next;
+			});
 		},
-		[localNodes],
+		[],
+	);
+
+	const handleSelectionChange = React.useCallback(
+		({
+			nodes: selectedNodes,
+			edges: selectedEdges,
+		}: {
+			nodes: EditorFlowNode[];
+			edges: EditorFlowEdge[];
+		}) => {
+			const stageNode = selectedNodes[0];
+			const edge = selectedEdges[0];
+			const nextSelection = stageNode
+				? { type: "stage" as const, id: stageNode.id }
+				: edge
+					? {
+							type: "edge" as const,
+							id:
+								(edge.data as GroupedEdgeData | undefined)?.displayEdge
+									?.memberEdgeIds[0] ?? edge.id,
+						}
+					: null;
+			if (
+				selection?.type === nextSelection?.type &&
+				selection?.id === nextSelection?.id
+			) {
+				return;
+			}
+			onSelect?.(nextSelection);
+		},
+		[onSelect, selection],
 	);
 
 	// Dragging supplies preferred positions to ELK's interactive layered mode.
@@ -924,7 +989,10 @@ const CanvasEditorInner = ({
 	}, [positions, document.root, setCenter]);
 
 	return (
-		<div ref={canvasRef} className={cn("relative h-full w-full", className)}>
+		<div
+			ref={canvasRef}
+			className={cn("relative h-full min-h-0 w-full overflow-hidden", className)}
+		>
 			{!readOnly && (
 				<div className="absolute left-3 top-3 z-10 flex flex-col gap-1.5 rounded-lg border bg-background/95 p-1.5 shadow-sm">
 					{onAddStage ? (
@@ -1007,22 +1075,10 @@ const CanvasEditorInner = ({
 				nodesDraggable={!readOnly && !interactionLock}
 				nodesConnectable={!readOnly && !interactionLock}
 				elementsSelectable={!interactionLock}
-				onSelectionChange={({ nodes: selectedNodes, edges: selectedEdges }) => {
-					const stageNode = selectedNodes[0];
-					const edge = selectedEdges[0];
-					onSelect?.(
-						stageNode
-							? { type: "stage", id: stageNode.id }
-							: edge
-								? {
-										type: "edge",
-										id:
-											(edge.data as GroupedEdgeData | undefined)?.displayEdge
-												?.memberEdgeIds[0] ?? edge.id,
-									}
-								: null,
-					);
-				}}
+				nodesFocusable={false}
+				autoPanOnNodeFocus={false}
+				preventScrolling
+				onSelectionChange={handleSelectionChange}
 				minZoom={0.1}
 				proOptions={{ hideAttribution: true }}
 			>

@@ -26,8 +26,10 @@ describe("migration journal", () => {
 			.filter((tag) => !journalTags.has(tag))
 			.sort();
 
-		expect(journal.entries).toHaveLength(227);
-		expect(journal.entries.at(-1)?.tag).toBe("0226_scan_pipelines");
+		expect(journal.entries).toHaveLength(232);
+		expect(journal.entries.at(-1)?.tag).toBe(
+			"0231_remove_scan_type",
+		);
 		expect(unregisteredTags).toEqual(["0057_damp_prism"]);
 		expect(journal.entries.map((entry) => entry.idx)).toEqual(
 			journal.entries.map((_, index) => index),
@@ -66,6 +68,21 @@ describe("migration journal", () => {
 		}
 		expect(schema).not.toContain("currentTaskId");
 		expect(schema).toContain('revision: integer("revision")');
+	});
+
+	it("adds a JSONB output list to scan jobs", () => {
+		const drizzleDirectory = join(
+			dirname(fileURLToPath(import.meta.url)),
+			"../../drizzle",
+		);
+		const migration = readFileSync(
+			join(drizzleDirectory, "0228_scan_job_outputs.sql"),
+			"utf8",
+		);
+
+		expect(migration).toContain('ALTER TABLE "scan_jobs"');
+		expect(migration).toContain('"outputs" jsonb');
+		expect(migration).toContain("DEFAULT '[]'::jsonb NOT NULL");
 	});
 
 	it("migrates prompt file names stored in pipeline snapshots", () => {
